@@ -96,5 +96,15 @@ Mở tab `redis-key` khi click key trong explorer:
 - Subscribe NATS subject → nhận messages real-time
 - Publish NATS message + Request/Reply hoạt động
 - JetStream: list streams và consumers
-- SSL hoạt động cho PG / MySQL / MSSQL / Redis
+- SSL hoạt động cho PG / MySQL / MariaDB / MSSQL / Redis
 - Split view: 2 tabs SQL editor cùng mở song song
+
+### Test (bắt buộc)
+- Unit test đầy đủ cho toàn bộ logic phase này (prefix tree builder, RESP highlight, pattern glob→regex, TTL logic...)
+- Integration test đầy đủ cho **từng hệ trong phase** qua **testcontainers**: Redis (6 types + TTL + Pub/Sub + SCAN), NATS (pub/sub + Request/Reply + JetStream cơ bản); SSL test cho các driver đã bật
+
+### UI đối chiếu 1:1 với `Database Studio.dc.html` (bắt buộc)
+- Token màu/spacing/font grep trực tiếp từ HTML, không phỏng đoán
+- Icon SVG copy nguyên vẹn từ HTML
+- Bảng đối chiếu số đo các thành phần của phase (key browser, Pub/Sub monitor, split view...) — không còn dòng lệch
+- Snapshot/DOM test cho các component UI mới của phase

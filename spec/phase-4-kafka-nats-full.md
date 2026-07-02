@@ -133,3 +133,13 @@ Tab `kafka-producer`:
 - NATS JetStream: tạo/xóa stream, get message by sequence
 - NATS KV: get/put/watch keys
 - NATS Object Store: upload/download file
+
+### Test (bắt buộc)
+- Unit test đầy đủ cho toàn bộ logic phase này (decode Avro/JSON, tính lag, offset reset preview, chunking Object Store...)
+- Integration test đầy đủ cho **từng hệ trong phase** qua **testcontainers**: Kafka (+ Schema Registry nếu cấu hình), NATS JetStream (KV + Object Store)
+
+### UI đối chiếu 1:1 với `Database Studio.dc.html` (bắt buộc)
+- Token màu/spacing/font grep trực tiếp từ HTML, không phỏng đoán
+- Icon SVG copy nguyên vẹn từ HTML
+- Bảng đối chiếu số đo các thành phần của phase (producer modal, consumer group lag view, KV/Object Store...) — không còn dòng lệch
+- Snapshot/DOM test cho các component UI mới của phase

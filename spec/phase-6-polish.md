@@ -95,15 +95,19 @@
 - [ ] Tooltip hint lần đầu dùng các tính năng chính
 
 ### 8. Final QA Checklist
-- [ ] Kết nối PG / MySQL / MSSQL / Redis / Kafka / NATS — tất cả hoạt động
+- [ ] Kết nối **đủ 10 hệ**: PG / MySQL / MariaDB / MSSQL / SQLite / ClickHouse / Cassandra / Redis / Kafka / NATS — tất cả hoạt động
 - [ ] SSH tunnel + SSL — hoạt động đồng thời
 - [ ] Multi-tab: mở 10 tabs, đóng app, mở lại — restore đúng
 - [ ] Force delete connection → orphaned tabs không crash
-- [ ] Editable grid: edit + apply → row cập nhật đúng trong DB
+- [ ] Editable grid: edit + apply → row cập nhật đúng trong DB (ClickHouse: route sang mutation async, không commit kiểu OLTP)
+- [ ] Cassandra: CQL editor chặn JOIN, ALLOW FILTERING có cảnh báo, paging state hoạt động
+- [ ] SQLite: đủ 3 mode (RW/RO/In-Memory), PRAGMA panel hoạt động
+- [ ] Execute Plan: đủ 10 hệ (6 SQL + Cassandra tracing; Redis/Kafka/NATS disabled đúng)
+- [ ] Index Scanner: health flags đúng trên từng hệ
 - [ ] Import CSV 100k rows — không timeout
 - [ ] Export 500k rows to Excel — file mở được
 - [ ] Command palette: tìm kiếm 50+ items — không lag
-- [ ] Dark / Light mode: tất cả components render đúng màu
+- [ ] Dark / Light mode: tất cả components render đúng màu — đủ 10 bộ màu system + orphan
 
 ---
 
@@ -113,3 +117,14 @@
 - Settings lưu persist qua app restart
 - Tất cả keyboard shortcuts hoạt động đúng
 - Không có crash trong normal usage flows
+- Final QA checklist (mục 8) pass trên **đủ 10 hệ**
+
+### Test (bắt buộc)
+- Unit test đầy đủ cho toàn bộ logic phase này (settings persist, error boundary, updater flow...)
+- Integration test đầy đủ chạy lại trên **từng hệ trong cả 10 hệ** qua **testcontainers** (SQLite trên file thật) — regression suite toàn app xanh
+
+### UI đối chiếu 1:1 với `Database Studio.dc.html` (bắt buộc)
+- Token màu/spacing/font grep trực tiếp từ HTML (`.ds` / `.ds-light`), không phỏng đoán — kiểm cả dark lẫn light theme
+- Icon SVG copy nguyên vẹn từ HTML
+- Bảng đối chiếu số đo toàn app (rà lại tổng) — không còn dòng lệch
+- Snapshot/DOM test cho các component UI của phase (Settings, Welcome screen, toast...)

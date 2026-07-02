@@ -4,13 +4,23 @@
 
 **Database Studio** là một desktop app cá nhân để quản lý và làm việc với cơ sở dữ liệu và message broker. Mục tiêu: nhẹ, nhanh, đủ tính năng cho developer/DBA cá nhân, không cần server.
 
-### Connections hỗ trợ
+### Connections hỗ trợ — 10 hệ thống
 
-| Loại | Hệ thống |
-|---|---|
-| **Relational DB** | PostgreSQL 12+, MySQL / MariaDB 8+, SQL Server 2014+ (v12+) |
-| **Key-Value Store** | Redis 6+ / Redis Stack / Valkey |
-| **Message Broker** | Apache Kafka 2.8+, NATS 2.x (bao gồm JetStream) |
+> Danh sách chuẩn theo `DATABASE_STUDIO_SPEC_v2.md` mục 2 (spec gốc chỉ nêu 6 hệ; đã mở rộng
+> thành 10: thêm **MariaDB, SQLite, ClickHouse, Cassandra**).
+
+| Hệ thống | Nhóm | Port | Quoting định danh | Workspace |
+|---|---|---|---|---|
+| PostgreSQL 12+ | Relational | 5432 | `"..."` | SQL editor + grid |
+| MySQL 8+ | Relational | 3306 | `` `...` `` | SQL editor + grid |
+| MariaDB | Relational | 3306 | `` `...` `` | SQL editor + grid |
+| SQL Server 2014+ (MSSQL) | Relational | 1433 | `[...]` | SQL editor + grid |
+| SQLite | Embedded | (file) | `"..."` | SQL editor + file tree |
+| ClickHouse | Analytical | 8123 (HTTP) / 9000 (native) | `` `...` `` | SQL editor + grid |
+| Cassandra | Wide Column | 9042 | `"..."` | CQL editor + grid |
+| Redis 6+ / Redis Stack / Valkey | Cache | 6379 | — | Key browser |
+| Apache Kafka 2.8+ | Streaming | 9092 | — | Topic browser |
+| NATS 2.x (bao gồm JetStream) | Streaming | 4222 | — | Subject browser |
 
 ### Phương thức kết nối
 - Direct TCP/IP
@@ -33,10 +43,16 @@ Mỗi loại database/broker có **bộ màu riêng nhất quán** xuất hiện
 | **MySQL** | `#F29111` | `#3d2800` | `#6b4400` | `#f5b84a` | `MY` |
 | **SQL Server** | `#CC2927` | `#3d0a09` | `#6b1515` | `#f08080` | `MS` |
 | **Redis** | `#D82C20` | `#3d0c08` | `#6b1a14` | `#f07070` | `RE` |
+| **MariaDB** | `#C0765A` | `#2e1a12` | `#5c3020` | `#e8a882` | `MA` |
+| **SQLite** | `#0F80CC` | `#0a1e35` | `#12406a` | `#60b8f5` | `SL` |
+| **ClickHouse** | `#FFCC00` | `#33290a` | `#665514` | `#ffe066` | `CH` |
+| **Cassandra** | `#1287B1` | `#0a2030` | `#134f72` | `#5cc4e8` | `CS` |
 | **Kafka** | `#231F20` (dark) / `#8B5CF6` (accent) | `#1e1a2e` | `#3d2f6b` | `#c4b5fd` | `KF` |
 | **NATS** | `#27AE60` | `#0d2e1a` | `#1a5c35` | `#6ee7a0` | `NT` |
 
 > Accent = màu đặc trưng thương hiệu. Background = nền tối dùng trong dark mode. Text on bg = màu chữ khi render trên Background.
+> Token lấy từ map `SYS` trong `Database Studio.dc.html` (source of truth) — đối chiếu lại code trước khi hard-code.
+> Ngoài ra có bộ màu `orphan` (accent `#5b6473`, badge `⚠`) cho tab mồ côi khi connection bị xóa.
 
 ### Áp dụng ở đâu
 
@@ -45,7 +61,11 @@ Mỗi loại database/broker có **bộ màu riêng nhất quán** xuất hiện
 ┌──────────────────────────────┐
 │ ▐█ Prod PG          [🐘 PG] │  ← thanh dọc màu #336791, badge "PG" nền #1a3a52
 │ ▐█ Dev MySQL        [MY]    │  ← thanh dọc màu #F29111
+│ ▐█ MariaDB App      [MA]    │  ← thanh dọc màu #C0765A
 │ ▐█ Analytics MSSQL  [MS]    │  ← thanh dọc màu #CC2927
+│ ▐█ Local SQLite     [SL]    │  ← thanh dọc màu #0F80CC
+│ ▐█ Analytics CH     [CH]    │  ← thanh dọc màu #FFCC00
+│ ▐█ Profiles CS      [CS]    │  ← thanh dọc màu #1287B1
 │ ▐█ Cache Redis      [RE]    │  ← thanh dọc màu #D82C20
 │ ▐█ Events Kafka     [KF]    │  ← thanh dọc màu #8B5CF6
 │ ▐█ Messaging NATS   [NT]    │  ← thanh dọc màu #27AE60
@@ -53,6 +73,7 @@ Mỗi loại database/broker có **bộ màu riêng nhất quán** xuất hiện
 ```
 - Thanh dọc 3px bên trái mỗi connection = màu Accent
 - Badge `[PG]` `[MY]` ... = text màu "Text on bg", nền màu Background, border màu Border
+- Connection list nhóm theo **category label viết hoa** (RELATIONAL / ANALYTICAL / WIDE COLUMN / CACHE / STREAMING / EMBEDDED) + **tag môi trường** màu: PROD (đỏ), STG (hổ phách), DEV (xanh lá), LOCAL (tím)
 
 #### 2. Tab bar
 ```
@@ -97,7 +118,7 @@ Mỗi loại database/broker có **bộ màu riêng nhất quán** xuất hiện
 - **Không dùng màu xám / màu mặc định** cho bất kỳ connection nào — luôn dùng màu system
 - **Consistency**: cùng một system thì cùng màu ở mọi nơi, không đổi theo theme
 - **Dark mode**: dùng cột Background + Text-on-bg. **Light mode**: dùng Accent làm border/icon, nền trắng
-- Badge text luôn là 2 ký tự viết tắt (PG, MY, MS, RE, KF, NT) — không dùng logo/emoji vì không scale nhỏ
+- Badge text luôn là 2 ký tự viết tắt (PG, MY, MA, MS, SL, CH, CS, RE, KF, NT) — không dùng logo/emoji vì không scale nhỏ. Lưu ý: badge Redis là **RE**, NATS là **NT** (theo HTML prototype — bảng 2 ký tự trong SPEC_v2 ghi RD/NA là sai)
 
 ---
 
@@ -113,23 +134,32 @@ Mỗi loại database/broker có **bộ màu riêng nhất quán** xuất hiện
 | SQL editor | **CodeMirror 6** | Framework-agnostic, autocomplete, highlight, extensible |
 | Data grid | **TanStack Table** (Svelte adapter) | Virtualization, headless, performance |
 | State | **Svelte stores (built-in)** | Reactive stores native, không cần lib thêm |
-| SQL drivers | Rust: `sqlx` (PG, MySQL), `tiberius` (MSSQL) | Native, async, type-safe |
+| SQL drivers | Rust: `sqlx` (PG, MySQL, MariaDB — MariaDB dùng chung driver MySQL), `tiberius` (MSSQL), `rusqlite` (SQLite user-DB) | Native, async, type-safe |
+| ClickHouse driver | Rust: `clickhouse` crate (HTTP 8123) | Typed, đơn giản, đủ cho bản cá nhân |
+| Cassandra driver | Rust: `scylla` (scylla-rust-driver) | Async gốc, prepared statement + paging + load balancing |
 | Redis driver | Rust: `redis` (redis-rs) | Async, connection pool, Pub/Sub |
 | Kafka driver | Rust: `rdkafka` (librdkafka) | Production-grade, SASL, consumer groups |
 | NATS driver | Rust: `async-nats` | Official Rust client, JetStream support |
 | SSH tunnel | Rust: `russh` | Thuần Rust, không cần OpenSSH |
 | Storage | **SQLite** (via `rusqlite`) | Lưu connections, history, snippets |
 
+> **SQLite có 2 vai tách bạch:** (1) **storage nội bộ** của app (connections/history/snippets/tabs
+> — không hiện trong UI như một connection); (2) **SQLite user-DB** — hệ thứ 10 mà người dùng
+> mở qua file picker. Cùng dùng `rusqlite` nhưng code path và lifecycle riêng, không trộn lẫn.
+
 ### Luồng kết nối
 ```
-Frontend (React)
+Frontend (Svelte 5)
     ↕ Tauri IPC (async commands)
 Rust backend
     ↕ SSH tunnel (russh) — optional
-    ├── Relational  →  PG / MySQL / MSSQL   (sqlx, tiberius)
-    ├── Key-Value   →  Redis / Valkey        (redis-rs)
-    ├── Kafka       →  Broker cluster        (rdkafka)
-    └── NATS        →  Server / JetStream    (async-nats)
+    ├── Relational  →  PG / MySQL / MariaDB / MSSQL   (sqlx, tiberius)
+    ├── Embedded    →  SQLite (file)          (rusqlite)
+    ├── Analytical  →  ClickHouse             (clickhouse HTTP)
+    ├── Wide Column →  Cassandra              (scylla)
+    ├── Key-Value   →  Redis / Valkey         (redis-rs)
+    ├── Kafka       →  Broker cluster         (rdkafka)
+    └── NATS        →  Server / JetStream     (async-nats)
 ```
 
 ---
@@ -251,6 +281,20 @@ Connection  [🐘 Prod PG · postgres]
 - Tách thêm node **Table-Valued Functions** và **Scalar Functions**
 - Thêm node **Synonyms**, **User-Defined Types**
 
+**SQLite** (`sqliteTree`)
+- Root là **file** (`/data/local.db`) → schema `main` → Tables / Views / Triggers
+- Bảng hệ thống `sqlite_sequence` / `sqlite_master` hiển thị khóa 🔒 (read-only)
+- Không có Procedures/Functions/Sequences
+
+**ClickHouse** (`clickhouseTree`)
+- Databases (default, system, ...) → Tables (kèm **engine badge**: MergeTree / ReplacingMergeTree / ...) / Views (gồm Materialized View) / Dictionaries / Functions
+- Database `system` là read-only, dùng để introspection
+
+**Cassandra** (`cassandraTree`)
+- Keyspace → Tables (hiện rõ **partition key** vs **clustering key**) / Materialized Views / User Types (UDT) / Functions (UDF) / Secondary Indexes
+- Keyspace hiển thị replication strategy + factor ở properties
+- Không dùng khái niệm "schema" kiểu quan hệ
+
 #### Khi expand object
 
 **Table** — expand ra:
@@ -294,7 +338,7 @@ Connection  [🐘 Prod PG · postgres]
 | Column | Copy Name, Copy as `table.column`, Set as Filter |
 
 ### 3.3 SQL Editor
-- Syntax highlighting đa dialect (PG / MySQL / MSSQL)
+- Syntax highlighting đa dialect (PG / MySQL / MariaDB / MSSQL / SQLite / ClickHouse; **CQL** cho Cassandra)
 - Auto-complete:
   - Keywords
   - Table names, column names từ schema đang kết nối
@@ -452,7 +496,10 @@ Showing 1-100 of 3,842 rows                         [< Prev] [Next >]
 ### 3.8 Query Plan Visualizer
 - Parse EXPLAIN output → visual node tree
 - Highlight slow nodes (cost threshold)
-- Support: PG `EXPLAIN ANALYZE`, MySQL `EXPLAIN FORMAT=JSON`, MSSQL Actual Execution Plan
+- **Đủ 10 hệ** qua cơ chế adapter chuẩn hóa (xem mục 3.16 và `EXECUTE_PLAN_AND_INDEX_SCAN_ADDENDUM.md`):
+  PG `EXPLAIN (FORMAT JSON)`, MySQL `EXPLAIN FORMAT=JSON` / `EXPLAIN ANALYZE`, MariaDB `ANALYZE FORMAT=JSON`,
+  MSSQL `SHOWPLAN_XML` / `STATISTICS XML`, SQLite `EXPLAIN QUERY PLAN`, ClickHouse `EXPLAIN PLAN/PIPELINE/ESTIMATE/indexes=1`,
+  Cassandra `TRACING ON` (timeline); Redis/Kafka/NATS → `not_applicable`
 
 ### 3.9 Redis Browser
 - Key Explorer:
@@ -520,9 +567,11 @@ Mỗi tab lưu:
   id:             uuid,
   connectionId:   "uuid của connection profile",
   connectionName: "Prod PG",           // tên đã đặt trong Connection Manager
-  systemType:     "postgres" | "mysql" | "mssql" | "redis" | "kafka" | "nats",
+  systemType:     "postgres" | "mysql" | "mariadb" | "mssql" | "sqlite" | "clickhouse"
+                  | "cassandra" | "redis" | "kafka" | "nats",
   contentType:    "sql-editor" | "table-viewer" | "redis-key" | "kafka-topic"
-                  | "kafka-consumer-group" | "nats-subject" | "nats-jetstream" | ...,
+                  | "kafka-consumer-group" | "nats-subject" | "nats-jetstream"
+                  | "cassandra-ring" | "query-plan" | "index-scanner" | ...,
   title:          "orders — query",    // auto-generated hoặc user rename
   isPinned:       false,
   isDirty:        false,               // có unsaved changes không
@@ -535,7 +584,11 @@ Mỗi tab lưu:
   - **System badge**: 2 ký tự viết tắt + màu theo Color Identity System (xem section 2)
     - `[PG]` PostgreSQL → `#336791`
     - `[MY]` MySQL → `#F29111`
+    - `[MA]` MariaDB → `#C0765A`
     - `[MS]` SQL Server → `#CC2927`
+    - `[SL]` SQLite → `#0F80CC`
+    - `[CH]` ClickHouse → `#FFCC00`
+    - `[CS]` Cassandra → `#1287B1`
     - `[RE]` Redis → `#D82C20`
     - `[KF]` Kafka → `#8B5CF6`
     - `[NT]` NATS → `#27AE60`
@@ -656,13 +709,114 @@ erDiagram
 **Search trong diagram:**
 - `Ctrl+F` trong tab diagram → highlight + pan tới table theo tên
 
-### 3.14 UX / General
+### 3.14 Schema Compare
+
+So sánh schema giữa 2 database **cùng loại** (PG↔PG, MySQL↔MySQL, MSSQL↔MSSQL). Không compare data.
+
+#### Mở
+- Từ menu: Connection → "Compare Schema..." → chọn Source + Target
+- Source và Target là 2 connection profiles bất kỳ cùng system type
+- Chọn schema/database cụ thể cho mỗi bên
+
+#### Kết quả diff
+
+```
+┌─ Schema Compare ──────────────────────────────────────────┐
+│ Source: [Prod PG · public ▼]   Target: [Dev PG · public ▼]│
+│                                          [Re-compare]      │
+├────────────────────────────────────────────────────────────┤
+│ Filter: [All ▼]  Search: __________                        │
+├──────┬───────────────────────┬────────────┬───────────────┤
+│ Type │ Object                │ Status     │               │
+├──────┼───────────────────────┼────────────┼───────────────┤
+│  ▦   │ orders                │ ✎ Different│ [View diff]   │
+│  ▦   │ users                 │ ● Identical│               │
+│  ▦   │ audit_log             │ ✚ Src only │ [View diff]   │
+│  ▦   │ temp_sessions         │ ✖ Tgt only │               │
+│  ◫   │ vw_active_orders      │ ✎ Different│ [View diff]   │
+│  ⚙   │ sp_process_order      │ ● Identical│               │
+│  ƒ   │ fn_calculate_total    │ ✚ Src only │ [View diff]   │
+└──────┴───────────────────────┴────────────┴───────────────┘
+```
+
+**Status icons:**
+| Icon | Nghĩa |
+|---|---|
+| `●` Identical | Giống nhau hoàn toàn |
+| `✎` Different | Khác nhau (column, type, index...) |
+| `✚` Src only | Chỉ có ở Source — cần tạo thêm ở Target |
+| `✖` Tgt only | Chỉ có ở Target — có thể là object thừa |
+
+**Filter:** All / Different only / Src only / Tgt only / Identical
+
+#### View diff của object
+Click "View diff" → split pane DDL:
+```
+┌─ orders — DDL Diff ─────────────────────────────────────┐
+│ Source (Prod PG)              │ Target (Dev PG)          │
+│ ─────────────────────────────│──────────────────────────│
+│ CREATE TABLE orders (         │ CREATE TABLE orders (    │
+│   id SERIAL PRIMARY KEY,      │   id SERIAL PRIMARY KEY, │
+│ + last_modified timestamptz,  │                          │
+│   user_id INT NOT NULL,       │   user_id INT NOT NULL,  │
+│   status VARCHAR(20),         │   status VARCHAR(50),    │ ← khác
+│   created_at timestamptz      │   created_at timestamptz │
+│ );                            │ );                       │
+└───────────────────────────────┴──────────────────────────┘
+```
+- Highlight: xanh lá = chỉ có ở Source, đỏ = chỉ có ở Target, vàng = khác
+
+#### Generate Migration SQL
+- Nút "Generate Migration SQL" → sinh ALTER TABLE / CREATE TABLE / DROP... để đưa Target về giống Source
+- Mở trong tab SQL Editor mới, có thể review trước khi chạy
+- Checkbox chọn object nào muốn include vào migration
+- Export migration SQL ra file
+
+#### Giới hạn
+- Chỉ so sánh **cùng system type** — không cross-type (PG vs MySQL)
+- Không compare data (row-level)
+- Không compare permissions / roles / users
+
+### 3.15 UX / General
 - Dark mode / Light mode / System auto
 - Keyboard-first navigation
 - Global command palette (Ctrl+P): fuzzy search tất cả actions + recent tabs
 - Notifications: query done, error, long-running query warning
 - Connection status indicator (latency ping) trên tab bar
 - Session variables / settings per connection
+
+### 3.16 Tính năng xuyên hệ (áp dụng nhất quán cho cả 10 hệ)
+
+Ba tính năng dưới đây được thiết kế theo cơ chế **adapter chuẩn hóa**: mỗi hệ có 1 adapter
+ở driver layer chạy cơ chế native của hệ đó rồi map về struct chuẩn; frontend chỉ làm việc
+với struct chuẩn, dùng chung 1 component cho mọi hệ. Luôn giữ kèm raw output gốc (nút
+"View raw"). Hệ không hỗ trợ → trả `not_applicable`, UI hiện empty state, không ném lỗi.
+
+#### a) Execute Plan (chi tiết: `EXECUTE_PLAN_AND_INDEX_SCAN_ADDENDUM.md` phần A)
+- Mỗi hệ lấy plan theo cơ chế riêng (PG `EXPLAIN FORMAT JSON`, MySQL/MariaDB `EXPLAIN FORMAT=JSON`,
+  MSSQL `SHOWPLAN_XML`, SQLite `EXPLAIN QUERY PLAN`, ClickHouse `EXPLAIN PLAN/PIPELINE/ESTIMATE`,
+  Cassandra `TRACING ON`) nhưng đều map về **CÙNG một output chuẩn `QueryPlan { root: PlanNode }`**.
+- `PlanNode`: operation chuẩn hóa (SeqScan/IndexScan/HashJoin/Sort/...), cost/rows estimated + actual,
+  `is_hotspot` (seq scan bảng lớn, actual lệch estimated >10x, ALLOW FILTERING...), tên gốc trong `extra.native_op`.
+- UI: 1 component visualizer duy nhất — cây node + mũi tên tỉ lệ row count, hotspot tô cam/đỏ,
+  toggle Estimated/Actual, tooltip, View raw. Cassandra render dạng timeline thay vì cây.
+
+#### b) Index Scan (chi tiết: `EXECUTE_PLAN_AND_INDEX_SCAN_ADDENDUM.md` phần B)
+- Quét toàn bộ index của connection/schema từ catalog từng hệ (`pg_index`, `information_schema.STATISTICS`,
+  `sys.indexes`, `PRAGMA index_list`, `system.data_skipping_indices`, `system_schema.indexes`...)
+  → map về **`IndexScanResult { indexes: IndexInfo[] }`** chuẩn.
+- `IndexInfo`: tên, bảng, cột (thứ tự + ASC/DESC + included), loại, unique/primary/partial, size,
+  cardinality, usage, và **cờ sức khỏe** `health`: unused / redundant / fragmented / invalid / anti_pattern.
+- Kèm gợi ý missing index nếu hệ hỗ trợ (PG, MSSQL). UI: bảng + filter theo health + panel DDL + export CSV/JSON.
+
+#### c) Query Editor Error Handling — lint 2 tầng theo dialect (chi tiết: `QUERY_EDITOR_ERROR_HANDLING_ADDENDUM.md`)
+- **Tầng 1 — Lint lúc gõ (advisory):** sqlparser-rs đúng dialect + rule pack đặc thù từng hệ
+  (CQL không JOIN, MSSQL dùng TOP thay LIMIT, ClickHouse mutation async...), cảnh báo schema-aware,
+  cảnh báo thao tác nguy hiểm (UPDATE/DELETE thiếu WHERE). Chỉ vẽ squiggle, **không bao giờ chặn Run**.
+- **Tầng 2 — Lỗi thực thi (authoritative):** lỗi thật từ DB chuẩn hóa về struct `QueryError`
+  (code, message, position, hint, raw), ánh xạ vị trí về toàn document (PG position → line/col,
+  MSSQL line + offset statement), Messages tab click-to-jump, nút View raw error.
+- Nếu lint và DB mâu thuẫn → DB thắng.
 
 ---
 
@@ -683,14 +837,19 @@ erDiagram
 > **Vibe coding** — ước tính rút ngắn ~40–50% so với manual coding
 
 ### Phase 1 — MVP Relational ~~4–6 tuần~~ → **2–3 tuần**
-- Connection Manager (PG + MySQL + MSSQL) + SSH Tunnel
-- Object Explorer cơ bản (Tables, Views, Procs, Functions)
+- Connection Manager (PG + MySQL + **MariaDB** + MSSQL + **SQLite**) + SSH Tunnel
+- SQLite: file picker + mode (Read-Write / Read-Only / In-Memory); tách vai với storage nội bộ
+- Object Explorer cơ bản (Tables, Views, Procs, Functions; SQLite file tree)
 - SQL Editor (highlight, F5 run, multi-statement sub-tabs)
+- Lỗi thực thi chuẩn hóa (tầng 2): `QueryError` + Messages click-to-jump
 - Result Grid read-only + export CSV
-- Multi-tab system + Color Identity System
+- Multi-tab system + Color Identity System (đủ 10 badge/màu)
 
 ### Phase 2 — Relational Core ~~3–4 tuần~~ → **1–2 tuần**
 - Schema-aware autocomplete
+- **ClickHouse basics**: connect + query (driver `clickhouse`, badge CH)
+- **Lint lúc gõ (tầng 1)** theo dialect: sqlparser-rs + rule pack + cảnh báo nguy hiểm
+- SQLite: file-info header + PRAGMA panel
 - Editable grid + pending changes + JSON/Single Row view modes
 - Query history + snippets + filter builder
 - DDL viewer + Object Explorer đầy đủ
@@ -705,17 +864,28 @@ erDiagram
 - Schema Registry + Avro decode
 - NATS JetStream đầy đủ (KV Store, Object Store)
 
+### Phase Cassandra (giữa Phase 4 và Phase 5) — **1–1.5 tuần**
+- Driver `scylla`: contact points, local DC, consistency level per-statement
+- CQL editor (không JOIN/subquery/OFFSET; WHERE theo partition/clustering key; cảnh báo ALLOW FILTERING)
+- Keyspace tree (Tables + partition/clustering key, MV, UDT, UDF, Secondary Indexes)
+- Phân trang bằng paging state (không LIMIT/OFFSET)
+- Ring Topology từ `system.peers` / `system.local`
+- Chi tiết: `CASSANDRA_SPEC_ADDENDUM.md`
+
 ### Phase 5 — Power User ~~4–5 tuần~~ → **2–3 tuần**
-- Query Plan Visualizer (PG / MySQL / MSSQL)
+- Query Plan Visualizer — **đủ 10 hệ** qua adapter chuẩn hóa `QueryPlan/PlanNode` (mục 3.16a)
+- **Index Scanner / Analyzer** — `IndexInfo` + cờ sức khỏe (mục 3.16b)
+- **ClickHouse nâng cao**: engine badge, TTL Viewer, partition ops, mutations async, MV/Dictionary
 - ER Diagram (Svelte Flow + export PNG/SVG/Mermaid)
 - Table Designer GUI + Import CSV + Export đầy đủ
-- Command palette
+- Schema Compare + Command palette
 
 ### Phase 6 — Polish ~~2 tuần~~ → **1–1.5 tuần**
 - Performance tuning, Settings UI, Keyboard shortcuts
 - Auto-update + Installer (Win/macOS/Linux)
+- Final QA trên **đủ 10 hệ**
 
-**Tổng: ~~18–26 tuần~~ → ~10–15 tuần**
+**Tổng: ~~18–26 tuần~~ → ~11–16 tuần**
 
 ---
 
@@ -738,18 +908,21 @@ database-studio/
 ├── src-tauri/          # Rust backend
 │   ├── src/
 │   │   ├── connections/    # connection pool, SSH tunnel
-│   │   ├── drivers/        # pg.rs, mysql.rs, mssql.rs, redis.rs, kafka.rs, nats.rs
+│   │   ├── drivers/        # pg.rs, mysql.rs (MySQL + MariaDB), mssql.rs, sqlite.rs,
+│   │   │                   # clickhouse.rs, cassandra.rs, redis.rs, kafka.rs, nats.rs
 │   │   ├── commands/       # Tauri IPC handlers
-│   │   └── storage/        # SQLite: connections, history
+│   │   └── storage/        # SQLite nội bộ: connections, history, tabs (tách vai với sqlite.rs user-DB)
 │   └── Cargo.toml
-├── src/                # React frontend
+├── src/                # Svelte 5 frontend
 │   ├── components/
-│   │   ├── editor/         # CodeMirror wrapper
-│   │   ├── explorer/       # Object tree (SQL + Redis + Kafka + NATS)
+│   │   ├── editor/         # CodeMirror wrapper (SQL + CQL)
+│   │   ├── explorer/       # Object tree (SQL + SQLite file tree + ClickHouse + Cassandra keyspace + Redis + Kafka + NATS)
 │   │   ├── grid/           # Result table
 │   │   ├── redis/          # Key browser, key editors per type
 │   │   ├── kafka/          # Topic/consumer group/message viewer
 │   │   ├── nats/           # Subject browser, JetStream UI
+│   │   ├── clickhouse/     # TTL Viewer, partition ops, engine badges
+│   │   ├── cassandra/      # Ring Topology
 │   │   └── connections/    # Connection form/list
 │   ├── stores/             # Svelte stores (built-in)
 │   └── lib/
