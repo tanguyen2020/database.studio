@@ -1,0 +1,74 @@
+// UI-level state: dialogs, theme, panel sizes (persisted via app_state).
+
+import * as ipc from '$lib/ipc'
+import type { ProfileDraft, ProfilePublic } from '$lib/types'
+
+export interface EditConnectedRequest {
+  draft: ProfileDraft
+  tabCount: number
+}
+
+class UiStore {
+  theme = $state<'dark' | 'light'>('dark')
+
+  // Connection Manager dialogs
+  pickerOpen = $state(false)
+  /** null = closed; profile with empty id = new */
+  formProfile = $state<ProfilePublic | null>(null)
+  deleteTarget = $state<ProfilePublic | null>(null)
+  /** save-while-connected decision dialog (Cancel / Save & Reconnect / Save only) */
+  editConnected = $state<EditConnectedRequest | null>(null)
+
+  // Layout sizes (px) — all resizers persist their size
+  sidebarWidth = $state(260)
+  connListHeight = $state(280)
+  editorHeight = $state(320)
+  sizesLoaded = $state(false)
+
+  toggleTheme() {
+    this.theme = this.theme === 'dark' ? 'light' : 'dark'
+    document.documentElement.classList.toggle('dark', this.theme === 'dark')
+    void ipc.setAppState('theme', this.theme)
+  }
+
+  async loadPersisted() {
+    try {
+      const [theme, sizes] = await Promise.all([
+        ipc.getAppState('theme'),
+        ipc.getAppState('layout_sizes'),
+      ])
+      if (theme === 'light' || theme === 'dark') {
+        this.theme = theme
+      }
+      document.documentElement.classList.toggle('dark', this.theme === 'dark')
+      if (sizes) {
+        const parsed = JSON.parse(sizes)
+        if (parsed.sidebarWidth > 150) this.sidebarWidth = parsed.sidebarWidth
+        if (parsed.connListHeight > 100) this.connListHeight = parsed.connListHeight
+        if (parsed.editorHeight > 100) this.editorHeight = parsed.editorHeight
+      }
+    } catch {
+      // defaults are fine
+    } finally {
+      this.sizesLoaded = true
+    }
+  }
+
+  private sizeTimer: ReturnType<typeof setTimeout> | null = null
+
+  persistSizes() {
+    if (this.sizeTimer) clearTimeout(this.sizeTimer)
+    this.sizeTimer = setTimeout(() => {
+      void ipc.setAppState(
+        'layout_sizes',
+        JSON.stringify({
+          sidebarWidth: this.sidebarWidth,
+          connListHeight: this.connListHeight,
+          editorHeight: this.editorHeight,
+        }),
+      )
+    }, 500)
+  }
+}
+
+export const ui = new UiStore()

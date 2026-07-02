@@ -1,0 +1,19 @@
+# Rust / Tauri
+backend/target/
+backend/gen/
+
+# Node / Vite
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# IDE / OS
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
+
+# Local app data (never commit user data / credentials)
+*.db
+*.sqlite
+!spec/**

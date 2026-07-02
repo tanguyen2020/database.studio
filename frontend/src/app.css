@@ -1,0 +1,233 @@
+@import 'tailwindcss';
+@import 'tw-animate-css';
+
+@custom-variant dark (&:is(.dark *));
+
+/* ---------------------------------------------------------------------------
+ * Design tokens — exact values from the design handoff (README §Design Tokens).
+ * Dark is the default theme; `.dark` on <html> is set at startup and the
+ * title-bar toggle removes it for light mode.
+ * ------------------------------------------------------------------------- */
+
+:root {
+  /* light theme */
+  --bg: #eef1f7;
+  --surface: #ffffff;
+  --panel: #f4f6fb;
+  --raised: #ffffff;
+  --border: #e2e6ef;
+  --border2: #d2d8e4;
+  --text: #1f2937;
+  --text2: #4b5563;
+  --muted: #8a93a6;
+  --header: #f4f6fb;
+  --hover: #eef1f7;
+  --primary: #3858e9;
+  --grid-zebra: #f7f9fc;
+
+  /* semantic status */
+  --success: #27ae60;
+  --warn: #f0a020;
+  --warn2: #f0c674;
+  --error: #e06c75;
+  --diff-highlight: rgba(74, 110, 224, 0.2);
+
+  --radius: 0.5rem;
+
+  /* shadcn-svelte mapping */
+  --background: var(--bg);
+  --foreground: var(--text);
+  --card: var(--surface);
+  --card-foreground: var(--text);
+  --popover: var(--raised);
+  --popover-foreground: var(--text);
+  --primary-foreground: #ffffff;
+  --secondary: var(--panel);
+  --secondary-foreground: var(--text);
+  --muted-bg: var(--panel);
+  --muted-foreground: var(--muted);
+  --accent: var(--hover);
+  --accent-foreground: var(--text);
+  --destructive: var(--error);
+  --destructive-foreground: #ffffff;
+  --input: var(--border2);
+  --ring: var(--primary);
+}
+
+.dark {
+  --bg: #0f1219;
+  --surface: #161a23;
+  --panel: #1b1f2a;
+  --raised: #222838;
+  --border: #272d3a;
+  --border2: #333b4d;
+  --text: #e6e9f0;
+  --text2: #aab2c4;
+  --muted: #6b7486;
+  --header: #13161f;
+  --hover: #1f2533;
+  --primary: #5b7cff;
+  --grid-zebra: #181c26;
+
+  --primary-foreground: #ffffff;
+  --destructive-foreground: #ffffff;
+}
+
+/* ---------------------------------------------------------------------------
+ * Color Identity System — 10 systems + orphaned (source: prototype SYS map).
+ * Same values in both themes; light mode uses accent for borders/icons.
+ * ------------------------------------------------------------------------- */
+
+:root {
+  --sys-postgres-accent: #336791;
+  --sys-postgres-bg: #1a3a52;
+  --sys-postgres-border: #2a5a7a;
+  --sys-postgres-fg: #7ec8f0;
+
+  --sys-mysql-accent: #f29111;
+  --sys-mysql-bg: #3d2800;
+  --sys-mysql-border: #6b4400;
+  --sys-mysql-fg: #f5b84a;
+
+  --sys-mariadb-accent: #c0765a;
+  --sys-mariadb-bg: #2e1a12;
+  --sys-mariadb-border: #5c3020;
+  --sys-mariadb-fg: #e8a882;
+
+  --sys-mssql-accent: #cc2927;
+  --sys-mssql-bg: #3d0a09;
+  --sys-mssql-border: #6b1515;
+  --sys-mssql-fg: #f08080;
+
+  --sys-sqlite-accent: #0f80cc;
+  --sys-sqlite-bg: #0a1e35;
+  --sys-sqlite-border: #12406a;
+  --sys-sqlite-fg: #60b8f5;
+
+  --sys-clickhouse-accent: #ffcc00;
+  --sys-clickhouse-bg: #33290a;
+  --sys-clickhouse-border: #665514;
+  --sys-clickhouse-fg: #ffe066;
+
+  --sys-cassandra-accent: #1287b1;
+  --sys-cassandra-bg: #0a2030;
+  --sys-cassandra-border: #134f72;
+  --sys-cassandra-fg: #5cc4e8;
+
+  --sys-redis-accent: #d82c20;
+  --sys-redis-bg: #3d0c08;
+  --sys-redis-border: #6b1a14;
+  --sys-redis-fg: #f07070;
+
+  --sys-kafka-accent: #8b5cf6;
+  --sys-kafka-bg: #1e1a2e;
+  --sys-kafka-border: #3d2f6b;
+  --sys-kafka-fg: #c4b5fd;
+
+  --sys-nats-accent: #27ae60;
+  --sys-nats-bg: #0d2e1a;
+  --sys-nats-border: #1a5c35;
+  --sys-nats-fg: #6ee7a0;
+
+  --sys-orphan-accent: #5b6473;
+  --sys-orphan-bg: #2a2f3a;
+  --sys-orphan-border: #3a4150;
+  --sys-orphan-fg: #9aa4b8;
+
+  /* environment tags */
+  --env-production: #e05252;
+  --env-staging: #f0a020;
+  --env-development: #27ae60;
+  --env-local: #8b5cf6;
+}
+
+/* ---------------------------------------------------------------------------
+ * Tailwind theme mapping (v4)
+ * ------------------------------------------------------------------------- */
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted-bg);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  /* app-specific surfaces */
+  --color-surface: var(--surface);
+  --color-panel: var(--panel);
+  --color-raised: var(--raised);
+  --color-header: var(--header);
+  --color-hover: var(--hover);
+  --color-zebra: var(--grid-zebra);
+  --color-border2: var(--border2);
+  --color-text2: var(--text2);
+  --color-mutedfg: var(--muted);
+  --color-success: var(--success);
+  --color-warn: var(--warn);
+  --color-error: var(--error);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  --font-sans: 'Inter', 'Be Vietnam Pro', 'Segoe UI', -apple-system, sans-serif;
+  --font-mono: 'Cascadia Code', 'JetBrains Mono', Consolas, 'Courier New', monospace;
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  html,
+  body,
+  #app {
+    height: 100%;
+    overflow: hidden;
+  }
+  body {
+    @apply bg-background text-foreground font-sans text-[13px];
+    -webkit-font-smoothing: antialiased;
+    user-select: none;
+  }
+  .mono {
+    font-family: var(--font-mono);
+  }
+  /* text selection allowed inside editors/grids */
+  .selectable {
+    user-select: text;
+  }
+}
+
+/* thin scrollbars, IDE-style */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border2);
+  border-radius: 5px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--muted);
+  background-clip: content-box;
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
