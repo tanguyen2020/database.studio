@@ -10,11 +10,14 @@ Một dev chưa từng đọc hội thoại vẫn implement được chỉ từ 
 1. **`DATABASE_STUDIO_SPEC_v2.md`** ← bắt đầu ở đây.
    Spec đầy đủ + **nhãn trạng thái từng tính năng** (✅ REAL / 🟡 NEEDS-REAL-IO / 🟠 MOCK-UI /
    🔴 SHELL / ⛔ HARDCODED). Cho biết cái nào chỉ cần nối backend, cái nào phải viết lại.
-2. **`SPEC_UPDATE.md`** — bản delta ngắn, chỉ tập trung "cái nào thật / cái nào giả" (nếu cần bản gọn).
+2. **4 addendum** (ghi đè SPEC_v2 khi mâu thuẫn): `CASSANDRA_SPEC_ADDENDUM.md`,
+   `CLICKHOUSE_SPEC_ADDENDUM.md`, `EXECUTE_PLAN_AND_INDEX_SCAN_ADDENDUM.md`,
+   `QUERY_EDITOR_ERROR_HANDLING_ADDENDUM.md`.
 3. **`README.md`** — handoff kỹ thuật chi tiết: design tokens, bảng màu chính xác, layout từng màn hình,
    context menu, state fields, tab types, ClickHouse specifics.
-4. **`overview.md`** — product spec gốc: tầm nhìn, tech stack (Tauri 2 + Svelte 5), roadmap theo phase,
-   chi tiết UX từng khu vực (Explorer, Redis/Kafka/NATS, ER Diagram…).
+4. **`../../overview.md`** (spec/overview.md) — product spec đã hợp nhất 10 hệ: tầm nhìn, tech stack
+   (Tauri 2 + Svelte 5), roadmap theo phase, chi tiết UX từng khu vực (Explorer, Redis/Kafka/NATS, ER Diagram…).
+   Kèm checklist từng phase: `../../phase-1..6` + `../../phase-4b-cassandra.md`.
 
 ## Design source of truth
 

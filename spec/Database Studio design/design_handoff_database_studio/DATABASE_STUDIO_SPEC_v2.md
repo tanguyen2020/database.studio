@@ -195,7 +195,7 @@ backup hạ tầng; lưu artifact vào storage; entry mang `sizeMB` thật + đ�
 - **Object Explorer** dạng cây riêng từng hệ (schema→tables/views/functions/procs/triggers/sequences/
   indexes/constraints; SQLite file tree; Cassandra keyspace→partition/clustering key, MV, UDT, UDF, secondary
   index; Redis/Kafka/NATS tree). Icon + màu riêng từng loại object; metadata (số dòng, kiểu khóa);
-  refresh node lẻ; pin; context menu phong phú theo loại (xem `overview.md` §3.2 để biết đầy đủ menu items);
+  refresh node lẻ; pin; context menu phong phú theo loại (xem `spec/overview.md` §3.2 để biết đầy đủ menu items);
   kéo-thả table vào ER.
 - **ER Diagram** — xem quan hệ + kéo-thả từ Explorer; diagram trống dựng mới. **Cần:** auto-layout (Dagre),
   zoom/pan/fit, mini-map, cardinality, export PNG/SVG/**Mermaid**. Prototype vẽ SVG tĩnh — nối schema thật.
@@ -289,7 +289,7 @@ cho mọi query** (xem §4.2); Tauri strict CSP, no remote code.
 7. **§5 editable grid** (pending changes → Apply thật) + **§12 persist tabs**.
 8. **Security pass:** parameterize query, ẩn credential, phân quyền migration/restore.
 
-Bám roadmap theo phase trong `overview.md` §5 (Tauri 2 + Svelte 5) nếu làm mới từ đầu.
+Bám roadmap theo phase trong `spec/overview.md` §5 + các file `spec/phase-*.md` (Tauri 2 + Svelte 5) nếu làm mới từ đầu.
 
 ---
 
@@ -317,4 +317,3 @@ Multi-user/team sharing · cloud sync · MongoDB · query scheduler · Kafka Mir
 - `uploads/overview.md` — product spec gốc (tầm nhìn, tech stack, roadmap, chi tiết UX từng màn hình).
 - `README.md` / `FEATURES.md` — feature catalog đầy đủ.
 - `design_handoff_database_studio/README.md` — handoff kỹ thuật (design tokens, màu, state fields, tab types).
-- `handoff/SPEC_UPDATE.md` — bản delta ngắn chỉ tập trung "cái nào thật / cái nào cần code lại".

@@ -320,7 +320,7 @@ pulled up so the panel never overflows off-screen.
 - **Theme toggle** (dark/light) in the title bar; toggles the `ds-light` class on `.ds`.
 - **Resizers** for sidebar width, connection-list height, editor/result split — all persisted.
 - **Toasts/flashes** for transient confirmations; in production, border-left should carry the
-  originating connection's accent color (see `overview.md` §2.6).
+  originating connection's accent color (see `spec/overview.md` §2.6).
 
 ---
 
@@ -347,7 +347,7 @@ Map these onto your framework's store(s):
 **Data fetching (production):** every read in the prototype is mock data. Replace with real
 driver calls — `sqlx`/`tiberius` for relational, a ClickHouse HTTP/native client for
 ClickHouse, `redis-rs`, `rdkafka`, `async-nats` — behind the IPC layer described in
-`overview.md` §3.
+`spec/overview.md` §3.
 
 ---
 
@@ -691,8 +691,8 @@ a monospace stack (`class="mono"`) for SQL, identifiers, and code/diff views.
 
 - `Database Studio.dc.html` — the full prototype (single file: markup + logic). Primary
   reference for layout, behavior, and exact values.
-- `overview.md` — the original product spec (broader vision, tech stack, roadmap, security,
-  per-broker feature lists). Read alongside this README.
+- `../../overview.md` (`spec/overview.md`) — the consolidated product spec (broader vision,
+  tech stack, roadmap, security, per-broker feature lists). Read alongside this README.
 - `screenshots/` — reference captures of key views (compare, clickhouse, connection dropdown,
   toolbar icons, my-db) if included.
 
