@@ -63,8 +63,7 @@ impl MySqlDriver {
 
     pub async fn exec(&mut self, sql: &str) -> Result<StatementOutcome, QueryError> {
         if util::returns_rows(sql) {
-            let rows = sqlx::raw_sql(sql)
-                .fetch_all(&mut self.conn)
+            let rows = fetch_all(&mut self.conn, sql)
                 .await
                 .map_err(|e| map_exec_error(self.system, &e))?;
             let mut cols: Vec<ColumnDef> = Vec::new();
@@ -72,7 +71,7 @@ impl MySqlDriver {
                 for c in first.columns() {
                     cols.push((c.name().to_string(), c.type_info().name().to_lowercase()));
                 }
-            } else if let Ok(desc) = self.conn.describe(sql).await {
+            } else if let Ok(desc) = describe(&mut self.conn, sql).await {
                 for c in desc.columns() {
                     cols.push((c.name().to_string(), c.type_info().name().to_lowercase()));
                 }
@@ -88,8 +87,7 @@ impl MySqlDriver {
             let total = out_rows.len() as u64;
             Ok(StatementOutcome::Rows { result: QueryResultSet { cols, rows: out_rows, total } })
         } else {
-            let res = sqlx::raw_sql(sql)
-                .execute(&mut self.conn)
+            let res = execute(&mut self.conn, sql)
                 .await
                 .map_err(|e| map_exec_error(self.system, &e))?;
             if util::is_dml(sql) {
@@ -306,6 +304,29 @@ impl MySqlDriver {
             })
             .collect())
     }
+}
+
+// Monomorphic helpers with a named connection lifetime — see postgres.rs for
+// why inline executor calls fail once the future is boxed/spawned.
+async fn fetch_all(
+    conn: &mut MySqlConnection,
+    sql: &str,
+) -> Result<Vec<sqlx::mysql::MySqlRow>, sqlx::Error> {
+    sqlx::query(sql).fetch_all(conn).await
+}
+
+async fn execute(
+    conn: &mut MySqlConnection,
+    sql: &str,
+) -> Result<sqlx::mysql::MySqlQueryResult, sqlx::Error> {
+    sqlx::query(sql).execute(conn).await
+}
+
+async fn describe(
+    conn: &mut MySqlConnection,
+    sql: &str,
+) -> Result<sqlx::Describe<sqlx::MySql>, sqlx::Error> {
+    conn.describe(sql).await
 }
 
 // ---------------------------------------------------------------------------

@@ -126,12 +126,18 @@ impl LiveConnection {
         }
     }
 
-    pub async fn exec(&mut self, sql: &str) -> Result<StatementOutcome, QueryError> {
+    /// Boxed to erase the drivers' opaque future types — awaiting the sqlx
+    /// futures directly inside a tokio::spawn'ed future trips a compiler
+    /// limitation ("implementation of Executor is not general enough").
+    pub fn exec<'a>(
+        &'a mut self,
+        sql: &'a str,
+    ) -> futures::future::BoxFuture<'a, Result<StatementOutcome, QueryError>> {
         match self {
-            Self::Postgres(d) => d.exec(sql).await,
-            Self::MySql(d) => d.exec(sql).await,
-            Self::Mssql(d) => d.exec(sql).await,
-            Self::Sqlite(d) => d.exec(sql).await,
+            Self::Postgres(d) => Box::pin(d.exec(sql)),
+            Self::MySql(d) => Box::pin(d.exec(sql)),
+            Self::Mssql(d) => Box::pin(d.exec(sql)),
+            Self::Sqlite(d) => Box::pin(d.exec(sql)),
         }
     }
 

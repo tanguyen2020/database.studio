@@ -74,11 +74,11 @@
         totalSize = inst.getTotalSize()
       },
     })
-    virtualizer._didMount()
+    const unmount = virtualizer._didMount()
     virtualizer._willUpdate()
     virtualItems = virtualizer.getVirtualItems()
     totalSize = virtualizer.getTotalSize()
-    return () => virtualizer._didMount()()
+    return unmount
   })
 
   const isDatetimeType = (type: string) =>

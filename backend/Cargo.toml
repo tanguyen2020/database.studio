@@ -40,10 +40,10 @@ tiberius = { version = "0.12", default-features = false, features = [
   "rust_decimal",
   "winauth",
 ] }
-rusqlite = { version = "0.32", features = ["bundled", "backup"] }
+rusqlite = { version = "0.32", features = ["bundled", "backup", "column_decltype"] }
 
 # SSH tunnel
-russh = "0.49"
+russh = { version = "0.54", default-features = false, features = ["ring", "flate2", "rsa"] }
 
 # Security: password encryption + OS keychain
 aes-gcm = "0.10"

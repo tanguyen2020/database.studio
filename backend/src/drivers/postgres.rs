@@ -64,8 +64,7 @@ impl PgDriver {
 
     pub async fn exec(&mut self, sql: &str) -> Result<StatementOutcome, QueryError> {
         if util::returns_rows(sql) {
-            let rows = sqlx::raw_sql(sql)
-                .fetch_all(&mut self.conn)
+            let rows = fetch_all(&mut self.conn, sql)
                 .await
                 .map_err(|e| map_exec_error("postgres", sql, &e))?;
             let mut cols: Vec<ColumnDef> = Vec::new();
@@ -74,12 +73,10 @@ impl PgDriver {
                 for c in first.columns() {
                     cols.push((c.name().to_string(), c.type_info().name().to_lowercase()));
                 }
-            } else {
+            } else if let Ok(desc) = describe(&mut self.conn, sql).await {
                 // Zero rows: describe the statement to still get column headers.
-                if let Ok(desc) = self.conn.describe(sql).await {
-                    for c in desc.columns() {
-                        cols.push((c.name().to_string(), c.type_info().name().to_lowercase()));
-                    }
+                for c in desc.columns() {
+                    cols.push((c.name().to_string(), c.type_info().name().to_lowercase()));
                 }
             }
             for row in &rows {
@@ -94,8 +91,7 @@ impl PgDriver {
                 result: QueryResultSet { cols, rows: out_rows, total },
             })
         } else {
-            let res = sqlx::raw_sql(sql)
-                .execute(&mut self.conn)
+            let res = execute(&mut self.conn, sql)
                 .await
                 .map_err(|e| map_exec_error("postgres", sql, &e))?;
             if util::is_dml(sql) {
@@ -342,6 +338,31 @@ impl PgDriver {
             .map(|r| SequenceInfo { schema: schema.to_string(), name: r.get(0) })
             .collect())
     }
+}
+
+// Monomorphic helpers with a *named* connection lifetime. Calling sqlx
+// executor methods on `&mut self.conn` inline creates a for<'any> Executor
+// obligation the trait solver cannot discharge once the future is boxed/spawned
+// ("implementation of Executor is not general enough").
+async fn fetch_all(
+    conn: &mut PgConnection,
+    sql: &str,
+) -> Result<Vec<sqlx::postgres::PgRow>, sqlx::Error> {
+    sqlx::query(sql).fetch_all(conn).await
+}
+
+async fn execute(
+    conn: &mut PgConnection,
+    sql: &str,
+) -> Result<sqlx::postgres::PgQueryResult, sqlx::Error> {
+    sqlx::query(sql).execute(conn).await
+}
+
+async fn describe(
+    conn: &mut PgConnection,
+    sql: &str,
+) -> Result<sqlx::Describe<sqlx::Postgres>, sqlx::Error> {
+    conn.describe(sql).await
 }
 
 /// "name type, name type DEFAULT x" → params (best-effort split).

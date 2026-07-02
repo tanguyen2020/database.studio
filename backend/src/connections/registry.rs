@@ -31,6 +31,17 @@ pub struct Registry {
     entries: Mutex<HashMap<String, LiveEntry>>,
 }
 
+/// Named future for tokio::spawn — an inline async block here trips a
+/// compiler limitation ("implementation of Executor is not general enough")
+/// with sqlx's lifetime-parameterized Executor impls.
+async fn run_statement(
+    driver: Arc<tokio::sync::Mutex<LiveConnection>>,
+    sql: String,
+) -> Result<crate::drivers::types::StatementOutcome, QueryError> {
+    let mut d = driver.lock().await;
+    d.exec(&sql).await
+}
+
 impl Registry {
     pub fn is_connected(&self, id: &str) -> bool {
         self.entries.lock().unwrap().contains_key(id)
@@ -154,10 +165,7 @@ impl Registry {
                 .unwrap_or("unknown")
         };
 
-        let task = tokio::spawn(async move {
-            let mut d = driver.lock().await;
-            d.exec(&sql).await
-        });
+        let task = tokio::spawn(run_statement(driver, sql));
         // Register the abort handle so `cancel` can reach it.
         {
             let mut map = self.entries.lock().unwrap();

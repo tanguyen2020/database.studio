@@ -88,7 +88,7 @@ impl MssqlDriver {
 
     pub async fn exec(&mut self, sql: &str) -> Result<StatementOutcome, QueryError> {
         if util::returns_rows(sql) {
-            let stream = self.client.simple_query(sql).await.map_err(|e| map_error(&e))?;
+            let mut stream = self.client.simple_query(sql).await.map_err(|e| map_error(&e))?;
             let cols_meta = stream
                 .columns()
                 .await

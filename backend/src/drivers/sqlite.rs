@@ -96,15 +96,14 @@ impl SqliteDriver {
             let mut stmt = c.prepare(&sql).map_err(|e| map_rusqlite_error(&e))?;
             if stmt.column_count() > 0 {
                 let cols: Vec<ColumnDef> = stmt
-                    .column_names()
+                    .columns()
                     .iter()
-                    .enumerate()
-                    .map(|(i, name)| {
-                        let dtype = stmt
-                            .column_decltype(i)
+                    .map(|c| {
+                        let dtype = c
+                            .decl_type()
                             .map(|t| t.to_lowercase())
                             .unwrap_or_else(|| "dynamic".to_string());
-                        (name.to_string(), dtype)
+                        (c.name().to_string(), dtype)
                     })
                     .collect();
                 let col_names: Vec<String> = cols.iter().map(|(n, _)| n.clone()).collect();
