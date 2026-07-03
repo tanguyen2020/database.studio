@@ -12,6 +12,9 @@ const SRC = path.join(ROOT, 'src')
 
 // File sinh tự động / file không phải UI được miễn
 const EXEMPT = new Set(['tokens.css', 'systems.gen.ts'])
+// shadcn-svelte primitives (stack đã chốt) — style mặc định của thư viện,
+// mọi chỗ DÙNG chúng trong app đều override bằng token
+const EXEMPT_DIRS = [path.join('components', 'ui') + path.sep]
 
 function* walk(dir) {
   for (const name of readdirSync(dir)) {
@@ -25,6 +28,7 @@ const violations = []
 for (const file of walk(SRC)) {
   const base = path.basename(file)
   if (EXEMPT.has(base)) continue
+  if (EXEMPT_DIRS.some((d) => file.includes(d))) continue
   if (!/\.(svelte|css)$/.test(file)) continue
 
   const rel = path.relative(ROOT, file)

@@ -62,44 +62,53 @@
   })
 </script>
 
-<div class="flex h-full min-h-0 flex-col">
-  <div class="flex h-[34px] shrink-0 items-center gap-2 border-b border-border bg-header px-2 text-[12px]">
+<div style="flex:1;display:flex;flex-direction:column;min-height:0">
+  <!-- toolbar table viewer — cùng ngôn ngữ editor toolbar (dòng 230) -->
+  <div style="flex:none;display:flex;align-items:center;gap:var(--px-8);padding:var(--px-7) var(--px-12);border-bottom:var(--px-1) solid var(--border);background:var(--surface);font-size:var(--px-12)">
     {#if profile}
       <SystemBadge system={profile.system} />
     {/if}
     <span class="mono">{schema}.{table}</span>
-    <div class="grow"></div>
-    <label class="flex items-center gap-1 text-[11px] text-text2">
-      Limit
-      <select
-        class="rounded border border-input bg-surface px-1 py-0.5 text-[11px]"
-        bind:value={limit}
-        onchange={load}
-      >
-        <option value={100}>100</option>
-        <option value={500}>500</option>
-        <option value={1000}>1000</option>
-      </select>
-    </label>
-    <button class="rounded px-1.5 py-0.5 text-text2 hover:bg-hover" title="Refresh" onclick={load}>⟳</button>
-    {#if data}
-      <span class="text-[11px] text-mutedfg">{data.total.toLocaleString()} rows · {durationMs} ms</span>
-    {/if}
+    <div style="margin-left:auto;display:flex;align-items:center;gap:var(--px-8)">
+      <label style="display:flex;align-items:center;gap:var(--px-4);font-size:var(--px-11);color:var(--text2)">
+        Limit
+        <select
+          style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-5);padding:var(--px-2) var(--px-4);font-size:var(--px-11);color:var(--text)"
+          bind:value={limit}
+          onchange={load}
+        >
+          <option value={100}>100</option>
+          <option value={500}>500</option>
+          <option value={1000}>1000</option>
+        </select>
+      </label>
+      <span
+        onclick={load}
+        onkeydown={(e) => e.key === 'Enter' && load()}
+        role="button"
+        tabindex="0"
+        title="Refresh"
+        style="color:var(--muted);cursor:pointer;font-size:var(--px-13)"
+      >⟳</span>
+      {#if data}
+        <span class="mono" style="font-size:var(--px-11);color:var(--muted)">{data.total.toLocaleString()} rows · {durationMs} ms</span>
+      {/if}
+    </div>
   </div>
-  <div class="min-h-0 grow">
+  <div style="min-height:0;flex:1;display:flex;flex-direction:column">
     {#if loading}
-      <div class="flex h-full items-center justify-center text-[12px] text-mutedfg">Đang tải…</div>
+      <div style="flex:1;display:flex;align-items:center;justify-content:center;font-size:var(--px-12);color:var(--muted)">Đang tải…</div>
     {:else if error}
-      <div class="selectable p-4 text-[12.5px] text-error">
+      <div class="selectable" style="padding:var(--px-16);font-size:var(--px-12_5);color:var(--error)">
         ✗ {error.message}
         {#if error.hint}
-          <div class="mt-1 text-warn">💡 {error.hint}</div>
+          <div style="margin-top:var(--px-4);color:var(--warn)">💡 {error.hint}</div>
         {/if}
       </div>
     {:else if data}
       <ResultGrid {data} />
     {:else}
-      <div class="flex h-full items-center justify-center text-[12px] text-mutedfg">
+      <div style="flex:1;display:flex;align-items:center;justify-content:center;font-size:var(--px-12);color:var(--muted)">
         {profile ? 'Không có dữ liệu' : 'Connection không tồn tại'}
       </div>
     {/if}

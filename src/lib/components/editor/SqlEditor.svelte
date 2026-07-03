@@ -61,7 +61,7 @@
   const editorTheme = EditorView.theme({
     '&': {
       height: '100%',
-      fontSize: '13px',
+      fontSize: 'var(--px-13)',
       backgroundColor: 'var(--surface)',
       color: 'var(--text)',
     },
@@ -73,22 +73,22 @@
       backgroundColor: 'var(--surface)',
       color: 'var(--muted)',
       border: 'none',
-      borderRight: '1px solid var(--border)',
+      borderRight: 'var(--px-1) solid var(--border)',
     },
     '.cm-activeLine': { backgroundColor: 'var(--hover)' },
     '.cm-activeLineGutter': { backgroundColor: 'var(--hover)' },
     '&.cm-focused .cm-selectionBackground, .cm-selectionBackground': {
-      backgroundColor: 'var(--diff-highlight) !important',
+      backgroundColor: 'var(--rgba-74-110-224-_20) !important',
     },
     '.cm-cursor': { borderLeftColor: 'var(--text)' },
     '.cm-lintRange-error': {
       backgroundImage: 'none',
-      textDecoration: 'underline wavy var(--error) 1px',
+      textDecoration: 'underline wavy var(--error) var(--px-1)',
     },
     '.cm-tooltip': {
       backgroundColor: 'var(--raised)',
       color: 'var(--text)',
-      border: '1px solid var(--border2)',
+      border: 'var(--px-1) solid var(--border2)',
     },
   })
 

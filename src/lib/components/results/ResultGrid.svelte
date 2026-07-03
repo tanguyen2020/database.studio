@@ -259,7 +259,7 @@
     </tbody>
   </table>
   {#if rowCount === 0}
-    <div class="px-3 py-4 text-[12px] text-mutedfg">0 rows</div>
+    <div style="padding:var(--px-12);font-size:var(--px-12);color:var(--muted)">0 rows</div>
   {/if}
 </div>
 

@@ -1,7 +1,8 @@
 <script lang="ts">
-  // Status bar: ● accent dot (gray when disconnected) · connection name ·
-  // system badge · current schema · latency · row count of the active result.
-  import SystemBadge from '$lib/components/SystemBadge.svelte'
+  // Status bar — port 1:1 từ Database Studio.dc.html dòng 1501-1507:
+  // 27px nền --header, dot 7px màu accent (xám orphan khi disconnected) +
+  // connName + icon hệ + object hiện tại (mono) | latency (mono) + rows (mono).
+  import SystemIcon from '$lib/components/SystemIcon.svelte'
   import { systemMeta } from '$lib/systems'
   import { connections } from '$lib/stores/connections.svelte'
   import { explorer } from '$lib/stores/explorer.svelte'
@@ -16,38 +17,30 @@
     const schemas = explorer.cache[profile.id]?.schemas
     return schemas?.find((s) => s.is_default)?.name ?? schemas?.[0]?.name ?? null
   })
+
+  // active.dot (dòng 4649): connected → accent, không thì màu orphan
+  const dot = $derived(
+    profile?.connected ? systemMeta(profile.system).accent : 'var(--sys-orphan-accent)',
+  )
+  // statusLatency (dòng 4819)
+  const latency = $derived(
+    profile ? (profile.connected ? `${profile.latency_ms ?? '–'}ms` : 'disconnected') : '',
+  )
 </script>
 
-<div class="flex h-[24px] shrink-0 items-center gap-2 border-t border-border bg-header px-2 text-[11px] text-text2">
+<div style="flex:none;height:var(--px-27);display:flex;align-items:center;gap:var(--px-14);padding:0 var(--px-14);background:var(--header);border-top:var(--px-1) solid var(--border);font-size:var(--px-11);color:var(--text2)">
+  <span style="display:flex;align-items:center;gap:var(--px-6)">
+    <span style="width:var(--px-7);height:var(--px-7);border-radius:50%;background:{dot}"></span>
+    {profile?.name ?? (tab?.systemType === 'orphan' ? '(deleted)' : 'No connection')}
+  </span>
   {#if profile}
-    <span
-      class="h-[7px] w-[7px] rounded-full"
-      style="background: {profile.connected ? systemMeta(profile.system).accent : 'var(--border2)'};"
-    ></span>
-    <span class="font-medium text-foreground">{profile.name}</span>
-    <SystemBadge system={profile.system} />
-    {#if currentSchema}
-      <span class="mono">{currentSchema}</span>
-    {/if}
-    {#if profile.connected && profile.latency_ms != null}
-      <span class="text-mutedfg">·</span>
-      <span>{profile.latency_ms} ms</span>
-    {/if}
-  {:else if tab?.systemType === 'orphan'}
-    <SystemBadge system="orphan" />
-    <span class="text-mutedfg">orphaned tab</span>
-  {:else}
-    <span class="h-[7px] w-[7px] rounded-full bg-border2"></span>
-    <span class="text-mutedfg">No connection</span>
+    <span style="display:flex;align-items:center"><SystemIcon system={profile.system} size={14} /></span>
   {/if}
-  <div class="grow"></div>
-  {#if exec?.running}
-    <span class="animate-pulse">Đang chạy…</span>
-  {:else if exec}
-    <span>{exec.totalMs} ms</span>
-    {#if exec.lastRowCount != null}
-      <span class="text-mutedfg">·</span>
-      <span>{exec.lastRowCount.toLocaleString()} rows</span>
-    {/if}
-  {/if}
+  <span class="mono">{currentSchema ?? '—'}</span>
+  <span class="mono" style="margin-left:auto">
+    {#if exec?.running}Đang chạy…{:else if exec}{exec.totalMs}ms{:else}{latency}{/if}
+  </span>
+  <span class="mono">
+    {#if exec && !exec.running && exec.lastRowCount != null}{exec.lastRowCount.toLocaleString()} rows{/if}
+  </span>
 </div>
