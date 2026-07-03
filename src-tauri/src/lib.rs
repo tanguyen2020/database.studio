@@ -56,6 +56,11 @@ pub fn run() {
             commands::sqlite::sqlite_file_info,
             commands::sqlite::sqlite_set_pragma,
             commands::sqlite::sqlite_integrity_check,
+            // history + snippets
+            commands::library::list_history,
+            commands::library::list_snippets,
+            commands::library::save_snippet,
+            commands::library::delete_snippet,
             // tabs + app state
             commands::tabs::save_tabs,
             commands::tabs::load_tabs,

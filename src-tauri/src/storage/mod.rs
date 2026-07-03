@@ -10,9 +10,32 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use rusqlite::{params, Connection};
+use serde::{Deserialize, Serialize};
 
 use crate::connections::profile::ConnectionProfile;
 use crate::error::{AppError, AppResult};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HistoryEntry {
+    pub connection_id: String,
+    pub system: String,
+    pub sql: String,
+    pub duration_ms: Option<i64>,
+    pub row_count: Option<i64>,
+    pub ok: bool,
+    pub error: Option<String>,
+    pub executed_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Snippet {
+    pub id: String,
+    pub name: String,
+    pub sql: String,
+    pub system: Option<String>,
+    #[serde(default)]
+    pub updated_at: String,
+}
 
 pub struct Storage {
     conn: Mutex<Connection>,
@@ -51,6 +74,15 @@ CREATE INDEX IF NOT EXISTS idx_history_conn ON query_history(connection_id, exec
 CREATE TABLE IF NOT EXISTS app_state (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS snippets (
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    sql         TEXT NOT NULL,
+    system      TEXT,               -- optional dialect hint
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 "#;
 
@@ -171,6 +203,94 @@ impl Storage {
                 error
             ],
         )?;
+        Ok(())
+    }
+
+    // ---- query history (Ctrl+H panel) ---------------------------------------
+
+    /// Lịch sử query, mới nhất trước. `search` lọc theo SQL (substring, không
+    /// phân biệt hoa/thường); `conn_id` None = tất cả connection.
+    pub fn list_history(
+        &self,
+        conn_id: Option<&str>,
+        search: Option<&str>,
+        limit: i64,
+    ) -> AppResult<Vec<HistoryEntry>> {
+        let conn = self.conn.lock().unwrap();
+        let like = search.map(|s| format!("%{}%", s.replace('%', "\\%").replace('_', "\\_")));
+        let mut sql = String::from(
+            "SELECT connection_id, system, sql, duration_ms, row_count, ok, error, executed_at
+             FROM query_history",
+        );
+        let mut clauses = Vec::new();
+        if conn_id.is_some() {
+            clauses.push("connection_id = ?1");
+        }
+        if like.is_some() {
+            clauses.push(if conn_id.is_some() { "sql LIKE ?2 ESCAPE '\\'" } else { "sql LIKE ?1 ESCAPE '\\'" });
+        }
+        if !clauses.is_empty() {
+            sql.push_str(" WHERE ");
+            sql.push_str(&clauses.join(" AND "));
+        }
+        sql.push_str(" ORDER BY executed_at DESC, id DESC LIMIT ");
+        sql.push_str(&limit.to_string());
+
+        let mut stmt = conn.prepare(&sql)?;
+        let map_row = |r: &rusqlite::Row| -> rusqlite::Result<HistoryEntry> {
+            Ok(HistoryEntry {
+                connection_id: r.get(0)?,
+                system: r.get(1)?,
+                sql: r.get(2)?,
+                duration_ms: r.get(3)?,
+                row_count: r.get(4)?,
+                ok: r.get::<_, i64>(5)? != 0,
+                error: r.get(6)?,
+                executed_at: r.get(7)?,
+            })
+        };
+        let rows = match (conn_id, &like) {
+            (Some(c), Some(l)) => stmt.query_map(params![c, l], map_row)?.collect::<Result<Vec<_>, _>>(),
+            (Some(c), None) => stmt.query_map(params![c], map_row)?.collect::<Result<Vec<_>, _>>(),
+            (None, Some(l)) => stmt.query_map(params![l], map_row)?.collect::<Result<Vec<_>, _>>(),
+            (None, None) => stmt.query_map([], map_row)?.collect::<Result<Vec<_>, _>>(),
+        }?;
+        Ok(rows)
+    }
+
+    // ---- snippets (Ctrl+S saved queries) ------------------------------------
+
+    pub fn list_snippets(&self) -> AppResult<Vec<Snippet>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT id, name, sql, system, updated_at FROM snippets ORDER BY updated_at DESC")?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(Snippet {
+                    id: r.get(0)?,
+                    name: r.get(1)?,
+                    sql: r.get(2)?,
+                    system: r.get(3)?,
+                    updated_at: r.get(4)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    pub fn save_snippet(&self, s: &Snippet) -> AppResult<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO snippets (id, name, sql, system) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(id) DO UPDATE SET name = ?2, sql = ?3, system = ?4, updated_at = datetime('now')",
+            params![s.id, s.name, s.sql, s.system],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_snippet(&self, id: &str) -> AppResult<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM snippets WHERE id = ?1", params![id])?;
         Ok(())
     }
 

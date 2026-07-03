@@ -3,6 +3,7 @@
   // logo D gradient 20px + tên app; phải: Saved / History / Sessions (Phase 2+,
   // toast) + theme toggle. Chiều cao 42px nền --header.
   import { toasts } from '$lib/stores/toast.svelte'
+  import { tabs } from '$lib/stores/tabs.svelte'
   import { ui } from '$lib/stores/ui.svelte'
 
   const themeIcon = $derived(ui.theme === 'dark' ? '☾' : '☀')
@@ -19,10 +20,10 @@
     <span style="font-weight:700;letter-spacing:-.01em">Database Studio</span>
   </div>
   <div style="margin-left:auto;display:flex;align-items:center;gap:var(--px-8)">
-    <div class="tb-btn" onclick={() => later('Saved Queries', 'Phase 2')} onkeydown={(e) => e.key === 'Enter' && later('Saved Queries', 'Phase 2')} role="button" tabindex="0" title="Saved Queries">
+    <div class="tb-btn" onclick={() => tabs.openUtilityTab('saved', 'Saved Queries')} onkeydown={(e) => e.key === 'Enter' && tabs.openUtilityTab('saved', 'Saved Queries')} role="button" tabindex="0" title="Saved Queries (Ctrl+S)">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path></svg><span>Saved</span>
     </div>
-    <div class="tb-btn" onclick={() => later('Query History', 'Phase 2')} onkeydown={(e) => e.key === 'Enter' && later('Query History', 'Phase 2')} role="button" tabindex="0" title="Query History">
+    <div class="tb-btn" onclick={() => tabs.openUtilityTab('history', 'Query History')} onkeydown={(e) => e.key === 'Enter' && tabs.openUtilityTab('history', 'Query History')} role="button" tabindex="0" title="Query History (Ctrl+H)">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"></path><path d="M3 4v4h4"></path><path d="M12 8v4l3 2"></path></svg><span>History</span>
     </div>
     <div class="tb-btn" onclick={() => later('Session Monitor', 'Phase 5')} onkeydown={(e) => e.key === 'Enter' && later('Session Monitor', 'Phase 5')} role="button" tabindex="0" title="Session Monitor">

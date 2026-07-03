@@ -14,6 +14,8 @@
   import { toasts } from '$lib/stores/toast.svelte'
   import { ui } from '$lib/stores/ui.svelte'
   import { explorer } from '$lib/stores/explorer.svelte'
+  import { snippets } from '$lib/stores/snippets.svelte'
+  import { formatSql } from '$lib/sql/format'
   import { mapErrorToDocument } from '$lib/sql/errors'
   import { lintSql, schemaLints, toCmDiagnostics } from '$lib/sql/lint-client'
   import { splitStatements, statementAtOffset } from '$lib/sql/statements'
@@ -148,6 +150,37 @@
 
   function cancel() {
     if (tab.connectionId) void results.cancel(tab.id, tab.connectionId)
+  }
+
+  // Format SQL (Ctrl+Shift+F) — dialect-aware, giữ 1 transaction để undo
+  function doFormat() {
+    if (!editor) return
+    const doc = editor.getDoc()
+    const formatted = formatSql(tab.systemType, doc)
+    if (formatted !== doc) editor.setDoc(formatted)
+  }
+
+  // Explain (Ctrl+Shift+E) — Phase 2: gửi lệnh EXPLAIN text; visual plan → Phase 5
+  function doExplain() {
+    if (!editor || !tab.connectionId) return
+    const doc = editor.getDoc()
+    const stmt = statementAtOffset(doc, editor.getCursorOffset())
+    if (!stmt) return
+    const prefix = tab.systemType === 'mssql' ? 'SET SHOWPLAN_ALL ON; ' : 'EXPLAIN '
+    void results.run(tab.id, tab.connectionId, [
+      { ...stmt, sql: `${prefix}${stmt.sql}` },
+    ])
+  }
+
+  // Ctrl+S — lưu nội dung editor thành snippet (Saved Queries)
+  async function saveSnippet() {
+    if (!editor) return
+    const sqlText = editor.getDoc().trim()
+    if (!sqlText) return
+    const name = window.prompt('Tên snippet:', tab.title)
+    if (!name) return
+    await snippets.save(name, sqlText, tab.systemType === 'orphan' ? null : tab.systemType)
+    toasts.success(`Đã lưu snippet "${name}"`)
   }
 
   function jump(line: number, col: number) {
@@ -288,11 +321,11 @@
       </div>
     {/if}
 
-    <!-- Format / Explain / Convert / Split — visual theo HTML, chức năng phase sau -->
-    <div class="wk-tbtn" onclick={() => toasts.show('Format — Phase 2')} onkeydown={(e) => e.key === 'Enter' && toasts.show('Format — Phase 2')} role="button" tabindex="0">
+    <!-- Format (Ctrl+Shift+F) + Explain (Ctrl+Shift+E, text — visual plan Phase 5) -->
+    <div class="wk-tbtn" onclick={doFormat} onkeydown={(e) => e.key === 'Enter' && doFormat()} role="button" tabindex="0" title="Format SQL (Ctrl+Shift+F)">
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><line x1="4" y1="6" x2="20" y2="6"></line><line x1="4" y1="12" x2="14" y2="12"></line><line x1="4" y1="18" x2="18" y2="18"></line></svg>Format
     </div>
-    <div class="wk-tbtn" onclick={() => toasts.show('Explain — Phase 2 (visual plan Phase 5)')} onkeydown={(e) => e.key === 'Enter' && toasts.show('Explain — Phase 2 (visual plan Phase 5)')} role="button" tabindex="0">
+    <div class="wk-tbtn" onclick={doExplain} onkeydown={(e) => e.key === 'Enter' && doExplain()} role="button" tabindex="0" title="Explain (Ctrl+Shift+E) — visual plan ở Phase 5">
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="20" x2="6" y2="13"></line><line x1="12" y1="20" x2="12" y2="8"></line><line x1="18" y1="20" x2="18" y2="11"></line></svg>Explain
     </div>
     <div class="wk-tbtn" onclick={() => toasts.show('Convert dialect — Phase 2')} onkeydown={(e) => e.key === 'Enter' && toasts.show('Convert dialect — Phase 2')} role="button" tabindex="0" title="Convert SQL dialect">
@@ -321,6 +354,9 @@
       onRun={run}
       onRunAtCursor={runAtCursor}
       onCancel={cancel}
+      onFormat={doFormat}
+      onExplain={doExplain}
+      onSaveSnippet={saveSnippet}
     />
   </div>
 

@@ -84,6 +84,30 @@ class TabsStore {
     return tab
   }
 
+  /** Mở (hoặc focus nếu đã có) một tab tiện ích singleton — History / Saved. */
+  openUtilityTab(contentType: 'history' | 'saved', title: string): TabState {
+    const existing = this.tabs.find((t) => t.contentType === contentType)
+    if (existing) {
+      this.activeTabId = existing.id
+      return existing
+    }
+    const tab: TabState = {
+      id: uuid(),
+      connectionId: this.active?.connectionId ?? connections.selectedId ?? null,
+      connectionName: '',
+      systemType: 'orphan',
+      contentType,
+      title,
+      isPinned: false,
+      isDirty: false,
+      state: {},
+    }
+    this.tabs.push(tab)
+    this.activeTabId = tab.id
+    this.schedulePersist()
+    return tab
+  }
+
   activate(id: string) {
     if (this.byId(id)) this.activeTabId = id
   }

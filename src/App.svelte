@@ -17,6 +17,8 @@
   import ObjectExplorer from '$lib/components/explorer/ObjectExplorer.svelte'
   import SqlWorkspace from '$lib/components/workspace/SqlWorkspace.svelte'
   import TableViewerTab from '$lib/components/workspace/TableViewerTab.svelte'
+  import HistoryTab from '$lib/components/workspace/HistoryTab.svelte'
+  import SavedQueriesTab from '$lib/components/workspace/SavedQueriesTab.svelte'
   import { connections } from '$lib/stores/connections.svelte'
   import { tabs } from '$lib/stores/tabs.svelte'
   import { ui } from '$lib/stores/ui.svelte'
@@ -42,7 +44,10 @@
     if (!ctrl) return
     const key = e.key.toLowerCase()
 
-    if (key === 't' && !e.shiftKey) {
+    if (key === 'h') {
+      e.preventDefault()
+      tabs.openUtilityTab('history', 'Query History')
+    } else if (key === 't' && !e.shiftKey) {
       e.preventDefault()
       tabs.openSqlTab({})
     } else if (key === 'w') {
@@ -136,6 +141,10 @@
           {#key tabs.active.id}
             {#if tabs.active.contentType === 'table-viewer'}
               <TableViewerTab tab={tabs.active} />
+            {:else if tabs.active.contentType === 'history'}
+              <HistoryTab />
+            {:else if tabs.active.contentType === 'saved'}
+              <SavedQueriesTab />
             {:else}
               <SqlWorkspace tab={tabs.active} />
             {/if}

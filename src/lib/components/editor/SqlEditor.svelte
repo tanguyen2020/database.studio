@@ -43,6 +43,9 @@
     onRun?: () => void
     onRunAtCursor?: () => void
     onCancel?: () => void
+    onFormat?: () => void
+    onExplain?: () => void
+    onSaveSnippet?: () => void
   }
 
   let {
@@ -56,6 +59,9 @@
     onRun,
     onRunAtCursor,
     onCancel,
+    onFormat,
+    onExplain,
+    onSaveSnippet,
   }: Props = $props()
 
   let container = $state<HTMLDivElement | null>(null)
@@ -161,6 +167,27 @@
             },
           },
           {
+            key: 'Mod-Shift-f',
+            run: () => {
+              onFormat?.()
+              return true
+            },
+          },
+          {
+            key: 'Mod-Shift-e',
+            run: () => {
+              onExplain?.()
+              return true
+            },
+          },
+          {
+            key: 'Mod-s',
+            run: () => {
+              onSaveSnippet?.()
+              return true
+            },
+          },
+          {
             key: 'Escape',
             run: () => {
               onCancel?.()
@@ -197,6 +224,14 @@
 
   export function getDoc(): string {
     return view?.state.doc.toString() ?? ''
+  }
+
+  /** Thay toàn bộ nội dung (Format SQL) — giữ trong 1 transaction để undo được. */
+  export function setDoc(next: string) {
+    if (!view) return
+    view.dispatch({
+      changes: { from: 0, to: view.state.doc.length, insert: next },
+    })
   }
 
   export function getSelection(): string {

@@ -264,6 +264,23 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
       })
     case 'cancel_query':
       return ok({ cancelled: true })
+    case 'list_history':
+      // port HISTORY của prototype (dòng 3761)
+      return ok([
+        { connection_id: 'c1', system: 'postgres', sql: "SELECT * FROM students WHERE status='active'", duration_ms: 22, row_count: 214, ok: true, error: null, executed_at: '2026-06-30 10:23:14' },
+        { connection_id: 'c1', system: 'postgres', sql: 'SELECT first_name, last_name, gpa FROM students ORDER BY gpa DESC LIMIT 25', duration_ms: 6, row_count: 25, ok: true, error: null, executed_at: '2026-06-30 10:21:02' },
+        { connection_id: 'c1', system: 'postgres', sql: "UPDATE enrollments SET grade='A' WHERE course_id=3", duration_ms: 9, row_count: 18, ok: true, error: null, executed_at: '2026-06-30 10:18:47' },
+        { connection_id: 'c8', system: 'clickhouse', sql: 'SELECT event_type, count() FROM lms_events GROUP BY event_type', duration_ms: 18, row_count: 7, ok: true, error: null, executed_at: '2026-06-30 10:15:30' },
+        { connection_id: 'c1', system: 'postgres', sql: 'SELECT department, count(id) FROM courses GROUP BY department', duration_ms: 5, row_count: 7, ok: true, error: null, executed_at: '2026-06-30 10:12:09' },
+      ])
+    case 'list_snippets':
+      return ok([
+        { id: 's1', name: 'Active students', sql: "SELECT * FROM students WHERE status='active';", system: 'postgres', updated_at: '2026-06-29 09:00:00' },
+        { id: 's2', name: 'Top GPA', sql: 'SELECT first_name, gpa FROM students ORDER BY gpa DESC LIMIT 25;', system: 'postgres', updated_at: '2026-06-28 14:30:00' },
+      ])
+    case 'save_snippet':
+    case 'delete_snippet':
+      return ok(null)
     default:
       return Promise.reject(new Error(`demo: chưa mock command "${cmd}"`))
   }

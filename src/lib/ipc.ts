@@ -94,3 +94,37 @@ export const getAppState = (key: string) => invoke<string | null>('get_app_state
 
 export const setAppState = (key: string, value: string) =>
   invoke<void>('set_app_state', { key, value })
+
+// ---- query history + saved queries (snippets) --------------------------------
+
+export interface HistoryEntry {
+  connection_id: string
+  system: string
+  sql: string
+  duration_ms: number | null
+  row_count: number | null
+  ok: boolean
+  error: string | null
+  executed_at: string
+}
+
+export interface Snippet {
+  id: string
+  name: string
+  sql: string
+  system: string | null
+  updated_at: string
+}
+
+export const listHistory = (opts?: { connId?: string; search?: string; limit?: number }) =>
+  invoke<HistoryEntry[]>('list_history', {
+    connId: opts?.connId ?? null,
+    search: opts?.search ?? null,
+    limit: opts?.limit ?? null,
+  })
+
+export const listSnippets = () => invoke<Snippet[]>('list_snippets')
+
+export const saveSnippet = (snippet: Snippet) => invoke<void>('save_snippet', { snippet })
+
+export const deleteSnippet = (id: string) => invoke<void>('delete_snippet', { id })
