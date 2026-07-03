@@ -14,7 +14,8 @@
   import { tabs } from '$lib/stores/tabs.svelte'
   import { toasts } from '$lib/stores/toast.svelte'
   import { quoteIdent, selectStarSql } from '$lib/sql/dialect'
-  import type { RoutineInfo, TableInfo } from '$lib/types'
+  import { genCreate, genDelete, genDrop, genInsert, genRename, genSelect, genTruncate, genUpdate } from '$lib/sql/ddl'
+  import type { ColumnInfo, RoutineInfo, TableInfo } from '$lib/types'
   import type { Snippet } from 'svelte'
 
   const selected = $derived(connections.selected)
@@ -76,6 +77,44 @@
   async function copyName(name: string) {
     await navigator.clipboard.writeText(name)
     toasts.success(`Đã copy "${name}"`)
+  }
+
+  // DDL Viewer + Generate SQL — sinh từ ColumnInfo thật (ddl.ts), mở trong tab
+  // SQL Editor (syntax highlight sẵn). Cột nạp lazy nên phải chờ loadTableDetail.
+  async function columnsOf(schema: string, table: string): Promise<ColumnInfo[]> {
+    if (!selected) return []
+    await explorer.loadTableDetail(selected.id, schema, table)
+    return explorer.cache[selected.id]?.bySchema[schema]?.tableDetails[table]?.columns ?? []
+  }
+
+  async function genSqlTab(kind: 'select' | 'insert' | 'update' | 'delete' | 'ddl', schema: string, table: string) {
+    if (!selected) return
+    const cols = await columnsOf(schema, table)
+    if (!cols.length) {
+      toasts.show(`Không lấy được cột của "${table}"`)
+      return
+    }
+    const sys = selected.system
+    const gen = { select: genSelect, insert: genInsert, update: genUpdate, delete: genDelete, ddl: genCreate }[kind]
+    const suffix = { select: 'SELECT', insert: 'INSERT', update: 'UPDATE', delete: 'DELETE', ddl: 'DDL' }[kind]
+    tabs.openSqlTab({ connectionId: selected.id, title: `${table} · ${suffix}`, query: gen(sys, schema, table, cols) })
+  }
+
+  async function copyDdl(schema: string, table: string) {
+    if (!selected) return
+    const cols = await columnsOf(schema, table)
+    if (!cols.length) {
+      toasts.show(`Không lấy được cột của "${table}"`)
+      return
+    }
+    await navigator.clipboard.writeText(genCreate(selected.system, schema, table, cols))
+    toasts.success('Đã copy DDL')
+  }
+
+  // Rename/Truncate/Drop — mở SQL editable để review trước khi Run (port HTML dòng 3370-3398).
+  function stmtTab(title: string, sql: string) {
+    if (!selected) return
+    tabs.openSqlTab({ connectionId: selected.id, title, query: sql })
   }
 
   function routineLabel(r: RoutineInfo): string {
@@ -246,9 +285,22 @@
               {@const tbOpen = expanded.has(`t:${schema.name}.${t.name}`)}
               {@const detail = sc.tableDetails[t.name]}
               {#snippet tableMenu()}
-                <ContextMenu.Content class="w-48">
+                <ContextMenu.Content class="w-52">
                   <ContextMenu.Item onclick={() => openData(schema.name, t)}>Open Data</ContextMenu.Item>
                   <ContextMenu.Item onclick={() => newQuery(schema.name, t.name)}>New Query</ContextMenu.Item>
+                  <ContextMenu.Separator />
+                  <ContextMenu.Item onclick={() => later('Design Table')}>Design Table</ContextMenu.Item>
+                  <ContextMenu.Item
+                    onclick={() => stmtTab(`Rename ${t.name}`, genRename(selected!.system, schema.name, t.name))}
+                  >
+                    Rename…
+                  </ContextMenu.Item>
+                  <ContextMenu.Separator />
+                  <ContextMenu.Item onclick={() => genSqlTab('select', schema.name, t.name)}>Generate SQL · SELECT</ContextMenu.Item>
+                  <ContextMenu.Item onclick={() => genSqlTab('insert', schema.name, t.name)}>Generate SQL · INSERT</ContextMenu.Item>
+                  <ContextMenu.Item onclick={() => genSqlTab('update', schema.name, t.name)}>Generate SQL · UPDATE</ContextMenu.Item>
+                  <ContextMenu.Item onclick={() => genSqlTab('delete', schema.name, t.name)}>Generate SQL · DELETE</ContextMenu.Item>
+                  <ContextMenu.Item onclick={() => genSqlTab('ddl', schema.name, t.name)}>View DDL</ContextMenu.Item>
                   <ContextMenu.Separator />
                   <ContextMenu.Item onclick={() => copyName(t.name)}>Copy Name</ContextMenu.Item>
                   <ContextMenu.Item
@@ -256,12 +308,28 @@
                   >
                     Copy Qualified Name
                   </ContextMenu.Item>
+                  <ContextMenu.Item onclick={() => copyDdl(schema.name, t.name)}>Copy DDL</ContextMenu.Item>
                   <ContextMenu.Separator />
                   <ContextMenu.Item
                     onclick={() => selected && explorer.refresh(selected.id, { kind: 'table', schema: schema.name, table: t.name })}
                   >
                     Refresh
                   </ContextMenu.Item>
+                  <ContextMenu.Separator />
+                  {#if !t.locked}
+                    <ContextMenu.Item
+                      variant="destructive"
+                      onclick={() => stmtTab(`Truncate ${t.name}`, genTruncate(selected!.system, schema.name, t.name))}
+                    >
+                      Truncate
+                    </ContextMenu.Item>
+                    <ContextMenu.Item
+                      variant="destructive"
+                      onclick={() => stmtTab(`Drop ${t.name}`, genDrop(selected!.system, schema.name, t.name))}
+                    >
+                      Drop
+                    </ContextMenu.Item>
+                  {/if}
                 </ContextMenu.Content>
               {/snippet}
               {@render row(
@@ -284,14 +352,25 @@
                   <div class="mono" style="padding-left:calc(var(--px-6) + {base + 3} * var(--px-15));font-size:var(--px-10);color:var(--muted)">loading…</div>
                 {:else if detail}
                   {#each detail.columns ?? [] as col (col.name)}
-                    {@render row({
-                      key: `col:${schema.name}.${t.name}.${col.name}`,
-                      depth: base + 3,
-                      glyph: '▸',
-                      color: C.col,
-                      name: col.name,
-                      meta: `${col.data_type}${col.is_pk ? ' · PK' : col.is_fk ? ' · FK' : ''}${!col.nullable && !col.is_pk ? ' · NN' : ''}`,
-                    })}
+                    {#snippet columnMenu()}
+                      <ContextMenu.Content class="w-48">
+                        <ContextMenu.Item onclick={() => copyName(col.name)}>Copy Name</ContextMenu.Item>
+                        <ContextMenu.Item onclick={() => copyName(`${t.name}.${col.name}`)}>Copy as table.column</ContextMenu.Item>
+                        <ContextMenu.Separator />
+                        <ContextMenu.Item onclick={() => later('Set as Filter')}>Set as Filter</ContextMenu.Item>
+                      </ContextMenu.Content>
+                    {/snippet}
+                    {@render row(
+                      {
+                        key: `col:${schema.name}.${t.name}.${col.name}`,
+                        depth: base + 3,
+                        glyph: '▸',
+                        color: C.col,
+                        name: col.name,
+                        meta: `${col.data_type}${col.is_pk ? ' · PK' : col.is_fk ? ' · FK' : ''}${!col.nullable && !col.is_pk ? ' · NN' : ''}`,
+                      },
+                      columnMenu,
+                    )}
                   {/each}
                   {#if (detail.indexes ?? []).length > 0}
                     {@render row({

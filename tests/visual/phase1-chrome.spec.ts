@@ -19,8 +19,10 @@ const CHECKS: Array<[string, string, string, string[]]> = [
   ],
   [
     'status bar',
+    // proto: body(2) > main(3) > statusbar(last) — app phản chiếu cùng cấu trúc,
+    // StatusBar nằm trong <main> (App.svelte dòng 166), không phải last-child của root.
     '.ds > div:nth-child(2) > div:nth-child(3) > div:last-child',
-    '#app > div > div:last-child',
+    '#app > div > div:nth-child(2) > main > div:last-child',
     ['height', 'background-color', 'border-top-width', 'font-size', 'color'],
   ],
 ]

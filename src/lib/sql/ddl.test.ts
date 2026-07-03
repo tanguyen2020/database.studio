@@ -1,0 +1,98 @@
+// Unit test SQL generators cho context menu Explorer (ddl.ts) — quoting theo
+// dialect, MSSQL dùng TOP, ClickHouse UPDATE/DELETE là ALTER TABLE … mutation.
+
+import { describe, expect, it } from 'vitest'
+import { genCreate, genDelete, genDrop, genInsert, genRename, genSelect, genTruncate, genUpdate } from './ddl'
+import type { ColumnInfo } from '$lib/types'
+
+function col(name: string, data_type: string, opts: Partial<ColumnInfo> = {}): ColumnInfo {
+  return { name, data_type, nullable: true, is_pk: false, is_fk: false, ordinal: 0, ...opts }
+}
+
+const cols: ColumnInfo[] = [
+  col('id', 'int4', { is_pk: true, nullable: false }),
+  col('name', 'varchar(255)', { nullable: false }),
+  col('created_at', 'timestamptz'),
+]
+
+describe('genSelect', () => {
+  it('PG liệt kê cột + LIMIT, quote double, sqlite main bỏ schema', () => {
+    expect(genSelect('postgres', 'public', 'users', cols)).toBe(
+      'SELECT "id", "name", "created_at"\nFROM "public"."users"\nLIMIT 100;',
+    )
+    expect(genSelect('sqlite', 'main', 'users', cols)).toBe(
+      'SELECT "id", "name", "created_at"\nFROM "users"\nLIMIT 100;',
+    )
+  })
+
+  it('MSSQL dùng TOP 100 + bracket quoting', () => {
+    expect(genSelect('mssql', 'dbo', 'users', cols)).toBe(
+      'SELECT TOP 100 [id], [name], [created_at]\nFROM [dbo].[users];',
+    )
+  })
+
+  it('không có cột → SELECT *', () => {
+    expect(genSelect('postgres', 'public', 'users', [])).toContain('SELECT *')
+  })
+})
+
+describe('genInsert', () => {
+  it('bỏ cột PK, sinh sample theo kiểu, MySQL backtick', () => {
+    expect(genInsert('mysql', 'app', 'users', cols)).toBe(
+      'INSERT INTO `app`.`users` (`name`, `created_at`)\nVALUES (\'\', \'2026-01-01\');',
+    )
+  })
+})
+
+describe('genUpdate', () => {
+  it('WHERE theo PK, set các cột non-PK', () => {
+    expect(genUpdate('postgres', 'public', 'users', cols)).toBe(
+      'UPDATE "public"."users"\nSET "name" = \'\',\n    "created_at" = \'2026-01-01\'\nWHERE "id" = 0;',
+    )
+  })
+
+  it('ClickHouse → ALTER TABLE … UPDATE (mutation)', () => {
+    const out = genUpdate('clickhouse', 'db', 'events', cols)
+    expect(out.startsWith('ALTER TABLE `db`.`events`')).toBe(true)
+    expect(out).toContain('UPDATE')
+    expect(out).toContain('WHERE `id` = 0;')
+  })
+})
+
+describe('genDelete', () => {
+  it('WHERE theo PK', () => {
+    expect(genDelete('postgres', 'public', 'users', cols)).toBe(
+      'DELETE FROM "public"."users"\nWHERE "id" = 0;',
+    )
+  })
+
+  it('ClickHouse → ALTER TABLE … DELETE WHERE', () => {
+    expect(genDelete('clickhouse', 'db', 'events', cols)).toBe(
+      'ALTER TABLE `db`.`events`\n    DELETE WHERE `id` = 0;',
+    )
+  })
+})
+
+describe('genCreate', () => {
+  it('NOT NULL + PRIMARY KEY từ ColumnInfo', () => {
+    expect(genCreate('postgres', 'public', 'users', cols)).toBe(
+      'CREATE TABLE "public"."users" (\n' +
+        '  "id" int4 NOT NULL PRIMARY KEY,\n' +
+        '  "name" varchar(255) NOT NULL,\n' +
+        '  "created_at" timestamptz\n);',
+    )
+  })
+})
+
+describe('genRename / genTruncate / genDrop', () => {
+  it('rename thêm hậu tố _new', () => {
+    expect(genRename('postgres', 'public', 'users')).toBe(
+      'ALTER TABLE "public"."users" RENAME TO "users_new";',
+    )
+  })
+
+  it('truncate + drop IF EXISTS', () => {
+    expect(genTruncate('mysql', 'app', 'users')).toBe('TRUNCATE TABLE `app`.`users`;')
+    expect(genDrop('mysql', 'app', 'users')).toBe('DROP TABLE IF EXISTS `app`.`users`;')
+  })
+})

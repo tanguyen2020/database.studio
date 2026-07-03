@@ -21,6 +21,7 @@
   import { splitStatements, statementAtOffset } from '$lib/sql/statements'
   import type { TabState } from '$lib/types'
   import type { Diagnostic } from '@codemirror/lint'
+  import { untrack } from 'svelte'
 
   interface Props {
     tab: TabState
@@ -41,12 +42,17 @@
   let savedQuery = initialQuery
 
   // ---- autocomplete schema (phase-2 §1): nạp schema + bảng của connection ----
+  // untrack: loadSchemas() ghi explorer.cache đồng bộ (conn()/track()) → nếu để
+  // trong vùng track của effect sẽ read+write cùng $state → effect_update_depth.
   $effect(() => {
-    if (profile?.connected) {
-      void explorer.loadSchemas(profile.id).then(() => {
-        const schemas = explorer.cache[profile.id]?.schemas ?? []
-        const def = schemas.find((s) => s.is_default) ?? schemas[0]
-        if (def) void explorer.loadSchemaChildren(profile.id, def.name)
+    const p = profile
+    if (p?.connected) {
+      untrack(() => {
+        void explorer.loadSchemas(p.id).then(() => {
+          const schemas = explorer.cache[p.id]?.schemas ?? []
+          const def = schemas.find((s) => s.is_default) ?? schemas[0]
+          if (def) void explorer.loadSchemaChildren(p.id, def.name)
+        })
       })
     }
   })

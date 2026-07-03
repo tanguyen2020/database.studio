@@ -1,0 +1,80 @@
+// SQL generators cho context menu Explorer — port gen* (dòng 3271-3291).
+// Sinh từ ColumnInfo thật của bảng, quoting theo dialect. ClickHouse:
+// UPDATE/DELETE là ALTER TABLE … (mutation async — CLICKHOUSE_SPEC_ADDENDUM).
+import { qualified as q, quoteIdent } from './dialect'
+import type { ColumnInfo } from '$lib/types'
+
+function target(system: string, schema: string, table: string): string {
+  return system === 'sqlite' && schema === 'main'
+    ? quoteIdent(system, table)
+    : q(system, schema, table)
+}
+
+function sample(dataType: string): string {
+  const t = dataType.toLowerCase()
+  if (/int|serial|numeric|decimal|float|double|real|uint/.test(t)) return '0'
+  if (/bool/.test(t)) return 'true'
+  if (/date|time/.test(t)) return "'2026-01-01'"
+  if (/uuid/.test(t)) return "'00000000-0000-0000-0000-000000000000'"
+  return "''"
+}
+
+export function genSelect(system: string, schema: string, table: string, cols: ColumnInfo[]): string {
+  const list = cols.map((c) => quoteIdent(system, c.name)).join(', ') || '*'
+  const t = target(system, schema, table)
+  if (system === 'mssql') return `SELECT TOP 100 ${list}\nFROM ${t};`
+  return `SELECT ${list}\nFROM ${t}\nLIMIT 100;`
+}
+
+export function genInsert(system: string, schema: string, table: string, cols: ColumnInfo[]): string {
+  const insertable = cols.filter((c) => !c.is_pk)
+  const names = insertable.map((c) => quoteIdent(system, c.name)).join(', ')
+  const vals = insertable.map((c) => sample(c.data_type)).join(', ')
+  return `INSERT INTO ${target(system, schema, table)} (${names})\nVALUES (${vals});`
+}
+
+export function genUpdate(system: string, schema: string, table: string, cols: ColumnInfo[]): string {
+  const t = target(system, schema, table)
+  const pk = cols.find((c) => c.is_pk) ?? cols[0]
+  const setCols = cols.filter((c) => !c.is_pk)
+  if (system === 'clickhouse') {
+    const sets = setCols.map((c) => `${quoteIdent(system, c.name)} = ${sample(c.data_type)}`).join(',\n           ')
+    return `ALTER TABLE ${t}\n    UPDATE ${sets}\nWHERE ${quoteIdent(system, pk.name)} = ${sample(pk.data_type)};`
+  }
+  const sets = setCols.map((c) => `${quoteIdent(system, c.name)} = ${sample(c.data_type)}`).join(',\n    ')
+  return `UPDATE ${t}\nSET ${sets}\nWHERE ${quoteIdent(system, pk.name)} = ${sample(pk.data_type)};`
+}
+
+export function genDelete(system: string, schema: string, table: string, cols: ColumnInfo[]): string {
+  const t = target(system, schema, table)
+  const pk = cols.find((c) => c.is_pk) ?? cols[0]
+  if (system === 'clickhouse') {
+    return `ALTER TABLE ${t}\n    DELETE WHERE ${quoteIdent(system, pk.name)} = ${sample(pk.data_type)};`
+  }
+  return `DELETE FROM ${t}\nWHERE ${quoteIdent(system, pk.name)} = ${sample(pk.data_type)};`
+}
+
+export function genCreate(system: string, schema: string, table: string, cols: ColumnInfo[]): string {
+  const body = cols
+    .map((c) => {
+      let line = `  ${quoteIdent(system, c.name)} ${c.data_type}`
+      if (!c.nullable) line += ' NOT NULL'
+      if (c.is_pk) line += ' PRIMARY KEY'
+      return line
+    })
+    .join(',\n')
+  return `CREATE TABLE ${target(system, schema, table)} (\n${body}\n);`
+}
+
+export function genRename(system: string, schema: string, table: string): string {
+  const t = target(system, schema, table)
+  return `ALTER TABLE ${t} RENAME TO ${quoteIdent(system, table + '_new')};`
+}
+
+export function genTruncate(system: string, schema: string, table: string): string {
+  return `TRUNCATE TABLE ${target(system, schema, table)};`
+}
+
+export function genDrop(system: string, schema: string, table: string): string {
+  return `DROP TABLE IF EXISTS ${target(system, schema, table)};`
+}
