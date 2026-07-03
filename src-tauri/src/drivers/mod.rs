@@ -171,6 +171,26 @@ impl LiveConnection {
         }
     }
 
+    /// SELECT tham số hóa (filter builder / pagination). ClickHouse: fallback
+    /// build literal (không có positional param HTTP) — Phase 2 tắt filter cho CH.
+    pub async fn exec_params(
+        &mut self,
+        sql: &str,
+        params: &[serde_json::Value],
+    ) -> Result<StatementOutcome, QueryError> {
+        match self {
+            Self::Postgres(d) => d.exec_params(sql, params).await,
+            Self::MySql(d) => d.exec_params(sql, params).await,
+            Self::Mssql(d) => d.exec_params(sql, params).await,
+            Self::Sqlite(d) => d.exec_params(sql, params.to_vec()).await,
+            Self::Clickhouse(_) => Err(QueryError::new(
+                "clickhouse",
+                "Filter builder chưa hỗ trợ ClickHouse ở Phase 2",
+                "clickhouse param select not supported yet",
+            )),
+        }
+    }
+
     /// Editable grid Apply — chạy pending changes trong transaction.
     /// ClickHouse KHÔNG hỗ trợ (mutation async — Phase 5); Cassandra không có ở đây.
     pub async fn apply_grid_changes(

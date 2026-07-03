@@ -106,6 +106,33 @@ impl PgDriver {
         self.conn.ping().await.is_ok()
     }
 
+    /// SELECT tham số hóa (filter builder / pagination) — bind giá trị filter.
+    pub async fn exec_params(
+        &mut self,
+        sql: &str,
+        params: &[Value],
+    ) -> Result<StatementOutcome, QueryError> {
+        let rows = pg_fetch_params(&mut self.conn, sql, params)
+            .await
+            .map_err(|e| map_exec_error("postgres", sql, &e))?;
+        let mut cols: Vec<ColumnDef> = Vec::new();
+        if let Some(first) = rows.first() {
+            for c in first.columns() {
+                cols.push((c.name().to_string(), c.type_info().name().to_lowercase()));
+            }
+        }
+        let mut out_rows: Vec<Value> = Vec::new();
+        for row in &rows {
+            let mut obj = Map::new();
+            for (i, c) in row.columns().iter().enumerate() {
+                obj.insert(c.name().to_string(), decode_value(row, i));
+            }
+            out_rows.push(Value::Object(obj));
+        }
+        let total = out_rows.len() as u64;
+        Ok(StatementOutcome::Rows { result: QueryResultSet { cols, rows: out_rows, total } })
+    }
+
     /// Editable grid: áp pending changes trong 1 transaction, rollback nếu lỗi.
     /// Statement tham số hóa ($1..) — value bind qua sqlx (không nối chuỗi).
     pub async fn apply_changes(
@@ -382,6 +409,27 @@ async fn execute(
     sql: &str,
 ) -> Result<sqlx::postgres::PgQueryResult, sqlx::Error> {
     sqlx::query(sql).execute(conn).await
+}
+
+/// Bind JSON params rồi fetch (monomorphic — tránh HRTB).
+async fn pg_fetch_params(
+    conn: &mut PgConnection,
+    sql: &str,
+    params: &[Value],
+) -> Result<Vec<sqlx::postgres::PgRow>, sqlx::Error> {
+    let mut q = sqlx::query(sql);
+    for p in params {
+        q = match p {
+            Value::Null => q.bind(Option::<String>::None),
+            Value::Bool(b) => q.bind(*b),
+            Value::Number(num) if num.is_i64() => q.bind(num.as_i64().unwrap()),
+            Value::Number(num) if num.is_u64() => q.bind(num.as_u64().unwrap() as i64),
+            Value::Number(num) => q.bind(num.as_f64().unwrap()),
+            Value::String(s) => q.bind(s.clone()),
+            other => q.bind(other.to_string()),
+        };
+    }
+    q.fetch_all(conn).await
 }
 
 /// Bind JSON params rồi execute (monomorphic — tránh HRTB "Executor not general enough").

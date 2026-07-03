@@ -115,6 +115,51 @@ impl SqliteDriver {
         .await
     }
 
+    /// SELECT tham số hóa (filter builder / pagination).
+    pub async fn exec_params(
+        &self,
+        sql: &str,
+        params: Vec<Value>,
+    ) -> Result<StatementOutcome, QueryError> {
+        let sql = sql.to_string();
+        self.with_conn(move |c| {
+            let binds: Vec<rusqlite::types::Value> = params.iter().map(json_to_sqlite).collect();
+            let mut stmt = c.prepare(&sql).map_err(|e| map_rusqlite_error(&e))?;
+            let cols: Vec<ColumnDef> = stmt
+                .columns()
+                .iter()
+                .map(|c| {
+                    let dtype = c.decl_type().map(|t| t.to_lowercase()).unwrap_or_else(|| "dynamic".into());
+                    (c.name().to_string(), dtype)
+                })
+                .collect();
+            let col_names: Vec<String> = cols.iter().map(|(n, _)| n.clone()).collect();
+            let mut rows_out: Vec<Value> = Vec::new();
+            let mut rows = stmt
+                .query(rusqlite::params_from_iter(binds.iter()))
+                .map_err(|e| map_rusqlite_error(&e))?;
+            while let Some(row) = rows.next().map_err(|e| map_rusqlite_error(&e))? {
+                let mut obj = Map::new();
+                for (i, name) in col_names.iter().enumerate() {
+                    let v = match row.get_ref(i).map_err(|e| map_rusqlite_error(&e))? {
+                        ValueRef::Null => Value::Null,
+                        ValueRef::Integer(n) => json!(n),
+                        ValueRef::Real(f) => json!(f),
+                        ValueRef::Text(t) => Value::String(String::from_utf8_lossy(t).to_string()),
+                        ValueRef::Blob(b) => {
+                            Value::String(format!("x'{}'", b.iter().map(|x| format!("{x:02x}")).collect::<String>()))
+                        }
+                    };
+                    obj.insert(name.clone(), v);
+                }
+                rows_out.push(Value::Object(obj));
+            }
+            let total = rows_out.len() as u64;
+            Ok(StatementOutcome::Rows { result: QueryResultSet { cols, rows: rows_out, total } })
+        })
+        .await
+    }
+
     pub async fn exec(&self, sql: &str) -> Result<StatementOutcome, QueryError> {
         let sql = sql.to_string();
         self.with_conn(move |c| {

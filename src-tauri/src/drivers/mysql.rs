@@ -102,6 +102,33 @@ impl MySqlDriver {
         self.conn.ping().await.is_ok()
     }
 
+    /// SELECT tham số hóa (filter builder / pagination).
+    pub async fn exec_params(
+        &mut self,
+        sql: &str,
+        params: &[serde_json::Value],
+    ) -> Result<StatementOutcome, QueryError> {
+        let rows = mysql_fetch_params(&mut self.conn, sql, params)
+            .await
+            .map_err(|e| map_exec_error(self.system, &e))?;
+        let mut cols: Vec<ColumnDef> = Vec::new();
+        if let Some(first) = rows.first() {
+            for c in first.columns() {
+                cols.push((c.name().to_string(), c.type_info().name().to_lowercase()));
+            }
+        }
+        let mut out_rows: Vec<Value> = Vec::new();
+        for row in &rows {
+            let mut obj = Map::new();
+            for (i, c) in row.columns().iter().enumerate() {
+                obj.insert(c.name().to_string(), decode_value(row, i));
+            }
+            out_rows.push(Value::Object(obj));
+        }
+        let total = out_rows.len() as u64;
+        Ok(StatementOutcome::Rows { result: QueryResultSet { cols, rows: out_rows, total } })
+    }
+
     /// Editable grid: pending changes trong 1 transaction (rollback nếu lỗi).
     pub async fn apply_changes(
         &mut self,
@@ -340,13 +367,11 @@ async fn fetch_all(
     sqlx::query(sql).fetch_all(conn).await
 }
 
-async fn mysql_apply_one(
-    conn: &mut MySqlConnection,
-    sql: &str,
-    params: &[serde_json::Value],
-) -> Result<u64, sqlx::Error> {
+fn bind_mysql<'q>(
+    mut q: sqlx::query::Query<'q, sqlx::MySql, sqlx::mysql::MySqlArguments>,
+    params: &'q [serde_json::Value],
+) -> sqlx::query::Query<'q, sqlx::MySql, sqlx::mysql::MySqlArguments> {
     use serde_json::Value;
-    let mut q = sqlx::query(sql);
     for p in params {
         q = match p {
             Value::Null => q.bind(Option::<String>::None),
@@ -358,7 +383,23 @@ async fn mysql_apply_one(
             other => q.bind(other.to_string()),
         };
     }
-    Ok(q.execute(conn).await?.rows_affected())
+    q
+}
+
+async fn mysql_apply_one(
+    conn: &mut MySqlConnection,
+    sql: &str,
+    params: &[serde_json::Value],
+) -> Result<u64, sqlx::Error> {
+    Ok(bind_mysql(sqlx::query(sql), params).execute(conn).await?.rows_affected())
+}
+
+async fn mysql_fetch_params(
+    conn: &mut MySqlConnection,
+    sql: &str,
+    params: &[serde_json::Value],
+) -> Result<Vec<sqlx::mysql::MySqlRow>, sqlx::Error> {
+    bind_mysql(sqlx::query(sql), params).fetch_all(conn).await
 }
 
 async fn execute(

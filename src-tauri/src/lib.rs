@@ -64,6 +64,7 @@ pub fn run() {
             // editable grid
             commands::grid::preview_grid_changes,
             commands::grid::apply_grid_changes,
+            commands::grid::exec_filtered,
             // tabs + app state
             commands::tabs::save_tabs,
             commands::tabs::load_tabs,

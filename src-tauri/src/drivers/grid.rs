@@ -194,6 +194,89 @@ fn preview_where(cols: &[Col], q: QuoteStyle, lit: &dyn Fn(&Value) -> String) ->
         .join(" AND ")
 }
 
+// ---------------------------------------------------------------------------
+// Filter builder (Table Data Viewer) — SELECT tham số hóa + ORDER BY + phân trang.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FilterCond {
+    pub col: String,
+    /// = != > >= < <= LIKE "IS NULL" "IS NOT NULL"
+    pub op: String,
+    pub value: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SortSpec {
+    pub col: String,
+    pub desc: bool,
+}
+
+/// Build `SELECT * FROM t [WHERE ...] [ORDER BY ...] LIMIT ? OFFSET ?`.
+/// Filter values bind tham số; LIMIT/OFFSET nội suy số nguyên an toàn.
+pub fn build_select(
+    system: &str,
+    schema: &Option<String>,
+    table: &str,
+    filters: &[FilterCond],
+    combinator_or: bool,
+    sorts: &[SortSpec],
+    limit: u32,
+    offset: u32,
+) -> BoundStatement {
+    let ph = Placeholder::of(system);
+    let q = quote_style(system);
+    let mut params: Vec<Value> = Vec::new();
+    let mut n = 0usize;
+
+    let mut sql = format!("SELECT * FROM {}", qualified(system, schema, table));
+
+    let valid_ops = ["=", "!=", "<>", ">", ">=", "<", "<=", "LIKE"];
+    let conds: Vec<String> = filters
+        .iter()
+        .filter_map(|f| {
+            let ident = quote_ident(&f.col, q);
+            match f.op.to_uppercase().as_str() {
+                "IS NULL" => Some(format!("{ident} IS NULL")),
+                "IS NOT NULL" => Some(format!("{ident} IS NOT NULL")),
+                op if valid_ops.contains(&op) || valid_ops.contains(&f.op.as_str()) => {
+                    n += 1;
+                    params.push(f.value.clone());
+                    let real_op = if op == "LIKE" { "LIKE" } else { &f.op };
+                    Some(format!("{ident} {real_op} {}", ph.render(n)))
+                }
+                _ => None, // toán tử lạ → bỏ (không nối chuỗi bừa)
+            }
+        })
+        .collect();
+    if !conds.is_empty() {
+        sql.push_str(" WHERE ");
+        sql.push_str(&conds.join(if combinator_or { " OR " } else { " AND " }));
+    }
+
+    let orders: Vec<String> = sorts
+        .iter()
+        .map(|s| format!("{} {}", quote_ident(&s.col, q), if s.desc { "DESC" } else { "ASC" }))
+        .collect();
+    if !orders.is_empty() {
+        sql.push_str(" ORDER BY ");
+        sql.push_str(&orders.join(", "));
+    }
+
+    // LIMIT/OFFSET: MSSQL cần ORDER BY cho OFFSET…FETCH → thêm ORDER BY (SELECT 1) nếu thiếu
+    let lim = limit.min(100_000);
+    if system == "mssql" {
+        if orders.is_empty() {
+            sql.push_str(" ORDER BY (SELECT NULL)");
+        }
+        sql.push_str(&format!(" OFFSET {offset} ROWS FETCH NEXT {lim} ROWS ONLY"));
+    } else {
+        sql.push_str(&format!(" LIMIT {lim} OFFSET {offset}"));
+    }
+
+    BoundStatement { sql, params }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -263,6 +346,50 @@ mod tests {
         );
         assert_eq!(b.sql, r#"DELETE FROM "t" WHERE "note" IS NULL"#);
         assert!(b.params.is_empty(), "NULL không được bind làm param");
+    }
+
+    #[test]
+    fn build_select_where_order_limit() {
+        let b = build_select(
+            "postgres",
+            &Some("public".into()),
+            "students",
+            &[
+                FilterCond { col: "status".into(), op: "=".into(), value: json!("active") },
+                FilterCond { col: "gpa".into(), op: ">".into(), value: json!(3.0) },
+            ],
+            false,
+            &[SortSpec { col: "gpa".into(), desc: true }],
+            100,
+            200,
+        );
+        assert_eq!(
+            b.sql,
+            r#"SELECT * FROM "public"."students" WHERE "status" = $1 AND "gpa" > $2 ORDER BY "gpa" DESC LIMIT 100 OFFSET 200"#
+        );
+        assert_eq!(b.params, vec![json!("active"), json!(3.0)]);
+    }
+
+    #[test]
+    fn build_select_is_null_no_param() {
+        let b = build_select("sqlite", &None, "t", &[FilterCond { col: "note".into(), op: "IS NULL".into(), value: json!(null) }], false, &[], 50, 0);
+        assert_eq!(b.sql, r#"SELECT * FROM "t" WHERE "note" IS NULL LIMIT 50 OFFSET 0"#);
+        assert!(b.params.is_empty());
+    }
+
+    #[test]
+    fn build_select_mssql_offset_fetch() {
+        let b = build_select("mssql", &None, "t", &[], false, &[], 100, 100);
+        assert!(b.sql.contains("ORDER BY (SELECT NULL)"));
+        assert!(b.sql.contains("OFFSET 100 ROWS FETCH NEXT 100 ROWS ONLY"));
+    }
+
+    #[test]
+    fn build_select_rejects_unknown_operator() {
+        // op lạ (SQL injection attempt) → điều kiện bị bỏ, không nối chuỗi
+        let b = build_select("postgres", &None, "t", &[FilterCond { col: "a".into(), op: "; DROP TABLE t --".into(), value: json!(1) }], false, &[], 50, 0);
+        assert!(!b.sql.contains("DROP"));
+        assert!(!b.sql.contains("WHERE"));
     }
 
     #[test]

@@ -3,7 +3,8 @@
 
 use tauri::State;
 
-use crate::drivers::grid::{self, GridChange};
+use crate::drivers::grid::{self, FilterCond, GridChange, SortSpec};
+use crate::drivers::types::ExecResponse;
 use crate::error::AppError;
 use crate::state::AppState;
 
@@ -20,6 +21,40 @@ pub fn preview_grid_changes(
         .map(|p| p.system.as_str().to_string())
         .unwrap_or_else(|_| "postgres".into());
     Ok(changes.iter().map(|c| grid::preview_sql(&system, c)).collect())
+}
+
+/// Table Data Viewer: SELECT có filter/sort/phân trang (server-side, tham số hóa).
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn exec_filtered(
+    state: State<'_, AppState>,
+    conn_id: String,
+    schema: Option<String>,
+    table: String,
+    filters: Vec<FilterCond>,
+    combinator_or: bool,
+    sorts: Vec<SortSpec>,
+    limit: u32,
+    offset: u32,
+) -> Result<ExecResponse, AppError> {
+    let system = state
+        .storage
+        .get_connection(&conn_id)
+        .map(|p| p.system.as_str().to_string())
+        .unwrap_or_else(|_| "postgres".into());
+    let stmt = grid::build_select(&system, &schema, &table, &filters, combinator_or, &sorts, limit, offset);
+    let started = std::time::Instant::now();
+    let out = state
+        .registry
+        .with_driver(&conn_id, move |driver| async move {
+            driver.lock().await.exec_params(&stmt.sql, &stmt.params).await
+        })
+        .await?;
+    let duration_ms = started.elapsed().as_millis() as u64;
+    Ok(match out {
+        Ok(o) => ExecResponse::from_outcome(o, duration_ms),
+        Err(qe) => ExecResponse::from_error(qe, duration_ms),
+    })
 }
 
 /// Apply pending changes trong 1 transaction (rollback nếu lỗi). Trả tổng số dòng bị ảnh hưởng.

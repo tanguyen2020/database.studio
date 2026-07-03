@@ -127,6 +127,34 @@ impl MssqlDriver {
         self.client.simple_query("SELECT 1").await.is_ok()
     }
 
+    /// SELECT tham số hóa (filter builder / pagination).
+    pub async fn exec_params(
+        &mut self,
+        sql: &str,
+        params: &[Value],
+    ) -> Result<StatementOutcome, QueryError> {
+        let owned: Vec<MssqlParam> = params.iter().map(MssqlParam::from_json).collect();
+        let refs: Vec<&dyn tiberius::ToSql> = owned.iter().map(|p| p as &dyn tiberius::ToSql).collect();
+        let stream = self.client.query(sql, &refs).await.map_err(|e| map_error(&e))?;
+        let rows = stream.into_first_result().await.map_err(|e| map_error(&e))?;
+        let mut cols: Vec<ColumnDef> = Vec::new();
+        if let Some(first) = rows.first() {
+            for c in first.columns() {
+                cols.push((c.name().to_string(), type_name(c.column_type())));
+            }
+        }
+        let mut out_rows: Vec<Value> = Vec::new();
+        for row in &rows {
+            let mut obj = Map::new();
+            for (i, col) in row.columns().iter().enumerate() {
+                obj.insert(col.name().to_string(), decode_value(row, i, col.column_type()));
+            }
+            out_rows.push(Value::Object(obj));
+        }
+        let total = out_rows.len() as u64;
+        Ok(StatementOutcome::Rows { result: QueryResultSet { cols, rows: out_rows, total } })
+    }
+
     /// Editable grid: pending changes trong 1 transaction (BEGIN TRAN/COMMIT/
     /// ROLLBACK). Param @P1.. bind qua tiberius ToSql (không nối chuỗi).
     pub async fn apply_changes(

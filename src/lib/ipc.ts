@@ -135,6 +135,37 @@ export interface GridCol {
   value: unknown
 }
 
+export interface FilterCond {
+  col: string
+  op: string
+  value: unknown
+}
+export interface SortSpec {
+  col: string
+  desc: boolean
+}
+
+export const execFiltered = (opts: {
+  connId: string
+  schema: string | null
+  table: string
+  filters: FilterCond[]
+  combinatorOr: boolean
+  sorts: SortSpec[]
+  limit: number
+  offset: number
+}) =>
+  invoke<ExecResponse>('exec_filtered', {
+    connId: opts.connId,
+    schema: opts.schema,
+    table: opts.table,
+    filters: opts.filters,
+    combinatorOr: opts.combinatorOr,
+    sorts: opts.sorts,
+    limit: opts.limit,
+    offset: opts.offset,
+  })
+
 export const previewGridChanges = (connId: string, changes: GridChange[]) =>
   invoke<string[]>('preview_grid_changes', { connId, changes })
 

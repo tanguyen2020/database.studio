@@ -287,6 +287,8 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
     }
     case 'apply_grid_changes':
       return ok(((args?.changes as unknown[]) ?? []).length)
+    case 'exec_filtered':
+      return demoInvoke('exec_statement', args)
     default:
       return Promise.reject(new Error(`demo: chưa mock command "${cmd}"`))
   }

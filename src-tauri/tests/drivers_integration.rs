@@ -392,6 +392,68 @@ async fn sqlite_editable_grid_apply_and_rollback() {
 }
 
 #[tokio::test]
+async fn pg_filter_sort_pagination() {
+    use database_studio_lib::drivers::grid::{build_select, FilterCond, SortSpec};
+    use serde_json::json;
+
+    let (_c, port) = start_pg().await;
+    let params = PgConnParams {
+        host: "localhost".into(),
+        port,
+        database: "testdb".into(),
+        user: "postgres".into(),
+        password: PASS.into(),
+        ssl: false,
+    };
+    let mut drv = retry("postgres", || PgDriver::connect(&params)).await;
+    drv.exec("CREATE TABLE flt (id int PRIMARY KEY, status text, gpa numeric)").await.unwrap();
+    drv.exec("INSERT INTO flt VALUES (1,'active',3.9),(2,'inactive',2.1),(3,'active',3.2),(4,'active',3.7)")
+        .await
+        .unwrap();
+
+    // WHERE status='active' ORDER BY gpa DESC → 3 dòng, cao nhất trước
+    let stmt = build_select(
+        "postgres",
+        &Some("public".into()),
+        "flt",
+        &[FilterCond { col: "status".into(), op: "=".into(), value: json!("active") }],
+        false,
+        &[SortSpec { col: "gpa".into(), desc: true }],
+        100,
+        0,
+    );
+    let out = drv.exec_params(&stmt.sql, &stmt.params).await.unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!("rows") };
+    assert_eq!(result.total, 3);
+    assert_eq!(result.rows[0]["id"], json!(1)); // gpa 3.9 cao nhất
+
+    // pagination: LIMIT 2 OFFSET 2 trên ORDER BY id
+    let p = build_select("postgres", &Some("public".into()), "flt", &[], false, &[SortSpec { col: "id".into(), desc: false }], 2, 2);
+    let out = drv.exec_params(&p.sql, &p.params).await.unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!("rows") };
+    assert_eq!(result.rows.len(), 2);
+    assert_eq!(result.rows[0]["id"], json!(3));
+
+    // filter value là tham số → không injection
+    let inj = build_select(
+        "postgres",
+        &Some("public".into()),
+        "flt",
+        &[FilterCond { col: "status".into(), op: "=".into(), value: json!("x'; DROP TABLE flt; --") }],
+        false,
+        &[],
+        100,
+        0,
+    );
+    let out = drv.exec_params(&inj.sql, &inj.params).await.unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!("rows") };
+    assert_eq!(result.total, 0); // không match, bảng vẫn còn
+    let still = drv.exec("SELECT count(*) AS c FROM flt").await.unwrap();
+    let StatementOutcome::Rows { result: s } = still else { panic!("rows") };
+    assert_eq!(s.rows[0]["c"], json!(4), "bảng không bị DROP");
+}
+
+#[tokio::test]
 async fn pg_editable_grid_apply_transaction() {
     use database_studio_lib::drivers::grid::{Col, GridChange};
     use serde_json::json;
