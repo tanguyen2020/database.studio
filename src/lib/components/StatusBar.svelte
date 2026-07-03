@@ -26,6 +26,22 @@
   const latency = $derived(
     profile ? (profile.connected ? `${profile.latency_ms ?? '–'}ms` : 'disconnected') : '',
   )
+  // statusObject/statusRows (dòng 4970, 5204-5206): '—' khi chưa có kết quả;
+  // 'schema.table' khi sub-tab select active; 'schema' cho các trường hợp khác
+  const activeSub = $derived(
+    exec && exec.activeSub >= 0 ? exec.subResults[exec.activeSub] : undefined,
+  )
+  const statusObject = $derived.by(() => {
+    if (!exec || exec.subResults.length === 0) return '—'
+    const schema = currentSchema ?? 'public'
+    if (activeSub?.kind === 'rows' && activeSub.table) return `${schema}.${activeSub.table}`
+    return schema
+  })
+  const statusRows = $derived(
+    activeSub?.kind === 'rows' && activeSub.result
+      ? `${activeSub.result.total.toLocaleString()} rows`
+      : '',
+  )
 </script>
 
 <div style="flex:none;height:var(--px-27);display:flex;align-items:center;gap:var(--px-14);padding:0 var(--px-14);background:var(--header);border-top:var(--px-1) solid var(--border);font-size:var(--px-11);color:var(--text2)">
@@ -36,11 +52,9 @@
   {#if profile}
     <span style="display:flex;align-items:center"><SystemIcon system={profile.system} size={14} /></span>
   {/if}
-  <span class="mono">{currentSchema ?? '—'}</span>
+  <span class="mono">{statusObject}</span>
   <span class="mono" style="margin-left:auto">
-    {#if exec?.running}Đang chạy…{:else if exec}{exec.totalMs}ms{:else}{latency}{/if}
+    {#if exec?.running}Đang chạy…{:else}{latency}{/if}
   </span>
-  <span class="mono">
-    {#if exec && !exec.running && exec.lastRowCount != null}{exec.lastRowCount.toLocaleString()} rows{/if}
-  </span>
+  <span class="mono">{statusRows}</span>
 </div>

@@ -98,6 +98,9 @@
     height: 100%;
     overflow: hidden;
     margin: 0;
+    /* prototype không reset line-height (default browser ~normal);
+       Tailwind preflight đặt 1.5 làm mọi hàng cao hơn → trả về normal */
+    line-height: normal;
   }
   body {
     @apply bg-background text-foreground;

@@ -20,9 +20,12 @@ class UiStore {
   editConnected = $state<EditConnectedRequest | null>(null)
 
   // Layout sizes (px) — all resizers persist their size
-  sidebarWidth = $state(260)
-  connListHeight = $state(280)
+  sidebarWidth = $state(278)
+  connListHeight = $state(200)
   editorHeight = $state(320)
+  // Object Properties (right panel) — mặc định mở 264px như prototype (dòng 2295)
+  rightPanelOpen = $state(true)
+  rightPanelWidth = $state(264)
   sizesLoaded = $state(false)
 
   toggleTheme() {
@@ -46,6 +49,8 @@ class UiStore {
         if (parsed.sidebarWidth > 150) this.sidebarWidth = parsed.sidebarWidth
         if (parsed.connListHeight > 100) this.connListHeight = parsed.connListHeight
         if (parsed.editorHeight > 100) this.editorHeight = parsed.editorHeight
+        if (parsed.rightPanelWidth > 150) this.rightPanelWidth = parsed.rightPanelWidth
+        if (typeof parsed.rightPanelOpen === 'boolean') this.rightPanelOpen = parsed.rightPanelOpen
       }
     } catch {
       // defaults are fine
@@ -65,6 +70,8 @@ class UiStore {
           sidebarWidth: this.sidebarWidth,
           connListHeight: this.connListHeight,
           editorHeight: this.editorHeight,
+          rightPanelWidth: this.rightPanelWidth,
+          rightPanelOpen: this.rightPanelOpen,
         }),
       )
     }, 500)

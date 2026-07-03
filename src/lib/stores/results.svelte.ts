@@ -17,6 +17,8 @@ export interface SubResult {
   error?: QueryError
   durationMs: number
   statement: SplitStatement
+  /** tên bảng chính (heuristic FROM) — statusObject của status bar */
+  table?: string
 }
 
 export interface MessageEntry {
@@ -131,6 +133,7 @@ class ResultsStore {
             result: response.result,
             durationMs: response.duration_ms,
             statement: stmt,
+            table,
           })
           exec.messages.push({
             index,

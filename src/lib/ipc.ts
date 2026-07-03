@@ -1,6 +1,12 @@
-// Typed wrappers around Tauri IPC commands (backend/src/commands/*).
+// Typed wrappers around Tauri IPC commands (src-tauri/src/commands/*).
+// Ngoài Tauri runtime (vite dev browser / Playwright) → demo fixtures để
+// pixel-diff so được với prototype (dữ liệu port từ CONNS/TABS của HTML).
 
-import { invoke } from '@tauri-apps/api/core'
+import { invoke as tauriInvoke } from '@tauri-apps/api/core'
+import { IS_TAURI, demoInvoke } from './demo'
+
+const invoke: typeof tauriInvoke = (cmd, args, options) =>
+  IS_TAURI ? tauriInvoke(cmd, args, options) : demoInvoke(cmd, args as Record<string, unknown>)
 import type {
   ColumnInfo,
   ConstraintInfo,

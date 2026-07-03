@@ -5,6 +5,7 @@
   import { onMount } from 'svelte'
   import TitleBar from '$lib/components/TitleBar.svelte'
   import StatusBar from '$lib/components/StatusBar.svelte'
+  import PropertiesPanel from '$lib/components/PropertiesPanel.svelte'
   import Toasts from '$lib/components/Toasts.svelte'
   import TabBar from '$lib/components/tabs/TabBar.svelte'
   import SaveBeforeCloseDialog from '$lib/components/tabs/SaveBeforeCloseDialog.svelte'
@@ -152,10 +153,13 @@
           </div>
         {/if}
       </div>
+      <!-- STATUS BAR nằm trong cột main — dòng 1501 -->
+      <StatusBar />
     </main>
-  </div>
 
-  <StatusBar />
+    <!-- RIGHT: Object Properties — dòng 1510-1554 -->
+    <PropertiesPanel />
+  </div>
 </div>
 
 <!-- global dialogs + toasts -->

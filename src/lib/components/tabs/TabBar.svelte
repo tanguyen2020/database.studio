@@ -114,7 +114,8 @@
             <!-- pin theo spec phase-1 mục 4 (prototype không hiển thị pin) -->
             <span style="flex:none;font-size:var(--px-10);color:var(--text2)" title="Pinned">📌</span>
           {/if}
-          <span style="flex:none;color:{tab.isDirty ? meta.accent : 'transparent'};font-size:var(--px-13)" title={tab.isDirty ? 'Unsaved changes' : ''}>●</span>
+          <!-- dirtyMark: '●' hoặc chuỗi rỗng (dòng 4680) — span rỗng không chiếm width -->
+          <span style="flex:none;color:{tab.isDirty ? meta.accent : 'transparent'};font-size:var(--px-13)" title={tab.isDirty ? 'Unsaved changes' : ''}>{tab.isDirty ? '●' : ''}</span>
           <span
             onclick={(e) => {
               e.stopPropagation()
