@@ -34,6 +34,7 @@ pub fn run() {
             commands::connections::connect,
             commands::connections::disconnect,
             commands::connections::reconnect,
+            commands::connections::quick_connect,
             commands::connections::test_connection,
             commands::connections::ping_connection,
             // query

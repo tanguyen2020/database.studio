@@ -120,6 +120,62 @@ async fn pg_roundtrip_null_multi_and_error_position() {
     assert!(!err.raw.is_empty(), "raw error phải giữ nguyên văn");
 }
 
+/// Phase 2 · Section 8 — Quick Connect: một connection với id ephemeral (`quick-*`)
+/// được đăng ký thẳng vào Registry (không qua storage) và truy vấn được như mọi
+/// live connection; disconnect gỡ sạch. Đây là hợp đồng backend của `quick_connect`.
+#[tokio::test]
+async fn quick_connect_ephemeral_id_is_queryable_via_registry() {
+    use database_studio_lib::connections::profile::{
+        ConnectionProfile, Environment, SqliteMode, SshConfig,
+    };
+    use database_studio_lib::connections::registry::Registry;
+    use database_studio_lib::drivers::types::{StatementOutcome, SystemType};
+
+    let (_c, port) = start_pg().await;
+    let profile = ConnectionProfile {
+        id: "quick-itest".into(),
+        name: "adhoc".into(),
+        system: SystemType::Postgres,
+        host: "localhost".into(),
+        port,
+        database: "testdb".into(),
+        user: "postgres".into(),
+        password_enc: String::new(),
+        group: String::new(),
+        env: Environment::Development,
+        ssh: SshConfig::default(),
+        ssl: false,
+        sqlite_path: String::new(),
+        sqlite_mode: SqliteMode::ReadWrite,
+        mssql_auth: String::new(),
+    };
+
+    let registry = Registry::default();
+    // retry tới khi container sẵn sàng (registry.connect trả AppError nên loop tay)
+    let deadline = Instant::now() + Duration::from_secs(240);
+    loop {
+        match registry.connect(profile.clone(), PASS.into(), String::new()).await {
+            Ok(_) => break,
+            Err(e) => {
+                assert!(Instant::now() < deadline, "quick connect hết 240s: {e:?}");
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+        }
+    }
+
+    assert!(registry.is_connected("quick-itest"), "ephemeral id phải sống trong registry");
+    let outcome = registry
+        .exec_statement("quick-itest", "SELECT 1 AS n".into())
+        .await
+        .unwrap()
+        .unwrap();
+    let StatementOutcome::Rows { result } = outcome else { panic!("expected rows") };
+    assert_eq!(result.rows[0]["n"], serde_json::json!(1));
+
+    registry.disconnect("quick-itest").await.unwrap();
+    assert!(!registry.is_connected("quick-itest"), "disconnect phải gỡ sạch");
+}
+
 // ---------------------------------------------------------------------------
 // MySQL + MariaDB (chung driver sqlx-mysql, system type riêng)
 // ---------------------------------------------------------------------------

@@ -129,6 +129,29 @@ pub async fn reconnect(state: State<'_, AppState>, id: String) -> Result<u64, Ap
     state.registry.connect(profile, password, ssh_password).await
 }
 
+/// One-off "Quick Connect": open a live connection straight from an unsaved
+/// draft under an ephemeral id (`quick-*`). Never written to storage → gone on
+/// restart. Query/schema/disconnect resolve it via the registry like any live
+/// connection; the frontend keeps the ephemeral profile in memory only.
+#[tauri::command]
+pub async fn quick_connect(
+    state: State<'_, AppState>,
+    draft: ProfileDraft,
+) -> Result<ProfilePublic, AppError> {
+    let mut profile = draft.profile.clone();
+    profile.id = format!("quick-{}", Uuid::new_v4());
+    if profile.port == 0 {
+        profile.port = ConnectionProfile::default_port(profile.system);
+    }
+    let password = draft.password.clone().unwrap_or_default();
+    let ssh_password = draft.ssh_password.clone().unwrap_or_default();
+    let latency = state
+        .registry
+        .connect(profile.clone(), password, ssh_password)
+        .await?;
+    Ok(ProfilePublic::from_profile(profile, true, Some(latency)))
+}
+
 /// Real handshake + latency; works for saved profiles and unsaved drafts.
 #[tauri::command]
 pub async fn test_connection(

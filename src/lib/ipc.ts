@@ -40,6 +40,10 @@ export const disconnect = (id: string) => invoke<void>('disconnect', { id })
 
 export const reconnect = (id: string) => invoke<number>('reconnect', { id })
 
+/** One-off connection from an unsaved draft — ephemeral, never persisted. */
+export const quickConnect = (draft: ProfileDraft) =>
+  invoke<ProfilePublic>('quick_connect', { draft })
+
 export const testConnection = (draft: ProfileDraft) =>
   invoke<TestResult>('test_connection', { draft })
 

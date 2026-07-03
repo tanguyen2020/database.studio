@@ -8,6 +8,7 @@
   import ConnectionIndicator from '$lib/components/ConnectionIndicator.svelte'
   import SystemIcon from '$lib/components/SystemIcon.svelte'
   import { CATEGORY_ORDER, SYSTEM_ORDER, envMeta, systemMeta } from '$lib/systems'
+  import { groupByFolder } from '$lib/connections/grouping'
   import { connections } from '$lib/stores/connections.svelte'
   import { tabs } from '$lib/stores/tabs.svelte'
   import { toasts } from '$lib/stores/toast.svelte'
@@ -128,7 +129,116 @@
   function phase5(label: string) {
     toasts.show(`${label} — Phase 5`)
   }
+
+  // ---- Section 8: grouping mode + import/export + quick connect ----
+  const folders = $derived(groupByFolder(filtered, SYSTEM_ORDER))
+
+  let fileInput = $state<HTMLInputElement | null>(null)
+
+  function exportConnections() {
+    if (connections.profiles.filter((p) => !p.ephemeral).length === 0) {
+      toasts.show('Chưa có connection để export')
+      return
+    }
+    const blob = new Blob([connections.exportPayload()], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = 'database-studio-connections.json'
+    a.click()
+    URL.revokeObjectURL(url)
+    toasts.success('Đã export connections (không kèm password)')
+  }
+
+  async function onImportFile(e: Event) {
+    const input = e.currentTarget as HTMLInputElement
+    const file = input.files?.[0]
+    input.value = ''
+    if (!file) return
+    try {
+      const parsed = JSON.parse(await file.text())
+      const list = Array.isArray(parsed) ? parsed : parsed?.profiles
+      if (!Array.isArray(list)) throw new Error('Cấu trúc JSON không hợp lệ')
+      const n = await connections.importProfiles(list)
+      toasts.success(`Đã import ${n} connection`)
+    } catch (err) {
+      toasts.error(`Import thất bại: ${err}`)
+    }
+  }
+
+  function quickConnect() {
+    ui.pickerQuick = true
+    ui.pickerOpen = true
+  }
 </script>
+
+<!-- hidden picker cho Import Connections (JSON) -->
+<input
+  bind:this={fileInput}
+  type="file"
+  accept="application/json,.json"
+  onchange={onImportFile}
+  style="display:none"
+/>
+
+<!-- connection row — dùng chung cho cả 2 chế độ nhóm (theo hệ / theo folder) -->
+{#snippet connRow(p: ProfilePublic)}
+  <ContextMenu.Root>
+    <ContextMenu.Trigger>
+      <!-- connection row — dòng 116-124 -->
+      <div
+        onclick={() => select(p)}
+        ondblclick={() => openOrToggle(p)}
+        onkeydown={(e) => e.key === 'Enter' && openOrToggle(p)}
+        role="button"
+        tabindex="0"
+        style="display:flex;align-items:center;gap:var(--px-9);padding:var(--px-6) var(--px-6) var(--px-6) 0;border-radius:var(--px-7);cursor:pointer;position:relative;margin-bottom:var(--px-1);background:{connections.selectedId === p.id ? 'var(--hover)' : 'transparent'}"
+      >
+        <ConnectionIndicator system={p.system} />
+        {#if connections.connecting.has(p.id)}
+          <span style="width:var(--px-7);height:var(--px-7);border-radius:50%;flex:none;background:var(--warn)" title="Đang kết nối…"></span>
+        {:else}
+          <span style="width:var(--px-7);height:var(--px-7);border-radius:50%;flex:none;background:{p.connected ? systemMeta(p.system).accent : 'var(--sys-orphan-accent)'}" title={p.connected ? `Connected · ${p.latency_ms ?? '–'} ms` : 'Disconnected'}></span>
+        {/if}
+        <div style="flex:1;min-width:0">
+          <div style="font-weight:600;font-size:var(--px-12_5);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{p.name}</div>
+          <div class="mono" style="font-size:var(--px-10);color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{p.system === 'sqlite' ? p.sqlite_path || ':memory:' : `${p.host}:${p.port}`}</div>
+        </div>
+        {#if p.ephemeral}
+          <span style="flex:none;margin-right:var(--px-6);font-size:var(--px-8_5);font-weight:700;letter-spacing:.04em;padding:var(--px-1) var(--px-5);border-radius:var(--px-4);background:var(--panel);color:var(--muted);border:var(--px-1) solid var(--border)" title="One-off · not saved">1×</span>
+        {/if}
+        <span style="flex:none;margin-right:var(--px-7);font-size:var(--px-8_5);font-weight:700;letter-spacing:.04em;padding:var(--px-1) var(--px-5);border-radius:var(--px-4);background:{envMeta(p.env).bg};color:{envMeta(p.env).fg}">{envMeta(p.env).label}</span>
+      </div>
+    </ContextMenu.Trigger>
+    <ContextMenu.Content class="w-56">
+      <ContextMenu.Item onclick={() => newQueryConsole(p)}>New Query Console</ContextMenu.Item>
+      {#if p.connected}
+        <ContextMenu.Item onclick={() => connections.disconnect(p.id)}>Disconnect</ContextMenu.Item>
+      {:else}
+        <ContextMenu.Item onclick={() => openOrToggle(p)}>Open Connection</ContextMenu.Item>
+      {/if}
+      <ContextMenu.Separator />
+      {#if !p.ephemeral}
+        <ContextMenu.Item onclick={() => (ui.formProfile = { ...p })}>Edit Connection…</ContextMenu.Item>
+        <ContextMenu.Item onclick={() => connections.duplicate(p.id)}>Duplicate</ContextMenu.Item>
+      {/if}
+      <ContextMenu.Item onclick={() => testConn(p)}>Test Connection</ContextMenu.Item>
+      <ContextMenu.Item onclick={() => copyConnString(p)}>Copy Connection String</ContextMenu.Item>
+      <ContextMenu.Separator />
+      {#if p.ephemeral}
+        <ContextMenu.Item class="text-error data-highlighted:text-error" onclick={() => connections.remove(p.id)}>
+          Close (one-off)
+        </ContextMenu.Item>
+      {:else}
+        <ContextMenu.Item onclick={() => connections.load()}>Refresh</ContextMenu.Item>
+        <ContextMenu.Separator />
+        <ContextMenu.Item class="text-error data-highlighted:text-error" onclick={() => (ui.deleteTarget = p)}>
+          Delete Connection
+        </ContextMenu.Item>
+      {/if}
+    </ContextMenu.Content>
+  </ContextMenu.Root>
+{/snippet}
 
 <div style="flex:none;border-bottom:var(--px-1) solid var(--border)">
   <!-- header — dòng 74-76 -->
@@ -181,73 +291,65 @@
 
   <!-- cây connections — dòng 97-130 -->
   <div style="padding:0 var(--px-6) var(--px-8);height:{ui.connListHeight}px;overflow:auto">
-    <div class="hoverable" onclick={() => (myDbOpen = !myDbOpen)} onkeydown={(e) => e.key === 'Enter' && (myDbOpen = !myDbOpen)} role="button" tabindex="0" style="display:flex;align-items:center;gap:var(--px-7);padding:var(--px-5) var(--px-6);border-radius:var(--px-6);cursor:pointer">
-      <span class="mono" style="width:var(--px-12);text-align:center;font-size:var(--px-12);color:var(--muted)">{myDbOpen ? '▾' : '▸'}</span>
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--muted)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path></svg>
-      <span style="font-size:var(--px-11_5);font-weight:700">My Databases</span>
-      <span class="mono" style="margin-left:auto;font-size:var(--px-10);color:var(--muted)">{connections.profiles.length}</span>
-    </div>
+    <ContextMenu.Root>
+      <ContextMenu.Trigger>
+        <div class="hoverable" onclick={() => (myDbOpen = !myDbOpen)} onkeydown={(e) => e.key === 'Enter' && (myDbOpen = !myDbOpen)} role="button" tabindex="0" style="display:flex;align-items:center;gap:var(--px-7);padding:var(--px-5) var(--px-6);border-radius:var(--px-6);cursor:pointer">
+          <span class="mono" style="width:var(--px-12);text-align:center;font-size:var(--px-12);color:var(--muted)">{myDbOpen ? '▾' : '▸'}</span>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--muted)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path></svg>
+          <span style="font-size:var(--px-11_5);font-weight:700">My Databases</span>
+          <span class="mono" style="margin-left:auto;font-size:var(--px-10);color:var(--muted)">{connections.profiles.length}</span>
+        </div>
+      </ContextMenu.Trigger>
+      <ContextMenu.Content class="w-56">
+        <ContextMenu.Item onclick={() => ui.setConnGroupMode('type')}>
+          {ui.connGroupMode === 'type' ? '✓ ' : ''}Group by Type
+        </ContextMenu.Item>
+        <ContextMenu.Item onclick={() => ui.setConnGroupMode('folder')}>
+          {ui.connGroupMode === 'folder' ? '✓ ' : ''}Group by Folder
+        </ContextMenu.Item>
+        <ContextMenu.Separator />
+        <ContextMenu.Item onclick={quickConnect}>Quick Connect…</ContextMenu.Item>
+        <ContextMenu.Separator />
+        <ContextMenu.Item onclick={() => fileInput?.click()}>Import Connections…</ContextMenu.Item>
+        <ContextMenu.Item onclick={exportConnections}>Export Connections…</ContextMenu.Item>
+      </ContextMenu.Content>
+    </ContextMenu.Root>
     {#if myDbOpen}
       <div style="padding-left:var(--px-11)">
-        {#each groups as group (group.system)}
-          {#if group.showCategory}
-            <div style="font-size:var(--px-9_5);font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);padding:var(--px-9) var(--px-12) var(--px-2) var(--px-4)">{group.category}</div>
-          {/if}
-          <div class="hoverable" onclick={() => toggleGroup(group.system)} onkeydown={(e) => e.key === 'Enter' && toggleGroup(group.system)} role="button" tabindex="0" style="display:flex;align-items:center;gap:var(--px-7);padding:var(--px-8) var(--px-8) var(--px-4) var(--px-4);cursor:pointer">
-            <span class="mono" style="width:var(--px-12);text-align:center;font-size:var(--px-12);color:var(--muted)">{collapsed.has(group.system) ? '▸' : '▾'}</span>
-            <span style="display:flex;align-items:center;flex:none"><SystemIcon system={group.system} size={16} /></span>
-            <span style="font-size:var(--px-10);font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--muted)">{systemMeta(group.system).label}</span>
-            <span class="mono" style="margin-left:auto;font-size:var(--px-10);color:var(--muted)">{group.items.length}</span>
-          </div>
-          {#if !collapsed.has(group.system)}
-            {#each group.items as p (p.id)}
-              <ContextMenu.Root>
-                <ContextMenu.Trigger>
-                  <!-- connection row — dòng 116-124 -->
-                  <div
-                    onclick={() => select(p)}
-                    ondblclick={() => openOrToggle(p)}
-                    onkeydown={(e) => e.key === 'Enter' && openOrToggle(p)}
-                    role="button"
-                    tabindex="0"
-                    style="display:flex;align-items:center;gap:var(--px-9);padding:var(--px-6) var(--px-6) var(--px-6) 0;border-radius:var(--px-7);cursor:pointer;position:relative;margin-bottom:var(--px-1);background:{connections.selectedId === p.id ? 'var(--hover)' : 'transparent'}"
-                  >
-                    <ConnectionIndicator system={p.system} />
-                    {#if connections.connecting.has(p.id)}
-                      <span style="width:var(--px-7);height:var(--px-7);border-radius:50%;flex:none;background:var(--warn)" title="Đang kết nối…"></span>
-                    {:else}
-                      <span style="width:var(--px-7);height:var(--px-7);border-radius:50%;flex:none;background:{p.connected ? systemMeta(p.system).accent : 'var(--sys-orphan-accent)'}" title={p.connected ? `Connected · ${p.latency_ms ?? '–'} ms` : 'Disconnected'}></span>
-                    {/if}
-                    <div style="flex:1;min-width:0">
-                      <div style="font-weight:600;font-size:var(--px-12_5);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{p.name}</div>
-                      <div class="mono" style="font-size:var(--px-10);color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{p.system === 'sqlite' ? p.sqlite_path || ':memory:' : `${p.host}:${p.port}`}</div>
-                    </div>
-                    <span style="flex:none;margin-right:var(--px-7);font-size:var(--px-8_5);font-weight:700;letter-spacing:.04em;padding:var(--px-1) var(--px-5);border-radius:var(--px-4);background:{envMeta(p.env).bg};color:{envMeta(p.env).fg}">{envMeta(p.env).label}</span>
-                  </div>
-                </ContextMenu.Trigger>
-                <ContextMenu.Content class="w-56">
-                  <ContextMenu.Item onclick={() => newQueryConsole(p)}>New Query Console</ContextMenu.Item>
-                  {#if p.connected}
-                    <ContextMenu.Item onclick={() => connections.disconnect(p.id)}>Disconnect</ContextMenu.Item>
-                  {:else}
-                    <ContextMenu.Item onclick={() => openOrToggle(p)}>Open Connection</ContextMenu.Item>
-                  {/if}
-                  <ContextMenu.Separator />
-                  <ContextMenu.Item onclick={() => (ui.formProfile = { ...p })}>Edit Connection…</ContextMenu.Item>
-                  <ContextMenu.Item onclick={() => connections.duplicate(p.id)}>Duplicate</ContextMenu.Item>
-                  <ContextMenu.Item onclick={() => testConn(p)}>Test Connection</ContextMenu.Item>
-                  <ContextMenu.Item onclick={() => copyConnString(p)}>Copy Connection String</ContextMenu.Item>
-                  <ContextMenu.Separator />
-                  <ContextMenu.Item onclick={() => connections.load()}>Refresh</ContextMenu.Item>
-                  <ContextMenu.Separator />
-                  <ContextMenu.Item class="text-error data-highlighted:text-error" onclick={() => (ui.deleteTarget = p)}>
-                    Delete Connection
-                  </ContextMenu.Item>
-                </ContextMenu.Content>
-              </ContextMenu.Root>
-            {/each}
-          {/if}
-        {/each}
+        {#if ui.connGroupMode === 'folder'}
+          <!-- nhóm theo folder (group field) — Section 8 -->
+          {#each folders as folder (folder.name)}
+            <div class="hoverable" onclick={() => toggleGroup(`folder:${folder.name}`)} onkeydown={(e) => e.key === 'Enter' && toggleGroup(`folder:${folder.name}`)} role="button" tabindex="0" style="display:flex;align-items:center;gap:var(--px-7);padding:var(--px-8) var(--px-8) var(--px-4) var(--px-4);cursor:pointer">
+              <span class="mono" style="width:var(--px-12);text-align:center;font-size:var(--px-12);color:var(--muted)">{collapsed.has(`folder:${folder.name}`) ? '▸' : '▾'}</span>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--muted)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path></svg>
+              <span style="font-size:var(--px-10);font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--muted)">{folder.name}</span>
+              <span class="mono" style="margin-left:auto;font-size:var(--px-10);color:var(--muted)">{folder.items.length}</span>
+            </div>
+            {#if !collapsed.has(`folder:${folder.name}`)}
+              {#each folder.items as p (p.id)}
+                {@render connRow(p)}
+              {/each}
+            {/if}
+          {/each}
+        {:else}
+          <!-- nhóm theo hệ (prototype-faithful) — mặc định -->
+          {#each groups as group (group.system)}
+            {#if group.showCategory}
+              <div style="font-size:var(--px-9_5);font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);padding:var(--px-9) var(--px-12) var(--px-2) var(--px-4)">{group.category}</div>
+            {/if}
+            <div class="hoverable" onclick={() => toggleGroup(group.system)} onkeydown={(e) => e.key === 'Enter' && toggleGroup(group.system)} role="button" tabindex="0" style="display:flex;align-items:center;gap:var(--px-7);padding:var(--px-8) var(--px-8) var(--px-4) var(--px-4);cursor:pointer">
+              <span class="mono" style="width:var(--px-12);text-align:center;font-size:var(--px-12);color:var(--muted)">{collapsed.has(group.system) ? '▸' : '▾'}</span>
+              <span style="display:flex;align-items:center;flex:none"><SystemIcon system={group.system} size={16} /></span>
+              <span style="font-size:var(--px-10);font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--muted)">{systemMeta(group.system).label}</span>
+              <span class="mono" style="margin-left:auto;font-size:var(--px-10);color:var(--muted)">{group.items.length}</span>
+            </div>
+            {#if !collapsed.has(group.system)}
+              {#each group.items as p (p.id)}
+                {@render connRow(p)}
+              {/each}
+            {/if}
+          {/each}
+        {/if}
 
         {#if connections.loaded && groups.length === 0}
           <div style="padding:var(--px-12) var(--px-12);font-size:var(--px-12);color:var(--muted);text-align:center">

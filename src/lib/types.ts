@@ -49,6 +49,8 @@ export interface ProfilePublic extends ConnectionProfile {
   has_password: boolean
   connected: boolean
   latency_ms?: number
+  /** Client-only: one-off "Quick Connect" — lives in memory, never persisted. */
+  ephemeral?: boolean
 }
 
 export interface ProfileDraft {

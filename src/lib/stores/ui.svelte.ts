@@ -13,9 +13,15 @@ class UiStore {
 
   // Connection Manager dialogs
   pickerOpen = $state(false)
+  /** picker → form should open in Quick Connect (one-off) mode */
+  pickerQuick = $state(false)
   /** null = closed; profile with empty id = new */
   formProfile = $state<ProfilePublic | null>(null)
+  /** form is a one-off Quick Connect (Connect instead of Save, no persist) */
+  formQuick = $state(false)
   deleteTarget = $state<ProfilePublic | null>(null)
+  /** connection tree grouping: by system type (prototype-faithful) or by folder */
+  connGroupMode = $state<'type' | 'folder'>('type')
   /** save-while-connected decision dialog (Cancel / Save & Reconnect / Save only) */
   editConnected = $state<EditConnectedRequest | null>(null)
 
@@ -28,6 +34,11 @@ class UiStore {
   rightPanelWidth = $state(264)
   sizesLoaded = $state(false)
 
+  setConnGroupMode(mode: 'type' | 'folder') {
+    this.connGroupMode = mode
+    void ipc.setAppState('conn_group_mode', mode)
+  }
+
   toggleTheme() {
     this.theme = this.theme === 'dark' ? 'light' : 'dark'
     document.documentElement.classList.toggle('dark', this.theme === 'dark')
@@ -36,12 +47,16 @@ class UiStore {
 
   async loadPersisted() {
     try {
-      const [theme, sizes] = await Promise.all([
+      const [theme, sizes, groupMode] = await Promise.all([
         ipc.getAppState('theme'),
         ipc.getAppState('layout_sizes'),
+        ipc.getAppState('conn_group_mode'),
       ])
       if (theme === 'light' || theme === 'dark') {
         this.theme = theme
+      }
+      if (groupMode === 'type' || groupMode === 'folder') {
+        this.connGroupMode = groupMode
       }
       document.documentElement.classList.toggle('dark', this.theme === 'dark')
       if (sizes) {

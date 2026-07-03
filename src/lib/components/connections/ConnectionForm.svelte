@@ -13,6 +13,7 @@
 
   const profile = $derived(ui.formProfile)
   const isNew = $derived(!profile?.id)
+  const isQuick = $derived(ui.formQuick)
   const meta = $derived(systemMeta(profile?.system))
 
   // Local editable copy + secrets (không round-trip từ backend)
@@ -54,6 +55,22 @@
 
   function close() {
     ui.formProfile = null
+    ui.formQuick = false
+  }
+
+  /** Quick Connect — connect a one-off (unsaved) profile. Name is optional. */
+  async function connectQuick() {
+    if (!draft || saving) return
+    saving = true
+    try {
+      if (!draft.name.trim()) {
+        draft.name = isSqlite ? draft.sqlite_path || 'SQLite' : draft.host || draft.system
+      }
+      const p = await connections.quickConnect(buildDraftPayload())
+      if (p) close()
+    } finally {
+      saving = false
+    }
   }
 
   // SQLite là file-based: prototype không có native dialog nên Host input kiêm
@@ -175,7 +192,8 @@
             >‹ Back</span>
           {/if}
           <span style="width:var(--px-3);height:var(--px-22);border-radius:var(--px-2);background:{meta.accent}"></span>
-          <span style="font-weight:700;font-size:var(--px-16)">{isNew ? 'New connection' : draft.name || 'Connection'}</span>
+          <span style="font-weight:700;font-size:var(--px-16)">{isNew ? (isQuick ? 'Quick Connect' : 'New connection') : draft.name || 'Connection'}</span>
+          {#if isQuick}<span style="font-size:var(--px-11);color:var(--muted);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-2) var(--px-7)">one-off · not saved</span>{/if}
           <span style="display:flex;align-items:center"><SystemIcon system={draft.system} size={18} /></span>
           <span
             onclick={close}
@@ -436,13 +454,23 @@
               tabindex="0"
               style="font-size:var(--px-12_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-8);padding:var(--px-8) var(--px-16);cursor:pointer"
             >Cancel</span>
-            <span
-              onclick={save}
-              onkeydown={(e) => e.key === 'Enter' && save()}
-              role="button"
-              tabindex="0"
-              style="font-size:var(--px-12_5);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-8);padding:var(--px-8) var(--px-18);cursor:pointer;font-weight:600"
-            >{saving ? 'Saving…' : 'Save'}</span>
+            {#if isQuick}
+              <span
+                onclick={connectQuick}
+                onkeydown={(e) => e.key === 'Enter' && connectQuick()}
+                role="button"
+                tabindex="0"
+                style="font-size:var(--px-12_5);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-8);padding:var(--px-8) var(--px-18);cursor:pointer;font-weight:600"
+              >{saving ? 'Connecting…' : 'Connect'}</span>
+            {:else}
+              <span
+                onclick={save}
+                onkeydown={(e) => e.key === 'Enter' && save()}
+                role="button"
+                tabindex="0"
+                style="font-size:var(--px-12_5);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-8);padding:var(--px-8) var(--px-18);cursor:pointer;font-weight:600"
+              >{saving ? 'Saving…' : 'Save'}</span>
+            {/if}
           </div>
         </div>
       </div>

@@ -221,6 +221,10 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
       return ok({ ok: true, latency_ms: 12, server_version: 'demo' })
     case 'save_connection':
       return ok((args?.draft as { profile: unknown })?.profile)
+    case 'quick_connect': {
+      const p = (args?.draft as { profile: ProfilePublic })?.profile
+      return ok({ ...p, id: `quick-demo-${p?.name ?? ''}`, connected: true, latency_ms: 7, has_password: false })
+    }
     case 'duplicate_connection':
       return ok({ ...DEMO_PROFILES[0], id: 'copy', name: 'Copy' })
     case 'list_schemas':

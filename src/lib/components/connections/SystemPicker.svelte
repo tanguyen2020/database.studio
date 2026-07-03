@@ -11,11 +11,13 @@
   function pick(system: SystemType) {
     if (!systemMeta(system).available) return
     ui.pickerOpen = false
+    ui.formQuick = ui.pickerQuick
     ui.formProfile = connections.makeBlankProfile(system)
   }
 
   function close() {
     ui.pickerOpen = false
+    ui.pickerQuick = false
   }
 </script>
 
@@ -35,8 +37,8 @@
       style="width:var(--px-520);max-width:94vw;background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-14);box-shadow:0 var(--px-30) var(--px-70) var(--rgba-0-0-0-_55);overflow:hidden"
     >
       <div style="display:flex;align-items:center;gap:var(--px-10);padding:var(--px-16) var(--px-20);border-bottom:var(--px-1) solid var(--border)">
-        <span style="font-weight:700;font-size:var(--px-15)">New Connection</span>
-        <span style="font-size:var(--px-12);color:var(--muted)">Choose database type</span>
+        <span style="font-weight:700;font-size:var(--px-15)">{ui.pickerQuick ? 'Quick Connect' : 'New Connection'}</span>
+        <span style="font-size:var(--px-12);color:var(--muted)">{ui.pickerQuick ? 'One-off · not saved' : 'Choose database type'}</span>
         <span
           onclick={close}
           onkeydown={(e) => e.key === 'Enter' && close()}
