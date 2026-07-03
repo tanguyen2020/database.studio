@@ -1,0 +1,161 @@
+@import 'tailwindcss';
+@import 'tw-animate-css';
+@import './lib/tokens.css';
+
+@custom-variant dark (&:is(.dark *));
+
+/* ---------------------------------------------------------------------------
+ * Mọi giá trị màu/px đến từ src/lib/tokens.css (SINH TỰ ĐỘNG từ
+ * "Database Studio.dc.html" — npm run tokens). File này chỉ được phép
+ * alias/tham chiếu token, không định nghĩa giá trị literal mới.
+ * Dark là theme mặc định; `.dark` trên <html> đặt lúc boot.
+ * ------------------------------------------------------------------------- */
+
+:root {
+  /* semantic aliases — trỏ về màu literal có thật trong prototype */
+  --success: var(--hex-27ae60);
+  --warn: var(--hex-f0a020);
+  --warn2: var(--hex-f0c674);
+  --error: var(--hex-e06c75);
+
+  /* shadcn-svelte mapping */
+  --background: var(--bg);
+  --foreground: var(--text);
+  --card: var(--surface);
+  --card-foreground: var(--text);
+  --popover: var(--raised);
+  --popover-foreground: var(--text);
+  --primary-foreground: var(--surface);
+  --secondary: var(--panel);
+  --secondary-foreground: var(--text);
+  --muted-bg: var(--panel);
+  --muted-foreground: var(--muted);
+  --accent: var(--hover);
+  --accent-foreground: var(--text);
+  --destructive: var(--error);
+  --destructive-foreground: var(--text);
+  --input: var(--border2);
+  --ring: var(--primary);
+  --radius: var(--px-8);
+}
+
+/* ---------------------------------------------------------------------------
+ * Tailwind theme mapping (v4)
+ * ------------------------------------------------------------------------- */
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted-bg);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  /* app-specific surfaces */
+  --color-surface: var(--surface);
+  --color-panel: var(--panel);
+  --color-raised: var(--raised);
+  --color-header: var(--header);
+  --color-hover: var(--hover);
+  --color-zebra: var(--grid-zebra);
+  --color-border2: var(--border2);
+  --color-text2: var(--text2);
+  --color-mutedfg: var(--muted);
+  --color-success: var(--success);
+  --color-warn: var(--warn);
+  --color-error: var(--error);
+
+  --radius-sm: calc(var(--radius) - var(--px-4));
+  --radius-md: calc(var(--radius) - var(--px-2));
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + var(--px-4));
+
+  --font-sans: var(--font-main);
+  --font-mono: var(--font-mono);
+}
+
+@layer base {
+  * {
+    @apply border-border;
+    box-sizing: border-box;
+  }
+  html,
+  body,
+  #app {
+    height: 100%;
+    overflow: hidden;
+    margin: 0;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-family: var(--font-main);
+    font-size: var(--px-13);
+    -webkit-font-smoothing: antialiased;
+    user-select: none;
+  }
+  .mono {
+    font-family: var(--font-mono);
+  }
+  /* text selection allowed inside editors/grids */
+  .selectable {
+    user-select: text;
+  }
+}
+
+/* scrollbar — port từ khối <style> của Database Studio.dc.html */
+::-webkit-scrollbar {
+  width: var(--px-10);
+  height: var(--px-10);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border2);
+  border-radius: var(--px-6);
+  border: var(--px-2) solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--muted);
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* keyframes — port nguyên từ Database Studio.dc.html */
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes blink {
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+@keyframes slidein {
+  from {
+    opacity: 0;
+    transform: translateY(var(--px-6));
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}

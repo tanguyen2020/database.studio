@@ -1,11 +1,16 @@
 # Rust / Tauri
-backend/target/
-backend/gen/
+src-tauri/target/
+src-tauri/gen/
 
 # Node / Vite
-frontend/node_modules/
-frontend/dist/
-frontend/.vite/
+node_modules/
+dist/
+.vite/
+
+# Test artifacts
+test-results/
+playwright-report/
+coverage/
 
 # IDE / OS
 .vscode/
