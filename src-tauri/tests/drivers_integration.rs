@@ -831,6 +831,46 @@ async fn redis_connect_auth_ping_and_version() {
     assert_eq!(acct.key_type, "hash");
     assert_eq!(acct.ttl, -1, "acct:1 không set TTL → -1");
 
+    // --- get_value theo từng kiểu (T4) ---
+    use database_studio_lib::drivers::redis::RedisValue;
+    let _: () = redis::cmd("RPUSH").arg("mylist").arg("a").arg("b").arg("c").query_async(&mut raw).await.unwrap();
+    let _: () = redis::cmd("SADD").arg("myset").arg("x").arg("y").query_async(&mut raw).await.unwrap();
+    let _: () = redis::cmd("ZADD").arg("myz").arg(1.5).arg("lo").arg(9.0).arg("hi").query_async(&mut raw).await.unwrap();
+
+    match drv.get_value("user:1").await.unwrap().value {
+        RedisValue::String { value } => assert_eq!(value, "a"),
+        other => panic!("string mong đợi, nhận {other:?}"),
+    }
+    match drv.get_value("acct:1").await.unwrap().value {
+        RedisValue::Hash { fields } => assert!(fields.iter().any(|(f, v)| f == "f" && v == "v")),
+        other => panic!("hash mong đợi, nhận {other:?}"),
+    }
+    match drv.get_value("mylist").await.unwrap().value {
+        RedisValue::List { items } => assert_eq!(items, vec!["a", "b", "c"]),
+        other => panic!("list mong đợi, nhận {other:?}"),
+    }
+    match drv.get_value("myset").await.unwrap().value {
+        RedisValue::Set { mut members } => {
+            members.sort();
+            assert_eq!(members, vec!["x", "y"]);
+        }
+        other => panic!("set mong đợi, nhận {other:?}"),
+    }
+    match drv.get_value("myz").await.unwrap().value {
+        RedisValue::Zset { members } => {
+            assert_eq!(members[0], ("lo".into(), 1.5));
+            assert_eq!(members[1], ("hi".into(), 9.0));
+        }
+        other => panic!("zset mong đợi, nhận {other:?}"),
+    }
+
+    // set_ttl (EXPIRE) rồi del
+    drv.set_ttl("mylist", 50).await.unwrap();
+    let after = drv.get_value("mylist").await.unwrap();
+    assert!(after.ttl > 0 && after.ttl <= 50, "TTL sau EXPIRE ~50s, nhận {}", after.ttl);
+    assert_eq!(drv.del("mylist").await.unwrap(), 1, "DEL trả 1");
+    assert!(matches!(drv.get_value("mylist").await.unwrap().value, RedisValue::None), "key đã xóa → none");
+
     // password sai/thiếu → NOAUTH, connect phải lỗi
     let p_bad = params("");
     let bad = RedisDriver::connect(&p_bad).await;

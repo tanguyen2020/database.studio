@@ -310,6 +310,18 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
           { name: 'leaderboard', key_type: 'zset', ttl: -1 },
         ],
       })
+    case 'redis_get': {
+      const key = (args?.key as string) ?? ''
+      if (key.startsWith('user:'))
+        return ok({ key_type: 'hash', ttl: -1, value: { kind: 'hash', fields: [['name', 'An'], ['email', 'an@acme.io'], ['role', 'admin']] } })
+      if (key === 'leaderboard')
+        return ok({ key_type: 'zset', ttl: -1, value: { kind: 'zset', members: [['an', 980], ['binh', 870], ['chi', 640]] } })
+      return ok({ key_type: 'string', ttl: 42, value: { kind: 'string', value: 'demo-value' } })
+    }
+    case 'redis_del':
+      return ok(1)
+    case 'redis_set_ttl':
+      return ok(null)
     default:
       return Promise.reject(new Error(`demo: chưa mock command "${cmd}"`))
   }

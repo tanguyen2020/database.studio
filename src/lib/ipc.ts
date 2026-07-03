@@ -69,6 +69,32 @@ export interface RedisScanResult {
 export const redisScan = (connId: string, pattern: string, cursor: number, count: number) =>
   invoke<RedisScanResult>('redis_scan', { connId, pattern, cursor, count })
 
+/** Typed value per Redis type (tagged by `kind`). */
+export type RedisValue =
+  | { kind: 'string'; value: string }
+  | { kind: 'hash'; fields: [string, string][] }
+  | { kind: 'list'; items: string[] }
+  | { kind: 'set'; members: string[] }
+  | { kind: 'zset'; members: [string, number][] }
+  | { kind: 'stream'; entries: { id: string; fields: [string, string][] }[] }
+  | { kind: 'none' }
+
+export interface RedisKeyValue {
+  key_type: string
+  ttl: number
+  value: RedisValue
+}
+
+export const redisGet = (connId: string, key: string) =>
+  invoke<RedisKeyValue>('redis_get', { connId, key })
+
+export const redisDel = (connId: string, key: string) =>
+  invoke<number>('redis_del', { connId, key })
+
+/** secs > 0 → EXPIRE; secs <= 0 → PERSIST. */
+export const redisSetTtl = (connId: string, key: string, secs: number) =>
+  invoke<void>('redis_set_ttl', { connId, key, secs })
+
 // ---- schema (Object Explorer) ----------------------------------------------
 
 export const listSchemas = (connId: string) => invoke<SchemaInfo[]>('list_schemas', { connId })

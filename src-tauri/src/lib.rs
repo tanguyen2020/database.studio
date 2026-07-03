@@ -42,6 +42,9 @@ pub fn run() {
             commands::query::cancel_query,
             // redis
             commands::redis::redis_scan,
+            commands::redis::redis_get,
+            commands::redis::redis_del,
+            commands::redis::redis_set_ttl,
             // schema
             commands::schema::list_schemas,
             commands::schema::list_tables,

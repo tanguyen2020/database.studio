@@ -3,7 +3,7 @@
 
 use tauri::State;
 
-use crate::drivers::redis::RedisScan;
+use crate::drivers::redis::{RedisKeyValue, RedisScan};
 use crate::drivers::LiveConnection;
 use crate::error::{AppError, QueryError};
 use crate::state::AppState;
@@ -31,6 +31,67 @@ pub async fn redis_scan(
                     let dbsize = r.dbsize().await?;
                     Ok(RedisScan { cursor: next, keys, dbsize })
                 }
+                _ => Err(not_redis()),
+            }
+        })
+        .await?;
+    inner.map_err(|e| AppError::Driver(e.message))
+}
+
+/// Đọc 1 key: kiểu + TTL + giá trị theo kiểu (viewer).
+#[tauri::command]
+pub async fn redis_get(
+    state: State<'_, AppState>,
+    conn_id: String,
+    key: String,
+) -> Result<RedisKeyValue, AppError> {
+    let inner = state
+        .registry
+        .with_driver(&conn_id, move |driver| async move {
+            let mut d = driver.lock().await;
+            match &mut *d {
+                LiveConnection::Redis(r) => r.get_value(&key).await,
+                _ => Err(not_redis()),
+            }
+        })
+        .await?;
+    inner.map_err(|e| AppError::Driver(e.message))
+}
+
+/// Xóa key (DEL) — trả số key đã xóa.
+#[tauri::command]
+pub async fn redis_del(
+    state: State<'_, AppState>,
+    conn_id: String,
+    key: String,
+) -> Result<u64, AppError> {
+    let inner = state
+        .registry
+        .with_driver(&conn_id, move |driver| async move {
+            let mut d = driver.lock().await;
+            match &mut *d {
+                LiveConnection::Redis(r) => r.del(&key).await,
+                _ => Err(not_redis()),
+            }
+        })
+        .await?;
+    inner.map_err(|e| AppError::Driver(e.message))
+}
+
+/// Đặt/gỡ TTL: secs > 0 → EXPIRE; secs <= 0 → PERSIST.
+#[tauri::command]
+pub async fn redis_set_ttl(
+    state: State<'_, AppState>,
+    conn_id: String,
+    key: String,
+    secs: i64,
+) -> Result<(), AppError> {
+    let inner = state
+        .registry
+        .with_driver(&conn_id, move |driver| async move {
+            let mut d = driver.lock().await;
+            match &mut *d {
+                LiveConnection::Redis(r) => r.set_ttl(&key, secs).await,
                 _ => Err(not_redis()),
             }
         })

@@ -17,4 +17,11 @@ test('redis key explorer renders keys from demo scan', async ({ page }) => {
   await expect(page.getByText(/SCAN ·/).first()).toBeVisible()
   await expect(page.getByText('leaderboard').first()).toBeVisible()
   await expect(page.getByText('user', { exact: true }).first()).toBeVisible()
+
+  // click key 'leaderboard' (zset) → viewer hiện member + nút Delete (T4)
+  await page.getByText('leaderboard').first().click()
+  await page.waitForTimeout(400)
+  await expect(page.getByRole('button', { name: 'Delete' })).toBeVisible()
+  await expect(page.getByText('an', { exact: true }).first()).toBeVisible()
+  expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })

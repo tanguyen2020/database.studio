@@ -150,6 +150,90 @@ impl RedisDriver {
         }
         Ok((next, keys))
     }
+
+    /// Đọc key: TYPE + TTL + giá trị theo đúng kiểu (GET/HGETALL/LRANGE/SMEMBERS/
+    /// ZRANGE WITHSCORES/XRANGE). Stream parse thủ công từ redis::Value.
+    pub async fn get_value(&mut self, key: &str) -> Result<RedisKeyValue, QueryError> {
+        let key_type: String = redis::cmd("TYPE")
+            .arg(key)
+            .query_async(&mut self.conn)
+            .await
+            .map_err(|e| err("TYPE lỗi", e))?;
+        let ttl: i64 = redis::cmd("TTL").arg(key).query_async(&mut self.conn).await.unwrap_or(-1);
+
+        let value = match key_type.as_str() {
+            "string" => RedisValue::String {
+                value: redis::cmd("GET").arg(key).query_async(&mut self.conn).await.map_err(|e| err("GET lỗi", e))?,
+            },
+            "hash" => RedisValue::Hash {
+                fields: redis::cmd("HGETALL").arg(key).query_async(&mut self.conn).await.map_err(|e| err("HGETALL lỗi", e))?,
+            },
+            "list" => RedisValue::List {
+                items: redis::cmd("LRANGE").arg(key).arg(0).arg(-1).query_async(&mut self.conn).await.map_err(|e| err("LRANGE lỗi", e))?,
+            },
+            "set" => RedisValue::Set {
+                members: redis::cmd("SMEMBERS").arg(key).query_async(&mut self.conn).await.map_err(|e| err("SMEMBERS lỗi", e))?,
+            },
+            "zset" => {
+                // ZRANGE … WITHSCORES → [member, score, member, score, …]
+                let flat: Vec<String> = redis::cmd("ZRANGE")
+                    .arg(key).arg(0).arg(-1).arg("WITHSCORES")
+                    .query_async(&mut self.conn).await.map_err(|e| err("ZRANGE lỗi", e))?;
+                let mut members = Vec::new();
+                let mut it = flat.into_iter();
+                while let (Some(m), Some(s)) = (it.next(), it.next()) {
+                    members.push((m, s.parse::<f64>().unwrap_or(0.0)));
+                }
+                RedisValue::Zset { members }
+            }
+            "stream" => {
+                let raw: redis::Value = redis::cmd("XRANGE")
+                    .arg(key).arg("-").arg("+")
+                    .query_async(&mut self.conn).await.map_err(|e| err("XRANGE lỗi", e))?;
+                RedisValue::Stream { entries: parse_stream(&raw) }
+            }
+            _ => RedisValue::None,
+        };
+        Ok(RedisKeyValue { key_type, ttl, value })
+    }
+
+    /// Xóa key (DEL) — trả số key đã xóa (0/1).
+    pub async fn del(&mut self, key: &str) -> Result<u64, QueryError> {
+        redis::cmd("DEL").arg(key).query_async(&mut self.conn).await.map_err(|e| err("DEL lỗi", e))
+    }
+
+    /// Đặt TTL: secs > 0 → EXPIRE; secs <= 0 → PERSIST (bỏ hết hạn).
+    pub async fn set_ttl(&mut self, key: &str, secs: i64) -> Result<(), QueryError> {
+        if secs > 0 {
+            let _: i64 = redis::cmd("EXPIRE").arg(key).arg(secs).query_async(&mut self.conn).await.map_err(|e| err("EXPIRE lỗi", e))?;
+        } else {
+            let _: i64 = redis::cmd("PERSIST").arg(key).query_async(&mut self.conn).await.map_err(|e| err("PERSIST lỗi", e))?;
+        }
+        Ok(())
+    }
+}
+
+/// Parse mảng XRANGE (Array of [id, [f,v,…]]) → StreamEntry[].
+fn parse_stream(raw: &redis::Value) -> Vec<StreamEntry> {
+    let mut out = Vec::new();
+    if let redis::Value::Array(entries) = raw {
+        for e in entries {
+            if let redis::Value::Array(pair) = e {
+                if pair.len() == 2 {
+                    let id = val_to_string(&pair[0]);
+                    let mut fields = Vec::new();
+                    if let redis::Value::Array(fv) = &pair[1] {
+                        let mut it = fv.iter();
+                        while let (Some(f), Some(v)) = (it.next(), it.next()) {
+                            fields.push((val_to_string(f), val_to_string(v)));
+                        }
+                    }
+                    out.push(StreamEntry { id, fields });
+                }
+            }
+        }
+    }
+    out
 }
 
 /// Một key trong SCAN — tên + kiểu (string/hash/list/set/zset/stream) + TTL giây
@@ -159,6 +243,46 @@ pub struct RedisKey {
     pub name: String,
     pub key_type: String,
     pub ttl: i64,
+}
+
+/// Một entry stream: ID + danh sách field/value.
+#[derive(Debug, serde::Serialize)]
+pub struct StreamEntry {
+    pub id: String,
+    pub fields: Vec<(String, String)>,
+}
+
+/// Giá trị key theo kiểu (tagged union cho frontend render đúng viewer).
+#[derive(Debug, serde::Serialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum RedisValue {
+    String { value: String },
+    Hash { fields: Vec<(String, String)> },
+    List { items: Vec<String> },
+    Set { members: Vec<String> },
+    Zset { members: Vec<(String, f64)> },
+    Stream { entries: Vec<StreamEntry> },
+    None,
+}
+
+/// Kết quả đọc 1 key: kiểu + TTL + giá trị.
+#[derive(Debug, serde::Serialize)]
+pub struct RedisKeyValue {
+    pub key_type: String,
+    pub ttl: i64,
+    pub value: RedisValue,
+}
+
+fn val_to_string(v: &redis::Value) -> String {
+    match v {
+        redis::Value::Nil => String::new(),
+        redis::Value::Int(i) => i.to_string(),
+        redis::Value::BulkString(b) => String::from_utf8_lossy(b).into_owned(),
+        redis::Value::SimpleString(s) => s.clone(),
+        redis::Value::Double(d) => d.to_string(),
+        redis::Value::Boolean(b) => b.to_string(),
+        other => format!("{other:?}"),
+    }
 }
 
 /// Kết quả 1 vòng SCAN gửi ra frontend.

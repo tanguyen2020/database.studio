@@ -25,6 +25,9 @@
   let error = $state<string | null>(null)
   let expanded = $state<Set<string>>(new Set())
   let selected = $state<string | null>(null)
+  let selectedValue = $state<ipc.RedisKeyValue | null>(null)
+  let valLoading = $state(false)
+  let valError = $state<string | null>(null)
 
   // màu badge theo type (token đã có trong tokens.css)
   const TYPE_COLOR: Record<string, string> = {
@@ -96,7 +99,80 @@
     await navigator.clipboard.writeText(name)
     toasts.success(`Đã copy "${name}"`)
   }
+
+  async function selectKey(path: string) {
+    if (!tab.connectionId) return
+    selected = path
+    selectedValue = null
+    valError = null
+    valLoading = true
+    try {
+      selectedValue = await ipc.redisGet(tab.connectionId, path)
+    } catch (e) {
+      valError = String(e)
+    } finally {
+      valLoading = false
+    }
+  }
+
+  async function delKey() {
+    if (!tab.connectionId || !selected) return
+    if (!window.confirm(`Xóa key "${selected}"? (DEL)`)) return
+    try {
+      await ipc.redisDel(tab.connectionId, selected)
+      toasts.success(`Đã DEL "${selected}"`)
+      selected = null
+      selectedValue = null
+      await load()
+    } catch (e) {
+      toasts.error(`DEL thất bại: ${e}`)
+    }
+  }
+
+  async function editTtl() {
+    if (!tab.connectionId || !selected) return
+    const cur = selectedValue?.ttl ?? -1
+    const input = window.prompt('TTL (giây; 0 hoặc trống = PERSIST bỏ hết hạn):', cur > 0 ? String(cur) : '')
+    if (input === null) return
+    const secs = parseInt(input, 10) || 0
+    try {
+      await ipc.redisSetTtl(tab.connectionId, selected, secs)
+      toasts.success(secs > 0 ? `EXPIRE ${secs}s` : 'PERSIST')
+      await selectKey(selected)
+      await load()
+    } catch (e) {
+      toasts.error(`Set TTL thất bại: ${e}`)
+    }
+  }
 </script>
+
+{#snippet kvTable(h1: string, h2: string, rows: [string, string][])}
+  <table class="mono" style="border-collapse:collapse;width:100%;font-size:var(--px-12_5)">
+    <thead><tr>
+      <th style="position:sticky;top:0;background:var(--header);border-bottom:var(--px-1) solid var(--border2);padding:var(--px-7) var(--px-14);text-align:left;color:var(--text2);font-weight:600">{h1}</th>
+      <th style="position:sticky;top:0;background:var(--header);border-bottom:var(--px-1) solid var(--border2);padding:var(--px-7) var(--px-14);text-align:left;color:var(--text2);font-weight:600">{h2}</th>
+    </tr></thead>
+    <tbody>
+      {#each rows as row, i (i)}
+        <tr><td style="padding:var(--px-7) var(--px-14);border-bottom:var(--px-1) solid var(--border);color:var(--hex-e8c547)">{row[0]}</td><td style="padding:var(--px-7) var(--px-14);border-bottom:var(--px-1) solid var(--border)">{row[1]}</td></tr>
+      {/each}
+    </tbody>
+  </table>
+{/snippet}
+
+{#snippet listTable(h1: string, items: string[])}
+  <table class="mono" style="border-collapse:collapse;width:100%;font-size:var(--px-12_5)">
+    <thead><tr>
+      <th style="position:sticky;top:0;background:var(--header);border-bottom:var(--px-1) solid var(--border2);padding:var(--px-7) var(--px-14);text-align:left;color:var(--text2);font-weight:600;width:var(--px-40)">{h1}</th>
+      <th style="position:sticky;top:0;background:var(--header);border-bottom:var(--px-1) solid var(--border2);padding:var(--px-7) var(--px-14);text-align:left;color:var(--text2);font-weight:600">Value</th>
+    </tr></thead>
+    <tbody>
+      {#each items as item, i (i)}
+        <tr><td style="padding:var(--px-7) var(--px-14);border-bottom:var(--px-1) solid var(--border);color:var(--muted)">{i}</td><td style="padding:var(--px-7) var(--px-14);border-bottom:var(--px-1) solid var(--border)">{item}</td></tr>
+      {/each}
+    </tbody>
+  </table>
+{/snippet}
 
 <div style="flex:1;display:flex;min-height:0">
   <!-- panel trái — key explorer (dòng 663-678) -->
@@ -141,9 +217,9 @@
           {:else}
             {@const kt = r.key?.key_type ?? 'string'}
             <div
-              onclick={() => (selected = r.path)}
+              onclick={() => selectKey(r.path)}
               ondblclick={() => copyKey(r.path)}
-              onkeydown={(e) => e.key === 'Enter' && (selected = r.path)}
+              onkeydown={(e) => e.key === 'Enter' && selectKey(r.path)}
               role="button"
               tabindex="0"
               title={r.path}
@@ -159,15 +235,52 @@
     </div>
   </div>
 
-  <!-- panel phải — Key Viewer (T4). Tạm placeholder. -->
+  <!-- panel phải — Key Viewer (dòng 679-705) -->
   <div style="flex:1;display:flex;flex-direction:column;min-width:0">
     {#if selected}
+      {@const v = selectedValue}
       <div style="flex:none;display:flex;align-items:center;gap:var(--px-10);padding:var(--px-10) var(--px-14);border-bottom:var(--px-1) solid var(--border);background:var(--surface)">
         <span style="width:var(--px-3);height:var(--px-20);border-radius:var(--px-2);background:#D82C20"></span>
         <span class="mono" style="font-size:var(--px-13);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{selected}</span>
+        {#if v}
+          <span class="mono" style="flex:none;font-size:var(--px-10);font-weight:700;color:{typeColor(v.key_type)};border:var(--px-1) solid {typeColor(v.key_type)};border-radius:var(--px-4);padding:var(--px-1) var(--px-6)">{v.key_type}</span>
+          <span class="mono" style="font-size:var(--px-11);color:var(--muted)">TTL {ttlLabel(v.ttl)}</span>
+        {/if}
+        <div style="margin-left:auto;display:flex;gap:var(--px-7)">
+          <span onclick={editTtl} onkeydown={(e) => e.key === 'Enter' && editTtl()} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">Set TTL</span>
+          <span onclick={delKey} onkeydown={(e) => e.key === 'Enter' && delKey()} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer;color:var(--error)">Delete</span>
+        </div>
       </div>
-      <div style="flex:1;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:var(--px-12)">
-        Key Viewer/Editor — Phase 3 (T4)
+      <div style="flex:1;overflow:auto;min-height:0">
+        {#if valLoading}
+          <div style="padding:var(--px-14);font-size:var(--px-12);color:var(--muted)">Đang tải…</div>
+        {:else if valError}
+          <div style="padding:var(--px-14);font-size:var(--px-12);color:var(--error)">{valError}</div>
+        {:else if v?.value.kind === 'string'}
+          <pre class="mono" style="margin:0;padding:var(--px-14);font-size:var(--px-12_5);white-space:pre-wrap;word-break:break-word;color:var(--hex-98c379)">{v.value.value}</pre>
+        {:else if v?.value.kind === 'hash'}
+          {@render kvTable('Field', 'Value', v.value.fields.map((f) => [f[0], f[1]]))}
+        {:else if v?.value.kind === 'zset'}
+          {@render kvTable('Member', 'Score', v.value.members.map((m) => [m[0], String(m[1])]))}
+        {:else if v?.value.kind === 'list'}
+          {@render listTable('#', v.value.items)}
+        {:else if v?.value.kind === 'set'}
+          {@render listTable('Member', v.value.members)}
+        {:else if v?.value.kind === 'stream'}
+          <table class="mono" style="border-collapse:collapse;width:100%;font-size:var(--px-12)">
+            <thead><tr>
+              <th style="position:sticky;top:0;background:var(--header);border-bottom:var(--px-1) solid var(--border2);padding:var(--px-7) var(--px-14);text-align:left;color:var(--text2)">ID</th>
+              <th style="position:sticky;top:0;background:var(--header);border-bottom:var(--px-1) solid var(--border2);padding:var(--px-7) var(--px-14);text-align:left;color:var(--text2)">Fields</th>
+            </tr></thead>
+            <tbody>
+              {#each v.value.entries as e (e.id)}
+                <tr><td style="padding:var(--px-6) var(--px-14);border-bottom:var(--px-1) solid var(--border);color:var(--hex-e8923a);white-space:nowrap">{e.id}</td><td style="padding:var(--px-6) var(--px-14);border-bottom:var(--px-1) solid var(--border)">{e.fields.map((f) => `${f[0]}=${f[1]}`).join('  ')}</td></tr>
+              {/each}
+            </tbody>
+          </table>
+        {:else}
+          <div style="padding:var(--px-14);font-size:var(--px-12);color:var(--muted)">(empty / key không tồn tại)</div>
+        {/if}
       </div>
     {:else}
       <div style="flex:1;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:var(--px-12)">
