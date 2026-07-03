@@ -3,24 +3,31 @@
   //  - sub-tab strip (dòng 332-340 + logic 4967-4987): #N mono bold muted,
   //    icon › khi active / ≣ Messages, underline 2px accent, statusColor ✓/✗
   //  - result toolbar (dòng 342-349): segmented Grid/JSON/Single Row/Chart
-  //    (JSON/Single/Chart → Phase 2, toast) + summary + Export CSV
+  //  - view modes: Grid / JSON / Single Row / Chart (dòng 500-548)
   // Click sub-tab lỗi / dòng Messages → nhảy đúng vị trí (addendum §3).
-  import ResultGrid from './ResultGrid.svelte'
+  import ResultGrid, { type EditTarget } from './ResultGrid.svelte'
+  import ResultJsonView from './ResultJsonView.svelte'
+  import ResultSingleRow from './ResultSingleRow.svelte'
+  import ResultChart from './ResultChart.svelte'
   import type { SubResult, TabExecution } from '$lib/stores/results.svelte'
   import { mapErrorToDocument } from '$lib/sql/errors'
-  import { toasts } from '$lib/stores/toast.svelte'
+
+  type ViewMode = 'grid' | 'json' | 'single' | 'chart'
 
   interface Props {
     exec: TabExecution
     /** accent của hệ tab đang chạy — underline sub-tab active (as.accent trong HTML) */
     accent?: string
+    /** editable grid khi result đến từ 1 bảng đã biết (Table Viewer) */
+    editTarget?: EditTarget
     onJump?: (line: number, col: number) => void
   }
 
-  let { exec, accent = 'var(--primary)', onJump }: Props = $props()
+  let { exec, accent = 'var(--primary)', editTarget, onJump }: Props = $props()
 
   let grid = $state<ResultGrid | null>(null)
   let rawError = $state<string | null>(null)
+  let viewMode = $state<ViewMode>('grid')
 
   const MESSAGES = -1
 
@@ -97,19 +104,27 @@
   {#if activeResult?.kind === 'rows' && activeResult.result}
     <div style="flex:none;display:flex;align-items:center;gap:var(--px-10);padding:var(--px-6) var(--px-12);border-bottom:var(--px-1) solid var(--border)">
       <div style="display:flex;background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-7);overflow:hidden">
-        <span class="vm-btn" style="background:{accent};color:var(--hex-fff)">Grid</span>
-        <span class="vm-btn" style="border-left:var(--px-1) solid var(--border);color:var(--text2)" onclick={() => toasts.show('JSON mode — Phase 2')} onkeydown={(e) => e.key === 'Enter' && toasts.show('JSON mode — Phase 2')} role="button" tabindex="0">JSON</span>
-        <span class="vm-btn" style="border-left:var(--px-1) solid var(--border);color:var(--text2)" onclick={() => toasts.show('Single Row — Phase 2')} onkeydown={(e) => e.key === 'Enter' && toasts.show('Single Row — Phase 2')} role="button" tabindex="0">Single Row</span>
-        <span class="vm-btn" style="border-left:var(--px-1) solid var(--border);color:var(--text2)" onclick={() => toasts.show('Chart — Phase 2')} onkeydown={(e) => e.key === 'Enter' && toasts.show('Chart — Phase 2')} role="button" tabindex="0">Chart</span>
+        {#each [['grid', 'Grid'], ['json', 'JSON'], ['single', 'Single Row'], ['chart', 'Chart']] as [mode, label], i (mode)}
+          <span
+            class="vm-btn"
+            style="{i > 0 ? 'border-left:var(--px-1) solid var(--border);' : ''}background:{viewMode === mode ? accent : 'transparent'};color:{viewMode === mode ? 'var(--hex-fff)' : 'var(--text2)'}"
+            onclick={() => (viewMode = mode as ViewMode)}
+            onkeydown={(e) => e.key === 'Enter' && (viewMode = mode as ViewMode)}
+            role="button"
+            tabindex="0"
+          >{label}</span>
+        {/each}
       </div>
       <span style="font-size:var(--px-11_5);color:var(--muted)">{summary}</span>
-      <span
-        style="margin-left:auto;font-size:var(--px-11_5);color:var(--text2);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer"
-        onclick={() => grid?.exportCsv()}
-        onkeydown={(e) => e.key === 'Enter' && grid?.exportCsv()}
-        role="button"
-        tabindex="0"
-      >Export CSV</span>
+      {#if viewMode === 'grid'}
+        <span
+          style="margin-left:auto;font-size:var(--px-11_5);color:var(--text2);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer"
+          onclick={() => grid?.exportCsv()}
+          onkeydown={(e) => e.key === 'Enter' && grid?.exportCsv()}
+          role="button"
+          tabindex="0"
+        >Export CSV</span>
+      {/if}
     </div>
   {/if}
 
@@ -175,7 +190,15 @@
       </div>
     {:else if activeResult}
       {#if activeResult.kind === 'rows' && activeResult.result}
-        <ResultGrid bind:this={grid} data={activeResult.result} />
+        {#if viewMode === 'grid'}
+          <ResultGrid bind:this={grid} data={activeResult.result} {editTarget} />
+        {:else if viewMode === 'json'}
+          <ResultJsonView data={activeResult.result} />
+        {:else if viewMode === 'single'}
+          <ResultSingleRow data={activeResult.result} />
+        {:else}
+          <ResultChart data={activeResult.result} {accent} />
+        {/if}
       {:else if activeResult.kind === 'affected'}
         <div style="padding:var(--px-16);font-size:var(--px-13)">
           <span style="color:var(--hex-27ae60)">✓</span>

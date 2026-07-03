@@ -47,6 +47,12 @@
   let editingCell = $state<{ row: number; col: string; insert?: number } | null>(null)
   let previewSql = $state<string[] | null>(null)
   let applying = $state(false)
+  // JSON cell viewer (badge { } → modal)
+  let jsonCell = $state<string | null>(null)
+
+  function isJsonValue(v: unknown): boolean {
+    return typeof v === 'object' && v !== null
+  }
 
   const editable = $derived(!!editTarget)
   const pendingCount = $derived(edits.size + deletedRows.size + insertedRows.length)
@@ -441,6 +447,17 @@
                   {:else}
                     <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{cell.text}</span>
                   {/if}
+                  {#if isJsonValue(rawVal)}
+                    <!-- JSON/JSONB cell badge — port dòng 445, click mở modal -->
+                    <span
+                      onclick={(e) => { e.stopPropagation(); jsonCell = JSON.stringify(rawVal, null, 2) }}
+                      onkeydown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); jsonCell = JSON.stringify(rawVal, null, 2) } }}
+                      role="button"
+                      tabindex="0"
+                      title="Expand JSON"
+                      style="flex:none;font-size:var(--px-9);font-weight:700;color:var(--hex-61afef);border:var(--px-1) solid var(--hex-2a4a6a);border-radius:var(--px-3);padding:0 var(--px-4);cursor:pointer"
+                    >{'{ }'}</span>
+                  {/if}
                 </div>
               {/if}
             </td>
@@ -525,6 +542,40 @@
           tabindex="0"
           style="font-size:var(--px-12_5);font-weight:600;background:var(--primary);color:var(--hex-fff);border-radius:var(--px-8);padding:var(--px-8) var(--px-16);cursor:pointer"
         >Apply</span>
+      </div>
+    </div>
+  </div>
+{/if}
+
+<!-- JSON cell modal — port jsonCellOpen (format + copy) -->
+{#if jsonCell !== null}
+  <div
+    onclick={() => (jsonCell = null)}
+    onkeydown={(e) => e.key === 'Escape' && (jsonCell = null)}
+    role="presentation"
+    style="position:fixed;inset:0;background:var(--rgba-0-0-0-_5);display:flex;align-items:center;justify-content:center;z-index:58"
+  >
+    <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
+    <div
+      onclick={(e) => e.stopPropagation()}
+      role="dialog"
+      aria-label="JSON cell"
+      tabindex="-1"
+      style="width:var(--px-640);max-width:94vw;background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-14);box-shadow:0 var(--px-30) var(--px-70) var(--rgba-0-0-0-_55);overflow:hidden"
+    >
+      <div style="padding:var(--px-18) var(--px-20) var(--px-8);font-weight:700;font-size:var(--px-15)">JSON cell</div>
+      <div style="padding:0 var(--px-20) var(--px-14)">
+        <pre class="mono selectable" style="max-height:50vh;overflow:auto;border-radius:var(--px-9);background:var(--panel);border:var(--px-1) solid var(--border);padding:var(--px-12);font-size:var(--px-11_5);line-height:1.6;margin:0">{jsonCell}</pre>
+      </div>
+      <div style="display:flex;gap:var(--px-9);padding:var(--px-14) var(--px-20);border-top:var(--px-1) solid var(--border);background:var(--panel)">
+        <span class="eg-btn" style="margin-left:auto" onclick={async () => { if (jsonCell) await navigator.clipboard.writeText(jsonCell) }} onkeydown={(e) => e.key === 'Enter' && jsonCell && navigator.clipboard.writeText(jsonCell)} role="button" tabindex="0">Copy</span>
+        <span
+          onclick={() => (jsonCell = null)}
+          onkeydown={(e) => e.key === 'Enter' && (jsonCell = null)}
+          role="button"
+          tabindex="0"
+          style="font-size:var(--px-12_5);font-weight:600;background:var(--primary);color:var(--hex-fff);border-radius:var(--px-8);padding:var(--px-8) var(--px-16);cursor:pointer"
+        >Đóng</span>
       </div>
     </div>
   </div>
