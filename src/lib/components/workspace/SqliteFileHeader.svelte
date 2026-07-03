@@ -142,10 +142,11 @@
         </label>
       {/each}
       {#each [['cache_size', info.cache_size], ['page_size', info.page_size], ['page_count', info.page_count]] as [key, val] (key)}
-        <label style="display:flex;flex-direction:column;gap:var(--px-3);font-size:var(--px-10_5);color:var(--muted)">
+        <!-- read-only: dùng <div> (không phải form control) — a11y -->
+        <div style="display:flex;flex-direction:column;gap:var(--px-3);font-size:var(--px-10_5);color:var(--muted)">
           {key}
           <span class="mono" style="background:var(--bg);color:var(--text2);border:var(--px-1) solid var(--border);border-radius:var(--px-5);padding:var(--px-4) var(--px-6);font-size:var(--px-11_5)">{val} · RO</span>
-        </label>
+        </div>
       {/each}
     </div>
   {/if}
