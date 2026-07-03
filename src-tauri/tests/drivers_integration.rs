@@ -864,6 +864,29 @@ async fn redis_connect_auth_ping_and_version() {
         other => panic!("zset mong đợi, nhận {other:?}"),
     }
 
+    // --- apply_edit (T4b) ---
+    use database_studio_lib::drivers::redis::RedisEditOp;
+    drv.apply_edit("newstr", RedisEditOp::SetString { value: "hello".into() }).await.unwrap();
+    match drv.get_value("newstr").await.unwrap().value {
+        RedisValue::String { value } => assert_eq!(value, "hello"),
+        other => panic!("SET string, nhận {other:?}"),
+    }
+    drv.apply_edit("acct:1", RedisEditOp::HSet { field: "role".into(), value: "admin".into() }).await.unwrap();
+    match drv.get_value("acct:1").await.unwrap().value {
+        RedisValue::Hash { fields } => assert!(fields.iter().any(|(f, v)| f == "role" && v == "admin")),
+        other => panic!("HSET, nhận {other:?}"),
+    }
+    drv.apply_edit("acct:1", RedisEditOp::HDel { field: "role".into() }).await.unwrap();
+    match drv.get_value("acct:1").await.unwrap().value {
+        RedisValue::Hash { fields } => assert!(!fields.iter().any(|(f, _)| f == "role"), "role phải bị HDEL"),
+        other => panic!("hash sau HDEL, nhận {other:?}"),
+    }
+    drv.apply_edit("myset", RedisEditOp::SAdd { member: "z".into() }).await.unwrap();
+    match drv.get_value("myset").await.unwrap().value {
+        RedisValue::Set { members } => assert!(members.contains(&"z".to_string())),
+        other => panic!("SADD, nhận {other:?}"),
+    }
+
     // set_ttl (EXPIRE) rồi del
     drv.set_ttl("mylist", 50).await.unwrap();
     let after = drv.get_value("mylist").await.unwrap();

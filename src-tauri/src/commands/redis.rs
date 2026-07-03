@@ -3,7 +3,7 @@
 
 use tauri::State;
 
-use crate::drivers::redis::{RedisKeyValue, RedisScan};
+use crate::drivers::redis::{RedisEditOp, RedisKeyValue, RedisScan};
 use crate::drivers::LiveConnection;
 use crate::error::{AppError, QueryError};
 use crate::state::AppState;
@@ -92,6 +92,27 @@ pub async fn redis_set_ttl(
             let mut d = driver.lock().await;
             match &mut *d {
                 LiveConnection::Redis(r) => r.set_ttl(&key, secs).await,
+                _ => Err(not_redis()),
+            }
+        })
+        .await?;
+    inner.map_err(|e| AppError::Driver(e.message))
+}
+
+/// Sửa giá trị theo op per-type (SET/HSET/HDEL/RPUSH/LSET/LREM/SADD/SREM/ZADD/ZREM/XADD/XDEL).
+#[tauri::command]
+pub async fn redis_edit(
+    state: State<'_, AppState>,
+    conn_id: String,
+    key: String,
+    op: RedisEditOp,
+) -> Result<(), AppError> {
+    let inner = state
+        .registry
+        .with_driver(&conn_id, move |driver| async move {
+            let mut d = driver.lock().await;
+            match &mut *d {
+                LiveConnection::Redis(r) => r.apply_edit(&key, op).await,
                 _ => Err(not_redis()),
             }
         })

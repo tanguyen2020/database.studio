@@ -95,6 +95,24 @@ export const redisDel = (connId: string, key: string) =>
 export const redisSetTtl = (connId: string, key: string, secs: number) =>
   invoke<void>('redis_set_ttl', { connId, key, secs })
 
+/** Per-type edit op (tag `op` matches backend RedisEditOp camelCase). */
+export type RedisEditOp =
+  | { op: 'setString'; value: string }
+  | { op: 'hSet'; field: string; value: string }
+  | { op: 'hDel'; field: string }
+  | { op: 'rPush'; value: string }
+  | { op: 'lSet'; index: number; value: string }
+  | { op: 'lRem'; value: string }
+  | { op: 'sAdd'; member: string }
+  | { op: 'sRem'; member: string }
+  | { op: 'zAdd'; member: string; score: number }
+  | { op: 'zRem'; member: string }
+  | { op: 'xAdd'; fields: [string, string][] }
+  | { op: 'xDel'; id: string }
+
+export const redisEdit = (connId: string, key: string, op: RedisEditOp) =>
+  invoke<void>('redis_edit', { connId, key, op })
+
 // ---- schema (Object Explorer) ----------------------------------------------
 
 export const listSchemas = (connId: string) => invoke<SchemaInfo[]>('list_schemas', { connId })

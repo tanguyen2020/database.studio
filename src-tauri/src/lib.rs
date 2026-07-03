@@ -45,6 +45,7 @@ pub fn run() {
             commands::redis::redis_get,
             commands::redis::redis_del,
             commands::redis::redis_set_ttl,
+            commands::redis::redis_edit,
             // schema
             commands::schema::list_schemas,
             commands::schema::list_tables,

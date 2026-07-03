@@ -28,6 +28,7 @@
   let selectedValue = $state<ipc.RedisKeyValue | null>(null)
   let valLoading = $state(false)
   let valError = $state<string | null>(null)
+  let stringDraft = $state('')
 
   // màu badge theo type (token đã có trong tokens.css)
   const TYPE_COLOR: Record<string, string> = {
@@ -108,11 +109,60 @@
     valLoading = true
     try {
       selectedValue = await ipc.redisGet(tab.connectionId, path)
+      if (selectedValue.value.kind === 'string') stringDraft = selectedValue.value.value
     } catch (e) {
       valError = String(e)
     } finally {
       valLoading = false
     }
+  }
+
+  async function edit(op: ipc.RedisEditOp, okMsg: string) {
+    if (!tab.connectionId || !selected) return
+    try {
+      await ipc.redisEdit(tab.connectionId, selected, op)
+      toasts.success(okMsg)
+      await selectKey(selected)
+      await load()
+    } catch (e) {
+      toasts.error(`Sửa thất bại: ${e}`)
+    }
+  }
+
+  // "+ Add" theo kiểu — dùng prompt gọn (form đầy đủ để Phase sau nếu cần).
+  function addItem() {
+    const v = selectedValue?.value
+    if (!v) return
+    if (v.kind === 'hash') {
+      const field = window.prompt('Field:')
+      if (!field) return
+      const value = window.prompt(`Value cho "${field}":`) ?? ''
+      void edit({ op: 'hSet', field, value }, `HSET ${field}`)
+    } else if (v.kind === 'set') {
+      const member = window.prompt('Member:')
+      if (member) void edit({ op: 'sAdd', member }, `SADD ${member}`)
+    } else if (v.kind === 'zset') {
+      const member = window.prompt('Member:')
+      if (!member) return
+      const score = parseFloat(window.prompt(`Score cho "${member}":`) ?? '0') || 0
+      void edit({ op: 'zAdd', member, score }, `ZADD ${member} ${score}`)
+    } else if (v.kind === 'list') {
+      const value = window.prompt('Value (RPUSH):')
+      if (value !== null) void edit({ op: 'rPush', value }, 'RPUSH')
+    } else if (v.kind === 'stream') {
+      const raw = window.prompt('Fields (dạng f1=v1,f2=v2):')
+      if (!raw) return
+      const fields = raw.split(',').map((p) => p.split('=') as [string, string]).filter((p) => p[0])
+      void edit({ op: 'xAdd', fields }, 'XADD')
+    }
+  }
+
+  function delItem(kind: string, id: string) {
+    if (kind === 'hash') void edit({ op: 'hDel', field: id }, `HDEL ${id}`)
+    else if (kind === 'set') void edit({ op: 'sRem', member: id }, `SREM ${id}`)
+    else if (kind === 'zset') void edit({ op: 'zRem', member: id }, `ZREM ${id}`)
+    else if (kind === 'list') void edit({ op: 'lRem', value: id }, 'LREM')
+    else if (kind === 'stream') void edit({ op: 'xDel', id }, `XDEL ${id}`)
   }
 
   async function delKey() {
@@ -146,29 +196,39 @@
   }
 </script>
 
-{#snippet kvTable(h1: string, h2: string, rows: [string, string][])}
+{#snippet delCell(id: string, del?: (id: string) => void)}
+  {#if del}
+    <td style="border-bottom:var(--px-1) solid var(--border);text-align:center;width:var(--px-38)">
+      <span onclick={() => del(id)} onkeydown={(e) => e.key === 'Enter' && del(id)} role="button" tabindex="0" title="Xóa" style="cursor:pointer;color:var(--muted);font-size:var(--px-13)">×</span>
+    </td>
+  {/if}
+{/snippet}
+
+{#snippet kvTable(h1: string, h2: string, rows: [string, string][], del?: (id: string) => void)}
   <table class="mono" style="border-collapse:collapse;width:100%;font-size:var(--px-12_5)">
     <thead><tr>
       <th style="position:sticky;top:0;background:var(--header);border-bottom:var(--px-1) solid var(--border2);padding:var(--px-7) var(--px-14);text-align:left;color:var(--text2);font-weight:600">{h1}</th>
       <th style="position:sticky;top:0;background:var(--header);border-bottom:var(--px-1) solid var(--border2);padding:var(--px-7) var(--px-14);text-align:left;color:var(--text2);font-weight:600">{h2}</th>
+      {#if del}<th style="position:sticky;top:0;background:var(--header);border-bottom:var(--px-1) solid var(--border2);width:var(--px-38)"></th>{/if}
     </tr></thead>
     <tbody>
       {#each rows as row, i (i)}
-        <tr><td style="padding:var(--px-7) var(--px-14);border-bottom:var(--px-1) solid var(--border);color:var(--hex-e8c547)">{row[0]}</td><td style="padding:var(--px-7) var(--px-14);border-bottom:var(--px-1) solid var(--border)">{row[1]}</td></tr>
+        <tr><td style="padding:var(--px-7) var(--px-14);border-bottom:var(--px-1) solid var(--border);color:var(--hex-e8c547)">{row[0]}</td><td style="padding:var(--px-7) var(--px-14);border-bottom:var(--px-1) solid var(--border)">{row[1]}</td>{@render delCell(row[0], del)}</tr>
       {/each}
     </tbody>
   </table>
 {/snippet}
 
-{#snippet listTable(h1: string, items: string[])}
+{#snippet listTable(h1: string, items: string[], del?: (id: string) => void)}
   <table class="mono" style="border-collapse:collapse;width:100%;font-size:var(--px-12_5)">
     <thead><tr>
       <th style="position:sticky;top:0;background:var(--header);border-bottom:var(--px-1) solid var(--border2);padding:var(--px-7) var(--px-14);text-align:left;color:var(--text2);font-weight:600;width:var(--px-40)">{h1}</th>
       <th style="position:sticky;top:0;background:var(--header);border-bottom:var(--px-1) solid var(--border2);padding:var(--px-7) var(--px-14);text-align:left;color:var(--text2);font-weight:600">Value</th>
+      {#if del}<th style="position:sticky;top:0;background:var(--header);border-bottom:var(--px-1) solid var(--border2);width:var(--px-38)"></th>{/if}
     </tr></thead>
     <tbody>
       {#each items as item, i (i)}
-        <tr><td style="padding:var(--px-7) var(--px-14);border-bottom:var(--px-1) solid var(--border);color:var(--muted)">{i}</td><td style="padding:var(--px-7) var(--px-14);border-bottom:var(--px-1) solid var(--border)">{item}</td></tr>
+        <tr><td style="padding:var(--px-7) var(--px-14);border-bottom:var(--px-1) solid var(--border);color:var(--muted)">{i}</td><td style="padding:var(--px-7) var(--px-14);border-bottom:var(--px-1) solid var(--border)">{item}</td>{@render delCell(item, del)}</tr>
       {/each}
     </tbody>
   </table>
@@ -247,6 +307,9 @@
           <span class="mono" style="font-size:var(--px-11);color:var(--muted)">TTL {ttlLabel(v.ttl)}</span>
         {/if}
         <div style="margin-left:auto;display:flex;gap:var(--px-7)">
+          {#if v && v.value.kind !== 'string' && v.value.kind !== 'none'}
+            <span onclick={addItem} onkeydown={(e) => e.key === 'Enter' && addItem()} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">+ Add</span>
+          {/if}
           <span onclick={editTtl} onkeydown={(e) => e.key === 'Enter' && editTtl()} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">Set TTL</span>
           <span onclick={delKey} onkeydown={(e) => e.key === 'Enter' && delKey()} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer;color:var(--error)">Delete</span>
         </div>
@@ -257,24 +320,34 @@
         {:else if valError}
           <div style="padding:var(--px-14);font-size:var(--px-12);color:var(--error)">{valError}</div>
         {:else if v?.value.kind === 'string'}
-          <pre class="mono" style="margin:0;padding:var(--px-14);font-size:var(--px-12_5);white-space:pre-wrap;word-break:break-word;color:var(--hex-98c379)">{v.value.value}</pre>
+          <div style="padding:var(--px-14);display:flex;flex-direction:column;gap:var(--px-8);height:100%;box-sizing:border-box">
+            <textarea
+              bind:value={stringDraft}
+              class="mono"
+              style="flex:1;width:100%;box-sizing:border-box;resize:none;background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-8);padding:var(--px-10);font-size:var(--px-12_5);color:var(--text);outline:none"
+            ></textarea>
+            <div style="flex:none;display:flex;justify-content:flex-end">
+              <span onclick={() => edit({ op: 'setString', value: stringDraft }, 'SET (đã lưu)')} onkeydown={(e) => e.key === 'Enter' && edit({ op: 'setString', value: stringDraft }, 'SET')} role="button" tabindex="0" style="font-size:var(--px-12);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-7);padding:var(--px-6) var(--px-16);cursor:pointer;font-weight:600">Save</span>
+            </div>
+          </div>
         {:else if v?.value.kind === 'hash'}
-          {@render kvTable('Field', 'Value', v.value.fields.map((f) => [f[0], f[1]]))}
+          {@render kvTable('Field', 'Value', v.value.fields.map((f) => [f[0], f[1]]), (id) => delItem('hash', id))}
         {:else if v?.value.kind === 'zset'}
-          {@render kvTable('Member', 'Score', v.value.members.map((m) => [m[0], String(m[1])]))}
+          {@render kvTable('Member', 'Score', v.value.members.map((m) => [m[0], String(m[1])]), (id) => delItem('zset', id))}
         {:else if v?.value.kind === 'list'}
-          {@render listTable('#', v.value.items)}
+          {@render listTable('#', v.value.items, (id) => delItem('list', id))}
         {:else if v?.value.kind === 'set'}
-          {@render listTable('Member', v.value.members)}
+          {@render listTable('Member', v.value.members, (id) => delItem('set', id))}
         {:else if v?.value.kind === 'stream'}
           <table class="mono" style="border-collapse:collapse;width:100%;font-size:var(--px-12)">
             <thead><tr>
               <th style="position:sticky;top:0;background:var(--header);border-bottom:var(--px-1) solid var(--border2);padding:var(--px-7) var(--px-14);text-align:left;color:var(--text2)">ID</th>
               <th style="position:sticky;top:0;background:var(--header);border-bottom:var(--px-1) solid var(--border2);padding:var(--px-7) var(--px-14);text-align:left;color:var(--text2)">Fields</th>
+              <th style="position:sticky;top:0;background:var(--header);border-bottom:var(--px-1) solid var(--border2);width:var(--px-38)"></th>
             </tr></thead>
             <tbody>
               {#each v.value.entries as e (e.id)}
-                <tr><td style="padding:var(--px-6) var(--px-14);border-bottom:var(--px-1) solid var(--border);color:var(--hex-e8923a);white-space:nowrap">{e.id}</td><td style="padding:var(--px-6) var(--px-14);border-bottom:var(--px-1) solid var(--border)">{e.fields.map((f) => `${f[0]}=${f[1]}`).join('  ')}</td></tr>
+                <tr><td style="padding:var(--px-6) var(--px-14);border-bottom:var(--px-1) solid var(--border);color:var(--hex-e8923a);white-space:nowrap">{e.id}</td><td style="padding:var(--px-6) var(--px-14);border-bottom:var(--px-1) solid var(--border)">{e.fields.map((f) => `${f[0]}=${f[1]}`).join('  ')}</td>{@render delCell(e.id, (id) => delItem('stream', id))}</tr>
               {/each}
             </tbody>
           </table>

@@ -202,6 +202,55 @@ impl RedisDriver {
         redis::cmd("DEL").arg(key).query_async(&mut self.conn).await.map_err(|e| err("DEL lỗi", e))
     }
 
+    /// Sửa giá trị theo op (per-type). Chạy đúng lệnh Redis tương ứng.
+    pub async fn apply_edit(&mut self, key: &str, op: RedisEditOp) -> Result<(), QueryError> {
+        let c = &mut self.conn;
+        match op {
+            RedisEditOp::SetString { value } => {
+                let _: () = redis::cmd("SET").arg(key).arg(value).query_async(c).await.map_err(|e| err("SET lỗi", e))?;
+            }
+            RedisEditOp::HSet { field, value } => {
+                let _: i64 = redis::cmd("HSET").arg(key).arg(field).arg(value).query_async(c).await.map_err(|e| err("HSET lỗi", e))?;
+            }
+            RedisEditOp::HDel { field } => {
+                let _: i64 = redis::cmd("HDEL").arg(key).arg(field).query_async(c).await.map_err(|e| err("HDEL lỗi", e))?;
+            }
+            RedisEditOp::RPush { value } => {
+                let _: i64 = redis::cmd("RPUSH").arg(key).arg(value).query_async(c).await.map_err(|e| err("RPUSH lỗi", e))?;
+            }
+            RedisEditOp::LSet { index, value } => {
+                let _: () = redis::cmd("LSET").arg(key).arg(index).arg(value).query_async(c).await.map_err(|e| err("LSET lỗi", e))?;
+            }
+            RedisEditOp::LRem { value } => {
+                let _: i64 = redis::cmd("LREM").arg(key).arg(0).arg(value).query_async(c).await.map_err(|e| err("LREM lỗi", e))?;
+            }
+            RedisEditOp::SAdd { member } => {
+                let _: i64 = redis::cmd("SADD").arg(key).arg(member).query_async(c).await.map_err(|e| err("SADD lỗi", e))?;
+            }
+            RedisEditOp::SRem { member } => {
+                let _: i64 = redis::cmd("SREM").arg(key).arg(member).query_async(c).await.map_err(|e| err("SREM lỗi", e))?;
+            }
+            RedisEditOp::ZAdd { member, score } => {
+                let _: i64 = redis::cmd("ZADD").arg(key).arg(score).arg(member).query_async(c).await.map_err(|e| err("ZADD lỗi", e))?;
+            }
+            RedisEditOp::ZRem { member } => {
+                let _: i64 = redis::cmd("ZREM").arg(key).arg(member).query_async(c).await.map_err(|e| err("ZREM lỗi", e))?;
+            }
+            RedisEditOp::XAdd { fields } => {
+                let mut cmd = redis::cmd("XADD");
+                cmd.arg(key).arg("*");
+                for (f, v) in fields {
+                    cmd.arg(f).arg(v);
+                }
+                let _: String = cmd.query_async(c).await.map_err(|e| err("XADD lỗi", e))?;
+            }
+            RedisEditOp::XDel { id } => {
+                let _: i64 = redis::cmd("XDEL").arg(key).arg(id).query_async(c).await.map_err(|e| err("XDEL lỗi", e))?;
+            }
+        }
+        Ok(())
+    }
+
     /// Đặt TTL: secs > 0 → EXPIRE; secs <= 0 → PERSIST (bỏ hết hạn).
     pub async fn set_ttl(&mut self, key: &str, secs: i64) -> Result<(), QueryError> {
         if secs > 0 {
@@ -271,6 +320,24 @@ pub struct RedisKeyValue {
     pub key_type: String,
     pub ttl: i64,
     pub value: RedisValue,
+}
+
+/// Thao tác sửa giá trị per-type (từ frontend). tag "op".
+#[derive(Debug, serde::Deserialize)]
+#[serde(tag = "op", rename_all = "camelCase")]
+pub enum RedisEditOp {
+    SetString { value: String },
+    HSet { field: String, value: String },
+    HDel { field: String },
+    RPush { value: String },
+    LSet { index: i64, value: String },
+    LRem { value: String },
+    SAdd { member: String },
+    SRem { member: String },
+    ZAdd { member: String, score: f64 },
+    ZRem { member: String },
+    XAdd { fields: Vec<(String, String)> },
+    XDel { id: String },
 }
 
 fn val_to_string(v: &redis::Value) -> String {

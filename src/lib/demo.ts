@@ -321,6 +321,7 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
     case 'redis_del':
       return ok(1)
     case 'redis_set_ttl':
+    case 'redis_edit':
       return ok(null)
     default:
       return Promise.reject(new Error(`demo: chưa mock command "${cmd}"`))
