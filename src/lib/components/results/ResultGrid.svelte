@@ -198,60 +198,54 @@
   aria-rowcount={rowCount}
   onkeydown={onKeydown}
 >
-  <table class="border-separate border-spacing-0 text-[12px]" style="min-width: 100%;">
-    <thead class="sticky top-0 z-10">
+  <!-- table — port dòng 421-452: mono 12px, th sticky header 6px 12px/600/text2 -->
+  <table class="mono" style="border-collapse:separate;border-spacing:0;width:100%;font-size:var(--px-12)">
+    <thead style="position:sticky;top:0;z-index:10">
       <tr>
-        <th class="sticky left-0 z-20 w-[46px] border-b border-r border-border bg-header px-1 text-right text-[10px] font-normal text-mutedfg">
-          #
-        </th>
         {#each data.cols as [name, type] (name)}
-          <th class="border-b border-r border-border bg-header px-2 py-1 text-left font-medium">
-            <div class="flex items-baseline gap-1.5 whitespace-nowrap">
-              <span>{name}</span>
-              <span class="mono text-[9.5px] font-normal text-mutedfg">{type}</span>
-            </div>
+          <th style="background:var(--header);border-bottom:var(--px-1) solid var(--border2);border-right:var(--px-1) solid var(--border);padding:var(--px-6) var(--px-12);text-align:left;font-weight:600;color:var(--text2);white-space:nowrap">
+            {name}
+            <span style="color:var(--muted);font-weight:400;font-size:var(--px-10)">{type}</span>
           </th>
         {/each}
       </tr>
     </thead>
     <tbody>
       {#if virtualItems.length > 0}
-        <tr style="height: {virtualItems[0].start}px;"><td colspan={columns.length + 1}></td></tr>
+        <tr style="height: {virtualItems[0].start}px;"><td colspan={columns.length}></td></tr>
       {/if}
       {#each virtualItems as vi (vi.key)}
         {@const row = data.rows[vi.index]}
         {@const isRowSelected = selectedRows.has(vi.index)}
+        <!-- row — dòng 434: click chọn row (row.select), zebra + selected inset bar -->
         <tr
-          class="{vi.index % 2 === 1 ? 'bg-zebra' : ''} {isRowSelected ? '!bg-[var(--diff-highlight)]' : ''}"
-          style="height: {ROW_H}px;"
+          class="grid-row"
+          onclick={(e) => clickRowNumber(e, vi.index)}
+          style="height:{ROW_H}px;cursor:pointer;background:{isRowSelected ? 'var(--rgba-91-124-255-_16)' : vi.index % 2 === 1 ? 'var(--grid-zebra)' : 'transparent'};box-shadow:inset var(--px-2) 0 0 {isRowSelected ? 'var(--primary)' : 'transparent'}"
         >
-          <td
-            class="sticky left-0 cursor-pointer border-b border-r border-border bg-header px-1 text-right text-[10px] text-mutedfg hover:text-foreground"
-            onclick={(e) => clickRowNumber(e, vi.index)}
-          >
-            {vi.index + 1}
-          </td>
           {#each columns as col (col)}
             {@const cell = display(row?.[col], col)}
             {@const isCellSelected = selectedCell?.row === vi.index && selectedCell?.col === col}
+            <!-- cell — dòng 436-446: padding 5px 12px, NULL badge 10px panel/border radius 3 -->
             <td
-              class="max-w-[420px] cursor-default overflow-hidden text-ellipsis whitespace-nowrap border-b border-r border-border/60 px-2
-                {isCellSelected ? 'outline outline-1 -outline-offset-1 outline-primary' : ''}"
-              onclick={() => clickCell(vi.index, col)}
+              style="border-bottom:var(--px-1) solid var(--border);border-right:var(--px-1) solid var(--border);padding:0;white-space:nowrap;max-width:var(--px-420);overflow:hidden;text-overflow:ellipsis;{isCellSelected ? 'box-shadow:inset 0 0 0 var(--px-1) var(--primary);' : ''}"
+              onclick={(e) => { e.stopPropagation(); clickCell(vi.index, col) }}
               ondblclick={() => {
                 clickCell(vi.index, col)
                 void copySelection()
               }}
               title={cell.isNull ? undefined : cell.text}
             >
-              {#if cell.isNull}
-                <!-- NULL ≠ empty string: gray badge -->
-                <span class="rounded-sm bg-panel px-1 py-px text-[9.5px] italic text-mutedfg">NULL</span>
-              {:else if cell.text === ''}
-                <span class="text-[9.5px] text-mutedfg/60">''</span>
-              {:else}
-                <span class="mono">{cell.text}</span>
-              {/if}
+              <div style="padding:var(--px-5) var(--px-12);display:flex;align-items:center;gap:var(--px-6)">
+                {#if cell.isNull}
+                  <!-- NULL ≠ chuỗi rỗng — badge dòng 442 -->
+                  <span style="font-size:var(--px-10);color:var(--muted);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-3);padding:0 var(--px-5)">NULL</span>
+                {:else if cell.text === ''}
+                  <span style="font-size:var(--px-10);color:var(--muted);opacity:.6">''</span>
+                {:else}
+                  <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{cell.text}</span>
+                {/if}
+              </div>
             </td>
           {/each}
         </tr>
@@ -259,7 +253,7 @@
       {#if virtualItems.length > 0}
         {@const last = virtualItems[virtualItems.length - 1]}
         <tr style="height: {Math.max(0, totalSize - last.end)}px;">
-          <td colspan={columns.length + 1}></td>
+          <td colspan={columns.length}></td>
         </tr>
       {/if}
     </tbody>
@@ -268,3 +262,10 @@
     <div class="px-3 py-4 text-[12px] text-mutedfg">0 rows</div>
   {/if}
 </div>
+
+<style>
+  /* style-hover của row (dòng 434) */
+  .grid-row:hover {
+    background: var(--hover) !important;
+  }
+</style>

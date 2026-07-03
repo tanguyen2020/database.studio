@@ -1,19 +1,23 @@
 <script lang="ts">
-  // Result panel: one sub-tab per statement (`#N …`) + trailing Messages tab.
-  // Error sub-tab click jumps to the failing statement; "View raw" shows the
-  // driver's original error text (addendum §3).
-  import * as Dialog from '$lib/components/ui/dialog'
-  import { Button } from '$lib/components/ui/button'
+  // Result panel — port 1:1 từ Database Studio.dc.html:
+  //  - sub-tab strip (dòng 332-340 + logic 4967-4987): #N mono bold muted,
+  //    icon › khi active / ≣ Messages, underline 2px accent, statusColor ✓/✗
+  //  - result toolbar (dòng 342-349): segmented Grid/JSON/Single Row/Chart
+  //    (JSON/Single/Chart → Phase 2, toast) + summary + Export CSV
+  // Click sub-tab lỗi / dòng Messages → nhảy đúng vị trí (addendum §3).
   import ResultGrid from './ResultGrid.svelte'
   import type { SubResult, TabExecution } from '$lib/stores/results.svelte'
   import { mapErrorToDocument } from '$lib/sql/errors'
+  import { toasts } from '$lib/stores/toast.svelte'
 
   interface Props {
     exec: TabExecution
+    /** accent của hệ tab đang chạy — underline sub-tab active (as.accent trong HTML) */
+    accent?: string
     onJump?: (line: number, col: number) => void
   }
 
-  let { exec, onJump }: Props = $props()
+  let { exec, accent = 'var(--primary)', onJump }: Props = $props()
 
   let grid = $state<ResultGrid | null>(null)
   let rawError = $state<string | null>(null)
@@ -23,6 +27,10 @@
   const activeResult = $derived(
     exec.activeSub >= 0 ? exec.subResults[exec.activeSub] : undefined,
   )
+
+  function stripN(label: string): string {
+    return label.replace(/^#\d+\s*/, '')
+  }
 
   function selectSub(idx: number) {
     exec.activeSub = idx
@@ -37,53 +45,81 @@
     const pos = mapErrorToDocument(sub.statement, sub.error)
     onJump?.(pos.line, pos.col)
   }
+
+  const summary = $derived.by(() => {
+    if (!activeResult) return ''
+    if (activeResult.kind === 'rows' && activeResult.result) {
+      return `${activeResult.result.total.toLocaleString()} rows · ${activeResult.durationMs} ms`
+    }
+    return ''
+  })
 </script>
 
-<div class="flex h-full min-h-0 flex-col">
-  <!-- sub-tab strip -->
-  <div class="flex h-[28px] shrink-0 items-stretch gap-px overflow-x-auto border-b border-border bg-header px-1">
+<div style="flex:1;display:flex;flex-direction:column;min-height:0;background:var(--surface)">
+  <!-- sub tabs — dòng 332-340 -->
+  <div style="flex:none;display:flex;align-items:center;gap:0;border-bottom:var(--px-1) solid var(--border);background:var(--header);overflow-x:auto">
     {#each exec.subResults as sub, idx (sub.index)}
-      <button
-        class="flex items-center gap-1 whitespace-nowrap rounded-t px-2 text-[11px]
-          {exec.activeSub === idx ? 'bg-surface font-medium' : 'text-text2 hover:bg-hover'}
-          {sub.kind === 'error' ? 'text-error' : ''}"
+      {@const on = exec.activeSub === idx}
+      {@const statusColor = sub.kind === 'error' ? 'var(--hex-e06c75)' : sub.kind === 'affected' || sub.kind === 'ok' ? 'var(--hex-27ae60)' : 'var(--muted)'}
+      <div
         onclick={() => selectSub(idx)}
+        onkeydown={(e) => e.key === 'Enter' && selectSub(idx)}
+        role="tab"
+        aria-selected={on}
+        tabindex="0"
+        style="display:flex;align-items:center;gap:var(--px-6);padding:var(--px-7) var(--px-13);cursor:pointer;font-size:var(--px-11_5);white-space:nowrap;border-bottom:var(--px-2) solid {on ? accent : 'transparent'};background:{on ? 'var(--surface)' : 'transparent'};color:{on ? 'var(--text)' : 'var(--text2)'}"
       >
-        {sub.label}
-      </button>
+        <span class="mono" style="font-weight:700;color:var(--muted)">#{sub.index}</span>
+        <span style="color:{statusColor}">{on ? '›' : ''}</span>
+        <span style="font-weight:{on ? 700 : 500};color:{sub.kind === 'error' ? 'var(--hex-e06c75)' : 'inherit'}">{stripN(sub.label)}</span>
+      </div>
     {/each}
     {#if exec.subResults.length > 0}
-      <button
-        class="ml-1 flex items-center whitespace-nowrap rounded-t px-2 text-[11px]
-          {exec.activeSub === MESSAGES ? 'bg-surface font-medium' : 'text-text2 hover:bg-hover'}"
+      {@const on = exec.activeSub === MESSAGES}
+      <div
         onclick={() => (exec.activeSub = MESSAGES)}
+        onkeydown={(e) => e.key === 'Enter' && (exec.activeSub = MESSAGES)}
+        role="tab"
+        aria-selected={on}
+        tabindex="0"
+        style="display:flex;align-items:center;gap:var(--px-6);padding:var(--px-7) var(--px-13);cursor:pointer;font-size:var(--px-11_5);white-space:nowrap;border-bottom:var(--px-2) solid {on ? accent : 'transparent'};background:{on ? 'var(--surface)' : 'transparent'};color:{on ? 'var(--text)' : 'var(--text2)'}"
       >
-        Messages
-      </button>
-    {/if}
-    <div class="grow"></div>
-    {#if activeResult?.kind === 'rows' && activeResult.result}
-      <button
-        class="my-0.5 rounded px-2 text-[11px] text-text2 hover:bg-hover hover:text-foreground"
-        onclick={() => grid?.exportCsv()}
-      >
-        Export CSV
-      </button>
+        <span style="color:var(--muted)">≣</span>
+        <span style="font-weight:{on ? 700 : 500}">Messages</span>
+      </div>
     {/if}
     {#if exec.running}
-      <span class="flex items-center px-2 text-[11px] text-text2">
-        <span class="animate-pulse">Đang chạy…</span>
-      </span>
+      <span style="display:flex;align-items:center;padding:0 var(--px-13);font-size:var(--px-11);color:var(--text2)">Đang chạy…</span>
     {/if}
   </div>
 
+  <!-- result toolbar — dòng 342-349 -->
+  {#if activeResult?.kind === 'rows' && activeResult.result}
+    <div style="flex:none;display:flex;align-items:center;gap:var(--px-10);padding:var(--px-6) var(--px-12);border-bottom:var(--px-1) solid var(--border)">
+      <div style="display:flex;background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-7);overflow:hidden">
+        <span class="vm-btn" style="background:{accent};color:var(--hex-fff)">Grid</span>
+        <span class="vm-btn" style="border-left:var(--px-1) solid var(--border);color:var(--text2)" onclick={() => toasts.show('JSON mode — Phase 2')} onkeydown={(e) => e.key === 'Enter' && toasts.show('JSON mode — Phase 2')} role="button" tabindex="0">JSON</span>
+        <span class="vm-btn" style="border-left:var(--px-1) solid var(--border);color:var(--text2)" onclick={() => toasts.show('Single Row — Phase 2')} onkeydown={(e) => e.key === 'Enter' && toasts.show('Single Row — Phase 2')} role="button" tabindex="0">Single Row</span>
+        <span class="vm-btn" style="border-left:var(--px-1) solid var(--border);color:var(--text2)" onclick={() => toasts.show('Chart — Phase 2')} onkeydown={(e) => e.key === 'Enter' && toasts.show('Chart — Phase 2')} role="button" tabindex="0">Chart</span>
+      </div>
+      <span style="font-size:var(--px-11_5);color:var(--muted)">{summary}</span>
+      <span
+        style="margin-left:auto;font-size:var(--px-11_5);color:var(--text2);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer"
+        onclick={() => grid?.exportCsv()}
+        onkeydown={(e) => e.key === 'Enter' && grid?.exportCsv()}
+        role="button"
+        tabindex="0"
+      >Export CSV</span>
+    </div>
+  {/if}
+
   <!-- content -->
-  <div class="min-h-0 grow bg-surface">
+  <div style="min-height:0;flex:1;display:flex;flex-direction:column;background:var(--surface)">
     {#if exec.activeSub === MESSAGES}
-      <div class="selectable h-full overflow-y-auto p-1 text-[12px]">
+      <div class="selectable" style="flex:1;overflow-y:auto;padding:var(--px-4);font-size:var(--px-12)">
         {#each exec.messages as msg (msg.index)}
-          <button
-            class="mono flex w-full items-start gap-2 rounded px-2 py-1 text-left hover:bg-hover"
+          <div
+            class="mono msg-row"
             onclick={() => {
               if (msg.error) {
                 const pos = mapErrorToDocument(msg.statement, msg.error)
@@ -92,118 +128,160 @@
                 onJump?.(msg.statement.startLine, msg.statement.startCol)
               }
             }}
+            onkeydown={(e) => e.key === 'Enter' && onJump?.(msg.statement.startLine, msg.statement.startCol)}
+            role="button"
+            tabindex="0"
+            style="display:flex;align-items:flex-start;gap:var(--px-8);border-radius:var(--px-5);padding:var(--px-4) var(--px-8);cursor:pointer;text-align:left;width:100%"
           >
-            <span class="shrink-0 {msg.ok ? 'text-success' : 'text-error'}">
-              {msg.ok ? '✓' : '✗'}
-            </span>
-            <span class="shrink-0 text-mutedfg">#{msg.index}</span>
-            <span class="min-w-0 grow whitespace-pre-wrap break-words {msg.ok ? '' : 'text-error'}">
+            <span style="flex:none;color:{msg.ok ? 'var(--hex-27ae60)' : 'var(--hex-e06c75)'}">{msg.ok ? '✓' : '✗'}</span>
+            <span style="flex:none;color:var(--muted)">#{msg.index}</span>
+            <span style="min-width:0;flex:1;white-space:pre-wrap;word-break:break-word;color:{msg.ok ? 'inherit' : 'var(--hex-e06c75)'}">
               {#if msg.error}
                 {msg.error.severity} · {msg.error.code ?? '—'} · {msg.text}
                 {#if msg.error.position}
                   {@const pos = mapErrorToDocument(msg.statement, msg.error)}
-                  <span class="text-mutedfg">(line {pos.line}:{pos.col})</span>
+                  <span style="color:var(--muted)">(line {pos.line}:{pos.col})</span>
                 {/if}
                 {#if msg.error.hint}
-                  <div class="mt-0.5 text-[11px] text-warn">💡 {msg.error.hint}</div>
+                  <div style="margin-top:var(--px-2);font-size:var(--px-11);color:var(--warn)">💡 {msg.error.hint}</div>
                 {/if}
               {:else}
                 {msg.text}
               {/if}
             </span>
-            <span class="shrink-0 text-[10.5px] text-mutedfg">{msg.durationMs} ms</span>
+            <span style="flex:none;font-size:var(--px-10_5);color:var(--muted)">{msg.durationMs} ms</span>
             {#if msg.error}
-              <Button
-                variant="ghost"
-                size="sm"
-                class="h-5 shrink-0 px-1.5 text-[10px]"
-                onclick={(e: MouseEvent) => {
+              <span
+                onclick={(e) => {
                   e.stopPropagation()
                   rawError = msg.error?.raw ?? null
                 }}
-              >
-                View raw
-              </Button>
+                onkeydown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.stopPropagation()
+                    rawError = msg.error?.raw ?? null
+                  }
+                }}
+                role="button"
+                tabindex="0"
+                style="flex:none;font-size:var(--px-10);color:var(--text2);border:var(--px-1) solid var(--border);border-radius:var(--px-5);padding:var(--px-1) var(--px-6);cursor:pointer"
+              >View raw</span>
             {/if}
-          </button>
+          </div>
         {/each}
         {#if exec.messages.length === 0}
-          <div class="px-2 py-3 text-mutedfg">Chưa có message nào</div>
+          <div style="padding:var(--px-8) var(--px-12);color:var(--muted)">Chưa có message nào</div>
         {/if}
       </div>
     {:else if activeResult}
       {#if activeResult.kind === 'rows' && activeResult.result}
         <ResultGrid bind:this={grid} data={activeResult.result} />
       {:else if activeResult.kind === 'affected'}
-        <div class="p-4 text-[13px]">
-          <span class="text-success">✓</span>
+        <div style="padding:var(--px-16);font-size:var(--px-13)">
+          <span style="color:var(--hex-27ae60)">✓</span>
           {activeResult.affected?.toLocaleString()} rows affected
-          <span class="ml-2 text-[11px] text-mutedfg">{activeResult.durationMs} ms</span>
+          <span class="mono" style="margin-left:var(--px-8);font-size:var(--px-11);color:var(--muted)">{activeResult.durationMs} ms</span>
         </div>
       {:else if activeResult.kind === 'ok'}
-        <div class="p-4 text-[13px]">
-          <span class="text-success">✓</span> OK
-          <span class="ml-2 text-[11px] text-mutedfg">{activeResult.durationMs} ms</span>
+        <div style="padding:var(--px-16);font-size:var(--px-13)">
+          <span style="color:var(--hex-27ae60)">✓</span> OK
+          <span class="mono" style="margin-left:var(--px-8);font-size:var(--px-11);color:var(--muted)">{activeResult.durationMs} ms</span>
         </div>
       {:else if activeResult.kind === 'error' && activeResult.error}
         {@const err = activeResult.error}
-        <div class="selectable p-4 text-[12.5px]">
-          <div class="flex items-start gap-2">
-            <span class="text-error">✗</span>
-            <div class="min-w-0 grow">
-              <div class="font-medium text-error">
+        <div class="selectable" style="padding:var(--px-16);font-size:var(--px-12_5)">
+          <div style="display:flex;align-items:flex-start;gap:var(--px-8)">
+            <span style="color:var(--hex-e06c75)">✗</span>
+            <div style="min-width:0;flex:1">
+              <div style="font-weight:500;color:var(--hex-e06c75)">
                 {err.code ? `[${err.code}] ` : ''}{err.message}
               </div>
               {#if err.position}
                 {@const pos = mapErrorToDocument(activeResult.statement, err)}
-                <button
-                  class="mt-1 text-[11.5px] text-primary hover:underline"
+                <div
                   onclick={() => jumpToError(activeResult)}
-                >
-                  → line {pos.line}, col {pos.col}
-                </button>
+                  onkeydown={(e) => e.key === 'Enter' && jumpToError(activeResult)}
+                  role="button"
+                  tabindex="0"
+                  style="margin-top:var(--px-4);font-size:var(--px-11_5);color:var(--primary);cursor:pointer;width:fit-content"
+                >→ line {pos.line}, col {pos.col}</div>
               {/if}
               {#if err.hint}
-                <div class="mt-1.5 text-[12px] text-warn">💡 {err.hint}</div>
+                <div style="margin-top:var(--px-6);font-size:var(--px-12);color:var(--warn)">💡 {err.hint}</div>
               {/if}
-              <Button
-                variant="outline"
-                size="sm"
-                class="mt-2 h-6 text-[11px]"
+              <div
                 onclick={() => (rawError = err.raw)}
-              >
-                View raw error
-              </Button>
+                onkeydown={(e) => e.key === 'Enter' && (rawError = err.raw)}
+                role="button"
+                tabindex="0"
+                style="margin-top:var(--px-8);font-size:var(--px-11);color:var(--text2);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-9);cursor:pointer;width:fit-content"
+              >View raw error</div>
             </div>
           </div>
         </div>
       {/if}
     {:else}
-      <div class="flex h-full items-center justify-center text-[12px] text-mutedfg">
+      <div style="flex:1;display:flex;align-items:center;justify-content:center;font-size:var(--px-12);color:var(--muted)">
         Chạy query (F5) để xem kết quả
       </div>
     {/if}
   </div>
 </div>
 
-<!-- raw driver error -->
-<Dialog.Root open={rawError !== null} onOpenChange={(o) => !o && (rawError = null)}>
-  <Dialog.Content class="max-w-[640px]">
-    <Dialog.Header>
-      <Dialog.Title>Raw driver error</Dialog.Title>
-    </Dialog.Header>
-    <pre class="selectable max-h-[50vh] overflow-auto rounded-md bg-panel p-3 text-[11.5px] leading-relaxed">{rawError}</pre>
-    <Dialog.Footer>
-      <Button
-        variant="secondary"
-        size="sm"
-        onclick={async () => {
-          if (rawError) await navigator.clipboard.writeText(rawError)
-        }}
-      >
-        Copy
-      </Button>
-      <Button size="sm" onclick={() => (rawError = null)}>Close</Button>
-    </Dialog.Footer>
-  </Dialog.Content>
-</Dialog.Root>
+<!-- raw driver error modal — cùng ngôn ngữ modal prototype -->
+{#if rawError !== null}
+  <div
+    onclick={() => (rawError = null)}
+    onkeydown={(e) => e.key === 'Escape' && (rawError = null)}
+    role="presentation"
+    style="position:fixed;inset:0;background:var(--rgba-0-0-0-_5);display:flex;align-items:center;justify-content:center;z-index:58"
+  >
+    <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
+    <div
+      onclick={(e) => e.stopPropagation()}
+      role="dialog"
+      aria-label="Raw driver error"
+      tabindex="-1"
+      style="width:var(--px-640);max-width:94vw;background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-14);box-shadow:0 var(--px-30) var(--px-70) var(--rgba-0-0-0-_55);overflow:hidden"
+    >
+      <div style="padding:var(--px-18) var(--px-20) var(--px-8);display:flex;align-items:center;gap:var(--px-10)">
+        <span style="font-weight:700;font-size:var(--px-15)">Raw driver error</span>
+      </div>
+      <div style="padding:0 var(--px-20) var(--px-14)">
+        <pre class="selectable mono" style="max-height:50vh;overflow:auto;border-radius:var(--px-9);background:var(--panel);border:var(--px-1) solid var(--border);padding:var(--px-12);font-size:var(--px-11_5);line-height:1.6;margin:0">{rawError}</pre>
+      </div>
+      <div style="display:flex;gap:var(--px-9);padding:var(--px-14) var(--px-20);border-top:var(--px-1) solid var(--border);background:var(--panel)">
+        <span
+          onclick={async () => {
+            if (rawError) await navigator.clipboard.writeText(rawError)
+          }}
+          onkeydown={async (e) => {
+            if (e.key === 'Enter' && rawError) await navigator.clipboard.writeText(rawError)
+          }}
+          role="button"
+          tabindex="0"
+          style="margin-left:auto;font-size:var(--px-12_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-8);padding:var(--px-8) var(--px-14);cursor:pointer"
+        >Copy</span>
+        <span
+          onclick={() => (rawError = null)}
+          onkeydown={(e) => e.key === 'Enter' && (rawError = null)}
+          role="button"
+          tabindex="0"
+          style="font-size:var(--px-12_5);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-8);padding:var(--px-8) var(--px-16);cursor:pointer;font-weight:600"
+        >Close</span>
+      </div>
+    </div>
+  </div>
+{/if}
+
+<style>
+  .vm-btn {
+    padding: var(--px-4) var(--px-11);
+    font-size: var(--px-11_5);
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .msg-row:hover {
+    background: var(--hover);
+  }
+</style>
