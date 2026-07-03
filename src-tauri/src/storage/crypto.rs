@@ -45,8 +45,18 @@ pub fn encrypt(plaintext: &str) -> AppResult<String> {
     if plaintext.is_empty() {
         return Ok(String::new());
     }
-    let key_bytes = get_or_create_master_key()?;
-    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key_bytes));
+    encrypt_with_key(plaintext, &get_or_create_master_key()?)
+}
+
+pub fn decrypt(stored: &str) -> AppResult<String> {
+    if stored.is_empty() {
+        return Ok(String::new());
+    }
+    decrypt_with_key(stored, &get_or_create_master_key()?)
+}
+
+fn encrypt_with_key(plaintext: &str, key_bytes: &[u8; 32]) -> AppResult<String> {
+    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key_bytes));
     let mut nonce_bytes = [0u8; NONCE_LEN];
     OsRng.fill_bytes(&mut nonce_bytes);
     let nonce = Nonce::from_slice(&nonce_bytes);
@@ -59,21 +69,60 @@ pub fn encrypt(plaintext: &str) -> AppResult<String> {
     Ok(B64.encode(blob))
 }
 
-pub fn decrypt(stored: &str) -> AppResult<String> {
-    if stored.is_empty() {
-        return Ok(String::new());
-    }
+fn decrypt_with_key(stored: &str, key_bytes: &[u8; 32]) -> AppResult<String> {
     let blob = B64
         .decode(stored)
         .map_err(|e| AppError::Crypto(format!("corrupt ciphertext: {e}")))?;
     if blob.len() < NONCE_LEN {
         return Err(AppError::Crypto("ciphertext too short".into()));
     }
-    let key_bytes = get_or_create_master_key()?;
-    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key_bytes));
+    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key_bytes));
     let nonce = Nonce::from_slice(&blob[..NONCE_LEN]);
     let pt = cipher
         .decrypt(nonce, &blob[NONCE_LEN..])
         .map_err(|e| AppError::Crypto(format!("decrypt failed: {e}")))?;
     String::from_utf8(pt).map_err(|e| AppError::Crypto(e.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const KEY: [u8; 32] = [7u8; 32];
+
+    #[test]
+    fn round_trip() {
+        let ct = encrypt_with_key("mật khẩu bí mật 🔑", &KEY).unwrap();
+        assert_ne!(ct, "mật khẩu bí mật 🔑");
+        assert_eq!(decrypt_with_key(&ct, &KEY).unwrap(), "mật khẩu bí mật 🔑");
+    }
+
+    #[test]
+    fn nonce_random_per_encrypt() {
+        let a = encrypt_with_key("x", &KEY).unwrap();
+        let b = encrypt_with_key("x", &KEY).unwrap();
+        assert_ne!(a, b, "cùng plaintext phải ra ciphertext khác (nonce ngẫu nhiên)");
+    }
+
+    #[test]
+    fn tamper_detected() {
+        let ct = encrypt_with_key("secret", &KEY).unwrap();
+        let mut blob = B64.decode(&ct).unwrap();
+        let last = blob.len() - 1;
+        blob[last] ^= 0x01;
+        let tampered = B64.encode(blob);
+        assert!(decrypt_with_key(&tampered, &KEY).is_err(), "GCM phải phát hiện sửa đổi");
+    }
+
+    #[test]
+    fn wrong_key_fails() {
+        let ct = encrypt_with_key("secret", &KEY).unwrap();
+        assert!(decrypt_with_key(&ct, &[8u8; 32]).is_err());
+    }
+
+    #[test]
+    fn invalid_inputs() {
+        assert!(decrypt_with_key("not-base64!!!", &KEY).is_err());
+        assert!(decrypt_with_key(&B64.encode([0u8; 4]), &KEY).is_err(), "ngắn hơn nonce");
+    }
 }

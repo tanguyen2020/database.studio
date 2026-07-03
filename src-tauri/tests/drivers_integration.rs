@@ -1,178 +1,210 @@
-//! Phase-1 driver integration tests. Relational tests expect the local test
-//! containers (see docker run commands in the phase log): PG :5432, MySQL
-//! :3306, MariaDB :3307, MSSQL :1433. Tests skip (not fail) when the server
-//! is unreachable so the suite stays runnable without infra.
+//! Integration test Phase 1 — mỗi hệ trong phase chạy trên DB THẬT qua
+//! testcontainers (container tự bật/tắt, không phụ thuộc DB cài sẵn trên máy).
+//! SQLite chạy trên file/in-memory thật (không cần container).
+//! SSH tunnel test bằng SSH server in-process (russh server) + echo target —
+//! kiểm auth password + forward bytes thật của `open_tunnel`.
+//!
+//! Chạy: `cargo test --test drivers_integration` (cần Docker daemon).
 
+use std::time::{Duration, Instant};
+
+use database_studio_lib::connections::profile::SqliteMode;
 use database_studio_lib::drivers::mssql::{MssqlConnParams, MssqlDriver};
 use database_studio_lib::drivers::mysql::{MySqlConnParams, MySqlDriver};
 use database_studio_lib::drivers::postgres::{PgConnParams, PgDriver};
 use database_studio_lib::drivers::sqlite::{SqliteConnParams, SqliteDriver};
 use database_studio_lib::drivers::types::StatementOutcome;
-use database_studio_lib::connections::profile::SqliteMode;
+use testcontainers::core::IntoContainerPort;
+use testcontainers::runners::AsyncRunner;
+use testcontainers::{ContainerAsync, GenericImage, ImageExt};
 
-fn pg_params() -> PgConnParams {
-    PgConnParams {
-        host: "localhost".into(),
-        port: 5432,
-        database: "testdb".into(),
-        user: "postgres".into(),
-        password: "test123".into(),
-        ssl: false,
-    }
-}
+const PASS: &str = "test123";
+const MSSQL_PASS: &str = "Test123!Pass";
 
-fn mysql_params(port: u16) -> MySqlConnParams {
-    MySqlConnParams {
-        host: "localhost".into(),
-        port,
-        database: "testdb".into(),
-        user: "root".into(),
-        password: "test123".into(),
-        ssl: false,
-    }
-}
-
-fn mssql_params() -> MssqlConnParams {
-    MssqlConnParams {
-        host: "localhost".into(),
-        port: 1433,
-        database: "".into(),
-        user: "sa".into(),
-        password: "Test123!Pass".into(),
-        ssl: false,
-        auth: "sql".into(),
-    }
-}
-
-macro_rules! skip_if_down {
-    ($result:expr, $name:literal) => {
-        match $result {
-            Ok(drv) => drv,
+/// Container mới start cần thời gian sẵn sàng — retry connect tới deadline.
+async fn retry<T, F, Fut>(what: &str, mut connect: F) -> T
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T, database_studio_lib::error::QueryError>>,
+{
+    let deadline = Instant::now() + Duration::from_secs(240);
+    loop {
+        match connect().await {
+            Ok(v) => return v,
             Err(e) => {
-                eprintln!("SKIP {}: server not reachable — {}", $name, e.message);
-                return;
+                assert!(
+                    Instant::now() < deadline,
+                    "{what}: hết 240s chờ container sẵn sàng — lỗi cuối: {}",
+                    e.message
+                );
+                tokio::time::sleep(Duration::from_secs(2)).await;
             }
         }
-    };
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PostgreSQL
+// ---------------------------------------------------------------------------
+
+async fn start_pg() -> (ContainerAsync<GenericImage>, u16) {
+    let c = GenericImage::new("postgres", "16-alpine")
+        .with_exposed_port(5432.tcp())
+        .with_env_var("POSTGRES_PASSWORD", PASS)
+        .with_env_var("POSTGRES_DB", "testdb")
+        .start()
+        .await
+        .expect("start postgres container (Docker daemon phải đang chạy)");
+    let port = c.get_host_port_ipv4(5432).await.unwrap();
+    (c, port)
 }
 
 #[tokio::test]
-async fn pg_select_where_and_multi() {
-    let mut drv = skip_if_down!(PgDriver::connect(&pg_params()).await, "postgres");
+async fn pg_roundtrip_null_multi_and_error_position() {
+    let (_c, port) = start_pg().await;
+    let params = PgConnParams {
+        host: "localhost".into(),
+        port,
+        database: "testdb".into(),
+        user: "postgres".into(),
+        password: PASS.into(),
+        ssl: false,
+    };
+    let mut drv = retry("postgres", || PgDriver::connect(&params)).await;
 
-    drv.exec("DROP TABLE IF EXISTS it_orders").await.unwrap();
-    drv.exec("CREATE TABLE it_orders (id int PRIMARY KEY, status text)")
-        .await
-        .unwrap();
+    // --- CRUD + WHERE lọc thật -------------------------------------------
+    drv.exec("CREATE TABLE it_orders (id int PRIMARY KEY, status text)").await.unwrap();
     let ins = drv
         .exec("INSERT INTO it_orders VALUES (1,'done'), (2,'open'), (3,'done')")
         .await
         .unwrap();
     assert!(matches!(ins, StatementOutcome::Affected { affected: 3 }));
 
-    // WHERE actually filters
     let out = drv
         .exec("SELECT id FROM it_orders WHERE status = 'done' ORDER BY id")
         .await
         .unwrap();
-    let StatementOutcome::Rows { result } = out else {
-        panic!("expected rows")
-    };
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
     assert_eq!(result.total, 2);
     assert_eq!(result.rows[0]["id"], serde_json::json!(1));
 
-    // NULL vs empty string distinction survives the wire
-    drv.exec("INSERT INTO it_orders VALUES (4, NULL), (5, '')")
-        .await
-        .unwrap();
+    // --- NULL vs chuỗi rỗng giữ nguyên qua wire ---------------------------
+    drv.exec("INSERT INTO it_orders VALUES (4, NULL), (5, '')").await.unwrap();
     let out = drv
         .exec("SELECT status FROM it_orders WHERE id IN (4,5) ORDER BY id")
         .await
         .unwrap();
-    let StatementOutcome::Rows { result } = out else {
-        panic!("expected rows")
-    };
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
     assert!(result.rows[0]["status"].is_null());
     assert_eq!(result.rows[1]["status"], serde_json::json!(""));
-}
 
-#[tokio::test]
-async fn pg_error_has_sqlstate_and_position() {
-    let mut drv = skip_if_down!(PgDriver::connect(&pg_params()).await, "postgres");
+    // --- Transaction/rollback thật ----------------------------------------
+    drv.exec("BEGIN").await.unwrap();
+    drv.exec("INSERT INTO it_orders VALUES (99, 'tx')").await.unwrap();
+    drv.exec("ROLLBACK").await.unwrap();
+    let out = drv.exec("SELECT count(*) AS n FROM it_orders WHERE id = 99").await.unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    assert_eq!(result.rows[0]["n"], serde_json::json!(0), "rollback phải hủy insert");
+
+    // --- QueryError tầng 2: SQLSTATE 42P01 + position → line/col ----------
     let err = drv
         .exec("SELECT * FROM khong_ton_tai_bang")
         .await
-        .expect_err("query must fail");
+        .expect_err("query phải fail");
     assert_eq!(err.code.as_deref(), Some("42P01"));
-    // PG reports a character position → mapped to line/col within the statement
-    let pos = err.position.expect("pg must provide a position");
+    let pos = err.position.expect("PG phải trả position");
     assert_eq!(pos.line, 1);
     assert!(pos.col > 1);
-    assert!(err.hint.is_some());
+    assert!(err.hint.is_some(), "42P01 phải có hint tiếng Việt");
+    assert!(!err.raw.is_empty(), "raw error phải giữ nguyên văn");
+}
+
+// ---------------------------------------------------------------------------
+// MySQL + MariaDB (chung driver sqlx-mysql, system type riêng)
+// ---------------------------------------------------------------------------
+
+async fn mysql_like_roundtrip(image: (&str, &str), env_prefix: &str, system: &'static str) {
+    let c = GenericImage::new(image.0, image.1)
+        .with_exposed_port(3306.tcp())
+        .with_env_var(format!("{env_prefix}_ROOT_PASSWORD"), PASS)
+        .with_env_var(format!("{env_prefix}_DATABASE"), "testdb")
+        .start()
+        .await
+        .unwrap_or_else(|e| panic!("start {system} container: {e}"));
+    let port = c.get_host_port_ipv4(3306).await.unwrap();
+    let params = MySqlConnParams {
+        host: "localhost".into(),
+        port,
+        database: "testdb".into(),
+        user: "root".into(),
+        password: PASS.into(),
+        ssl: false,
+    };
+    let mut drv = retry(system, || MySqlDriver::connect(&params, system)).await;
+
+    drv.exec("CREATE TABLE it_users (id int PRIMARY KEY, name varchar(50))").await.unwrap();
+    drv.exec("INSERT INTO it_users VALUES (1,'an'), (2,'binh')").await.unwrap();
+    let out = drv.exec("SELECT name FROM it_users WHERE id = 2").await.unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    assert_eq!(result.rows[0]["name"], serde_json::json!("binh"));
+
+    // lỗi giữ đúng system identity (mysql vs mariadb) + raw
+    let err = drv.exec("SELEC * FROM x").await.expect_err("phải fail");
+    assert_eq!(err.system, system);
     assert!(!err.raw.is_empty());
 }
 
 #[tokio::test]
-async fn mysql_and_mariadb_roundtrip() {
-    for (port, system) in [(3306u16, "mysql"), (3307u16, "mariadb")] {
-        let mut drv = match MySqlDriver::connect(&mysql_params(port), if system == "mysql" { "mysql" } else { "mariadb" }).await {
-            Ok(d) => d,
-            Err(e) => {
-                eprintln!("SKIP {system}: {}", e.message);
-                continue;
-            }
-        };
-        drv.exec("DROP TABLE IF EXISTS it_users").await.unwrap();
-        drv.exec("CREATE TABLE it_users (id int PRIMARY KEY, name varchar(50))")
-            .await
-            .unwrap();
-        drv.exec("INSERT INTO it_users VALUES (1,'an'), (2,'binh')")
-            .await
-            .unwrap();
-        let out = drv
-            .exec("SELECT name FROM it_users WHERE id = 2")
-            .await
-            .unwrap();
-        let StatementOutcome::Rows { result } = out else {
-            panic!("expected rows")
-        };
-        assert_eq!(result.rows[0]["name"], serde_json::json!("binh"));
-
-        // error carries the system name (mysql vs mariadb identity preserved)
-        let err = drv.exec("SELEC * FROM x").await.expect_err("must fail");
-        assert_eq!(err.system, system);
-        assert!(!err.raw.is_empty());
-    }
+async fn mysql_roundtrip() {
+    mysql_like_roundtrip(("mysql", "8"), "MYSQL", "mysql").await;
 }
 
 #[tokio::test]
+async fn mariadb_roundtrip() {
+    mysql_like_roundtrip(("mariadb", "11"), "MARIADB", "mariadb").await;
+}
+
+// ---------------------------------------------------------------------------
+// MSSQL
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
 async fn mssql_roundtrip_and_line_error() {
-    let mut drv = skip_if_down!(MssqlDriver::connect(&mssql_params()).await, "mssql");
-    drv.exec("IF OBJECT_ID('it_t') IS NOT NULL DROP TABLE it_t")
+    let c = GenericImage::new("mcr.microsoft.com/mssql/server", "2022-latest")
+        .with_exposed_port(1433.tcp())
+        .with_env_var("ACCEPT_EULA", "Y")
+        .with_env_var("MSSQL_SA_PASSWORD", MSSQL_PASS)
+        .start()
         .await
-        .unwrap();
-    drv.exec("CREATE TABLE it_t (id int PRIMARY KEY, v nvarchar(50))")
-        .await
-        .unwrap();
-    let ins = drv
-        .exec("INSERT INTO it_t VALUES (1, N'xin chào')")
-        .await
-        .unwrap();
+        .expect("start mssql container");
+    let port = c.get_host_port_ipv4(1433).await.unwrap();
+    let params = MssqlConnParams {
+        host: "localhost".into(),
+        port,
+        database: "".into(),
+        user: "sa".into(),
+        password: MSSQL_PASS.into(),
+        ssl: false,
+        auth: "sql".into(),
+    };
+    let mut drv = retry("mssql", || MssqlDriver::connect(&params)).await;
+
+    drv.exec("CREATE TABLE it_t (id int PRIMARY KEY, v nvarchar(50))").await.unwrap();
+    let ins = drv.exec("INSERT INTO it_t VALUES (1, N'xin chào')").await.unwrap();
     assert!(matches!(ins, StatementOutcome::Affected { affected: 1 }));
     let out = drv.exec("SELECT TOP 1 v FROM it_t").await.unwrap();
-    let StatementOutcome::Rows { result } = out else {
-        panic!("expected rows")
-    };
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
     assert_eq!(result.rows[0]["v"], serde_json::json!("xin chào"));
 
-    // MSSQL gives a line number for errors
-    let err = drv
-        .exec("SELECT 1\nFROM bang_khong_co")
-        .await
-        .expect_err("must fail");
+    // MSSQL trả line number cho lỗi → position
+    let err = drv.exec("SELECT 1\nFROM bang_khong_co").await.expect_err("phải fail");
     assert_eq!(err.code.as_deref(), Some("208"));
-    assert!(err.position.is_some());
+    assert!(err.position.is_some(), "MSSQL line phải map sang position");
 }
+
+// ---------------------------------------------------------------------------
+// SQLite — file thật + in-memory, đủ 3 mode (không cần container)
+// ---------------------------------------------------------------------------
 
 #[tokio::test]
 async fn sqlite_file_modes_and_errors() {
@@ -188,55 +220,40 @@ async fn sqlite_file_modes_and_errors() {
     })
     .await
     .unwrap();
-    rw.exec("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)")
-        .await
-        .unwrap();
+    rw.exec("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)").await.unwrap();
     rw.exec("INSERT INTO t (name) VALUES ('a'), ('b')").await.unwrap();
     let out = rw.exec("SELECT * FROM t ORDER BY id").await.unwrap();
-    let StatementOutcome::Rows { result } = out else {
-        panic!("expected rows")
-    };
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
     assert_eq!(result.total, 2);
     assert_eq!(result.cols[1].0, "name");
 
-    // read-only: writes must fail with a helpful hint
+    // read-only: write phải fail kèm hint
     let ro = SqliteDriver::connect(&SqliteConnParams {
         path: path.to_string_lossy().to_string(),
         mode: SqliteMode::ReadOnly,
     })
     .await
     .unwrap();
-    let err = ro
-        .exec("INSERT INTO t (name) VALUES ('c')")
-        .await
-        .expect_err("read-only write must fail");
+    let err = ro.exec("INSERT INTO t (name) VALUES ('c')").await.expect_err("RO phải chặn write");
     assert!(err.hint.unwrap_or_default().contains("Read-Only"));
 
-    // in-memory: independent database
-    let mem = SqliteDriver::connect(&SqliteConnParams {
-        path: String::new(),
-        mode: SqliteMode::InMemory,
-    })
-    .await
-    .unwrap();
-    let err = mem.exec("SELECT * FROM t").await.expect_err("no such table in memory db");
+    // in-memory: database độc lập
+    let mem = SqliteDriver::connect(&SqliteConnParams { path: String::new(), mode: SqliteMode::InMemory })
+        .await
+        .unwrap();
+    let err = mem.exec("SELECT * FROM t").await.expect_err("in-memory không thấy bảng file");
     assert!(err.message.contains("no such table"));
 }
 
 #[tokio::test]
 async fn sqlite_introspection() {
-    let mem = SqliteDriver::connect(&SqliteConnParams {
-        path: String::new(),
-        mode: SqliteMode::InMemory,
-    })
-    .await
-    .unwrap();
+    let mem = SqliteDriver::connect(&SqliteConnParams { path: String::new(), mode: SqliteMode::InMemory })
+        .await
+        .unwrap();
     mem.exec("CREATE TABLE parent (id INTEGER PRIMARY KEY)").await.unwrap();
-    mem.exec(
-        "CREATE TABLE child (id INTEGER PRIMARY KEY, pid INTEGER NOT NULL REFERENCES parent(id))",
-    )
-    .await
-    .unwrap();
+    mem.exec("CREATE TABLE child (id INTEGER PRIMARY KEY, pid INTEGER NOT NULL REFERENCES parent(id))")
+        .await
+        .unwrap();
 
     let schemas = mem.schemas().await.unwrap();
     assert_eq!(schemas[0].name, "main");
@@ -247,8 +264,137 @@ async fn sqlite_introspection() {
 
     let cols = mem.columns("main", "child").await.unwrap();
     let pid = cols.iter().find(|c| c.name == "pid").unwrap();
-    assert!(pid.is_fk, "FK flag from foreign_key_list");
+    assert!(pid.is_fk, "FK flag từ foreign_key_list");
     assert!(!pid.nullable);
     let id = cols.iter().find(|c| c.name == "id").unwrap();
     assert!(id.is_pk);
+}
+
+// ---------------------------------------------------------------------------
+// SSH tunnel — SSH server in-process (russh server API) + echo target.
+// Kiểm thật: connect, auth password, direct-tcpip forward 2 chiều.
+// ---------------------------------------------------------------------------
+
+mod ssh_support {
+    use std::sync::Arc;
+
+    use russh::server::{self, Auth, Msg, Server as _, Session};
+    use russh::Channel;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpStream;
+
+    #[derive(Clone)]
+    pub struct TestSshServer;
+
+    impl server::Server for TestSshServer {
+        type Handler = TestHandler;
+        fn new_client(&mut self, _peer: Option<std::net::SocketAddr>) -> TestHandler {
+            TestHandler
+        }
+    }
+
+    pub struct TestHandler;
+
+    impl server::Handler for TestHandler {
+        type Error = russh::Error;
+
+        async fn auth_password(&mut self, user: &str, password: &str) -> Result<Auth, Self::Error> {
+            if user == "tester" && password == "test123" {
+                Ok(Auth::Accept)
+            } else {
+                Ok(Auth::reject())
+            }
+        }
+
+        async fn channel_open_direct_tcpip(
+            &mut self,
+            channel: Channel<Msg>,
+            host_to_connect: &str,
+            port_to_connect: u32,
+            _originator_address: &str,
+            _originator_port: u32,
+            _session: &mut Session,
+        ) -> Result<bool, Self::Error> {
+            // forward thật tới target — như sshd làm
+            let addr = format!("{host_to_connect}:{port_to_connect}");
+            tokio::spawn(async move {
+                if let Ok(mut target) = TcpStream::connect(addr).await {
+                    let mut stream = channel.into_stream();
+                    let _ = tokio::io::copy_bidirectional(&mut stream, &mut target).await;
+                }
+            });
+            Ok(true)
+        }
+    }
+
+    /// SSH server + echo TCP server, trả (ssh_port, echo_port).
+    pub async fn start() -> (u16, u16) {
+        // echo server: viết gì nhận lại nấy
+        let echo = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let echo_port = echo.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut sock, _)) = echo.accept().await else { break };
+                tokio::spawn(async move {
+                    let mut buf = [0u8; 1024];
+                    while let Ok(n) = sock.read(&mut buf).await {
+                        if n == 0 {
+                            break;
+                        }
+                        if sock.write_all(&buf[..n]).await.is_err() {
+                            break;
+                        }
+                    }
+                });
+            }
+        });
+
+        let key = russh::keys::PrivateKey::random(
+            &mut russh::keys::ssh_key::rand_core::OsRng,
+            russh::keys::Algorithm::Ed25519,
+        )
+        .unwrap();
+        let config = Arc::new(server::Config {
+            keys: vec![key],
+            ..Default::default()
+        });
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let ssh_port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let mut srv = TestSshServer;
+            srv.run_on_socket(config, &listener).await.ok();
+        });
+        (ssh_port, echo_port)
+    }
+}
+
+#[tokio::test]
+async fn ssh_tunnel_forwards_and_rejects_bad_auth() {
+    use database_studio_lib::connections::profile::{SshAuthMethod, SshConfig};
+    use database_studio_lib::connections::tunnel::open_tunnel;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let (ssh_port, echo_port) = ssh_support::start().await;
+    let ssh = SshConfig {
+        enabled: true,
+        host: "127.0.0.1".into(),
+        port: ssh_port,
+        user: "tester".into(),
+        auth: SshAuthMethod::Password,
+        password_enc: String::new(),
+        key_path: String::new(),
+    };
+
+    // auth sai → phải bị từ chối
+    let bad = open_tunnel(&ssh, "sai-mat-khau", "127.0.0.1", echo_port).await;
+    assert!(bad.is_err(), "auth sai phải lỗi");
+
+    // auth đúng → forward 2 chiều qua tunnel
+    let tunnel = open_tunnel(&ssh, "test123", "127.0.0.1", echo_port).await.unwrap();
+    let mut sock = tokio::net::TcpStream::connect(("127.0.0.1", tunnel.local_port)).await.unwrap();
+    sock.write_all(b"xin chao qua tunnel").await.unwrap();
+    let mut buf = [0u8; 64];
+    let n = sock.read(&mut buf).await.unwrap();
+    assert_eq!(&buf[..n], b"xin chao qua tunnel");
+    tunnel.shutdown().await;
 }

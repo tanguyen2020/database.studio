@@ -92,8 +92,15 @@ for (const [c] of html.matchAll(/rgba?\([^)]*\)/g)) rgbaColors.add(c.replace(/\s
 
 const pxName = (n) => `--px-${String(n).replace('-', 'neg').replace('.', '_')}`
 const hexName = (c) => `--hex-${c.slice(1)}`
+// tên biến CSS chỉ được chứa ident chars: '.' → '_', bỏ prefix rgba trùng lặp
 const rgbaName = (c) =>
-  `--rgba-${c.replace(/[^0-9a-z.]/gi, '-').replace(/-+/g, '-').replace(/^-|-$/g, '')}`
+  `--rgba-${c
+    .replace(/^rgba?\(/, '')
+    .replace(/\)$/, '')
+    .replace(/\./g, '_')
+    .replace(/[^0-9a-z_]/gi, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')}`
 
 // --- Emit tokens.css ---------------------------------------------------------
 

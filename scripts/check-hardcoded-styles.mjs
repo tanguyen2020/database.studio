@@ -31,6 +31,9 @@ for (const file of walk(SRC)) {
   const lines = readFileSync(file, 'utf8').split('\n')
   lines.forEach((line, i) => {
     if (line.includes('token-exempt')) return // lối thoát có chủ đích, phải giải thích trong PR
+    const t = line.trim()
+    // bỏ qua comment (JS/TS/CSS/HTML) — chỉ bắt giá trị trong code/markup thật
+    if (t.startsWith('//') || t.startsWith('*') || t.startsWith('/*') || t.startsWith('<!--')) return
     for (const re of [
       /#[0-9a-fA-F]{3,8}\b/g, // màu hex
       /rgba?\([^)]*\)/g, // màu rgb/rgba

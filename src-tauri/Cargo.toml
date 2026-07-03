@@ -60,6 +60,10 @@ bigdecimal = "0.4"
 regex = "1"
 dirs = "5"
 
+[dev-dependencies]
+# Integration test: container tự bật/tắt cho từng hệ (không phụ thuộc DB cài sẵn)
+testcontainers = "0.23"
+
 [profile.dev]
 incremental = true
 

@@ -1,8 +1,6 @@
 <script lang="ts">
-  // Delete connection. When tabs are using it: Cancel / Close tabs & Delete /
-  // Force Delete (tabs become orphaned — gray ⚠ badge, content kept).
-  import * as Dialog from '$lib/components/ui/dialog'
-  import { Button } from '$lib/components/ui/button'
+  // Delete connection dialog — port 1:1 từ Database Studio.dc.html dòng 2068-2090.
+  // Cancel / Close tabs & Delete / Force Delete (tab orphaned: badge xám ⚠, giữ nội dung).
   import { connections } from '$lib/stores/connections.svelte'
   import { tabs } from '$lib/stores/tabs.svelte'
   import { toasts } from '$lib/stores/toast.svelte'
@@ -40,45 +38,60 @@
   }
 </script>
 
-<Dialog.Root open={!!target} onOpenChange={(o) => !o && close()}>
-  <Dialog.Content class="max-w-[480px]">
-    {#if target}
-      <Dialog.Header>
-        <Dialog.Title>Delete connection "{target.name}"?</Dialog.Title>
-      </Dialog.Header>
-
-      {#if affectedTabs.length > 0}
-        <div class="rounded-md border border-warn/50 bg-panel px-3 py-2 text-[12.5px]">
-          <p class="mb-1 font-medium text-warn">
-            ⚠ Connection này đang được dùng bởi {affectedTabs.length} tab:
-          </p>
-          <ul class="ml-4 list-disc text-text2">
-            {#each affectedTabs.slice(0, 6) as t (t.id)}
-              <li class="truncate">{t.title}</li>
-            {/each}
-            {#if affectedTabs.length > 6}
-              <li>… và {affectedTabs.length - 6} tab khác</li>
-            {/if}
-          </ul>
+{#if target}
+  <div
+    onclick={close}
+    onkeydown={(e) => e.key === 'Escape' && close()}
+    role="presentation"
+    style="position:fixed;inset:0;background:var(--rgba-0-0-0-_5);display:flex;align-items:center;justify-content:center;z-index:55"
+  >
+    <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
+    <div
+      onclick={(e) => e.stopPropagation()}
+      role="alertdialog"
+      aria-label="Delete connection"
+      tabindex="-1"
+      style="width:var(--px-480);max-width:94vw;background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-14);box-shadow:0 var(--px-30) var(--px-70) var(--rgba-0-0-0-_55);overflow:hidden"
+    >
+      <div style="padding:var(--px-18) var(--px-20) var(--px-8);display:flex;align-items:center;gap:var(--px-10)">
+        <span style="font-size:var(--px-18);color:var(--hex-f0a020)">⚠</span>
+        <span style="font-weight:700;font-size:var(--px-15)">Delete connection "{target.name}"?</span>
+      </div>
+      <div style="padding:0 var(--px-20) var(--px-14)">
+        <div style="font-size:var(--px-12_5);color:var(--text2);margin-bottom:var(--px-8)">
+          This connection is used by {affectedTabs.length} tab(s):
         </div>
-        <p class="text-[11.5px] text-mutedfg">
-          <b>Force Delete</b> giữ nguyên các tab (trạng thái orphaned — không chạy được query
-          nhưng không mất nội dung editor).
-        </p>
-        <Dialog.Footer>
-          <Button variant="ghost" size="sm" onclick={close}>Cancel</Button>
-          <Button variant="secondary" size="sm" onclick={closeTabsAndDelete}>
-            Close tabs & Delete
-          </Button>
-          <Button variant="destructive" size="sm" onclick={forceDelete}>Force Delete</Button>
-        </Dialog.Footer>
-      {:else}
-        <p class="text-[12.5px] text-text2">Không có tab nào đang dùng connection này.</p>
-        <Dialog.Footer>
-          <Button variant="ghost" size="sm" onclick={close}>Cancel</Button>
-          <Button variant="destructive" size="sm" onclick={deleteOnly}>Delete</Button>
-        </Dialog.Footer>
-      {/if}
-    {/if}
-  </Dialog.Content>
-</Dialog.Root>
+        <div style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-9);padding:var(--px-6);max-height:var(--px-160);overflow:auto">
+          {#each affectedTabs as t (t.id)}
+            <div class="mono" style="font-size:var(--px-12);padding:var(--px-5) var(--px-9);color:var(--text2)">· {t.title}</div>
+          {:else}
+            <div class="mono" style="font-size:var(--px-12);padding:var(--px-5) var(--px-9);color:var(--muted)">(không có tab nào)</div>
+          {/each}
+        </div>
+      </div>
+      <div style="display:flex;gap:var(--px-9);padding:var(--px-14) var(--px-20);border-top:var(--px-1) solid var(--border);background:var(--panel)">
+        <span
+          onclick={close}
+          onkeydown={(e) => e.key === 'Enter' && close()}
+          role="button"
+          tabindex="0"
+          style="font-size:var(--px-12_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-8);padding:var(--px-8) var(--px-14);cursor:pointer"
+        >Cancel</span>
+        <span
+          onclick={closeTabsAndDelete}
+          onkeydown={(e) => e.key === 'Enter' && closeTabsAndDelete()}
+          role="button"
+          tabindex="0"
+          style="margin-left:auto;font-size:var(--px-12_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-8);padding:var(--px-8) var(--px-14);cursor:pointer"
+        >Close tabs &amp; Delete</span>
+        <span
+          onclick={forceDelete}
+          onkeydown={(e) => e.key === 'Enter' && forceDelete()}
+          role="button"
+          tabindex="0"
+          style="font-size:var(--px-12_5);background:var(--hex-e03131);color:var(--hex-fff);border-radius:var(--px-8);padding:var(--px-8) var(--px-14);cursor:pointer;font-weight:600"
+        >Force Delete</span>
+      </div>
+    </div>
+  </div>
+{/if}
