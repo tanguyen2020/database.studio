@@ -19,9 +19,14 @@
     syntaxHighlighting,
     defaultHighlightStyle,
   } from '@codemirror/language'
-  import { closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete'
+  import {
+    autocompletion,
+    closeBrackets,
+    closeBracketsKeymap,
+    completionKeymap,
+  } from '@codemirror/autocomplete'
   import { highlightSelectionMatches, searchKeymap } from '@codemirror/search'
-  import { setDiagnostics, type Diagnostic } from '@codemirror/lint'
+  import { linter, setDiagnostics, type Diagnostic } from '@codemirror/lint'
   import { sql, PostgreSQL, MySQL, MSSQL, SQLite, StandardSQL } from '@codemirror/lang-sql'
   import { lineColToOffset } from '$lib/sql/statements'
 
@@ -29,18 +34,37 @@
     value: string
     system: string
     readOnly?: boolean
+    /** schema-aware autocomplete (Phase 2): { table: [cols] } từ explorer cache */
+    schema?: Record<string, string[]>
+    defaultSchema?: string
+    /** lint tầng 1 — advisory, debounce 400ms do linter đảm nhiệm, KHÔNG chặn Run */
+    lintSource?: (doc: string) => Promise<Diagnostic[]>
     onChange?: (doc: string) => void
     onRun?: () => void
     onRunAtCursor?: () => void
     onCancel?: () => void
   }
 
-  let { value, system, readOnly = false, onChange, onRun, onRunAtCursor, onCancel }: Props =
-    $props()
+  let {
+    value,
+    system,
+    readOnly = false,
+    schema,
+    defaultSchema,
+    lintSource,
+    onChange,
+    onRun,
+    onRunAtCursor,
+    onCancel,
+  }: Props = $props()
 
   let container = $state<HTMLDivElement | null>(null)
   let view: EditorView | null = null
   const langCompartment = new Compartment()
+
+  function langExt(sys: string) {
+    return sql({ dialect: dialectFor(sys), schema, defaultSchema })
+  }
 
   function dialectFor(sys: string) {
     switch (sys) {
@@ -104,7 +128,13 @@
         closeBrackets(),
         highlightSelectionMatches(),
         syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
-        langCompartment.of(sql({ dialect: dialectFor(system) })),
+        langCompartment.of(langExt(system)),
+        // autocomplete: keywords dialect + table/column từ schema cache (lang-sql)
+        autocompletion(),
+        // lint tầng 1 — advisory, debounce 400ms (addendum §1.1), không chặn Run
+        linter(async (v) => (lintSource ? await lintSource(v.state.doc.toString()) : []), {
+          delay: 400,
+        }),
         editorTheme,
         EditorState.readOnly.of(readOnly),
         keymap.of([
@@ -138,6 +168,7 @@
             },
           },
           ...closeBracketsKeymap,
+          ...completionKeymap,
           ...defaultKeymap,
           ...historyKeymap,
           ...foldKeymap,
@@ -155,10 +186,11 @@
     return () => view?.destroy()
   })
 
-  // dialect switches when the tab's connection changes system
+  // dialect/schema đổi (đổi connection trong tab hoặc cache autocomplete nạp xong)
+  // → reconfigure lang: reload autocomplete (spec phase-1 §6 + phase-2 §1)
   $effect(() => {
-    const dialect = dialectFor(system)
-    view?.dispatch({ effects: langCompartment.reconfigure(sql({ dialect })) })
+    void schema
+    view?.dispatch({ effects: langCompartment.reconfigure(langExt(system)) })
   })
 
   // ---- public API (via bind:this) ----

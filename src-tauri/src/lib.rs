@@ -2,6 +2,7 @@ pub mod commands;
 pub mod connections;
 pub mod drivers;
 pub mod error;
+pub mod lint;
 pub mod state;
 pub mod storage;
 
@@ -49,6 +50,8 @@ pub fn run() {
             commands::schema::list_sequences,
             // files
             commands::files::write_text_file,
+            // lint tầng 1
+            commands::lint::lint_sql,
             // tabs + app state
             commands::tabs::save_tabs,
             commands::tabs::load_tabs,

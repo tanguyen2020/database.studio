@@ -12,9 +12,12 @@
   import { tabs } from '$lib/stores/tabs.svelte'
   import { toasts } from '$lib/stores/toast.svelte'
   import { ui } from '$lib/stores/ui.svelte'
+  import { explorer } from '$lib/stores/explorer.svelte'
   import { mapErrorToDocument } from '$lib/sql/errors'
+  import { lintSql, schemaLints, toCmDiagnostics } from '$lib/sql/lint-client'
   import { splitStatements, statementAtOffset } from '$lib/sql/statements'
   import type { TabState } from '$lib/types'
+  import type { Diagnostic } from '@codemirror/lint'
 
   interface Props {
     tab: TabState
@@ -33,6 +36,53 @@
   // svelte-ignore state_referenced_locally
   const initialQuery = (tab.state.query as string) ?? ''
   let savedQuery = initialQuery
+
+  // ---- autocomplete schema (phase-2 §1): nạp schema + bảng của connection ----
+  $effect(() => {
+    if (profile?.connected) {
+      void explorer.loadSchemas(profile.id).then(() => {
+        const schemas = explorer.cache[profile.id]?.schemas ?? []
+        const def = schemas.find((s) => s.is_default) ?? schemas[0]
+        if (def) void explorer.loadSchemaChildren(profile.id, def.name)
+      })
+    }
+  })
+
+  /** { table: [cols], schema.table: [cols] } cho lang-sql completion */
+  const completionSchema = $derived.by(() => {
+    if (!profile) return undefined
+    const cache = explorer.cache[profile.id]
+    if (!cache) return undefined
+    const out: Record<string, string[]> = {}
+    for (const [schemaName, sc] of Object.entries(cache.bySchema)) {
+      for (const t of sc.tables ?? []) {
+        const cols = sc.tableDetails[t.name]?.columns?.map((c) => c.name) ?? []
+        out[t.name] = cols
+        out[`${schemaName}.${t.name}`] = cols
+      }
+    }
+    return Object.keys(out).length > 0 ? out : undefined
+  })
+
+  const defaultSchema = $derived.by(() => {
+    if (!profile) return undefined
+    const schemas = explorer.cache[profile.id]?.schemas ?? []
+    return (schemas.find((s) => s.is_default) ?? schemas[0])?.name
+  })
+
+  const knownTables = $derived.by(() => {
+    if (!profile) return []
+    const cache = explorer.cache[profile.id]
+    if (!cache) return []
+    return Object.values(cache.bySchema).flatMap((sc) => (sc.tables ?? []).map((t) => t.name))
+  })
+
+  // ---- lint tầng 1 (phase-2 §2b): backend parse-only + schema-aware client ----
+  async function lintDoc(doc: string): Promise<Diagnostic[]> {
+    if (!tab.connectionId || isOrphan) return []
+    const backend = await lintSql(tab.systemType, doc)
+    return [...toCmDiagnostics(doc, backend), ...schemaLints(doc, knownTables)]
+  }
 
   function onChange(doc: string) {
     tab.state.query = doc
@@ -253,6 +303,9 @@
       bind:this={editor}
       value={initialQuery}
       system={tab.systemType}
+      schema={completionSchema}
+      {defaultSchema}
+      lintSource={lintDoc}
       {onChange}
       onRun={run}
       onRunAtCursor={runAtCursor}

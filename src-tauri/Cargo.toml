@@ -51,6 +51,9 @@ keyring = { version = "3", features = ["windows-native"] }
 rand = "0.8"
 base64 = "0.22"
 
+# SQL lint tầng 1 (parse-only, không chạy DB) — QUERY_EDITOR_ERROR_HANDLING_ADDENDUM §1.1
+sqlparser = "0.53"
+
 # Misc
 uuid = { version = "1", features = ["v4"] }
 thiserror = "2"
