@@ -72,30 +72,31 @@
 
   function dragConnList(e: PointerEvent) {
     if (!draggingConnList) return
-    // relative to viewport: below the 32px title bar
-    ui.connListHeight = Math.min(Math.max(e.clientY - 32, 120), window.innerHeight - 200)
+    // relative to viewport: dưới title bar 42px (HTML dòng 46) + header/toolbar khu Connections
+    ui.connListHeight = Math.min(Math.max(e.clientY - 42 - 66, 120), window.innerHeight - 260)
     ui.persistSizes()
   }
 </script>
 
 <svelte:window onkeydown={onKeydown} />
 
-<div class="flex h-full flex-col overflow-hidden">
+<!-- layout — port từ Database Studio.dc.html dòng 43, 68-71, 170-173 -->
+<div style="height:100vh;display:flex;flex-direction:column;background:var(--bg);color:var(--text);font-size:var(--px-13);overflow:hidden">
   <TitleBar />
 
-  <div class="flex min-h-0 grow">
-    <!-- sidebar -->
+  <!-- BODY — dòng 68 -->
+  <div style="flex:1;display:flex;min-height:0">
+    <!-- LEFT SIDEBAR — dòng 71 -->
     <aside
-      class="flex shrink-0 flex-col overflow-hidden border-r border-border bg-panel"
-      style="width: {ui.sidebarWidth}px;"
+      style="width:{ui.sidebarWidth}px;flex:none;display:flex;flex-direction:column;background:var(--surface);border-right:var(--px-1) solid var(--border);min-height:0"
     >
-      <div style="height: {ui.connListHeight}px;" class="shrink-0 overflow-hidden">
-        <ConnectionList />
-      </div>
+      <ConnectionList />
+      <!-- resizer chiều cao connection list (persist) -->
       <div
-        class="h-[5px] shrink-0 cursor-row-resize border-y border-border bg-header hover:bg-primary/40"
+        style="flex:none;height:var(--px-5);cursor:row-resize;background:var(--border)"
         role="separator"
         aria-orientation="horizontal"
+        title="Drag to resize"
         onpointerdown={(e) => {
           draggingConnList = true
           ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
@@ -103,16 +104,17 @@
         onpointermove={dragConnList}
         onpointerup={() => (draggingConnList = false)}
       ></div>
-      <div class="min-h-0 grow overflow-hidden">
+      <div style="min-height:0;flex:1;overflow:hidden;display:flex;flex-direction:column">
         <ObjectExplorer />
       </div>
     </aside>
 
-    <!-- sidebar width handle -->
+    <!-- sidebar width resizer — dòng 170 -->
     <div
-      class="w-[5px] shrink-0 cursor-col-resize border-x border-border bg-header hover:bg-primary/40"
+      style="flex:none;width:var(--px-5);cursor:col-resize;background:var(--border);align-self:stretch"
       role="separator"
       aria-orientation="vertical"
+      title="Drag to resize width"
       onpointerdown={(e) => {
         draggingSidebar = true
         ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
@@ -121,12 +123,12 @@
       onpointerup={() => (draggingSidebar = false)}
     ></div>
 
-    <!-- main area -->
-    <main class="flex min-w-0 grow flex-col overflow-hidden bg-surface">
+    <!-- MAIN — dòng 173 -->
+    <main style="flex:1;display:flex;flex-direction:column;min-width:0;background:var(--bg);overflow:hidden">
       <TabBar />
-      <div class="min-h-0 grow">
+      <div style="flex:1;display:flex;flex-direction:column;min-height:0">
         {#if !ready}
-          <div class="flex h-full items-center justify-center text-[12px] text-mutedfg">
+          <div style="flex:1;display:flex;align-items:center;justify-content:center;font-size:var(--px-12);color:var(--muted)">
             Đang khởi động…
           </div>
         {:else if tabs.active}
@@ -138,11 +140,15 @@
             {/if}
           {/key}
         {:else}
-          <div class="flex h-full flex-col items-center justify-center gap-2 text-[13px] text-mutedfg">
+          <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:var(--px-8);font-size:var(--px-13);color:var(--muted)">
             <p>Chưa có tab nào mở</p>
-            <button class="text-primary hover:underline" onclick={() => tabs.openSqlTab({})}>
-              + New SQL tab (Ctrl+T)
-            </button>
+            <div
+              onclick={() => tabs.openSqlTab({})}
+              onkeydown={(e) => e.key === 'Enter' && tabs.openSqlTab({})}
+              role="button"
+              tabindex="0"
+              style="color:var(--primary);cursor:pointer"
+            >+ New SQL tab (Ctrl+T)</div>
           </div>
         {/if}
       </div>

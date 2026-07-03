@@ -1,9 +1,6 @@
 <script lang="ts">
-  // Save-before-close for dirty tabs: Cancel / Don't Save / Save.
-  // "Save" (Phase 1) keeps the buffer by persisting tab state, then closes.
-  import * as Dialog from '$lib/components/ui/dialog'
-  import { Button } from '$lib/components/ui/button'
-  import SystemBadge from '$lib/components/SystemBadge.svelte'
+  // Save-before-close — port 1:1 từ Database Studio.dc.html dòng 2093-2113.
+  // Cancel / Don't Save / Save. "Save" (Phase 1) đánh dấu sạch + persist buffer rồi đóng.
   import { tabs } from '$lib/stores/tabs.svelte'
 
   const pending = $derived(tabs.pendingClose)
@@ -19,7 +16,6 @@
 
   async function saveAndClose() {
     if (!pending) return
-    // Mark clean (content already lives in tab.state.query) and persist.
     for (const t of pending) {
       const live = tabs.byId(t.id)
       if (live) live.isDirty = false
@@ -29,28 +25,58 @@
   }
 </script>
 
-<Dialog.Root open={!!pending} onOpenChange={(o) => !o && cancel()}>
-  <Dialog.Content class="max-w-[440px]">
-    {#if pending}
-      <Dialog.Header>
-        <Dialog.Title>Lưu thay đổi trước khi đóng?</Dialog.Title>
-      </Dialog.Header>
-      <div class="text-[12.5px] text-text2">
-        {dirtyTabs.length} tab có thay đổi chưa lưu:
-        <ul class="mt-1.5 grid gap-1">
-          {#each dirtyTabs as t (t.id)}
-            <li class="flex items-center gap-1.5">
-              <SystemBadge system={t.systemType} />
-              <span class="truncate">{t.title}</span>
-            </li>
-          {/each}
-        </ul>
+{#if pending}
+  <div
+    onclick={cancel}
+    onkeydown={(e) => e.key === 'Escape' && cancel()}
+    role="presentation"
+    style="position:fixed;inset:0;background:var(--rgba-0-0-0-_5);display:flex;align-items:center;justify-content:center;z-index:58"
+  >
+    <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
+    <div
+      onclick={(e) => e.stopPropagation()}
+      role="alertdialog"
+      aria-label="Save changes before closing?"
+      tabindex="-1"
+      style="width:var(--px-460);max-width:94vw;background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-14);box-shadow:0 var(--px-30) var(--px-70) var(--rgba-0-0-0-_55);overflow:hidden"
+    >
+      <div style="padding:var(--px-18) var(--px-20) var(--px-8);display:flex;align-items:center;gap:var(--px-10)">
+        <span style="font-size:var(--px-18);color:var(--hex-f0a020)">⚠</span>
+        <span style="font-weight:700;font-size:var(--px-15)">Save changes before closing?</span>
       </div>
-      <Dialog.Footer>
-        <Button variant="ghost" size="sm" onclick={cancel}>Cancel</Button>
-        <Button variant="secondary" size="sm" onclick={dontSave}>Don't Save</Button>
-        <Button size="sm" onclick={saveAndClose}>Save</Button>
-      </Dialog.Footer>
-    {/if}
-  </Dialog.Content>
-</Dialog.Root>
+      <div style="padding:0 var(--px-20) var(--px-14)">
+        <div style="font-size:var(--px-12_5);color:var(--text2);margin-bottom:var(--px-8)">
+          {dirtyTabs.length} tab(s) have unsaved changes:
+        </div>
+        <div style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-9);padding:var(--px-6);max-height:var(--px-160);overflow:auto">
+          {#each dirtyTabs as t (t.id)}
+            <div class="mono" style="font-size:var(--px-12);padding:var(--px-5) var(--px-9);color:var(--text2)">● {t.title}</div>
+          {/each}
+        </div>
+      </div>
+      <div style="display:flex;gap:var(--px-9);padding:var(--px-14) var(--px-20);border-top:var(--px-1) solid var(--border);background:var(--panel)">
+        <span
+          onclick={cancel}
+          onkeydown={(e) => e.key === 'Enter' && cancel()}
+          role="button"
+          tabindex="0"
+          style="font-size:var(--px-12_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-8);padding:var(--px-8) var(--px-14);cursor:pointer"
+        >Cancel</span>
+        <span
+          onclick={dontSave}
+          onkeydown={(e) => e.key === 'Enter' && dontSave()}
+          role="button"
+          tabindex="0"
+          style="margin-left:auto;font-size:var(--px-12_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-8);padding:var(--px-8) var(--px-14);cursor:pointer"
+        >Don't Save</span>
+        <span
+          onclick={saveAndClose}
+          onkeydown={(e) => e.key === 'Enter' && saveAndClose()}
+          role="button"
+          tabindex="0"
+          style="font-size:var(--px-12_5);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-8);padding:var(--px-8) var(--px-16);cursor:pointer;font-weight:600"
+        >Save</span>
+      </div>
+    </div>
+  </div>
+{/if}
