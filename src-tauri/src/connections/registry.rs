@@ -218,6 +218,23 @@ impl Registry {
         Ok(f(driver).await)
     }
 
+    /// Params để mở connection Redis phụ (pub/sub) — lấy endpoint/password/db/ssl
+    /// từ live entry. Dùng endpoint (đã qua tunnel nếu có).
+    pub fn redis_params(&self, id: &str) -> AppResult<crate::drivers::redis::RedisConnParams> {
+        let map = self.entries.lock().unwrap();
+        let e = map
+            .get(id)
+            .ok_or_else(|| AppError::Driver("Connection không tồn tại / chưa kết nối".into()))?;
+        Ok(crate::drivers::redis::RedisConnParams {
+            host: e.endpoint.host.clone(),
+            port: e.endpoint.port,
+            password: e.password.clone(),
+            db: e.profile.database.trim().parse::<i64>().unwrap_or(0),
+            ssl: e.profile.ssl,
+            ssl_ca: e.profile.ssl_ca.clone(),
+        })
+    }
+
     /// Pings the live connection (used by the status bar / reconnect banner).
     pub async fn ping(&self, id: &str) -> bool {
         let Ok(driver) = self.driver_handle(id) else {

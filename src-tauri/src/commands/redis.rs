@@ -1,12 +1,21 @@
 //! IPC commands cho Redis (Phase 3 · T3+). Thao tác key đi qua Registry →
 //! driver Redis. SCAN cursor-based (không KEYS *) cho Key Explorer.
 
-use tauri::State;
+use futures::StreamExt;
+use tauri::{AppHandle, Emitter, State};
 
-use crate::drivers::redis::{RedisEditOp, RedisKeyValue, RedisScan};
+use crate::drivers::redis::{RedisDriver, RedisEditOp, RedisKeyValue, RedisScan};
 use crate::drivers::LiveConnection;
 use crate::error::{AppError, QueryError};
 use crate::state::AppState;
+
+/// Message pub/sub emit ra frontend qua event "redis-pubsub".
+#[derive(serde::Serialize, Clone)]
+struct PubSubMsg {
+    conn_id: String,
+    channel: String,
+    payload: String,
+}
 
 fn not_redis() -> QueryError {
     QueryError::new("redis", "Connection không phải Redis", "not a redis connection")
@@ -148,6 +157,69 @@ pub async fn redis_flushdb(state: State<'_, AppState>, conn_id: String) -> Resul
             let mut d = driver.lock().await;
             match &mut *d {
                 LiveConnection::Redis(r) => r.flushdb().await,
+                _ => Err(not_redis()),
+            }
+        })
+        .await?;
+    inner.map_err(|e| AppError::Driver(e.message))
+}
+
+/// Subscribe channels/patterns → stream message qua event "redis-pubsub".
+/// Mở connection pub/sub RIÊNG (redis pub/sub chiếm trọn connection); task nền
+/// lưu AbortHandle trong state.pubsub (subscribe mới hủy cái cũ của cùng conn).
+#[tauri::command]
+pub async fn redis_subscribe(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    conn_id: String,
+    channels: Vec<String>,
+    patterns: Vec<String>,
+) -> Result<(), AppError> {
+    let params = state.registry.redis_params(&conn_id)?;
+    let mut pubsub = RedisDriver::open_pubsub(&params)
+        .await
+        .map_err(|e| AppError::Driver(e.message))?;
+    for ch in &channels {
+        pubsub.subscribe(ch).await.map_err(|e| AppError::Driver(e.to_string()))?;
+    }
+    for p in &patterns {
+        pubsub.psubscribe(p).await.map_err(|e| AppError::Driver(e.to_string()))?;
+    }
+
+    let cid = conn_id.clone();
+    let handle = tokio::spawn(async move {
+        let mut stream = pubsub.on_message();
+        while let Some(msg) = stream.next().await {
+            let channel = msg.get_channel_name().to_string();
+            let payload: String = msg.get_payload().unwrap_or_default();
+            let _ = app.emit("redis-pubsub", PubSubMsg { conn_id: cid.clone(), channel, payload });
+        }
+    });
+    state.pubsub.replace(conn_id, handle.abort_handle());
+    Ok(())
+}
+
+/// Dừng subscription pub/sub của connection.
+#[tauri::command]
+pub async fn redis_unsubscribe(state: State<'_, AppState>, conn_id: String) -> Result<(), AppError> {
+    state.pubsub.abort(&conn_id);
+    Ok(())
+}
+
+/// PUBLISH channel message → số subscriber nhận (qua connection chính).
+#[tauri::command]
+pub async fn redis_publish(
+    state: State<'_, AppState>,
+    conn_id: String,
+    channel: String,
+    message: String,
+) -> Result<i64, AppError> {
+    let inner = state
+        .registry
+        .with_driver(&conn_id, move |driver| async move {
+            let mut d = driver.lock().await;
+            match &mut *d {
+                LiveConnection::Redis(r) => r.publish(&channel, &message).await,
                 _ => Err(not_redis()),
             }
         })

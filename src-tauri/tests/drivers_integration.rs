@@ -898,6 +898,21 @@ async fn redis_connect_auth_ping_and_version() {
     assert_eq!(drv.del("mylist").await.unwrap(), 1, "DEL trả 1");
     assert!(matches!(drv.get_value("mylist").await.unwrap().value, RedisValue::None), "key đã xóa → none");
 
+    // --- Pub/Sub (T6): subscribe pattern rồi PUBLISH → nhận đúng message ---
+    use futures::StreamExt;
+    let mut pubsub = RedisDriver::open_pubsub(&p_ok).await.unwrap();
+    pubsub.psubscribe("news.*").await.unwrap();
+    // publish qua driver chính (connection khác) sau khi subscriber đã sẵn sàng
+    let n = drv.publish("news.tech", "hello-pubsub").await.unwrap();
+    assert_eq!(n, 1, "PUBLISH phải tới 1 subscriber");
+    let msg = tokio::time::timeout(Duration::from_secs(5), pubsub.on_message().next())
+        .await
+        .expect("không nhận được message trong 5s")
+        .expect("stream đóng sớm");
+    assert_eq!(msg.get_channel_name(), "news.tech");
+    assert_eq!(msg.get_payload::<String>().unwrap(), "hello-pubsub");
+    drop(pubsub);
+
     // FLUSHDB xóa sạch (T7) — làm cuối cùng
     drv.flushdb().await.unwrap();
     assert_eq!(drv.dbsize().await.unwrap(), 0, "FLUSHDB → DBSIZE 0");

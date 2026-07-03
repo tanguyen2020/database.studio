@@ -111,6 +111,33 @@ class TabsStore {
     return tab
   }
 
+  /** Redis Pub/Sub monitor tab — 1 tab / connection. */
+  openRedisPubSubTab(connectionId: string): TabState {
+    const existing = this.tabs.find(
+      (t) => t.contentType === 'redis-pubsub' && t.connectionId === connectionId,
+    )
+    if (existing) {
+      this.activeTabId = existing.id
+      return existing
+    }
+    const profile = connections.byId(connectionId)
+    const tab: TabState = {
+      id: uuid(),
+      connectionId,
+      connectionName: profile?.name ?? '',
+      systemType: (profile?.system as SystemType) ?? 'orphan',
+      contentType: 'redis-pubsub',
+      title: `${profile?.name ?? 'Redis'} · Pub/Sub`,
+      isPinned: false,
+      isDirty: false,
+      state: {},
+    }
+    this.tabs.push(tab)
+    this.activeTabId = tab.id
+    this.schedulePersist()
+    return tab
+  }
+
   /** Mở (hoặc focus nếu đã có) một tab tiện ích singleton — History / Saved. */
   openUtilityTab(contentType: 'history' | 'saved', title: string): TabState {
     const existing = this.tabs.find((t) => t.contentType === contentType)

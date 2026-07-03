@@ -22,7 +22,7 @@ pub fn run() {
                 .app_data_dir()
                 .expect("cannot resolve app data dir");
             let storage = Storage::open(data_dir)?;
-            app.manage(AppState { storage, registry: Registry::default() });
+            app.manage(AppState { storage, registry: Registry::default(), pubsub: Default::default() });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -49,6 +49,9 @@ pub fn run() {
             commands::redis::redis_command,
             commands::redis::redis_memory_usage,
             commands::redis::redis_flushdb,
+            commands::redis::redis_subscribe,
+            commands::redis::redis_unsubscribe,
+            commands::redis::redis_publish,
             // schema
             commands::schema::list_schemas,
             commands::schema::list_tables,

@@ -116,6 +116,8 @@ pub async fn connect(state: State<'_, AppState>, id: String) -> Result<u64, AppE
 
 #[tauri::command]
 pub async fn disconnect(state: State<'_, AppState>, id: String) -> Result<(), AppError> {
+    // dừng luôn subscription pub/sub Redis (nếu có) trước khi ngắt kết nối
+    state.pubsub.abort(&id);
     state.registry.disconnect(&id).await
 }
 

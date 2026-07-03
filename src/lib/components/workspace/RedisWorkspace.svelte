@@ -6,6 +6,7 @@
   import { untrack } from 'svelte'
   import * as ipc from '$lib/ipc'
   import { connections } from '$lib/stores/connections.svelte'
+  import { tabs } from '$lib/stores/tabs.svelte'
   import { toasts } from '$lib/stores/toast.svelte'
   import { buildRedisTree, flattenRedisTree, type RedisKeyInfo } from '$lib/redis/tree'
   import type { TabState } from '$lib/types'
@@ -320,6 +321,7 @@
       <span style="font-size:var(--px-12);color:var(--text2)">DB</span>
       <span class="mono" style="font-size:var(--px-11);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-3) var(--px-9)">db{dbIndex}</span>
       <span class="mono" style="margin-left:auto;font-size:var(--px-11);color:var(--muted)">SCAN · {dbsize} keys</span>
+      <span onclick={() => tab.connectionId && tabs.openRedisPubSubTab(tab.connectionId)} onkeydown={(e) => e.key === 'Enter' && tab.connectionId && tabs.openRedisPubSubTab(tab.connectionId)} role="button" tabindex="0" title="Pub/Sub Monitor" style="flex:none;font-size:var(--px-10_5);color:var(--primary);cursor:pointer">Pub/Sub ▸</span>
       <span onclick={flushDb} onkeydown={(e) => e.key === 'Enter' && flushDb()} role="button" tabindex="0" title="FLUSHDB (xóa toàn bộ DB)" style="flex:none;font-size:var(--px-10_5);color:var(--error);cursor:pointer">Flush</span>
     </div>
     <!-- search pattern -->

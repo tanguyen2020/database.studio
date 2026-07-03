@@ -18,6 +18,7 @@
   import SqlWorkspace from '$lib/components/workspace/SqlWorkspace.svelte'
   import TableViewerTab from '$lib/components/workspace/TableViewerTab.svelte'
   import RedisWorkspace from '$lib/components/workspace/RedisWorkspace.svelte'
+  import RedisPubSub from '$lib/components/workspace/RedisPubSub.svelte'
   import HistoryTab from '$lib/components/workspace/HistoryTab.svelte'
   import SavedQueriesTab from '$lib/components/workspace/SavedQueriesTab.svelte'
   import { connections } from '$lib/stores/connections.svelte'
@@ -148,6 +149,8 @@
               <SavedQueriesTab />
             {:else if tabs.active.contentType === 'redis'}
               <RedisWorkspace tab={tabs.active} />
+            {:else if tabs.active.contentType === 'redis-pubsub'}
+              <RedisPubSub tab={tabs.active} />
             {:else}
               <SqlWorkspace tab={tabs.active} />
             {/if}

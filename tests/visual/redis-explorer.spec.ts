@@ -30,5 +30,11 @@ test('redis key explorer renders keys from demo scan', async ({ page }) => {
   await cli.press('Enter')
   await page.waitForTimeout(300)
   await expect(page.getByText('PONG').first()).toBeVisible()
+
+  // mở Pub/Sub monitor (T6) → header + nút Subscribe render
+  await page.getByText('Pub/Sub ▸').first().click()
+  await page.waitForTimeout(300)
+  await expect(page.getByText('Pub/Sub Monitor')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Subscribe' })).toBeVisible()
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })

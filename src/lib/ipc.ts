@@ -122,6 +122,23 @@ export const redisMemoryUsage = (connId: string, key: string) =>
 
 export const redisFlushDb = (connId: string) => invoke<void>('redis_flushdb', { connId })
 
+/** Pub/Sub — subscribe channels/patterns; messages arrive via `redis-pubsub` event. */
+export const redisSubscribe = (connId: string, channels: string[], patterns: string[]) =>
+  invoke<void>('redis_subscribe', { connId, channels, patterns })
+
+export const redisUnsubscribe = (connId: string) =>
+  invoke<void>('redis_unsubscribe', { connId })
+
+export const redisPublish = (connId: string, channel: string, message: string) =>
+  invoke<number>('redis_publish', { connId, channel, message })
+
+/** Payload of the `redis-pubsub` Tauri event. */
+export interface RedisPubSubMsg {
+  conn_id: string
+  channel: string
+  payload: string
+}
+
 // ---- schema (Object Explorer) ----------------------------------------------
 
 export const listSchemas = (connId: string) => invoke<SchemaInfo[]>('list_schemas', { connId })

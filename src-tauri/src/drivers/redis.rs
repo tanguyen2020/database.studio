@@ -30,7 +30,8 @@ fn err(msg: impl Into<String>, raw: impl std::fmt::Display) -> QueryError {
 }
 
 impl RedisDriver {
-    async fn open(p: &RedisConnParams) -> Result<redis::aio::MultiplexedConnection, QueryError> {
+    /// Dựng redis::Client từ params (dùng chung cho connection thường + pub/sub).
+    pub fn client(p: &RedisConnParams) -> Result<redis::Client, QueryError> {
         let addr = if p.ssl {
             ConnectionAddr::TcpTls {
                 host: p.host.clone(),
@@ -51,21 +52,42 @@ impl RedisDriver {
             },
         };
         // CA tùy chọn cho self-signed rediss → build_with_tls; còn lại webpki roots.
-        let client = if p.ssl && !p.ssl_ca.is_empty() {
+        if p.ssl && !p.ssl_ca.is_empty() {
             let ca = std::fs::read(&p.ssl_ca)
                 .map_err(|e| err(format!("Không đọc được CA cert: {}", p.ssl_ca), e))?;
             redis::Client::build_with_tls(
                 info,
                 redis::TlsCertificates { client_tls: None, root_cert: Some(ca) },
             )
-            .map_err(|e| err("Cấu hình TLS Redis lỗi", e))?
+            .map_err(|e| err("Cấu hình TLS Redis lỗi", e))
         } else {
-            redis::Client::open(info).map_err(|e| err("Redis connection info lỗi", e))?
-        };
-        client
+            redis::Client::open(info).map_err(|e| err("Redis connection info lỗi", e))
+        }
+    }
+
+    async fn open(p: &RedisConnParams) -> Result<redis::aio::MultiplexedConnection, QueryError> {
+        Self::client(p)?
             .get_multiplexed_async_connection()
             .await
             .map_err(|e| err(format!("Không kết nối được Redis {}:{}", p.host, p.port), e))
+    }
+
+    /// Mở connection PUB/SUB riêng (redis pub/sub chiếm trọn 1 connection).
+    pub async fn open_pubsub(p: &RedisConnParams) -> Result<redis::aio::PubSub, QueryError> {
+        Self::client(p)?
+            .get_async_pubsub()
+            .await
+            .map_err(|e| err("Không mở được Redis pub/sub", e))
+    }
+
+    /// PUBLISH channel message → số subscriber nhận.
+    pub async fn publish(&mut self, channel: &str, message: &str) -> Result<i64, QueryError> {
+        redis::cmd("PUBLISH")
+            .arg(channel)
+            .arg(message)
+            .query_async(&mut self.conn)
+            .await
+            .map_err(|e| err("PUBLISH lỗi", e))
     }
 
     pub async fn connect(p: &RedisConnParams) -> Result<Self, QueryError> {
