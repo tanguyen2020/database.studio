@@ -16,7 +16,7 @@
   import { quoteIdent, selectStarSql } from '$lib/sql/dialect'
   import { genCreate, genDelete, genDrop, genInsert, genRename, genSelect, genTruncate, genUpdate } from '$lib/sql/ddl'
   import type { ColumnInfo, RoutineInfo, TableInfo } from '$lib/types'
-  import type { Snippet } from 'svelte'
+  import { untrack, type Snippet } from 'svelte'
 
   const selected = $derived(connections.selected)
   const cache = $derived(selected ? explorer.cache[selected.id] : undefined)
@@ -34,9 +34,13 @@
   let expanded = $state<Set<string>>(new Set())
   let treeSel = $state<string | null>(null)
 
+  // untrack: loadSchemas() đọc+ghi explorer.cache đồng bộ (conn()/track()) → nếu
+  // trong vùng track của effect sẽ read+write cùng $state → effect_update_depth
+  // (kích hoạt khi chọn 1 connection ĐANG kết nối). Xem build-gotchas memory.
   $effect(() => {
-    if (selected?.connected) {
-      void explorer.loadSchemas(selected.id)
+    const s = selected
+    if (s?.connected) {
+      untrack(() => void explorer.loadSchemas(s.id))
     }
   })
 

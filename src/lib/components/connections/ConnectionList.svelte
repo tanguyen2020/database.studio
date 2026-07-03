@@ -76,6 +76,10 @@
   async function openOrToggle(p: ProfilePublic) {
     connections.selectedId = p.id
     if (!p.connected) await connections.connect(p.id)
+    // Redis: mở Key Explorer tab (không phải SQL editor)
+    if (p.system === 'redis' && connections.byId(p.id)?.connected) {
+      tabs.openRedisTab(p.id)
+    }
   }
 
   function newQueryConsole(p?: ProfilePublic | null) {

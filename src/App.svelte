@@ -17,6 +17,7 @@
   import ObjectExplorer from '$lib/components/explorer/ObjectExplorer.svelte'
   import SqlWorkspace from '$lib/components/workspace/SqlWorkspace.svelte'
   import TableViewerTab from '$lib/components/workspace/TableViewerTab.svelte'
+  import RedisWorkspace from '$lib/components/workspace/RedisWorkspace.svelte'
   import HistoryTab from '$lib/components/workspace/HistoryTab.svelte'
   import SavedQueriesTab from '$lib/components/workspace/SavedQueriesTab.svelte'
   import { connections } from '$lib/stores/connections.svelte'
@@ -145,6 +146,8 @@
               <HistoryTab />
             {:else if tabs.active.contentType === 'saved'}
               <SavedQueriesTab />
+            {:else if tabs.active.contentType === 'redis'}
+              <RedisWorkspace tab={tabs.active} />
             {:else}
               <SqlWorkspace tab={tabs.active} />
             {/if}

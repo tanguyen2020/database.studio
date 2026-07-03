@@ -84,6 +84,33 @@ class TabsStore {
     return tab
   }
 
+  /** Redis key browser tab — 1 tab / connection (focus nếu đã mở). */
+  openRedisTab(connectionId: string): TabState {
+    const existing = this.tabs.find(
+      (t) => t.contentType === 'redis' && t.connectionId === connectionId,
+    )
+    if (existing) {
+      this.activeTabId = existing.id
+      return existing
+    }
+    const profile = connections.byId(connectionId)
+    const tab: TabState = {
+      id: uuid(),
+      connectionId,
+      connectionName: profile?.name ?? '',
+      systemType: (profile?.system as SystemType) ?? 'orphan',
+      contentType: 'redis',
+      title: `${profile?.name ?? 'Redis'} · keys`,
+      isPinned: false,
+      isDirty: false,
+      state: {},
+    }
+    this.tabs.push(tab)
+    this.activeTabId = tab.id
+    this.schedulePersist()
+    return tab
+  }
+
   /** Mở (hoặc focus nếu đã có) một tab tiện ích singleton — History / Saved. */
   openUtilityTab(contentType: 'history' | 'saved', title: string): TabState {
     const existing = this.tabs.find((t) => t.contentType === contentType)

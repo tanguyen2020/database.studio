@@ -181,7 +181,7 @@ export interface SequenceInfo {
 // Tabs
 // ---------------------------------------------------------------------------
 
-export type TabContentType = 'sql-editor' | 'table-viewer' | 'history' | 'saved'
+export type TabContentType = 'sql-editor' | 'table-viewer' | 'history' | 'saved' | 'redis'
 
 export interface TabState {
   id: string
