@@ -763,3 +763,50 @@ async fn ssh_tunnel_forwards_and_rejects_bad_auth() {
     assert_eq!(&buf[..n], b"xin chao qua tunnel");
     tunnel.shutdown().await;
 }
+
+// ---------------------------------------------------------------------------
+// Redis (Phase 3 · T2) — connect + AUTH + PING trên container thật
+// ---------------------------------------------------------------------------
+
+async fn start_redis(pass: &str) -> (ContainerAsync<GenericImage>, u16) {
+    let c = GenericImage::new("redis", "7-alpine")
+        .with_exposed_port(6379.tcp())
+        .with_cmd(vec!["redis-server", "--requirepass", pass])
+        .start()
+        .await
+        .expect("start redis container (Docker daemon phải đang chạy)");
+    let port = c.get_host_port_ipv4(6379).await.unwrap();
+    (c, port)
+}
+
+#[tokio::test]
+async fn redis_connect_auth_ping_and_version() {
+    use database_studio_lib::drivers::redis::{RedisConnParams, RedisDriver};
+
+    let (_c, port) = start_redis("test123").await;
+    let params = |pw: &str| RedisConnParams {
+        host: "localhost".into(),
+        port,
+        password: pw.into(),
+        db: 0,
+        ssl: false,
+        ssl_ca: String::new(),
+    };
+
+    // password đúng → connect + PING + INFO version
+    let p_ok = params("test123");
+    let mut drv = retry("redis", || RedisDriver::connect(&p_ok)).await;
+    assert!(drv.ping().await, "PING phải thành công");
+    let t = RedisDriver::test(&p_ok).await;
+    assert!(t.ok, "test connection phải OK");
+    assert!(
+        t.server_version.as_deref().unwrap_or("").starts_with("Redis"),
+        "phải parse được redis_version, nhận: {:?}",
+        t.server_version
+    );
+
+    // password sai/thiếu → NOAUTH, connect phải lỗi
+    let p_bad = params("");
+    let bad = RedisDriver::connect(&p_bad).await;
+    assert!(bad.is_err(), "thiếu password phải bị NOAUTH từ chối");
+}

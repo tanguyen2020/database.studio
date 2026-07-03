@@ -44,6 +44,7 @@
   // hiện Host/Port/Database như prototype; Host = đường dẫn file.
   const isSqlite = $derived(draft?.system === 'sqlite')
   const isMssql = $derived(draft?.system === 'mssql')
+  const isRedis = $derived(draft?.system === 'redis')
   const hostLabel = 'Host' // Kafka/NATS (phase sau): 'Bootstrap servers'/'Servers'
   const hostPlaceholder = $derived(isSqlite ? '/data/local.db' : 'localhost')
   const dbPlaceholder = $derived(draft?.system === 'postgres' ? 'postgres' : '')
@@ -291,10 +292,19 @@
               </div>
             </div>
 
-            <!-- database — port dòng 2205-2207 -->
+            <!-- database — port dòng 2205-2207 (Redis: DB index 0–15 thay tên DB) -->
             <div>
-              <div class="cm-label">Database</div>
-              <input class="cm-input mono" bind:value={draft.database} placeholder={dbPlaceholder} />
+              {#if isRedis}
+                <div class="cm-label">DB Index</div>
+                <select class="cm-input" bind:value={draft.database}>
+                  {#each Array.from({ length: 16 }, (_, i) => String(i)) as n (n)}
+                    <option value={n}>{n}</option>
+                  {/each}
+                </select>
+              {:else}
+                <div class="cm-label">Database</div>
+                <input class="cm-input mono" bind:value={draft.database} placeholder={dbPlaceholder} />
+              {/if}
             </div>
 
             {#if isMssql}
@@ -308,7 +318,7 @@
               </div>
             {/if}
 
-            {#if authShowUser}
+            {#if authShowUser && !isRedis}
               <div>
                 <div class="cm-label">User</div>
                 <input class="cm-input mono" bind:value={draft.user} />

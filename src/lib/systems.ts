@@ -44,7 +44,7 @@ const EXTRA: Record<
   sqlite: { category: 'EMBEDDED', defaultPort: null, quote: 'double', available: true },
   clickhouse: { category: 'ANALYTICAL', defaultPort: 8123, quote: 'backtick', available: true },
   cassandra: { category: 'WIDE COLUMN', defaultPort: 9042, quote: 'double', available: false }, // Phase Cassandra
-  redis: { category: 'CACHE', defaultPort: 6379, quote: null, available: false }, // Phase 3
+  redis: { category: 'CACHE', defaultPort: 6379, quote: null, available: true }, // Phase 3
   kafka: { category: 'STREAMING', defaultPort: 9092, quote: null, available: false }, // Phase 4
   nats: { category: 'STREAMING', defaultPort: 4222, quote: null, available: false }, // Phase 3-4
   orphan: { category: null, defaultPort: null, quote: null, available: false },

@@ -5,6 +5,7 @@ pub mod grid;
 pub mod mssql;
 pub mod mysql;
 pub mod postgres;
+pub mod redis;
 pub mod sqlite;
 pub mod types;
 pub mod util;
@@ -17,6 +18,7 @@ use clickhouse::{ChConnParams, ChDriver};
 use mssql::{MssqlConnParams, MssqlDriver};
 use mysql::{MySqlConnParams, MySqlDriver};
 use postgres::{PgConnParams, PgDriver};
+use redis::{RedisConnParams, RedisDriver};
 use sqlite::{SqliteConnParams, SqliteDriver};
 
 /// Effective network endpoint: profile host/port, or the local end of an SSH
@@ -33,6 +35,7 @@ pub enum LiveConnection {
     MySql(MySqlDriver),
     Mssql(MssqlDriver),
     Sqlite(SqliteDriver),
+    Redis(RedisDriver),
 }
 
 fn pg_params(p: &ConnectionProfile, ep: &Endpoint, password: &str) -> PgConnParams {
@@ -94,6 +97,27 @@ fn sqlite_params(p: &ConnectionProfile) -> SqliteConnParams {
     }
 }
 
+fn redis_params(p: &ConnectionProfile, ep: &Endpoint, password: &str) -> RedisConnParams {
+    RedisConnParams {
+        host: ep.host.clone(),
+        port: ep.port,
+        password: password.to_string(),
+        // DB index dùng lại field `database` (chuỗi "0".."15"); mặc định 0.
+        db: p.database.trim().parse::<i64>().unwrap_or(0),
+        ssl: p.ssl,
+        ssl_ca: p.ssl_ca.clone(),
+    }
+}
+
+/// Lỗi dùng chung cho các thao tác SQL gọi nhầm trên Redis (key-value store).
+fn redis_not_sql() -> QueryError {
+    QueryError::new(
+        "redis",
+        "Redis là key-value store — dùng Key Explorer / CLI, không phải SQL",
+        "sql operation not applicable to redis",
+    )
+}
+
 impl LiveConnection {
     pub async fn connect(
         profile: &ConnectionProfile,
@@ -119,10 +143,13 @@ impl LiveConnection {
             SystemType::Sqlite => Ok(Self::Sqlite(
                 SqliteDriver::connect(&sqlite_params(profile)).await?,
             )),
+            SystemType::Redis => Ok(Self::Redis(
+                RedisDriver::connect(&redis_params(profile, endpoint, password)).await?,
+            )),
             other => Err(QueryError::new(
                 other.as_str(),
-                format!("Hệ {} chưa được hỗ trợ ở Phase 1", other.as_str()),
-                "unsupported system in phase 1",
+                format!("Hệ {} chưa được hỗ trợ", other.as_str()),
+                "unsupported system",
             )),
         }
     }
@@ -143,11 +170,12 @@ impl LiveConnection {
             SystemType::Mssql => MssqlDriver::test(&mssql_params(profile, endpoint, password)).await,
             SystemType::Clickhouse => ChDriver::test(&ch_params(profile, endpoint, password)).await,
             SystemType::Sqlite => SqliteDriver::test(&sqlite_params(profile)).await,
+            SystemType::Redis => RedisDriver::test(&redis_params(profile, endpoint, password)).await,
             other => TestResult {
                 ok: false,
                 latency_ms: None,
                 server_version: None,
-                error: Some(format!("Hệ {} chưa được hỗ trợ ở Phase 1", other.as_str())),
+                error: Some(format!("Hệ {} chưa được hỗ trợ", other.as_str())),
             },
         }
     }
@@ -165,6 +193,7 @@ impl LiveConnection {
             Self::Mssql(d) => Box::pin(d.exec(sql)),
             Self::Sqlite(d) => Box::pin(d.exec(sql)),
             Self::Clickhouse(d) => Box::pin(d.exec(sql)),
+            Self::Redis(_) => Box::pin(async { Err(redis_not_sql()) }),
         }
     }
 
@@ -175,6 +204,7 @@ impl LiveConnection {
             Self::Mssql(d) => d.ping().await,
             Self::Sqlite(d) => d.ping().await,
             Self::Clickhouse(d) => d.ping().await,
+            Self::Redis(d) => d.ping().await,
         }
     }
 
@@ -195,6 +225,7 @@ impl LiveConnection {
                 "Filter builder chưa hỗ trợ ClickHouse ở Phase 2",
                 "clickhouse param select not supported yet",
             )),
+            Self::Redis(_) => Err(redis_not_sql()),
         }
     }
 
@@ -214,6 +245,7 @@ impl LiveConnection {
                 "ClickHouse: sửa dữ liệu là mutation async (ALTER TABLE … UPDATE/DELETE) — dùng ở Phase 5, không commit kiểu OLTP",
                 "editable grid not applicable to clickhouse",
             )),
+            Self::Redis(_) => Err(redis_not_sql()),
         }
     }
 
@@ -226,6 +258,7 @@ impl LiveConnection {
             Self::Mssql(d) => d.schemas().await,
             Self::Sqlite(d) => d.schemas().await,
             Self::Clickhouse(d) => d.schemas().await,
+            Self::Redis(_) => Ok(Vec::new()),
         }
     }
 
@@ -236,6 +269,7 @@ impl LiveConnection {
             Self::Mssql(d) => d.tables(schema).await,
             Self::Sqlite(d) => d.tables(schema).await,
             Self::Clickhouse(d) => d.tables(schema).await,
+            Self::Redis(_) => Ok(Vec::new()),
         }
     }
 
@@ -246,6 +280,7 @@ impl LiveConnection {
             Self::Mssql(d) => d.columns(schema, table).await,
             Self::Sqlite(d) => d.columns(schema, table).await,
             Self::Clickhouse(d) => d.columns(schema, table).await,
+            Self::Redis(_) => Ok(Vec::new()),
         }
     }
 
@@ -256,6 +291,7 @@ impl LiveConnection {
             Self::Mssql(d) => d.indexes(schema, table).await,
             Self::Sqlite(d) => d.indexes(schema, table).await,
             Self::Clickhouse(_) => Ok(Vec::new()), // data-skipping index → Phase 5 Index Scanner
+            Self::Redis(_) => Ok(Vec::new()),
         }
     }
 
@@ -267,6 +303,7 @@ impl LiveConnection {
             // SQLite: PK/unique come from indexes; FKs from foreign_key_list.
             Self::Sqlite(_) => Ok(Vec::new()),
             Self::Clickhouse(_) => Ok(Vec::new()),
+            Self::Redis(_) => Ok(Vec::new()),
         }
     }
 
@@ -277,6 +314,7 @@ impl LiveConnection {
             Self::Mssql(d) => d.routines(schema).await,
             Self::Sqlite(_) => Ok(Vec::new()), // SQLite has no stored routines
             Self::Clickhouse(_) => Ok(Vec::new()), // UDF → Phase 5
+            Self::Redis(_) => Ok(Vec::new()),
         }
     }
 
@@ -287,6 +325,7 @@ impl LiveConnection {
             Self::Mssql(d) => d.triggers(schema).await,
             Self::Sqlite(d) => d.triggers(schema).await,
             Self::Clickhouse(_) => Ok(Vec::new()),
+            Self::Redis(_) => Ok(Vec::new()),
         }
     }
 

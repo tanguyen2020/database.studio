@@ -58,6 +58,14 @@ sqlparser = "0.53"
 # thay crate `clickhouse` vì result set động không hợp API typed-row của crate đó)
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 
+# Redis (Phase 3) — async tokio + rustls TLS (rediss://). CA tùy chọn qua TlsCertificates.
+redis = { version = "0.27", default-features = false, features = [
+  "tokio-comp",
+  "tokio-rustls-comp",
+  "tls-rustls-webpki-roots",
+  "keep-alive",
+] }
+
 # Misc
 uuid = { version = "1", features = ["v4"] }
 thiserror = "2"
