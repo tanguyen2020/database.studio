@@ -99,6 +99,62 @@ pub async fn redis_set_ttl(
     inner.map_err(|e| AppError::Driver(e.message))
 }
 
+/// CLI console: chạy 1 lệnh thô (args đã tách) → RESP text.
+#[tauri::command]
+pub async fn redis_command(
+    state: State<'_, AppState>,
+    conn_id: String,
+    args: Vec<String>,
+) -> Result<String, AppError> {
+    let inner = state
+        .registry
+        .with_driver(&conn_id, move |driver| async move {
+            let mut d = driver.lock().await;
+            match &mut *d {
+                LiveConnection::Redis(r) => r.command(&args).await,
+                _ => Err(not_redis()),
+            }
+        })
+        .await?;
+    inner.map_err(|e| AppError::Driver(e.message))
+}
+
+/// MEMORY USAGE key → bytes (null nếu không tồn tại).
+#[tauri::command]
+pub async fn redis_memory_usage(
+    state: State<'_, AppState>,
+    conn_id: String,
+    key: String,
+) -> Result<Option<u64>, AppError> {
+    let inner = state
+        .registry
+        .with_driver(&conn_id, move |driver| async move {
+            let mut d = driver.lock().await;
+            match &mut *d {
+                LiveConnection::Redis(r) => r.memory_usage(&key).await,
+                _ => Err(not_redis()),
+            }
+        })
+        .await?;
+    inner.map_err(|e| AppError::Driver(e.message))
+}
+
+/// FLUSHDB — xóa toàn bộ DB hiện tại (UI phải confirm gõ tên DB).
+#[tauri::command]
+pub async fn redis_flushdb(state: State<'_, AppState>, conn_id: String) -> Result<(), AppError> {
+    let inner = state
+        .registry
+        .with_driver(&conn_id, move |driver| async move {
+            let mut d = driver.lock().await;
+            match &mut *d {
+                LiveConnection::Redis(r) => r.flushdb().await,
+                _ => Err(not_redis()),
+            }
+        })
+        .await?;
+    inner.map_err(|e| AppError::Driver(e.message))
+}
+
 /// Sửa giá trị theo op per-type (SET/HSET/HDEL/RPUSH/LSET/LREM/SADD/SREM/ZADD/ZREM/XADD/XDEL).
 #[tauri::command]
 pub async fn redis_edit(

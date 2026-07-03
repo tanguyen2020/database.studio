@@ -251,6 +251,41 @@ impl RedisDriver {
         Ok(())
     }
 
+    /// CLI console: chạy 1 lệnh Redis thô (args đã tách) → RESP format text.
+    pub async fn command(&mut self, args: &[String]) -> Result<String, QueryError> {
+        let Some(name) = args.first() else {
+            return Err(err("Lệnh rỗng", "empty command"));
+        };
+        let mut cmd = redis::cmd(name);
+        for a in &args[1..] {
+            cmd.arg(a);
+        }
+        let v: redis::Value = cmd
+            .query_async(&mut self.conn)
+            .await
+            .map_err(|e| err(format!("{} lỗi", name.to_uppercase()), e))?;
+        Ok(format_resp(&v))
+    }
+
+    /// MEMORY USAGE key → bytes (None nếu key không tồn tại).
+    pub async fn memory_usage(&mut self, key: &str) -> Result<Option<u64>, QueryError> {
+        redis::cmd("MEMORY")
+            .arg("USAGE")
+            .arg(key)
+            .query_async(&mut self.conn)
+            .await
+            .map_err(|e| err("MEMORY USAGE lỗi", e))
+    }
+
+    /// FLUSHDB — xóa toàn bộ DB hiện tại.
+    pub async fn flushdb(&mut self) -> Result<(), QueryError> {
+        let _: () = redis::cmd("FLUSHDB")
+            .query_async(&mut self.conn)
+            .await
+            .map_err(|e| err("FLUSHDB lỗi", e))?;
+        Ok(())
+    }
+
     /// Đặt TTL: secs > 0 → EXPIRE; secs <= 0 → PERSIST (bỏ hết hạn).
     pub async fn set_ttl(&mut self, key: &str, secs: i64) -> Result<(), QueryError> {
         if secs > 0 {
@@ -338,6 +373,32 @@ pub enum RedisEditOp {
     ZRem { member: String },
     XAdd { fields: Vec<(String, String)> },
     XDel { id: String },
+}
+
+/// Format redis::Value kiểu RESP cho CLI console (giống redis-cli gọn).
+fn format_resp(v: &redis::Value) -> String {
+    match v {
+        redis::Value::Nil => "(nil)".into(),
+        redis::Value::Int(i) => format!("(integer) {i}"),
+        redis::Value::BulkString(b) => format!("\"{}\"", String::from_utf8_lossy(b)),
+        redis::Value::SimpleString(s) => s.clone(),
+        redis::Value::Okay => "OK".into(),
+        redis::Value::Double(d) => format!("(double) {d}"),
+        redis::Value::Boolean(b) => format!("(boolean) {b}"),
+        redis::Value::Array(items) | redis::Value::Set(items) => {
+            if items.is_empty() {
+                "(empty)".into()
+            } else {
+                items
+                    .iter()
+                    .enumerate()
+                    .map(|(i, it)| format!("{}) {}", i + 1, format_resp(it)))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            }
+        }
+        other => format!("{other:?}"),
+    }
 }
 
 fn val_to_string(v: &redis::Value) -> String {

@@ -29,6 +29,12 @@
   let valLoading = $state(false)
   let valError = $state<string | null>(null)
   let stringDraft = $state('')
+  let selectedMem = $state<number | null>(null)
+  // CLI console
+  let cliInput = $state('')
+  let cliLog = $state<{ cmd: string; out: string; err: boolean }[]>([])
+  let cliHistory = $state<string[]>([])
+  let histIdx = $state(-1)
 
   // màu badge theo type (token đã có trong tokens.css)
   const TYPE_COLOR: Record<string, string> = {
@@ -107,13 +113,36 @@
     selectedValue = null
     valError = null
     valLoading = true
+    selectedMem = null
     try {
       selectedValue = await ipc.redisGet(tab.connectionId, path)
       if (selectedValue.value.kind === 'string') stringDraft = selectedValue.value.value
+      selectedMem = await ipc.redisMemoryUsage(tab.connectionId, path).catch(() => null)
     } catch (e) {
       valError = String(e)
     } finally {
       valLoading = false
+    }
+  }
+
+  function fmtBytes(n: number): string {
+    if (n < 1024) return `${n} B`
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
+    return `${(n / 1024 / 1024).toFixed(1)} MB`
+  }
+
+  async function flushDb() {
+    if (!tab.connectionId) return
+    const ans = window.prompt(`FLUSHDB sẽ XÓA TOÀN BỘ db${dbIndex}. Gõ "db${dbIndex}" để xác nhận:`)
+    if (ans !== `db${dbIndex}`) return
+    try {
+      await ipc.redisFlushDb(tab.connectionId)
+      toasts.success('FLUSHDB — đã xóa toàn bộ DB')
+      selected = null
+      selectedValue = null
+      await load()
+    } catch (e) {
+      toasts.error(`FLUSHDB thất bại: ${e}`)
     }
   }
 
@@ -156,6 +185,55 @@
       void edit({ op: 'xAdd', fields }, 'XADD')
     }
   }
+
+  // tokenizer đơn giản: tách theo khoảng trắng, tôn trọng "double quotes"
+  function tokenize(line: string): string[] {
+    const out: string[] = []
+    const re = /"([^"]*)"|(\S+)/g
+    let m: RegExpExecArray | null
+    while ((m = re.exec(line)) !== null) out.push(m[1] ?? m[2])
+    return out
+  }
+
+  async function runCli() {
+    const line = cliInput.trim()
+    if (!line || !tab.connectionId) return
+    cliHistory = [...cliHistory, line]
+    histIdx = -1
+    cliInput = ''
+    try {
+      const out = await ipc.redisCommand(tab.connectionId, tokenize(line))
+      cliLog = [...cliLog, { cmd: line, out, err: false }]
+    } catch (e) {
+      cliLog = [...cliLog, { cmd: line, out: String(e), err: true }]
+    }
+    // lệnh ghi có thể đổi keyspace → refresh cây + value đang xem
+    void load()
+    if (selected) void selectKey(selected)
+  }
+
+  function cliKeydown(e: KeyboardEvent) {
+    if (e.key === 'Enter') {
+      void runCli()
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      if (cliHistory.length === 0) return
+      histIdx = histIdx < 0 ? cliHistory.length - 1 : Math.max(0, histIdx - 1)
+      cliInput = cliHistory[histIdx]
+    } else if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      if (histIdx < 0) return
+      histIdx = histIdx + 1
+      if (histIdx >= cliHistory.length) {
+        histIdx = -1
+        cliInput = ''
+      } else {
+        cliInput = cliHistory[histIdx]
+      }
+    }
+  }
+
+  const cliPrompt = $derived(`${profile?.host ?? 'localhost'}:${profile?.port ?? 6379}>`)
 
   function delItem(kind: string, id: string) {
     if (kind === 'hash') void edit({ op: 'hDel', field: id }, `HDEL ${id}`)
@@ -242,6 +320,7 @@
       <span style="font-size:var(--px-12);color:var(--text2)">DB</span>
       <span class="mono" style="font-size:var(--px-11);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-3) var(--px-9)">db{dbIndex}</span>
       <span class="mono" style="margin-left:auto;font-size:var(--px-11);color:var(--muted)">SCAN · {dbsize} keys</span>
+      <span onclick={flushDb} onkeydown={(e) => e.key === 'Enter' && flushDb()} role="button" tabindex="0" title="FLUSHDB (xóa toàn bộ DB)" style="flex:none;font-size:var(--px-10_5);color:var(--error);cursor:pointer">Flush</span>
     </div>
     <!-- search pattern -->
     <div style="flex:none;padding:var(--px-6) var(--px-8)">
@@ -305,6 +384,7 @@
         {#if v}
           <span class="mono" style="flex:none;font-size:var(--px-10);font-weight:700;color:{typeColor(v.key_type)};border:var(--px-1) solid {typeColor(v.key_type)};border-radius:var(--px-4);padding:var(--px-1) var(--px-6)">{v.key_type}</span>
           <span class="mono" style="font-size:var(--px-11);color:var(--muted)">TTL {ttlLabel(v.ttl)}</span>
+          {#if selectedMem != null}<span class="mono" style="font-size:var(--px-11);color:var(--muted)" title="MEMORY USAGE">{fmtBytes(selectedMem)}</span>{/if}
         {/if}
         <div style="margin-left:auto;display:flex;gap:var(--px-7)">
           {#if v && v.value.kind !== 'string' && v.value.kind !== 'none'}
@@ -360,5 +440,28 @@
         Chọn một key để xem giá trị
       </div>
     {/if}
+
+    <!-- CLI console — port dòng 706-713 -->
+    <div style="flex:none;border-top:var(--px-1) solid var(--border);background:var(--bg);padding:var(--px-10) var(--px-14);max-height:35%;display:flex;flex-direction:column;min-height:0">
+      <div style="flex:none;font-size:var(--px-10_5);color:var(--muted);text-transform:uppercase;letter-spacing:.06em;font-weight:700;margin-bottom:var(--px-6)">CLI Console</div>
+      {#if cliLog.length > 0}
+        <div class="mono" style="flex:1;overflow:auto;min-height:0;font-size:var(--px-11_5);margin-bottom:var(--px-6)">
+          {#each cliLog as l, i (i)}
+            <div style="color:var(--muted)"><span style="color:#D82C20;font-weight:700">{cliPrompt}</span> {l.cmd}</div>
+            <pre style="margin:0 0 var(--px-4);white-space:pre-wrap;word-break:break-word;color:{l.err ? 'var(--error)' : 'var(--text2)'}">{l.out}</pre>
+          {/each}
+        </div>
+      {/if}
+      <div class="mono" style="flex:none;display:flex;align-items:center;gap:var(--px-8);font-size:var(--px-12)">
+        <span style="color:#D82C20;font-weight:700;flex:none">{cliPrompt}</span>
+        <input
+          bind:value={cliInput}
+          onkeydown={cliKeydown}
+          placeholder="GET key · HSET h f v · SCAN 0 …"
+          class="mono"
+          style="flex:1;background:transparent;border:none;outline:none;color:var(--text);font-size:var(--px-12)"
+        />
+      </div>
+    </div>
   </div>
 </div>

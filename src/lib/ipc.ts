@@ -113,6 +113,15 @@ export type RedisEditOp =
 export const redisEdit = (connId: string, key: string, op: RedisEditOp) =>
   invoke<void>('redis_edit', { connId, key, op })
 
+/** CLI console — run a raw command (args already split), returns RESP text. */
+export const redisCommand = (connId: string, args: string[]) =>
+  invoke<string>('redis_command', { connId, args })
+
+export const redisMemoryUsage = (connId: string, key: string) =>
+  invoke<number | null>('redis_memory_usage', { connId, key })
+
+export const redisFlushDb = (connId: string) => invoke<void>('redis_flushdb', { connId })
+
 // ---- schema (Object Explorer) ----------------------------------------------
 
 export const listSchemas = (connId: string) => invoke<SchemaInfo[]>('list_schemas', { connId })

@@ -23,5 +23,12 @@ test('redis key explorer renders keys from demo scan', async ({ page }) => {
   await page.waitForTimeout(400)
   await expect(page.getByRole('button', { name: 'Delete' })).toBeVisible()
   await expect(page.getByText('an', { exact: true }).first()).toBeVisible()
+
+  // CLI console: gõ PING → thấy phản hồi PONG (T5)
+  const cli = page.getByPlaceholder(/GET key/)
+  await cli.fill('PING')
+  await cli.press('Enter')
+  await page.waitForTimeout(300)
+  await expect(page.getByText('PONG').first()).toBeVisible()
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })

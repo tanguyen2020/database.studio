@@ -887,12 +887,20 @@ async fn redis_connect_auth_ping_and_version() {
         other => panic!("SADD, nhận {other:?}"),
     }
 
+    // CLI command + MEMORY USAGE (T5/T7)
+    assert_eq!(drv.command(&["PING".into()]).await.unwrap(), "PONG");
+    assert!(drv.memory_usage("acct:1").await.unwrap().unwrap_or(0) > 0, "MEMORY USAGE > 0");
+
     // set_ttl (EXPIRE) rồi del
     drv.set_ttl("mylist", 50).await.unwrap();
     let after = drv.get_value("mylist").await.unwrap();
     assert!(after.ttl > 0 && after.ttl <= 50, "TTL sau EXPIRE ~50s, nhận {}", after.ttl);
     assert_eq!(drv.del("mylist").await.unwrap(), 1, "DEL trả 1");
     assert!(matches!(drv.get_value("mylist").await.unwrap().value, RedisValue::None), "key đã xóa → none");
+
+    // FLUSHDB xóa sạch (T7) — làm cuối cùng
+    drv.flushdb().await.unwrap();
+    assert_eq!(drv.dbsize().await.unwrap(), 0, "FLUSHDB → DBSIZE 0");
 
     // password sai/thiếu → NOAUTH, connect phải lỗi
     let p_bad = params("");

@@ -322,7 +322,18 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
       return ok(1)
     case 'redis_set_ttl':
     case 'redis_edit':
+    case 'redis_flushdb':
       return ok(null)
+    case 'redis_command': {
+      const a = (args?.args as string[]) ?? []
+      const cmd = (a[0] ?? '').toUpperCase()
+      if (cmd === 'PING') return ok('PONG')
+      if (cmd === 'GET') return ok('"demo-value"')
+      if (cmd === 'DBSIZE') return ok('(integer) 6')
+      return ok('OK')
+    }
+    case 'redis_memory_usage':
+      return ok(128)
     default:
       return Promise.reject(new Error(`demo: chưa mock command "${cmd}"`))
   }
