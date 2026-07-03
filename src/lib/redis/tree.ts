@@ -1,0 +1,90 @@
+// Redis Key Explorer — dựng cây phân cấp theo separator ':' (port hành vi tree
+// của prototype: user:1, user:2 → folder 'user' → con '1','2'). Hàm thuần để
+// unit-test; component flatten theo tập expanded.
+
+export interface RedisKeyInfo {
+  name: string
+  key_type: string
+  /** giây; -1 = không hết hạn, -2 = không tồn tại */
+  ttl: number
+}
+
+export interface RedisTreeNode {
+  segment: string
+  /** đường dẫn tích lũy (prefix) tới node này */
+  path: string
+  children: RedisTreeNode[]
+  /** set nếu path này CHÍNH LÀ một key (leaf hoặc prefix trùng key) */
+  key?: RedisKeyInfo
+}
+
+/** Dựng rừng cây từ danh sách key, sort segment theo alphabet ở mọi cấp. */
+export function buildRedisTree(keys: RedisKeyInfo[]): RedisTreeNode[] {
+  const root: RedisTreeNode = { segment: '', path: '', children: [] }
+  for (const k of keys) {
+    const segs = k.name.split(':')
+    let node = root
+    let path = ''
+    for (const seg of segs) {
+      path = path ? `${path}:${seg}` : seg
+      let child = node.children.find((c) => c.segment === seg && c.path === path)
+      if (!child) {
+        child = { segment: seg, path, children: [] }
+        node.children.push(child)
+      }
+      node = child
+    }
+    node.key = k
+  }
+  const sortRec = (n: RedisTreeNode) => {
+    n.children.sort((a, b) => a.segment.localeCompare(b.segment))
+    n.children.forEach(sortRec)
+  }
+  sortRec(root)
+  return root.children
+}
+
+export interface RedisFlatRow {
+  kind: 'folder' | 'key'
+  segment: string
+  path: string
+  depth: number
+  expanded: boolean
+  key?: RedisKeyInfo
+  /** số key con (đệ quy) — chỉ folder */
+  count: number
+}
+
+/** Đếm số key (node có .key) trong nhánh, kể cả chính node. */
+function countKeys(n: RedisTreeNode): number {
+  return (n.key ? 1 : 0) + n.children.reduce((s, c) => s + countKeys(c), 0)
+}
+
+/**
+ * Flatten cây thành danh sách hàng để render, tôn trọng tập `expanded` (chứa
+ * path các folder đang mở). Folder = có children; đồng thời có thể là key.
+ */
+export function flattenRedisTree(
+  nodes: RedisTreeNode[],
+  expanded: Set<string>,
+  depth = 0,
+): RedisFlatRow[] {
+  const out: RedisFlatRow[] = []
+  for (const n of nodes) {
+    const isFolder = n.children.length > 0
+    const open = expanded.has(n.path)
+    out.push({
+      kind: isFolder ? 'folder' : 'key',
+      segment: n.segment,
+      path: n.path,
+      depth,
+      expanded: open,
+      key: n.key,
+      count: isFolder ? countKeys(n) : 0,
+    })
+    if (isFolder && open) {
+      out.push(...flattenRedisTree(n.children, expanded, depth + 1))
+    }
+  }
+  return out
+}

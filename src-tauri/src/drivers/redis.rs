@@ -110,4 +110,61 @@ impl RedisDriver {
     pub async fn ping(&mut self) -> bool {
         redis::cmd("PING").query_async::<String>(&mut self.conn).await.is_ok()
     }
+
+    /// Số key trong DB hiện tại (DBSIZE).
+    pub async fn dbsize(&mut self) -> Result<u64, QueryError> {
+        redis::cmd("DBSIZE")
+            .query_async(&mut self.conn)
+            .await
+            .map_err(|e| err("DBSIZE lỗi", e))
+    }
+
+    /// SCAN cursor-based (KHÔNG dùng KEYS *) + TYPE + TTL cho từng key.
+    /// Trả (cursor kế tiếp, keys). cursor = 0 nghĩa là hết vòng.
+    pub async fn scan(
+        &mut self,
+        pattern: &str,
+        cursor: u64,
+        count: usize,
+    ) -> Result<(u64, Vec<RedisKey>), QueryError> {
+        let pat = if pattern.is_empty() { "*" } else { pattern };
+        let (next, names): (u64, Vec<String>) = redis::cmd("SCAN")
+            .arg(cursor)
+            .arg("MATCH")
+            .arg(pat)
+            .arg("COUNT")
+            .arg(count.max(1))
+            .query_async(&mut self.conn)
+            .await
+            .map_err(|e| err("SCAN lỗi", e))?;
+
+        let mut keys = Vec::with_capacity(names.len());
+        for name in names {
+            let key_type: String = redis::cmd("TYPE")
+                .arg(&name)
+                .query_async(&mut self.conn)
+                .await
+                .unwrap_or_else(|_| "none".into());
+            let ttl: i64 = redis::cmd("TTL").arg(&name).query_async(&mut self.conn).await.unwrap_or(-1);
+            keys.push(RedisKey { name, key_type, ttl });
+        }
+        Ok((next, keys))
+    }
+}
+
+/// Một key trong SCAN — tên + kiểu (string/hash/list/set/zset/stream) + TTL giây
+/// (-1 = không hết hạn, -2 = không tồn tại).
+#[derive(Debug, serde::Serialize)]
+pub struct RedisKey {
+    pub name: String,
+    pub key_type: String,
+    pub ttl: i64,
+}
+
+/// Kết quả 1 vòng SCAN gửi ra frontend.
+#[derive(Debug, serde::Serialize)]
+pub struct RedisScan {
+    pub cursor: u64,
+    pub keys: Vec<RedisKey>,
+    pub dbsize: u64,
 }

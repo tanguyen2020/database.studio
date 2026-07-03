@@ -57,6 +57,18 @@ export const execStatement = (connId: string, sql: string, statementIndex?: numb
 export const cancelQuery = (connId: string) =>
   invoke<{ cancelled: boolean }>('cancel_query', { connId })
 
+// ---- redis (Phase 3) --------------------------------------------------------
+
+export interface RedisScanResult {
+  cursor: number
+  keys: { name: string; key_type: string; ttl: number }[]
+  dbsize: number
+}
+
+/** One SCAN round (cursor-based, never KEYS *). cursor 0 = start / finished. */
+export const redisScan = (connId: string, pattern: string, cursor: number, count: number) =>
+  invoke<RedisScanResult>('redis_scan', { connId, pattern, cursor, count })
+
 // ---- schema (Object Explorer) ----------------------------------------------
 
 export const listSchemas = (connId: string) => invoke<SchemaInfo[]>('list_schemas', { connId })

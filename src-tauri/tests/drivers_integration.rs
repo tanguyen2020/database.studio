@@ -805,6 +805,32 @@ async fn redis_connect_auth_ping_and_version() {
         t.server_version
     );
 
+    // Nạp key qua connection thô (redis crate) rồi kiểm SCAN + TYPE + TTL.
+    let client = redis::Client::open(format!("redis://:test123@localhost:{port}/0")).unwrap();
+    let mut raw = client.get_multiplexed_async_connection().await.unwrap();
+    let _: () = redis::cmd("SET").arg("user:1").arg("a").query_async(&mut raw).await.unwrap();
+    let _: () = redis::cmd("SET").arg("user:2").arg("b").query_async(&mut raw).await.unwrap();
+    let _: () = redis::cmd("HSET").arg("acct:1").arg("f").arg("v").query_async(&mut raw).await.unwrap();
+    let _: () = redis::cmd("EXPIRE").arg("user:1").arg(100).query_async(&mut raw).await.unwrap();
+
+    // gom hết key qua nhiều vòng SCAN (cursor tới khi 0)
+    let mut all = Vec::new();
+    let mut cursor = 0u64;
+    loop {
+        let (next, keys) = drv.scan("*", cursor, 100).await.unwrap();
+        all.extend(keys);
+        cursor = next;
+        if cursor == 0 {
+            break;
+        }
+    }
+    let user1 = all.iter().find(|k| k.name == "user:1").expect("phải thấy user:1");
+    assert_eq!(user1.key_type, "string");
+    assert!(user1.ttl > 0 && user1.ttl <= 100, "TTL phải ~100s, nhận {}", user1.ttl);
+    let acct = all.iter().find(|k| k.name == "acct:1").expect("phải thấy acct:1");
+    assert_eq!(acct.key_type, "hash");
+    assert_eq!(acct.ttl, -1, "acct:1 không set TTL → -1");
+
     // password sai/thiếu → NOAUTH, connect phải lỗi
     let p_bad = params("");
     let bad = RedisDriver::connect(&p_bad).await;

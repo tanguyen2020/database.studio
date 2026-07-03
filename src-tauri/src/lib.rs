@@ -40,6 +40,8 @@ pub fn run() {
             // query
             commands::query::exec_statement,
             commands::query::cancel_query,
+            // redis
+            commands::redis::redis_scan,
             // schema
             commands::schema::list_schemas,
             commands::schema::list_tables,

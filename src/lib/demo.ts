@@ -296,6 +296,20 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
       return ok(((args?.changes as unknown[]) ?? []).length)
     case 'exec_filtered':
       return demoInvoke('exec_statement', args)
+    case 'redis_scan':
+      // port key store demo của prototype (user:*, session:*, cache:*)
+      return ok({
+        cursor: 0,
+        dbsize: 6,
+        keys: [
+          { name: 'session:abc123', key_type: 'string', ttl: 42 },
+          { name: 'session:def456', key_type: 'string', ttl: 120 },
+          { name: 'user:1001', key_type: 'hash', ttl: -1 },
+          { name: 'user:1002', key_type: 'hash', ttl: -1 },
+          { name: 'cache:home', key_type: 'string', ttl: 8 },
+          { name: 'leaderboard', key_type: 'zset', ttl: -1 },
+        ],
+      })
     default:
       return Promise.reject(new Error(`demo: chưa mock command "${cmd}"`))
   }
