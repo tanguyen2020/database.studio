@@ -22,6 +22,11 @@
   const isSqlite = $derived(selected?.system === 'sqlite')
   const isMssql = $derived(selected?.system === 'mssql')
   const isPg = $derived(selected?.system === 'postgres')
+  // ClickHouse (clickhouseTree): Databases → Tables/Views — không có
+  // Procs/Triggers/Sequences; Dictionaries/Functions/engine badge → Phase 5
+  const isClickhouse = $derived(selected?.system === 'clickhouse')
+  const showRoutines = $derived(!isSqlite && !isClickhouse)
+  const showTriggers = $derived(!isClickhouse)
   // SQLite lùi 1 cấp vì có file root
   const base = $derived(isSqlite ? 1 : 0)
 
@@ -376,7 +381,7 @@
             {/each}
           {/if}
 
-          {#if !isSqlite}
+          {#if showRoutines}
             <!-- Stored Procedures -->
             {@render row({
               key: `f:${schema.name}:procs`,
@@ -471,6 +476,7 @@
           {/if}
 
           <!-- Triggers -->
+          {#if showTriggers}
           {@render row({
             key: `f:${schema.name}:triggers`,
             depth: base + 1,
@@ -493,6 +499,7 @@
                 meta: `${tg.event} ON ${tg.table}`,
               })}
             {/each}
+          {/if}
           {/if}
 
           {#if isPg}

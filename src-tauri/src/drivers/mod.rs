@@ -1,5 +1,6 @@
 //! Driver layer: one adapter per system, unified behind `LiveConnection`.
 
+pub mod clickhouse;
 pub mod mssql;
 pub mod mysql;
 pub mod postgres;
@@ -11,6 +12,7 @@ use crate::connections::profile::{ConnectionProfile, SqliteMode};
 use crate::drivers::types::*;
 use crate::error::QueryError;
 
+use clickhouse::{ChConnParams, ChDriver};
 use mssql::{MssqlConnParams, MssqlDriver};
 use mysql::{MySqlConnParams, MySqlDriver};
 use postgres::{PgConnParams, PgDriver};
@@ -25,6 +27,7 @@ pub struct Endpoint {
 }
 
 pub enum LiveConnection {
+    Clickhouse(ChDriver),
     Postgres(PgDriver),
     MySql(MySqlDriver),
     Mssql(MssqlDriver),
@@ -65,6 +68,17 @@ fn mssql_params(p: &ConnectionProfile, ep: &Endpoint, password: &str) -> MssqlCo
     }
 }
 
+fn ch_params(p: &ConnectionProfile, ep: &Endpoint, password: &str) -> ChConnParams {
+    ChConnParams {
+        host: ep.host.clone(),
+        port: ep.port,
+        database: if p.database.is_empty() { "default".into() } else { p.database.clone() },
+        user: if p.user.is_empty() { "default".into() } else { p.user.clone() },
+        password: password.to_string(),
+        ssl: p.ssl,
+    }
+}
+
 fn sqlite_params(p: &ConnectionProfile) -> SqliteConnParams {
     SqliteConnParams {
         path: p.sqlite_path.clone(),
@@ -91,6 +105,9 @@ impl LiveConnection {
             SystemType::Mssql => Ok(Self::Mssql(
                 MssqlDriver::connect(&mssql_params(profile, endpoint, password)).await?,
             )),
+            SystemType::Clickhouse => Ok(Self::Clickhouse(
+                ChDriver::connect(&ch_params(profile, endpoint, password)).await?,
+            )),
             SystemType::Sqlite => Ok(Self::Sqlite(
                 SqliteDriver::connect(&sqlite_params(profile)).await?,
             )),
@@ -116,6 +133,7 @@ impl LiveConnection {
                 MySqlDriver::test(&mysql_params(profile, endpoint, password), "mariadb").await
             }
             SystemType::Mssql => MssqlDriver::test(&mssql_params(profile, endpoint, password)).await,
+            SystemType::Clickhouse => ChDriver::test(&ch_params(profile, endpoint, password)).await,
             SystemType::Sqlite => SqliteDriver::test(&sqlite_params(profile)).await,
             other => TestResult {
                 ok: false,
@@ -138,6 +156,7 @@ impl LiveConnection {
             Self::MySql(d) => Box::pin(d.exec(sql)),
             Self::Mssql(d) => Box::pin(d.exec(sql)),
             Self::Sqlite(d) => Box::pin(d.exec(sql)),
+            Self::Clickhouse(d) => Box::pin(d.exec(sql)),
         }
     }
 
@@ -147,6 +166,7 @@ impl LiveConnection {
             Self::MySql(d) => d.ping().await,
             Self::Mssql(d) => d.ping().await,
             Self::Sqlite(d) => d.ping().await,
+            Self::Clickhouse(d) => d.ping().await,
         }
     }
 
@@ -158,6 +178,7 @@ impl LiveConnection {
             Self::MySql(d) => d.schemas().await,
             Self::Mssql(d) => d.schemas().await,
             Self::Sqlite(d) => d.schemas().await,
+            Self::Clickhouse(d) => d.schemas().await,
         }
     }
 
@@ -167,6 +188,7 @@ impl LiveConnection {
             Self::MySql(d) => d.tables(schema).await,
             Self::Mssql(d) => d.tables(schema).await,
             Self::Sqlite(d) => d.tables(schema).await,
+            Self::Clickhouse(d) => d.tables(schema).await,
         }
     }
 
@@ -176,6 +198,7 @@ impl LiveConnection {
             Self::MySql(d) => d.columns(schema, table).await,
             Self::Mssql(d) => d.columns(schema, table).await,
             Self::Sqlite(d) => d.columns(schema, table).await,
+            Self::Clickhouse(d) => d.columns(schema, table).await,
         }
     }
 
@@ -185,6 +208,7 @@ impl LiveConnection {
             Self::MySql(d) => d.indexes(schema, table).await,
             Self::Mssql(d) => d.indexes(schema, table).await,
             Self::Sqlite(d) => d.indexes(schema, table).await,
+            Self::Clickhouse(_) => Ok(Vec::new()), // data-skipping index → Phase 5 Index Scanner
         }
     }
 
@@ -195,6 +219,7 @@ impl LiveConnection {
             Self::Mssql(d) => d.constraints(schema, table).await,
             // SQLite: PK/unique come from indexes; FKs from foreign_key_list.
             Self::Sqlite(_) => Ok(Vec::new()),
+            Self::Clickhouse(_) => Ok(Vec::new()),
         }
     }
 
@@ -204,6 +229,7 @@ impl LiveConnection {
             Self::MySql(d) => d.routines(schema).await,
             Self::Mssql(d) => d.routines(schema).await,
             Self::Sqlite(_) => Ok(Vec::new()), // SQLite has no stored routines
+            Self::Clickhouse(_) => Ok(Vec::new()), // UDF → Phase 5
         }
     }
 
@@ -213,6 +239,7 @@ impl LiveConnection {
             Self::MySql(d) => d.triggers(schema).await,
             Self::Mssql(d) => d.triggers(schema).await,
             Self::Sqlite(d) => d.triggers(schema).await,
+            Self::Clickhouse(_) => Ok(Vec::new()),
         }
     }
 

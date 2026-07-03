@@ -42,7 +42,7 @@ const EXTRA: Record<
   mariadb: { category: 'RELATIONAL', defaultPort: 3306, quote: 'backtick', available: true },
   mssql: { category: 'RELATIONAL', defaultPort: 1433, quote: 'bracket', available: true },
   sqlite: { category: 'EMBEDDED', defaultPort: null, quote: 'double', available: true },
-  clickhouse: { category: 'ANALYTICAL', defaultPort: 8123, quote: 'backtick', available: false }, // Phase 2
+  clickhouse: { category: 'ANALYTICAL', defaultPort: 8123, quote: 'backtick', available: true },
   cassandra: { category: 'WIDE COLUMN', defaultPort: 9042, quote: 'double', available: false }, // Phase Cassandra
   redis: { category: 'CACHE', defaultPort: 6379, quote: null, available: false }, // Phase 3
   kafka: { category: 'STREAMING', defaultPort: 9092, quote: null, available: false }, // Phase 4

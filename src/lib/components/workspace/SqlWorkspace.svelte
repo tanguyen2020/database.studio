@@ -3,6 +3,7 @@
   // + CodeMirror + resizable split + result panel. Run is selection-aware (F5),
   // Ctrl+Enter runs the statement at the cursor.
   import SqlEditor from '$lib/components/editor/SqlEditor.svelte'
+  import SqliteFileHeader from './SqliteFileHeader.svelte'
   import ResultPanel from '$lib/components/results/ResultPanel.svelte'
   import SystemBadge from '$lib/components/SystemBadge.svelte'
   import SystemIcon from '$lib/components/SystemIcon.svelte'
@@ -206,6 +207,16 @@
         style="margin-left:auto;color:var(--primary);cursor:pointer"
       >Reconnect</div>
     </div>
+  {/if}
+
+  {#if tab.systemType === 'sqlite' && profile?.connected && tab.connectionId}
+    <!-- SQLite file header + PRAGMA panel — dòng 197-227 -->
+    <SqliteFileHeader
+      connId={tab.connectionId}
+      onRunSql={(sqlText) => {
+        void results.run(tab.id, tab.connectionId!, splitStatements(sqlText))
+      }}
+    />
   {/if}
 
   <!-- editor toolbar — port dòng 230-262 -->

@@ -401,3 +401,123 @@ fn hint_for(raw: &str) -> Option<String> {
     };
     Some(hint.to_string())
 }
+
+// ---------------------------------------------------------------------------
+// PRAGMA panel (Phase 2 — README §"SQLite file header + PRAGMA panel"):
+// editable journal_mode/synchronous/foreign_keys/auto_vacuum (whitelist),
+// read-only cache_size/page_size/page_count + size + version + WAL.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SqliteFileInfo {
+    pub path: String,
+    pub size_bytes: u64,
+    pub version: String,
+    pub journal_mode: String,
+    pub synchronous: String,
+    pub foreign_keys: String,
+    pub auto_vacuum: String,
+    pub cache_size: String,
+    pub page_size: String,
+    pub page_count: String,
+}
+
+/// PRAGMA được phép sửa từ panel — whitelist cứng, value được validate,
+/// KHÔNG bao giờ nối chuỗi tự do vào câu PRAGMA.
+const EDITABLE_PRAGMAS: &[(&str, &[&str])] = &[
+    ("journal_mode", &["delete", "truncate", "persist", "memory", "wal", "off"]),
+    ("synchronous", &["off", "normal", "full", "extra", "0", "1", "2", "3"]),
+    ("foreign_keys", &["on", "off", "0", "1", "true", "false"]),
+    ("auto_vacuum", &["none", "full", "incremental", "0", "1", "2"]),
+];
+
+fn synchronous_label(v: i64) -> String {
+    match v {
+        0 => "OFF".into(),
+        1 => "NORMAL".into(),
+        2 => "FULL".into(),
+        3 => "EXTRA".into(),
+        other => other.to_string(),
+    }
+}
+
+fn auto_vacuum_label(v: i64) -> String {
+    match v {
+        0 => "NONE".into(),
+        1 => "FULL".into(),
+        2 => "INCREMENTAL".into(),
+        other => other.to_string(),
+    }
+}
+
+impl SqliteDriver {
+    pub async fn file_info(&self) -> Result<SqliteFileInfo, QueryError> {
+        let path = self.path.clone();
+        self.with_conn(move |c| {
+            let q = |sql: &str| -> Result<String, QueryError> {
+                c.query_row(sql, [], |r| r.get::<_, rusqlite::types::Value>(0))
+                    .map(|v| match v {
+                        rusqlite::types::Value::Text(s) => s,
+                        rusqlite::types::Value::Integer(i) => i.to_string(),
+                        other => format!("{other:?}"),
+                    })
+                    .map_err(|e| map_rusqlite_error(&e))
+            };
+            let sync_raw: i64 = q("PRAGMA synchronous")?.parse().unwrap_or(-1);
+            let av_raw: i64 = q("PRAGMA auto_vacuum")?.parse().unwrap_or(-1);
+            let fk = if q("PRAGMA foreign_keys")? == "1" { "ON" } else { "OFF" };
+            let size_bytes = if path.is_empty() {
+                0
+            } else {
+                std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0)
+            };
+            Ok(SqliteFileInfo {
+                path: path.clone(),
+                size_bytes,
+                version: q("SELECT sqlite_version()")?,
+                journal_mode: q("PRAGMA journal_mode")?.to_uppercase(),
+                synchronous: synchronous_label(sync_raw),
+                foreign_keys: fk.to_string(),
+                auto_vacuum: auto_vacuum_label(av_raw),
+                cache_size: q("PRAGMA cache_size")?,
+                page_size: q("PRAGMA page_size")?,
+                page_count: q("PRAGMA page_count")?,
+            })
+        })
+        .await
+    }
+
+    pub async fn set_pragma(&self, key: &str, value: &str) -> Result<(), QueryError> {
+        let key = key.to_lowercase();
+        let value = value.to_lowercase();
+        let allowed = EDITABLE_PRAGMAS
+            .iter()
+            .find(|(k, _)| *k == key)
+            .ok_or_else(|| {
+                QueryError::new("sqlite", format!("PRAGMA '{key}' không được phép sửa từ panel"), "")
+            })?;
+        if !allowed.1.contains(&value.as_str()) {
+            return Err(QueryError::new(
+                "sqlite",
+                format!("Giá trị '{value}' không hợp lệ cho PRAGMA {key}"),
+                "",
+            ));
+        }
+        self.with_conn(move |c| {
+            // journal_mode trả về row → dùng query thay execute
+            c.pragma_update(None, &key, &value).map_err(|e| map_rusqlite_error(&e))
+        })
+        .await
+    }
+
+    pub async fn integrity_check(&self) -> Result<Vec<String>, QueryError> {
+        self.with_conn(|c| {
+            let mut stmt = c.prepare("PRAGMA integrity_check").map_err(|e| map_rusqlite_error(&e))?;
+            let rows = stmt
+                .query_map([], |r| r.get::<_, String>(0))
+                .map_err(|e| map_rusqlite_error(&e))?;
+            rows.collect::<Result<Vec<_>, _>>().map_err(|e| map_rusqlite_error(&e))
+        })
+        .await
+    }
+}

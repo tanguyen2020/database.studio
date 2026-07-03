@@ -52,6 +52,10 @@ pub fn run() {
             commands::files::write_text_file,
             // lint tầng 1
             commands::lint::lint_sql,
+            // SQLite PRAGMA panel
+            commands::sqlite::sqlite_file_info,
+            commands::sqlite::sqlite_set_pragma,
+            commands::sqlite::sqlite_integrity_check,
             // tabs + app state
             commands::tabs::save_tabs,
             commands::tabs::load_tabs,

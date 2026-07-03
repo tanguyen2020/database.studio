@@ -9,6 +9,7 @@
 use std::time::{Duration, Instant};
 
 use database_studio_lib::connections::profile::SqliteMode;
+use database_studio_lib::drivers::clickhouse::{ChConnParams, ChDriver};
 use database_studio_lib::drivers::mssql::{MssqlConnParams, MssqlDriver};
 use database_studio_lib::drivers::mysql::{MySqlConnParams, MySqlDriver};
 use database_studio_lib::drivers::postgres::{PgConnParams, PgDriver};
@@ -203,6 +204,78 @@ async fn mssql_roundtrip_and_line_error() {
 }
 
 // ---------------------------------------------------------------------------
+// ClickHouse — HTTP 8123, kiểu dữ liệu cột + total ước lượng + lỗi có code
+// (Phase 2 basics — CLICKHOUSE_SPEC_ADDENDUM)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn clickhouse_roundtrip_types_and_errors() {
+    let c = GenericImage::new("clickhouse/clickhouse-server", "24.8")
+        .with_exposed_port(8123.tcp())
+        .with_env_var("CLICKHOUSE_PASSWORD", PASS)
+        .start()
+        .await
+        .expect("start clickhouse container");
+    let port = c.get_host_port_ipv4(8123).await.unwrap();
+    let params = ChConnParams {
+        host: "localhost".into(),
+        port,
+        database: "default".into(),
+        user: "default".into(),
+        password: PASS.into(),
+        ssl: false,
+    };
+    let mut drv = retry("clickhouse", || ChDriver::connect(&params)).await;
+
+    // DDL MergeTree + kiểu đặc thù CH
+    drv.exec(
+        "CREATE TABLE it_events (d Date, kind LowCardinality(String), note Nullable(String), n UInt64) \
+         ENGINE = MergeTree ORDER BY n",
+    )
+    .await
+    .unwrap();
+    let ins = drv
+        .exec("INSERT INTO it_events VALUES ('2026-07-01','click',NULL,1),('2026-07-02','view','ok',2)")
+        .await
+        .unwrap();
+    assert!(matches!(ins, StatementOutcome::Affected { affected: 2 }), "{ins:?}");
+
+    // SELECT: kiểu cột render đúng (LowCardinality/Nullable), NULL giữ nguyên
+    let out = drv.exec("SELECT kind, note, n FROM it_events ORDER BY n").await.unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    assert_eq!(result.total, 2);
+    let types: Vec<&str> = result.cols.iter().map(|c| c.1.as_str()).collect();
+    assert!(types.contains(&"LowCardinality(String)"), "{types:?}");
+    assert!(types.contains(&"Nullable(String)"), "{types:?}");
+    assert!(result.rows[0]["note"].is_null(), "Nullable NULL phải giữ nguyên");
+
+    // total = rows_before_limit (ước lượng server) khi có LIMIT
+    let out = drv.exec("SELECT n FROM it_events ORDER BY n LIMIT 1").await.unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    assert_eq!(result.rows.len(), 1);
+    assert!(result.total >= 2, "total phải là ước lượng trước LIMIT, got {}", result.total);
+
+    // lỗi có code (60 = UNKNOWN_TABLE) + hint + raw
+    let err = drv.exec("SELECT * FROM khong_ton_tai").await.expect_err("phải fail");
+    assert_eq!(err.code.as_deref(), Some("60"), "{err:?}");
+    assert!(err.hint.is_some());
+    assert!(!err.raw.is_empty());
+
+    // introspection cơ bản
+    let schemas = drv.schemas().await.unwrap();
+    assert!(schemas.iter().any(|s| s.name == "default" && s.is_default));
+    assert!(schemas.iter().any(|s| s.name == "system"));
+    let tables = drv.tables("default").await.unwrap();
+    let t = tables.iter().find(|t| t.name == "it_events").expect("bảng vừa tạo");
+    assert_eq!(t.kind, "table");
+    let cols = drv.columns("default", "it_events").await.unwrap();
+    let note = cols.iter().find(|c| c.name == "note").unwrap();
+    assert!(note.nullable, "Nullable(...) → nullable=true");
+    let n = cols.iter().find(|c| c.name == "n").unwrap();
+    assert!(n.is_pk, "ORDER BY key → is_in_primary_key");
+}
+
+// ---------------------------------------------------------------------------
 // SQLite — file thật + in-memory, đủ 3 mode (không cần container)
 // ---------------------------------------------------------------------------
 
@@ -243,6 +316,43 @@ async fn sqlite_file_modes_and_errors() {
         .unwrap();
     let err = mem.exec("SELECT * FROM t").await.expect_err("in-memory không thấy bảng file");
     assert!(err.message.contains("no such table"));
+}
+
+#[tokio::test]
+async fn sqlite_pragma_panel_round_trip() {
+    let dir = std::env::temp_dir().join("ds-it-sqlite");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("pragma.db");
+    let _ = std::fs::remove_file(&path);
+
+    let drv = SqliteDriver::connect(&SqliteConnParams {
+        path: path.to_string_lossy().to_string(),
+        mode: SqliteMode::ReadWrite,
+    })
+    .await
+    .unwrap();
+    drv.exec("CREATE TABLE t (id INTEGER PRIMARY KEY)").await.unwrap();
+
+    // file_info đọc pragma thật
+    let info = drv.file_info().await.unwrap();
+    assert_eq!(info.version.split('.').count(), 3, "sqlite_version dạng x.y.z");
+    assert!(!info.page_size.is_empty());
+
+    // đổi journal_mode → WAL, đọc lại phải đúng (round-trip)
+    drv.set_pragma("journal_mode", "wal").await.unwrap();
+    let info = drv.file_info().await.unwrap();
+    assert_eq!(info.journal_mode, "WAL");
+
+    // foreign_keys ON
+    drv.set_pragma("foreign_keys", "on").await.unwrap();
+    assert_eq!(drv.file_info().await.unwrap().foreign_keys, "ON");
+
+    // whitelist: key lạ / value lạ phải bị chặn (không nối chuỗi tự do)
+    assert!(drv.set_pragma("secure_delete", "on").await.is_err(), "key ngoài whitelist");
+    assert!(drv.set_pragma("journal_mode", "hacked; DROP TABLE t").await.is_err());
+
+    // integrity_check → ok
+    assert_eq!(drv.integrity_check().await.unwrap(), vec!["ok".to_string()]);
 }
 
 #[tokio::test]
