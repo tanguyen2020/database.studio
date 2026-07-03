@@ -90,6 +90,31 @@ impl SqliteDriver {
         .map_err(|e| QueryError::new("sqlite", e.to_string(), e.to_string()))?
     }
 
+    /// Editable grid: pending changes trong 1 transaction (rollback nếu lỗi).
+    /// rusqlite dynamic typing → bind JSON tự nhiên; unchecked_transaction cho
+    /// phép mở tx trên &Connection (đang giữ trong Arc<Mutex>).
+    pub async fn apply_changes(
+        &self,
+        changes: Vec<crate::drivers::grid::GridChange>,
+    ) -> Result<u64, QueryError> {
+        self.with_conn(move |c| {
+            let tx = c.unchecked_transaction().map_err(|e| map_rusqlite_error(&e))?;
+            let mut total = 0u64;
+            for ch in &changes {
+                let stmt = crate::drivers::grid::build("sqlite", ch);
+                let binds: Vec<rusqlite::types::Value> =
+                    stmt.params.iter().map(json_to_sqlite).collect();
+                let n = tx
+                    .execute(&stmt.sql, rusqlite::params_from_iter(binds.iter()))
+                    .map_err(|e| map_rusqlite_error(&e))?;
+                total += n as u64;
+            }
+            tx.commit().map_err(|e| map_rusqlite_error(&e))?;
+            Ok(total)
+        })
+        .await
+    }
+
     pub async fn exec(&self, sql: &str) -> Result<StatementOutcome, QueryError> {
         let sql = sql.to_string();
         self.with_conn(move |c| {
@@ -519,5 +544,20 @@ impl SqliteDriver {
             rows.collect::<Result<Vec<_>, _>>().map_err(|e| map_rusqlite_error(&e))
         })
         .await
+    }
+}
+
+/// JSON scalar → rusqlite Value (dynamic typing khớp mọi cột).
+fn json_to_sqlite(v: &serde_json::Value) -> rusqlite::types::Value {
+    use rusqlite::types::Value as SV;
+    use serde_json::Value as JV;
+    match v {
+        JV::Null => SV::Null,
+        JV::Bool(b) => SV::Integer(if *b { 1 } else { 0 }),
+        JV::Number(num) if num.is_i64() => SV::Integer(num.as_i64().unwrap()),
+        JV::Number(num) if num.is_u64() => SV::Integer(num.as_u64().unwrap() as i64),
+        JV::Number(num) => SV::Real(num.as_f64().unwrap_or(0.0)),
+        JV::String(s) => SV::Text(s.clone()),
+        other => SV::Text(other.to_string()),
     }
 }

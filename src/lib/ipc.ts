@@ -123,6 +123,24 @@ export const listHistory = (opts?: { connId?: string; search?: string; limit?: n
     limit: opts?.limit ?? null,
   })
 
+// ---- editable grid ----------------------------------------------------------
+
+export type GridChange =
+  | { kind: 'update'; schema: string | null; table: string; pk: GridCol[]; set: GridCol[] }
+  | { kind: 'insert'; schema: string | null; table: string; values: GridCol[] }
+  | { kind: 'delete'; schema: string | null; table: string; pk: GridCol[] }
+
+export interface GridCol {
+  name: string
+  value: unknown
+}
+
+export const previewGridChanges = (connId: string, changes: GridChange[]) =>
+  invoke<string[]>('preview_grid_changes', { connId, changes })
+
+export const applyGridChanges = (connId: string, changes: GridChange[]) =>
+  invoke<number>('apply_grid_changes', { connId, changes })
+
 export const listSnippets = () => invoke<Snippet[]>('list_snippets')
 
 export const saveSnippet = (snippet: Snippet) => invoke<void>('save_snippet', { snippet })

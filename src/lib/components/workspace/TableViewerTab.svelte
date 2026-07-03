@@ -2,9 +2,9 @@
   // Table Data Viewer (Phase-1 basic): opened by double-clicking a table in
   // the explorer. Runs a dialect-correct preview SELECT through the real
   // driver and reuses the result grid. Filter builder → Phase 2.
-  import ResultGrid from '$lib/components/results/ResultGrid.svelte'
+  import ResultGrid, { type EditTarget } from '$lib/components/results/ResultGrid.svelte'
   import SystemBadge from '$lib/components/SystemBadge.svelte'
-  import { execStatement } from '$lib/ipc'
+  import { execStatement, listColumns } from '$lib/ipc'
   import { connections } from '$lib/stores/connections.svelte'
   import { selectStarSql } from '$lib/sql/dialect'
   import type { QueryError, QueryResultSet, TabState } from '$lib/types'
@@ -27,6 +27,22 @@
   let loading = $state(false)
   let durationMs = $state(0)
   let limit = $state(500)
+  let pkCols = $state<string[]>([])
+
+  // editable grid: mở data table đầy đủ schema/table/PK → cho phép sửa (spec §5).
+  // ClickHouse là mutation async → tắt inline-edit (route Phase 5).
+  const editTarget = $derived<EditTarget | undefined>(
+    profile && profile.system !== 'clickhouse' && tab.connectionId
+      ? {
+          connId: tab.connectionId,
+          system: profile.system,
+          schema,
+          table,
+          pkCols,
+          onApplied: () => void load(),
+        }
+      : undefined,
+  )
 
   async function load() {
     if (!tab.connectionId || !profile) return
@@ -42,6 +58,13 @@
       durationMs = res.duration_ms
       if (res.ok && res.result) {
         data = res.result
+        // PK cho editable grid (WHERE khi UPDATE/DELETE)
+        try {
+          const cols = await listColumns(tab.connectionId, schema, table)
+          pkCols = cols.filter((c) => c.is_pk).map((c) => c.name)
+        } catch {
+          pkCols = []
+        }
       } else if (res.error) {
         error = res.error
       }
@@ -106,7 +129,7 @@
         {/if}
       </div>
     {:else if data}
-      <ResultGrid {data} />
+      <ResultGrid {data} {editTarget} />
     {:else}
       <div style="flex:1;display:flex;align-items:center;justify-content:center;font-size:var(--px-12);color:var(--muted)">
         {profile ? 'Không có dữ liệu' : 'Connection không tồn tại'}

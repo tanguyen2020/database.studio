@@ -61,6 +61,9 @@ pub fn run() {
             commands::library::list_snippets,
             commands::library::save_snippet,
             commands::library::delete_snippet,
+            // editable grid
+            commands::grid::preview_grid_changes,
+            commands::grid::apply_grid_changes,
             // tabs + app state
             commands::tabs::save_tabs,
             commands::tabs::load_tabs,

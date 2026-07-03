@@ -127,6 +127,37 @@ impl MssqlDriver {
         self.client.simple_query("SELECT 1").await.is_ok()
     }
 
+    /// Editable grid: pending changes trong 1 transaction (BEGIN TRAN/COMMIT/
+    /// ROLLBACK). Param @P1.. bind qua tiberius ToSql (không nối chuỗi).
+    pub async fn apply_changes(
+        &mut self,
+        changes: &[crate::drivers::grid::GridChange],
+    ) -> Result<u64, QueryError> {
+        self.client
+            .simple_query("BEGIN TRANSACTION")
+            .await
+            .map_err(|e| map_error(&e))?;
+        let mut total = 0u64;
+        for ch in changes {
+            let stmt = crate::drivers::grid::build("mssql", ch);
+            let owned: Vec<MssqlParam> = stmt.params.iter().map(MssqlParam::from_json).collect();
+            let refs: Vec<&dyn tiberius::ToSql> =
+                owned.iter().map(|p| p as &dyn tiberius::ToSql).collect();
+            match self.client.execute(&stmt.sql, &refs).await {
+                Ok(res) => total += res.total(),
+                Err(e) => {
+                    let _ = self.client.simple_query("ROLLBACK").await;
+                    return Err(map_error(&e));
+                }
+            }
+        }
+        self.client
+            .simple_query("COMMIT")
+            .await
+            .map_err(|e| map_error(&e))?;
+        Ok(total)
+    }
+
     // ---- introspection ------------------------------------------------------
 
     pub async fn schemas(&mut self) -> Result<Vec<SchemaInfo>, QueryError> {
@@ -589,4 +620,41 @@ fn hint_for_code(code: u32) -> Option<String> {
         _ => return None,
     };
     Some(hint.to_string())
+}
+
+/// Owned param cho tiberius (homogeneous slice) — bind JSON scalar.
+enum MssqlParam {
+    Null,
+    Int(i64),
+    Float(f64),
+    Bool(bool),
+    Str(String),
+}
+
+impl MssqlParam {
+    fn from_json(v: &Value) -> Self {
+        match v {
+            Value::Null => MssqlParam::Null,
+            Value::Bool(b) => MssqlParam::Bool(*b),
+            Value::Number(n) if n.is_i64() => MssqlParam::Int(n.as_i64().unwrap()),
+            Value::Number(n) if n.is_u64() => MssqlParam::Int(n.as_u64().unwrap() as i64),
+            Value::Number(n) => MssqlParam::Float(n.as_f64().unwrap()),
+            Value::String(s) => MssqlParam::Str(s.clone()),
+            other => MssqlParam::Str(other.to_string()),
+        }
+    }
+}
+
+impl tiberius::ToSql for MssqlParam {
+    fn to_sql(&self) -> tiberius::ColumnData<'_> {
+        use std::borrow::Cow;
+        use tiberius::ColumnData;
+        match self {
+            MssqlParam::Null => ColumnData::String(None),
+            MssqlParam::Int(i) => ColumnData::I64(Some(*i)),
+            MssqlParam::Float(f) => ColumnData::F64(Some(*f)),
+            MssqlParam::Bool(b) => ColumnData::Bit(Some(*b)),
+            MssqlParam::Str(s) => ColumnData::String(Some(Cow::Borrowed(s.as_str()))),
+        }
+    }
 }

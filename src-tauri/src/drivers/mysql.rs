@@ -102,6 +102,31 @@ impl MySqlDriver {
         self.conn.ping().await.is_ok()
     }
 
+    /// Editable grid: pending changes trong 1 transaction (rollback nếu lỗi).
+    pub async fn apply_changes(
+        &mut self,
+        changes: &[crate::drivers::grid::GridChange],
+    ) -> Result<u64, QueryError> {
+        execute(&mut self.conn, "START TRANSACTION")
+            .await
+            .map_err(|e| map_exec_error(self.system, &e))?;
+        let mut total = 0u64;
+        for ch in changes {
+            let stmt = crate::drivers::grid::build(self.system, ch);
+            match mysql_apply_one(&mut self.conn, &stmt.sql, &stmt.params).await {
+                Ok(n) => total += n,
+                Err(e) => {
+                    let _ = execute(&mut self.conn, "ROLLBACK").await;
+                    return Err(map_exec_error(self.system, &e));
+                }
+            }
+        }
+        execute(&mut self.conn, "COMMIT")
+            .await
+            .map_err(|e| map_exec_error(self.system, &e))?;
+        Ok(total)
+    }
+
     // ---- introspection ------------------------------------------------------
     // MySQL "schema" == database. The explorer shows the current database as
     // the single schema node (plus others the user can access).
@@ -313,6 +338,27 @@ async fn fetch_all(
     sql: &str,
 ) -> Result<Vec<sqlx::mysql::MySqlRow>, sqlx::Error> {
     sqlx::query(sql).fetch_all(conn).await
+}
+
+async fn mysql_apply_one(
+    conn: &mut MySqlConnection,
+    sql: &str,
+    params: &[serde_json::Value],
+) -> Result<u64, sqlx::Error> {
+    use serde_json::Value;
+    let mut q = sqlx::query(sql);
+    for p in params {
+        q = match p {
+            Value::Null => q.bind(Option::<String>::None),
+            Value::Bool(b) => q.bind(*b),
+            Value::Number(num) if num.is_i64() => q.bind(num.as_i64().unwrap()),
+            Value::Number(num) if num.is_u64() => q.bind(num.as_u64().unwrap() as i64),
+            Value::Number(num) => q.bind(num.as_f64().unwrap()),
+            Value::String(s) => q.bind(s.clone()),
+            other => q.bind(other.to_string()),
+        };
+    }
+    Ok(q.execute(conn).await?.rows_affected())
 }
 
 async fn execute(

@@ -319,6 +319,127 @@ async fn sqlite_file_modes_and_errors() {
 }
 
 #[tokio::test]
+async fn sqlite_editable_grid_apply_and_rollback() {
+    use database_studio_lib::drivers::grid::{Col, GridChange};
+    use serde_json::json;
+
+    let mem = SqliteDriver::connect(&SqliteConnParams { path: String::new(), mode: SqliteMode::InMemory })
+        .await
+        .unwrap();
+    mem.exec("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT, n INTEGER)").await.unwrap();
+    mem.exec("INSERT INTO t VALUES (1,'a',10),(2,'b',20)").await.unwrap();
+
+    // INSERT + UPDATE + DELETE trong 1 transaction
+    let n = mem
+        .apply_changes(vec![
+            GridChange::Insert {
+                schema: None,
+                table: "t".into(),
+                values: vec![
+                    Col { name: "id".into(), value: json!(3) },
+                    Col { name: "name".into(), value: json!("c") },
+                    Col { name: "n".into(), value: json!(30) },
+                ],
+            },
+            GridChange::Update {
+                schema: None,
+                table: "t".into(),
+                pk: vec![Col { name: "id".into(), value: json!(1) }],
+                set: vec![Col { name: "name".into(), value: json!("A") }],
+            },
+            GridChange::Delete {
+                schema: None,
+                table: "t".into(),
+                pk: vec![Col { name: "id".into(), value: json!(2) }],
+            },
+        ])
+        .await
+        .unwrap();
+    assert_eq!(n, 3);
+
+    let out = mem.exec("SELECT id, name FROM t ORDER BY id").await.unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!("rows") };
+    assert_eq!(result.total, 2); // 2 gốc - 1 xóa + 1 thêm
+    assert_eq!(result.rows[0]["name"], json!("A")); // update áp dụng
+    assert_eq!(result.rows[1]["id"], json!(3)); // insert áp dụng
+
+    // rollback: 1 change hợp lệ + 1 change lỗi (cột không tồn tại) → không đổi gì
+    let before = mem.exec("SELECT count(*) AS c FROM t").await.unwrap();
+    let StatementOutcome::Rows { result: b } = before else { panic!("rows") };
+    let count_before = b.rows[0]["c"].as_i64().unwrap();
+    let err = mem
+        .apply_changes(vec![
+            GridChange::Update {
+                schema: None,
+                table: "t".into(),
+                pk: vec![Col { name: "id".into(), value: json!(1) }],
+                set: vec![Col { name: "name".into(), value: json!("X") }],
+            },
+            GridChange::Insert {
+                schema: None,
+                table: "t".into(),
+                values: vec![Col { name: "khong_co_cot".into(), value: json!(1) }],
+            },
+        ])
+        .await;
+    assert!(err.is_err(), "batch lỗi phải fail");
+    let after = mem.exec("SELECT name FROM t WHERE id = 1").await.unwrap();
+    let StatementOutcome::Rows { result: a } = after else { panic!("rows") };
+    assert_eq!(a.rows[0]["name"], json!("A"), "rollback: update 'X' không được commit");
+    let cnt = mem.exec("SELECT count(*) AS c FROM t").await.unwrap();
+    let StatementOutcome::Rows { result: c } = cnt else { panic!("rows") };
+    assert_eq!(c.rows[0]["c"].as_i64().unwrap(), count_before);
+}
+
+#[tokio::test]
+async fn pg_editable_grid_apply_transaction() {
+    use database_studio_lib::drivers::grid::{Col, GridChange};
+    use serde_json::json;
+
+    let (_c, port) = start_pg().await;
+    let params = PgConnParams {
+        host: "localhost".into(),
+        port,
+        database: "testdb".into(),
+        user: "postgres".into(),
+        password: PASS.into(),
+        ssl: false,
+    };
+    let mut drv = retry("postgres", || PgDriver::connect(&params)).await;
+    drv.exec("CREATE TABLE grid_t (id int PRIMARY KEY, name text, active bool)").await.unwrap();
+    drv.exec("INSERT INTO grid_t VALUES (1,'a',true),(2,'b',false)").await.unwrap();
+
+    let n = drv
+        .apply_changes(&[
+            GridChange::Update {
+                schema: Some("public".into()),
+                table: "grid_t".into(),
+                pk: vec![Col { name: "id".into(), value: json!(1) }],
+                set: vec![
+                    Col { name: "name".into(), value: json!("An") },
+                    Col { name: "active".into(), value: json!(false) },
+                ],
+            },
+            GridChange::Insert {
+                schema: Some("public".into()),
+                table: "grid_t".into(),
+                values: vec![
+                    Col { name: "id".into(), value: json!(3) },
+                    Col { name: "name".into(), value: json!("Chi") },
+                    Col { name: "active".into(), value: json!(true) },
+                ],
+            },
+        ])
+        .await
+        .unwrap();
+    assert_eq!(n, 2);
+    let out = drv.exec("SELECT name, active FROM grid_t WHERE id = 1").await.unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!("rows") };
+    assert_eq!(result.rows[0]["name"], json!("An"));
+    assert_eq!(result.rows[0]["active"], json!(false));
+}
+
+#[tokio::test]
 async fn sqlite_pragma_panel_round_trip() {
     let dir = std::env::temp_dir().join("ds-it-sqlite");
     std::fs::create_dir_all(&dir).unwrap();

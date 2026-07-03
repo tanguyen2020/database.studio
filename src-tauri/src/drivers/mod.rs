@@ -1,6 +1,7 @@
 //! Driver layer: one adapter per system, unified behind `LiveConnection`.
 
 pub mod clickhouse;
+pub mod grid;
 pub mod mssql;
 pub mod mysql;
 pub mod postgres;
@@ -167,6 +168,25 @@ impl LiveConnection {
             Self::Mssql(d) => d.ping().await,
             Self::Sqlite(d) => d.ping().await,
             Self::Clickhouse(d) => d.ping().await,
+        }
+    }
+
+    /// Editable grid Apply — chạy pending changes trong transaction.
+    /// ClickHouse KHÔNG hỗ trợ (mutation async — Phase 5); Cassandra không có ở đây.
+    pub async fn apply_grid_changes(
+        &mut self,
+        changes: &[grid::GridChange],
+    ) -> Result<u64, QueryError> {
+        match self {
+            Self::Postgres(d) => d.apply_changes(changes).await,
+            Self::MySql(d) => d.apply_changes(changes).await,
+            Self::Mssql(d) => d.apply_changes(changes).await,
+            Self::Sqlite(d) => d.apply_changes(changes.to_vec()).await,
+            Self::Clickhouse(_) => Err(QueryError::new(
+                "clickhouse",
+                "ClickHouse: sửa dữ liệu là mutation async (ALTER TABLE … UPDATE/DELETE) — dùng ở Phase 5, không commit kiểu OLTP",
+                "editable grid not applicable to clickhouse",
+            )),
         }
     }
 

@@ -106,6 +106,32 @@ impl PgDriver {
         self.conn.ping().await.is_ok()
     }
 
+    /// Editable grid: áp pending changes trong 1 transaction, rollback nếu lỗi.
+    /// Statement tham số hóa ($1..) — value bind qua sqlx (không nối chuỗi).
+    pub async fn apply_changes(
+        &mut self,
+        changes: &[crate::drivers::grid::GridChange],
+    ) -> Result<u64, QueryError> {
+        execute(&mut self.conn, "BEGIN")
+            .await
+            .map_err(|e| map_exec_error("postgres", "BEGIN", &e))?;
+        let mut total = 0u64;
+        for ch in changes {
+            let stmt = crate::drivers::grid::build("postgres", ch);
+            match pg_apply_one(&mut self.conn, &stmt.sql, &stmt.params).await {
+                Ok(n) => total += n,
+                Err(e) => {
+                    let _ = execute(&mut self.conn, "ROLLBACK").await;
+                    return Err(map_exec_error("postgres", &stmt.sql, &e));
+                }
+            }
+        }
+        execute(&mut self.conn, "COMMIT")
+            .await
+            .map_err(|e| map_exec_error("postgres", "COMMIT", &e))?;
+        Ok(total)
+    }
+
     // ---- introspection ------------------------------------------------------
 
     pub async fn schemas(&mut self) -> Result<Vec<SchemaInfo>, QueryError> {
@@ -356,6 +382,27 @@ async fn execute(
     sql: &str,
 ) -> Result<sqlx::postgres::PgQueryResult, sqlx::Error> {
     sqlx::query(sql).execute(conn).await
+}
+
+/// Bind JSON params rồi execute (monomorphic — tránh HRTB "Executor not general enough").
+async fn pg_apply_one(
+    conn: &mut PgConnection,
+    sql: &str,
+    params: &[Value],
+) -> Result<u64, sqlx::Error> {
+    let mut q = sqlx::query(sql);
+    for p in params {
+        q = match p {
+            Value::Null => q.bind(Option::<String>::None),
+            Value::Bool(b) => q.bind(*b),
+            Value::Number(num) if num.is_i64() => q.bind(num.as_i64().unwrap()),
+            Value::Number(num) if num.is_u64() => q.bind(num.as_u64().unwrap() as i64),
+            Value::Number(num) => q.bind(num.as_f64().unwrap()),
+            Value::String(s) => q.bind(s.clone()),
+            other => q.bind(other.to_string()),
+        };
+    }
+    Ok(q.execute(conn).await?.rows_affected())
 }
 
 async fn describe(

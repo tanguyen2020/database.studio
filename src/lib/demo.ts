@@ -281,6 +281,12 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
     case 'save_snippet':
     case 'delete_snippet':
       return ok(null)
+    case 'preview_grid_changes': {
+      const changes = (args?.changes as Array<{ kind: string; table: string }>) ?? []
+      return ok(changes.map((c) => `-- ${c.kind.toUpperCase()} ${c.table} (demo preview)`))
+    }
+    case 'apply_grid_changes':
+      return ok(((args?.changes as unknown[]) ?? []).length)
     default:
       return Promise.reject(new Error(`demo: chưa mock command "${cmd}"`))
   }

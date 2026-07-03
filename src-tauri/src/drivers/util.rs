@@ -58,6 +58,7 @@ fn contains_returning(sql: &str) -> bool {
 }
 
 /// Dialect-correct identifier quoting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QuoteStyle {
     /// PostgreSQL / SQLite / Cassandra: "ident"
     DoubleQuote,
