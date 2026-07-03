@@ -39,6 +39,10 @@ export interface ConnectionProfile {
   env: Environment
   ssh: SshConfig
   ssl: boolean
+  /** TLS material — path only (files not copied). Empty = none / system CA. */
+  ssl_ca: string
+  ssl_cert: string
+  ssl_key: string
   sqlite_path: string
   sqlite_mode: SqliteMode
   mssql_auth: string

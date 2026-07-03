@@ -53,6 +53,18 @@
   const authShowPass = $derived(!authWindows)
   const sshMode = $derived(draft?.ssh.auth === 'key' ? 'key' : 'password')
 
+  // TLS cert fields hiện khi bật SSL — MSSQL chỉ CA (tiberius không mTLS).
+  type CertField = { field: 'ssl_ca' | 'ssl_cert' | 'ssl_key'; label: string; placeholder: string }
+  const certFields = $derived<CertField[]>(
+    isMssql
+      ? [{ field: 'ssl_ca', label: 'CA Certificate', placeholder: '~/certs/ca.pem' }]
+      : [
+          { field: 'ssl_ca', label: 'CA Certificate', placeholder: '~/certs/ca.pem' },
+          { field: 'ssl_cert', label: 'Client Certificate', placeholder: '~/certs/client.crt' },
+          { field: 'ssl_key', label: 'Client Key', placeholder: '~/certs/client.key' },
+        ],
+  )
+
   function close() {
     ui.formProfile = null
     ui.formQuick = false
@@ -92,6 +104,18 @@
   async function browseSshKey() {
     const picked = await openFileDialog({ multiple: false })
     if (typeof picked === 'string' && draft) draft.ssh.key_path = picked
+  }
+
+  // TLS cert/key picker — lưu path (không copy file). MSSQL chỉ dùng CA.
+  async function browseCert(field: 'ssl_ca' | 'ssl_cert' | 'ssl_key') {
+    const picked = await openFileDialog({
+      multiple: false,
+      filters: [
+        { name: 'Certificate / Key', extensions: ['pem', 'crt', 'cert', 'key', 'der'] },
+        { name: 'All files', extensions: ['*'] },
+      ],
+    })
+    if (typeof picked === 'string' && draft) draft[field] = picked
   }
 
   function buildDraftPayload() {
@@ -428,6 +452,32 @@
                   </div>
                 </div>
               {/if}
+            </div>
+          {/if}
+
+          {#if draft.ssl}
+            <!-- TLS certificates — lưu path (không copy file); MSSQL chỉ CA -->
+            <div style="margin-top:var(--px-14);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-10);padding:var(--px-14)">
+              <div class="cm-label">TLS Certificates <span style="color:var(--muted);font-weight:400">(tùy chọn — để trống dùng CA hệ thống)</span></div>
+              <div style="display:grid;gap:var(--px-10);margin-top:var(--px-6)">
+                {#each certFields as cf (cf.field)}
+                  <div>
+                    <div class="cm-label">{cf.label}</div>
+                    <div style="display:flex;gap:var(--px-8)">
+                      <input class="cm-input-ssh mono" style="flex:1;min-width:0" bind:value={draft[cf.field]} placeholder={cf.placeholder} />
+                      <span
+                        onclick={() => browseCert(cf.field)}
+                        onkeydown={(e) => e.key === 'Enter' && browseCert(cf.field)}
+                        role="button"
+                        tabindex="0"
+                        style="flex:none;display:flex;align-items:center;gap:var(--px-6);background:var(--bg);border:var(--px-1) solid var(--border);border-radius:var(--px-8);padding:var(--px-8) var(--px-14);font-size:var(--px-12_5);font-weight:600;cursor:pointer;color:var(--text2)"
+                      >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path></svg>Browse…
+                      </span>
+                    </div>
+                  </div>
+                {/each}
+              </div>
             </div>
           {/if}
         </div>

@@ -43,6 +43,9 @@ fn pg_params(p: &ConnectionProfile, ep: &Endpoint, password: &str) -> PgConnPara
         user: p.user.clone(),
         password: password.to_string(),
         ssl: p.ssl,
+        ssl_ca: p.ssl_ca.clone(),
+        ssl_cert: p.ssl_cert.clone(),
+        ssl_key: p.ssl_key.clone(),
     }
 }
 
@@ -54,6 +57,9 @@ fn mysql_params(p: &ConnectionProfile, ep: &Endpoint, password: &str) -> MySqlCo
         user: p.user.clone(),
         password: password.to_string(),
         ssl: p.ssl,
+        ssl_ca: p.ssl_ca.clone(),
+        ssl_cert: p.ssl_cert.clone(),
+        ssl_key: p.ssl_key.clone(),
     }
 }
 
@@ -65,6 +71,7 @@ fn mssql_params(p: &ConnectionProfile, ep: &Endpoint, password: &str) -> MssqlCo
         user: p.user.clone(),
         password: password.to_string(),
         ssl: p.ssl,
+        ssl_ca: p.ssl_ca.clone(),
         auth: if p.mssql_auth.is_empty() { "sql".into() } else { p.mssql_auth.clone() },
     }
 }
@@ -289,5 +296,55 @@ impl LiveConnection {
             // MySQL/MariaDB/MSSQL(Phase1)/SQLite: no sequences node
             _ => Ok(Vec::new()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::connections::profile::{Environment, SqliteMode, SshConfig};
+
+    fn tls_profile(system: SystemType) -> ConnectionProfile {
+        ConnectionProfile {
+            id: "t".into(),
+            name: "t".into(),
+            system,
+            host: "h".into(),
+            port: 1234,
+            database: "db".into(),
+            user: "u".into(),
+            password_enc: String::new(),
+            group: String::new(),
+            env: Environment::Development,
+            ssh: SshConfig::default(),
+            ssl: true,
+            ssl_ca: "/ca.pem".into(),
+            ssl_cert: "/client.crt".into(),
+            ssl_key: "/client.key".into(),
+            sqlite_path: String::new(),
+            sqlite_mode: SqliteMode::ReadWrite,
+            mssql_auth: String::new(),
+        }
+    }
+
+    fn ep() -> Endpoint {
+        Endpoint { host: "h".into(), port: 1234 }
+    }
+
+    // Phase 3 · T1: cert paths phải chảy từ profile → ConnParams của mọi driver.
+    #[test]
+    fn tls_cert_paths_propagate_to_conn_params() {
+        let pg = pg_params(&tls_profile(SystemType::Postgres), &ep(), "pw");
+        assert_eq!((pg.ssl, pg.ssl_ca.as_str(), pg.ssl_cert.as_str(), pg.ssl_key.as_str()),
+                   (true, "/ca.pem", "/client.crt", "/client.key"));
+
+        let my = mysql_params(&tls_profile(SystemType::Mysql), &ep(), "pw");
+        assert_eq!((my.ssl, my.ssl_ca.as_str(), my.ssl_cert.as_str(), my.ssl_key.as_str()),
+                   (true, "/ca.pem", "/client.crt", "/client.key"));
+
+        // MSSQL: chỉ CA (tiberius không mTLS).
+        let ms = mssql_params(&tls_profile(SystemType::Mssql), &ep(), "pw");
+        assert!(ms.ssl);
+        assert_eq!(ms.ssl_ca, "/ca.pem");
     }
 }

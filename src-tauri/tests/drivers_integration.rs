@@ -70,6 +70,9 @@ async fn pg_roundtrip_null_multi_and_error_position() {
         user: "postgres".into(),
         password: PASS.into(),
         ssl: false,
+        ssl_ca: String::new(),
+        ssl_cert: String::new(),
+        ssl_key: String::new(),
     };
     let mut drv = retry("postgres", || PgDriver::connect(&params)).await;
 
@@ -145,6 +148,9 @@ async fn quick_connect_ephemeral_id_is_queryable_via_registry() {
         env: Environment::Development,
         ssh: SshConfig::default(),
         ssl: false,
+        ssl_ca: String::new(),
+        ssl_cert: String::new(),
+        ssl_key: String::new(),
         sqlite_path: String::new(),
         sqlite_mode: SqliteMode::ReadWrite,
         mssql_auth: String::new(),
@@ -196,6 +202,9 @@ async fn mysql_like_roundtrip(image: (&str, &str), env_prefix: &str, system: &'s
         user: "root".into(),
         password: PASS.into(),
         ssl: false,
+        ssl_ca: String::new(),
+        ssl_cert: String::new(),
+        ssl_key: String::new(),
     };
     let mut drv = retry(system, || MySqlDriver::connect(&params, system)).await;
 
@@ -242,6 +251,7 @@ async fn mssql_roundtrip_and_line_error() {
         user: "sa".into(),
         password: MSSQL_PASS.into(),
         ssl: false,
+        ssl_ca: String::new(),
         auth: "sql".into(),
     };
     let mut drv = retry("mssql", || MssqlDriver::connect(&params)).await;
@@ -460,6 +470,9 @@ async fn pg_filter_sort_pagination() {
         user: "postgres".into(),
         password: PASS.into(),
         ssl: false,
+        ssl_ca: String::new(),
+        ssl_cert: String::new(),
+        ssl_key: String::new(),
     };
     let mut drv = retry("postgres", || PgDriver::connect(&params)).await;
     drv.exec("CREATE TABLE flt (id int PRIMARY KEY, status text, gpa numeric)").await.unwrap();
@@ -522,6 +535,9 @@ async fn pg_editable_grid_apply_transaction() {
         user: "postgres".into(),
         password: PASS.into(),
         ssl: false,
+        ssl_ca: String::new(),
+        ssl_cert: String::new(),
+        ssl_key: String::new(),
     };
     let mut drv = retry("postgres", || PgDriver::connect(&params)).await;
     drv.exec("CREATE TABLE grid_t (id int PRIMARY KEY, name text, active bool)").await.unwrap();

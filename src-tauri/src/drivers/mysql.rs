@@ -25,6 +25,10 @@ pub struct MySqlConnParams {
     pub user: String,
     pub password: String,
     pub ssl: bool,
+    /// TLS cert paths (empty = none). ssl_ca → VerifyCa; cert+key → mTLS.
+    pub ssl_ca: String,
+    pub ssl_cert: String,
+    pub ssl_key: String,
 }
 
 impl MySqlDriver {
@@ -34,7 +38,22 @@ impl MySqlDriver {
             .port(p.port)
             .username(&p.user)
             .password(&p.password)
-            .ssl_mode(if p.ssl { MySqlSslMode::Required } else { MySqlSslMode::Preferred });
+            .ssl_mode(if !p.ssl_ca.is_empty() {
+                MySqlSslMode::VerifyCa
+            } else if p.ssl {
+                MySqlSslMode::Required
+            } else {
+                MySqlSslMode::Preferred
+            });
+        if !p.ssl_ca.is_empty() {
+            opts = opts.ssl_ca(&p.ssl_ca);
+        }
+        if !p.ssl_cert.is_empty() {
+            opts = opts.ssl_client_cert(&p.ssl_cert);
+        }
+        if !p.ssl_key.is_empty() {
+            opts = opts.ssl_client_key(&p.ssl_key);
+        }
         if !p.database.is_empty() {
             opts = opts.database(&p.database);
         }

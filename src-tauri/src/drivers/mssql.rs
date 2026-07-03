@@ -21,6 +21,8 @@ pub struct MssqlConnParams {
     pub user: String,
     pub password: String,
     pub ssl: bool,
+    /// CA cert path (empty = trust server cert, phù hợp self-signed nội bộ).
+    pub ssl_ca: String,
     /// "sql" (default) | "windows"
     pub auth: String,
 }
@@ -50,8 +52,13 @@ impl MssqlDriver {
         } else {
             config.encryption(EncryptionLevel::NotSupported);
         }
-        // Personal desktop client: trust server cert (self-signed is common).
-        config.trust_cert();
+        // Có CA path → xác thực chuỗi cert với CA đó; không thì trust server cert
+        // (self-signed nội bộ là phổ biến với desktop client).
+        if !p.ssl_ca.is_empty() {
+            config.trust_cert_ca(&p.ssl_ca);
+        } else {
+            config.trust_cert();
+        }
 
         let tcp = TcpStream::connect((p.host.as_str(), p.port))
             .await

@@ -70,6 +70,14 @@ pub struct ConnectionProfile {
     pub ssh: SshConfig,
     #[serde(default)]
     pub ssl: bool,
+    /// TLS material — path only (files never copied into app storage). Empty =
+    /// dùng CA hệ thống / bỏ qua. Client cert+key dùng cho mutual TLS.
+    #[serde(default)]
+    pub ssl_ca: String,
+    #[serde(default)]
+    pub ssl_cert: String,
+    #[serde(default)]
+    pub ssl_key: String,
     /// SQLite only: file path ("" for in-memory).
     #[serde(default)]
     pub sqlite_path: String,

@@ -20,17 +20,37 @@ pub struct PgConnParams {
     pub user: String,
     pub password: String,
     pub ssl: bool,
+    /// TLS cert paths (empty = none). ssl_ca → verify-ca root; cert+key → mTLS.
+    pub ssl_ca: String,
+    pub ssl_cert: String,
+    pub ssl_key: String,
 }
 
 impl PgDriver {
     pub async fn connect(p: &PgConnParams) -> Result<Self, QueryError> {
-        let opts = PgConnectOptions::new()
+        let mut opts = PgConnectOptions::new()
             .host(&p.host)
             .port(p.port)
             .database(if p.database.is_empty() { "postgres" } else { &p.database })
             .username(&p.user)
             .password(&p.password)
-            .ssl_mode(if p.ssl { PgSslMode::Require } else { PgSslMode::Prefer });
+            // Có CA → VerifyCa (xác thực chuỗi cert); còn lại Require/Prefer.
+            .ssl_mode(if !p.ssl_ca.is_empty() {
+                PgSslMode::VerifyCa
+            } else if p.ssl {
+                PgSslMode::Require
+            } else {
+                PgSslMode::Prefer
+            });
+        if !p.ssl_ca.is_empty() {
+            opts = opts.ssl_root_cert(&p.ssl_ca);
+        }
+        if !p.ssl_cert.is_empty() {
+            opts = opts.ssl_client_cert(&p.ssl_cert);
+        }
+        if !p.ssl_key.is_empty() {
+            opts = opts.ssl_client_key(&p.ssl_key);
+        }
         let conn = opts
             .connect()
             .await
