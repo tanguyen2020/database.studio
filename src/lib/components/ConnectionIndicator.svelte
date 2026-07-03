@@ -1,20 +1,22 @@
 <script lang="ts">
+  // port từ thanh accent trong connection row, Database Studio.dc.html dòng 117:
+  // width:3px; align-self:stretch; border-radius:2px; background:accent;
+  // margin:1px 0 1px 4px
   import { systemMeta } from '$lib/systems'
 
   interface Props {
     system: string | null | undefined
-    /** stretch to the row height (default) or fixed height */
+    /** true = nằm trong connection row (có margin như HTML); false = tự bố trí */
+    rowMargin?: boolean
     height?: string
   }
 
-  let { system, height = '100%' }: Props = $props()
+  let { system, rowMargin = true, height }: Props = $props()
 
   const meta = $derived(systemMeta(system))
 </script>
 
-<!-- 3px vertical accent bar — never gray for a known system -->
 <span
-  class="inline-block w-[3px] shrink-0 rounded-full"
-  style="background: {meta.accent}; height: {height};"
+  style="width:var(--px-3);flex:none;border-radius:var(--px-2);background:{meta.accent};{height ? `height:${height};` : 'align-self:stretch;'}{rowMargin ? 'margin:var(--px-1) 0 var(--px-1) var(--px-4);' : ''}"
   aria-hidden="true"
 ></span>

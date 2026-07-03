@@ -102,7 +102,7 @@
               dropIdx = null
             }}
           >
-            <SystemBadge system={tab.systemType} dimmed={!isActive} />
+            <SystemBadge system={tab.systemType} />
             {#if renamingId === tab.id}
               <!-- svelte-ignore a11y_autofocus -->
               <input

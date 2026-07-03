@@ -164,7 +164,7 @@
                 ondblclick={() => openOrToggle(p)}
                 onkeydown={(e) => e.key === 'Enter' && openOrToggle(p)}
               >
-                <ConnectionIndicator system={p.system} height="18px" />
+                <ConnectionIndicator system={p.system} />
                 <SystemIcon system={p.system} size={15} />
                 <span class="truncate text-[12.5px]">{p.name}</span>
                 <!-- port từ env pill trong Database Studio.dc.html (dòng 123) -->

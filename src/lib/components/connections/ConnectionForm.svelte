@@ -131,7 +131,7 @@
     {#if draft}
       <Dialog.Header>
         <Dialog.Title class="flex items-center gap-2">
-          <SystemBadge system={draft.system} size="md" />
+          <SystemBadge system={draft.system} />
           {isNew ? `New ${meta.label} Connection` : `Edit "${draft.name}"`}
         </Dialog.Title>
       </Dialog.Header>
