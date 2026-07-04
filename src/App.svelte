@@ -32,6 +32,7 @@
   import IndexScanner from '$lib/components/workspace/IndexScanner.svelte'
   import CommandPalette from '$lib/components/CommandPalette.svelte'
   import ClickHouseTtlDialog from '$lib/components/ClickHouseTtlDialog.svelte'
+  import ImportDialog from '$lib/components/ImportDialog.svelte'
   import { palette } from '$lib/stores/palette.svelte'
   import HistoryTab from '$lib/components/workspace/HistoryTab.svelte'
   import SavedQueriesTab from '$lib/components/workspace/SavedQueriesTab.svelte'
@@ -245,4 +246,5 @@
 <SaveBeforeCloseDialog />
 <CommandPalette />
 <ClickHouseTtlDialog />
+<ImportDialog />
 <Toasts />

@@ -14,6 +14,7 @@
   import { explorer } from '$lib/stores/explorer.svelte'
   import { tabs } from '$lib/stores/tabs.svelte'
   import { chTtl } from '$lib/stores/chttl.svelte'
+  import { importWizard } from '$lib/stores/import.svelte'
   import { toasts } from '$lib/stores/toast.svelte'
   import { quoteIdent, selectStarSql } from '$lib/sql/dialect'
   import { genCreate, genDelete, genDrop, genInsert, genRename, genSelect, genTruncate, genUpdate } from '$lib/sql/ddl'
@@ -759,7 +760,7 @@
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M7 9l3 3-3 3M13 15h4"></path></svg>
     </span>
     <span style="width:var(--px-1);height:var(--px-16);background:var(--border);margin:0 var(--px-3)"></span>
-    <span class="xbtn" onclick={() => later('Import data')} onkeydown={(e) => e.key === 'Enter' && later('Import data')} role="button" tabindex="0" title="Import data from file">
+    <span class="xbtn" onclick={() => selected && importWizard.show(selected.id, cache?.schemas?.[0]?.name ?? '')} onkeydown={(e) => e.key === 'Enter' && selected && importWizard.show(selected.id, cache?.schemas?.[0]?.name ?? '')} role="button" tabindex="0" title="Import data from file">
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 10l5 5 5-5"></path><path d="M5 21h14"></path></svg>
     </span>
     <span class="xbtn" onclick={() => later('Export / dump')} onkeydown={(e) => e.key === 'Enter' && later('Export / dump')} role="button" tabindex="0" title="Export / dump to file">

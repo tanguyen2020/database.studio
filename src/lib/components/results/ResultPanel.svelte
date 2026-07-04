@@ -11,6 +11,7 @@
   import ResultChart from './ResultChart.svelte'
   import type { SubResult, TabExecution } from '$lib/stores/results.svelte'
   import { mapErrorToDocument } from '$lib/sql/errors'
+  import { toCsv, toJson, toSqlInsert, toExcelHtml, download } from '$lib/export/rows'
 
   type ViewMode = 'grid' | 'json' | 'single' | 'chart'
 
@@ -28,6 +29,20 @@
   let grid = $state<ResultGrid | null>(null)
   let rawError = $state<string | null>(null)
   let viewMode = $state<ViewMode>('grid')
+  let exportOpen = $state(false)
+
+  // Export result hiện tại (CSV/JSON/SQL/Excel) — dùng util thuần export/rows.ts.
+  function doExport(fmt: 'csv' | 'json' | 'sql' | 'xls') {
+    exportOpen = false
+    const r = activeResult?.kind === 'rows' ? activeResult.result : undefined
+    if (!r) return
+    const headers = r.cols.map((c) => c[0])
+    const rows = r.rows as Record<string, unknown>[]
+    if (fmt === 'csv') download('result.csv', toCsv(headers, rows), 'text/csv')
+    else if (fmt === 'json') download('result.json', toJson(rows), 'application/json')
+    else if (fmt === 'sql') download('result.sql', toSqlInsert('result', headers, rows), 'text/plain')
+    else download('result.xls', toExcelHtml(headers, rows), 'application/vnd.ms-excel')
+  }
 
   const MESSAGES = -1
 
@@ -116,15 +131,22 @@
         {/each}
       </div>
       <span style="font-size:var(--px-11_5);color:var(--muted)">{summary}</span>
-      {#if viewMode === 'grid'}
+      <div style="margin-left:auto;position:relative">
         <span
-          style="margin-left:auto;font-size:var(--px-11_5);color:var(--text2);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer"
-          onclick={() => grid?.exportCsv()}
-          onkeydown={(e) => e.key === 'Enter' && grid?.exportCsv()}
+          style="font-size:var(--px-11_5);color:var(--text2);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer"
+          onclick={() => (exportOpen = !exportOpen)}
+          onkeydown={(e) => e.key === 'Enter' && (exportOpen = !exportOpen)}
           role="button"
           tabindex="0"
-        >Export CSV</span>
-      {/if}
+        >Export ▾</span>
+        {#if exportOpen}
+          <div style="position:absolute;right:0;top:calc(100% + var(--px-4));z-index:20;background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-8);box-shadow:0 var(--px-8) var(--px-24) rgba(0,0,0,.4);overflow:hidden;min-width:var(--px-120)">
+            {#each [['csv', 'CSV'], ['json', 'JSON'], ['sql', 'SQL INSERT'], ['xls', 'Excel (.xls)']] as [fmt, label] (fmt)}
+              <div onclick={() => doExport(fmt as 'csv' | 'json' | 'sql' | 'xls')} onkeydown={(e) => e.key === 'Enter' && doExport(fmt as 'csv' | 'json' | 'sql' | 'xls')} role="button" tabindex="0" style="padding:var(--px-7) var(--px-12);font-size:var(--px-12);cursor:pointer;color:var(--text2)">{label}</div>
+            {/each}
+          </div>
+        {/if}
+      </div>
     </div>
   {/if}
 

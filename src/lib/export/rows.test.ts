@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { csvCell, toCsv, toSqlInsert } from './rows'
+import { csvCell, toCsv, toSqlInsert, parseCsv } from './rows'
 
 describe('csvCell', () => {
   it('quotes cells with comma/quote/newline and doubles quotes', () => {
@@ -18,6 +18,24 @@ describe('toCsv', () => {
   })
   it('header only when no rows', () => {
     expect(toCsv(['a'], [])).toBe('a')
+  })
+})
+
+describe('parseCsv', () => {
+  it('parses headers + rows', () => {
+    const { headers, rows } = parseCsv('id,name\n1,Alice\n2,Bob')
+    expect(headers).toEqual(['id', 'name'])
+    expect(rows).toEqual([['1', 'Alice'], ['2', 'Bob']])
+  })
+  it('handles quoted fields with commas, newlines and escaped quotes', () => {
+    const { rows } = parseCsv('a,b\n"x,y","line1\nline2"\n"say ""hi""",z')
+    expect(rows[0]).toEqual(['x,y', 'line1\nline2'])
+    expect(rows[1]).toEqual(['say "hi"', 'z'])
+  })
+  it('skips blank lines and supports custom delimiter', () => {
+    const { headers, rows } = parseCsv('a;b\n1;2\n\n3;4', ';')
+    expect(headers).toEqual(['a', 'b'])
+    expect(rows).toEqual([['1', '2'], ['3', '4']])
   })
 })
 

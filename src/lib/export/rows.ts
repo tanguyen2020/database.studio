@@ -37,6 +37,71 @@ function sqlLiteral(v: unknown): string {
   return `'${s.replace(/'/g, "''")}'`
 }
 
+/** Parse CSV (RFC 4180: quoted fields, "" escape, \n/\r\n) → headers + rows.
+ *  Thuần → unit-test được. Dùng cho Import wizard. */
+export function parseCsv(
+  text: string,
+  delimiter = ',',
+): { headers: string[]; rows: string[][] } {
+  const records: string[][] = []
+  let field = ''
+  let row: string[] = []
+  let inQuotes = false
+  let i = 0
+  const pushField = () => {
+    row.push(field)
+    field = ''
+  }
+  const pushRow = () => {
+    pushField()
+    records.push(row)
+    row = []
+  }
+  const s = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+  while (i < s.length) {
+    const ch = s[i]
+    if (inQuotes) {
+      if (ch === '"') {
+        if (s[i + 1] === '"') {
+          field += '"'
+          i += 2
+          continue
+        }
+        inQuotes = false
+        i++
+        continue
+      }
+      field += ch
+      i++
+    } else if (ch === '"') {
+      inQuotes = true
+      i++
+    } else if (ch === delimiter) {
+      pushField()
+      i++
+    } else if (ch === '\n') {
+      pushRow()
+      i++
+    } else {
+      field += ch
+      i++
+    }
+  }
+  if (field.length > 0 || row.length > 0) pushRow()
+  const nonEmpty = records.filter((r) => !(r.length === 1 && r[0].trim() === ''))
+  const headers = nonEmpty.shift() ?? []
+  return { headers, rows: nonEmpty }
+}
+
+/** Excel export dep-free: bảng HTML với đuôi .xls + mime ms-excel (Excel mở được). */
+export function toExcelHtml(headers: string[], rows: Record<string, unknown>[]): string {
+  const esc = (v: unknown) =>
+    v == null ? '' : String(typeof v === 'object' ? JSON.stringify(v) : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  const th = headers.map((h) => `<th>${esc(h)}</th>`).join('')
+  const trs = rows.map((r) => `<tr>${headers.map((h) => `<td>${esc(r[h])}</td>`).join('')}</tr>`).join('')
+  return `<html><head><meta charset="utf-8"></head><body><table border="1"><thead><tr>${th}</tr></thead><tbody>${trs}</tbody></table></body></html>`
+}
+
 /** Trigger download 1 blob text trong browser (dùng ở component). */
 export function download(filename: string, content: string, mime = 'text/plain') {
   const blob = new Blob([content], { type: mime })
