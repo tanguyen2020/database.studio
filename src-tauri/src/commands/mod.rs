@@ -7,6 +7,7 @@ pub mod kafka;
 pub mod library;
 pub mod lint;
 pub mod nats;
+pub mod plan;
 pub mod query;
 pub mod redis;
 pub mod schema;

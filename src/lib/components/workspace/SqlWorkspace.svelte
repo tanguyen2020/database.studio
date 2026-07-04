@@ -166,16 +166,13 @@
     if (formatted !== doc) editor.setDoc(formatted)
   }
 
-  // Explain (Ctrl+Shift+E) — Phase 2: gửi lệnh EXPLAIN text; visual plan → Phase 5
+  // Explain (Ctrl+Shift+E) — Phase 5: mở Query Plan Visualizer (cây chuẩn hóa).
   function doExplain() {
     if (!editor || !tab.connectionId) return
     const doc = editor.getDoc()
     const stmt = statementAtOffset(doc, editor.getCursorOffset())
     if (!stmt) return
-    const prefix = tab.systemType === 'mssql' ? 'SET SHOWPLAN_ALL ON; ' : 'EXPLAIN '
-    void results.run(tab.id, tab.connectionId, [
-      { ...stmt, sql: `${prefix}${stmt.sql}` },
-    ])
+    tabs.openQueryPlan(tab.connectionId, stmt.sql)
   }
 
   // Ctrl+S — lưu nội dung editor thành snippet (Saved Queries)

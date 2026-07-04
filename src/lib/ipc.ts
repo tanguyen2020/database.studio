@@ -442,6 +442,30 @@ export const cassandraRing = (connId: string) => invoke<RingNode[]>('cassandra_r
 export const cassandraTableDdl = (connId: string, keyspace: string, table: string) =>
   invoke<string>('cassandra_table_ddl', { connId, keyspace, table })
 
+// ---- Query Plan Visualizer (Phase 5 · T1) ----------------------------------
+
+export interface PlanNode {
+  operation: string
+  native_op: string
+  estimated_rows?: number
+  actual_rows?: number
+  estimated_cost?: number
+  actual_time_ms?: number
+  extra: Record<string, unknown>
+  children: PlanNode[]
+  is_hotspot: boolean
+}
+export interface QueryPlan {
+  system: string
+  mode: 'estimated' | 'actual' | 'not_applicable'
+  root?: PlanNode
+  summary: { total_cost?: number; total_time_ms?: number; warnings: string[] }
+  raw: string
+}
+
+export const explainPlan = (connId: string, sql: string, actual: boolean) =>
+  invoke<QueryPlan>('explain_plan', { connId, sql, actual })
+
 // ---- ClickHouse advanced (Phase 5 · T7c) -----------------------------------
 
 export interface TtlRule {

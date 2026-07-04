@@ -580,6 +580,50 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
       return ok(
         'CREATE TABLE campus_ks.grades_by_student (\n  student_id uuid,\n  term_course text,\n  grade text,\n  points decimal,\n  PRIMARY KEY ((student_id), term_course)\n)\nWITH CLUSTERING ORDER BY (term_course ASC);',
       )
+    case 'explain_plan': {
+      const actual = !!(args?.actual as boolean)
+      return ok({
+        system: 'postgres',
+        mode: actual ? 'actual' : 'estimated',
+        root: {
+          operation: 'HashJoin',
+          native_op: 'Hash Join',
+          estimated_rows: 214,
+          actual_rows: actual ? 214 : undefined,
+          estimated_cost: 512.4,
+          actual_time_ms: actual ? 8.2 : undefined,
+          extra: { 'Hash Cond': '(e.student_id = s.id)' },
+          is_hotspot: false,
+          children: [
+            {
+              operation: 'SeqScan',
+              native_op: 'Seq Scan',
+              estimated_rows: 50000,
+              actual_rows: actual ? 48210 : undefined,
+              estimated_cost: 380.0,
+              extra: { 'Relation Name': 'enrollments', Filter: "(status = 'active')" },
+              is_hotspot: true,
+              children: [],
+            },
+            {
+              operation: 'IndexScan',
+              native_op: 'Index Scan',
+              estimated_rows: 1,
+              estimated_cost: 8.3,
+              extra: { 'Index Name': 'students_pkey' },
+              is_hotspot: false,
+              children: [],
+            },
+          ],
+        },
+        summary: {
+          total_cost: 512.4,
+          total_time_ms: actual ? 8.2 : undefined,
+          warnings: ['Seq Scan trên enrollments (~50000 rows)'],
+        },
+        raw: '[{"Plan":{"Node Type":"Hash Join","Total Cost":512.4,"Plan Rows":214}}]',
+      })
+    }
     case 'ch_table_meta': {
       const tbl = (args?.table as string) ?? 'lms_events'
       return ok({

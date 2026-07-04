@@ -7,6 +7,7 @@ pub mod kafka;
 pub mod mssql;
 pub mod mysql;
 pub mod nats;
+pub mod plan;
 pub mod postgres;
 pub mod redis;
 pub mod schema_registry;

@@ -121,6 +121,25 @@ async fn pg_roundtrip_null_multi_and_error_position() {
     assert!(pos.col > 1);
     assert!(err.hint.is_some(), "42P01 phải có hint tiếng Việt");
     assert!(!err.raw.is_empty(), "raw error phải giữ nguyên văn");
+
+    // --- Phase 5 T1: EXPLAIN (FORMAT JSON) thật → parse_pg ra cây chuẩn hóa ---
+    let out = drv
+        .exec("EXPLAIN (FORMAT JSON) SELECT id FROM it_orders WHERE status = 'done'")
+        .await
+        .unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!("EXPLAIN phải trả rows") };
+    let cell = result.rows[0].as_object().unwrap().values().next().unwrap();
+    let json = if cell.is_string() { cell.as_str().unwrap().to_string() } else { cell.to_string() };
+    let plan = database_studio_lib::drivers::plan::parse_pg(&json, false).expect("parse PG plan");
+    let root = plan.root.expect("phải có root node");
+    // scan node cơ bản (Seq Scan bảng nhỏ) — operation đã chuẩn hóa
+    assert!(
+        root.operation.contains("Scan") || !root.children.is_empty(),
+        "root phải là scan/tree node, got {}",
+        root.operation
+    );
+    assert_eq!(plan.system, "postgres");
+    assert!(!plan.raw.is_empty());
 }
 
 /// Phase 2 · Section 8 — Quick Connect: một connection với id ephemeral (`quick-*`)

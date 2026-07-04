@@ -200,6 +200,7 @@ export type TabContentType =
   | 'kafka-schema-registry'
   | 'cassandra-ring'
   | 'table-designer'
+  | 'query-plan'
 
 export interface TabState {
   id: string

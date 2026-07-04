@@ -1,0 +1,361 @@
+//! Query Plan normalization (Phase 5 · T1). Mỗi hệ chạy EXPLAIN theo cơ chế
+//! native rồi map về struct chuẩn `QueryPlan { system, mode, root, summary, raw }`
+//! để 1 component visualizer duy nhất hiển thị mọi hệ. Parser thuần (không I/O)
+//! → unit-test được; orchestration (chạy EXPLAIN) ở commands/plan.rs.
+
+use serde::Serialize;
+use serde_json::{Map, Value};
+
+/// Một node trong cây kế hoạch, đã chuẩn hóa tên operation.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct PlanNode {
+    /// Tên chuẩn hóa (SeqScan/IndexScan/HashJoin/Sort/Aggregate/…).
+    pub operation: String,
+    /// Tên gốc của hệ (giữ nguyên để tham chiếu).
+    pub native_op: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub estimated_rows: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub actual_rows: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub estimated_cost: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub actual_time_ms: Option<f64>,
+    /// Chi tiết thô (relation, filter, join cond, buffers, loops…).
+    pub extra: Map<String, Value>,
+    pub children: Vec<PlanNode>,
+    pub is_hotspot: bool,
+}
+
+impl PlanNode {
+    fn leaf(operation: &str, native: &str) -> Self {
+        PlanNode {
+            operation: operation.to_string(),
+            native_op: native.to_string(),
+            estimated_rows: None,
+            actual_rows: None,
+            estimated_cost: None,
+            actual_time_ms: None,
+            extra: Map::new(),
+            children: Vec::new(),
+            is_hotspot: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct PlanSummary {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_cost: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_time_ms: Option<f64>,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct QueryPlan {
+    pub system: String,
+    /// "estimated" | "actual" | "not_applicable"
+    pub mode: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub root: Option<PlanNode>,
+    pub summary: PlanSummary,
+    /// Bản gốc (JSON/XML/text/trace) cho nút "View raw".
+    pub raw: String,
+}
+
+impl QueryPlan {
+    pub fn not_applicable(system: &str) -> Self {
+        QueryPlan {
+            system: system.to_string(),
+            mode: "not_applicable".into(),
+            root: None,
+            summary: PlanSummary { total_cost: None, total_time_ms: None, warnings: Vec::new() },
+            raw: String::new(),
+        }
+    }
+}
+
+/// Ngưỡng coi là "bảng lớn" khi cảnh báo full/seq scan.
+const LARGE_ROWS: f64 = 10_000.0;
+
+/// Chuẩn hóa tên operation gốc về tập chung.
+pub fn normalize_op(native: &str) -> String {
+    let n = native.to_lowercase();
+    let canon = if n.contains("seq scan") || n == "scan" || n.contains("table scan") || n.contains("full") {
+        "SeqScan"
+    } else if n.contains("index only scan") {
+        "IndexOnlyScan"
+    } else if n.contains("bitmap") {
+        "BitmapScan"
+    } else if n.contains("index scan") || n.contains("index range") || (n.contains("search") && n.contains("index")) {
+        "IndexScan"
+    } else if n.contains("nested loop") {
+        "NestedLoop"
+    } else if n.contains("hash join") || n.contains("hash") && n.contains("join") {
+        "HashJoin"
+    } else if n.contains("merge join") {
+        "MergeJoin"
+    } else if n.contains("sort") {
+        "Sort"
+    } else if n.contains("aggregate") || n.contains("group") {
+        "Aggregate"
+    } else if n.contains("limit") {
+        "Limit"
+    } else if n.contains("materialize") {
+        "Materialize"
+    } else if n.contains("gather") {
+        "Gather"
+    } else if n.contains("hash") {
+        "Hash"
+    } else if n.contains("search") {
+        "IndexScan"
+    } else {
+        return native.to_string();
+    };
+    canon.to_string()
+}
+
+// ---------------------------------------------------------------------------
+// PostgreSQL — EXPLAIN (FORMAT JSON) / (ANALYZE, FORMAT JSON)
+// ---------------------------------------------------------------------------
+
+/// Parse output PG `EXPLAIN (FORMAT JSON)`: `[{"Plan": {...}, "Execution Time":..}]`.
+pub fn parse_pg(json_text: &str, actual: bool) -> Result<QueryPlan, String> {
+    let v: Value = serde_json::from_str(json_text).map_err(|e| format!("PG plan JSON lỗi: {e}"))?;
+    let obj = v.as_array().and_then(|a| a.first()).ok_or("PG plan rỗng")?;
+    let plan = obj.get("Plan").ok_or("thiếu Plan")?;
+    let mut warnings = Vec::new();
+    let root = parse_pg_node(plan, &mut warnings);
+    let total_time = obj.get("Execution Time").and_then(Value::as_f64);
+    QueryPlan_ok("postgres", actual, root, total_time, warnings, json_text)
+}
+
+fn parse_pg_node(plan: &Value, warnings: &mut Vec<String>) -> PlanNode {
+    let native = plan.get("Node Type").and_then(Value::as_str).unwrap_or("Unknown").to_string();
+    let mut node = PlanNode::leaf(&normalize_op(&native), &native);
+    node.estimated_rows = plan.get("Plan Rows").and_then(Value::as_f64);
+    node.actual_rows = plan.get("Actual Rows").and_then(Value::as_f64);
+    node.estimated_cost = plan.get("Total Cost").and_then(Value::as_f64);
+    node.actual_time_ms = plan.get("Actual Total Time").and_then(Value::as_f64);
+    for key in ["Relation Name", "Index Name", "Filter", "Join Type", "Hash Cond", "Index Cond", "Sort Key"] {
+        if let Some(val) = plan.get(key) {
+            node.extra.insert(key.to_string(), val.clone());
+        }
+    }
+    mark_hotspot(&mut node, warnings);
+    if let Some(children) = plan.get("Plans").and_then(Value::as_array) {
+        node.children = children.iter().map(|c| parse_pg_node(c, warnings)).collect();
+    }
+    node
+}
+
+// ---------------------------------------------------------------------------
+// MySQL / MariaDB — EXPLAIN FORMAT=JSON (query_block → nested table nodes)
+// ---------------------------------------------------------------------------
+
+/// Parse `EXPLAIN FORMAT=JSON` của MySQL/MariaDB (đơn giản hóa: 1 nhánh chính
+/// theo query_block/nested_loop/table). Đủ để hiển thị access type + rows.
+pub fn parse_mysql(json_text: &str, system: &str) -> Result<QueryPlan, String> {
+    let v: Value = serde_json::from_str(json_text).map_err(|e| format!("MySQL plan JSON lỗi: {e}"))?;
+    let qb = v.get("query_block").ok_or("thiếu query_block")?;
+    let mut warnings = Vec::new();
+    let root = parse_mysql_block(qb, &mut warnings);
+    QueryPlan_ok(system, false, root, None, warnings, json_text)
+}
+
+fn parse_mysql_block(block: &Value, warnings: &mut Vec<String>) -> PlanNode {
+    // nested_loop → join; table → scan
+    if let Some(nested) = block.get("nested_loop").and_then(Value::as_array) {
+        let mut node = PlanNode::leaf("NestedLoop", "nested_loop");
+        node.children = nested.iter().map(|t| parse_mysql_block(t, warnings)).collect();
+        return node;
+    }
+    if let Some(table) = block.get("table") {
+        return parse_mysql_table(table, warnings);
+    }
+    if let Some(cost) = block.get("cost_info").and_then(|c| c.get("query_cost")).and_then(Value::as_str) {
+        let mut n = PlanNode::leaf("QueryBlock", "query_block");
+        n.estimated_cost = cost.parse().ok();
+        // đệ quy vào table nếu có
+        return n;
+    }
+    PlanNode::leaf("QueryBlock", "query_block")
+}
+
+fn parse_mysql_table(table: &Value, warnings: &mut Vec<String>) -> PlanNode {
+    let access = table.get("access_type").and_then(Value::as_str).unwrap_or("ALL");
+    let native = format!("{access} access");
+    let op = match access {
+        "ALL" => "SeqScan",
+        "index" => "IndexOnlyScan",
+        "ref" | "eq_ref" | "range" | "const" => "IndexScan",
+        _ => "SeqScan",
+    };
+    let mut node = PlanNode::leaf(op, &native);
+    node.estimated_rows = table.get("rows_examined_per_scan").and_then(Value::as_f64);
+    if let Some(name) = table.get("table_name").and_then(Value::as_str) {
+        node.extra.insert("Relation Name".into(), Value::String(name.into()));
+    }
+    if let Some(cost) = table.get("cost_info").and_then(|c| c.get("read_cost")).and_then(Value::as_str) {
+        node.estimated_cost = cost.parse().ok();
+    }
+    mark_hotspot(&mut node, warnings);
+    node
+}
+
+// ---------------------------------------------------------------------------
+// SQLite — EXPLAIN QUERY PLAN (id, parent, notused, detail)
+// ---------------------------------------------------------------------------
+
+/// Parse các dòng `EXPLAIN QUERY PLAN`: mỗi dòng (id, parent, detail) → cây theo parent.
+pub fn parse_sqlite(rows: &[(i64, i64, String)]) -> QueryPlan {
+    // Node giả gốc = QUERY PLAN; con theo parent id (0 = gốc).
+    fn build(id: i64, rows: &[(i64, i64, String)], warnings: &mut Vec<String>) -> Vec<PlanNode> {
+        rows.iter()
+            .filter(|(_, parent, _)| *parent == id)
+            .map(|(nid, _, detail)| {
+                let op = normalize_op(detail);
+                let mut node = PlanNode::leaf(&op, detail);
+                node.extra.insert("detail".into(), Value::String(detail.clone()));
+                if detail.to_uppercase().contains("SCAN") && !detail.to_uppercase().contains("USING INDEX") {
+                    node.is_hotspot = true;
+                    warnings.push(format!("Full scan: {detail}"));
+                }
+                node.children = build(*nid, rows, warnings);
+                node
+            })
+            .collect()
+    }
+    let mut warnings = Vec::new();
+    let children = build(0, rows, &mut warnings);
+    let mut root = PlanNode::leaf("QueryPlan", "QUERY PLAN");
+    root.children = children;
+    QueryPlan {
+        system: "sqlite".into(),
+        mode: "estimated".into(),
+        root: Some(root),
+        summary: PlanSummary { total_cost: None, total_time_ms: None, warnings },
+        raw: rows.iter().map(|(i, p, d)| format!("{i}|{p}|{d}")).collect::<Vec<_>>().join("\n"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Fallback text (MSSQL/ClickHouse trước khi có parser chuyên biệt): 1 node raw.
+// ---------------------------------------------------------------------------
+
+pub fn from_raw_text(system: &str, raw: &str) -> QueryPlan {
+    let mut root = PlanNode::leaf("Plan", "Plan");
+    root.extra.insert("text".into(), Value::String(raw.to_string()));
+    QueryPlan {
+        system: system.to_string(),
+        mode: "estimated".into(),
+        root: Some(root),
+        summary: PlanSummary { total_cost: None, total_time_ms: None, warnings: Vec::new() },
+        raw: raw.to_string(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+
+#[allow(non_snake_case)]
+fn QueryPlan_ok(
+    system: &str,
+    actual: bool,
+    root: PlanNode,
+    total_time: Option<f64>,
+    warnings: Vec<String>,
+    raw: &str,
+) -> Result<QueryPlan, String> {
+    Ok(QueryPlan {
+        system: system.to_string(),
+        mode: if actual { "actual".into() } else { "estimated".into() },
+        summary: PlanSummary {
+            total_cost: root.estimated_cost,
+            total_time_ms: total_time.or(root.actual_time_ms),
+            warnings,
+        },
+        root: Some(root),
+        raw: raw.to_string(),
+    })
+}
+
+/// Đánh dấu hotspot + thêm cảnh báo: seq scan bảng lớn; actual lệch estimated >10x.
+fn mark_hotspot(node: &mut PlanNode, warnings: &mut Vec<String>) {
+    let rows = node.estimated_rows.or(node.actual_rows).unwrap_or(0.0);
+    if node.operation == "SeqScan" && rows > LARGE_ROWS {
+        node.is_hotspot = true;
+        let rel = node.extra.get("Relation Name").and_then(Value::as_str).unwrap_or("bảng");
+        warnings.push(format!("Seq Scan trên {rel} (~{} rows)", rows as i64));
+    }
+    if let (Some(est), Some(act)) = (node.estimated_rows, node.actual_rows) {
+        if est > 0.0 && (act / est > 10.0 || est / act.max(1.0) > 10.0) {
+            node.is_hotspot = true;
+            warnings.push(format!(
+                "{}: actual {} vs estimated {} (lệch >10x)",
+                node.operation, act as i64, est as i64
+            ));
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_ops() {
+        assert_eq!(normalize_op("Seq Scan"), "SeqScan");
+        assert_eq!(normalize_op("Index Scan"), "IndexScan");
+        assert_eq!(normalize_op("Index Only Scan"), "IndexOnlyScan");
+        assert_eq!(normalize_op("Hash Join"), "HashJoin");
+        assert_eq!(normalize_op("Nested Loop"), "NestedLoop");
+    }
+
+    #[test]
+    fn pg_json_tree_and_hotspot() {
+        let json = r#"[{"Plan":{"Node Type":"Hash Join","Total Cost":250.5,"Plan Rows":100,
+          "Plans":[
+            {"Node Type":"Seq Scan","Relation Name":"orders","Total Cost":180.0,"Plan Rows":50000,"Actual Rows":50000},
+            {"Node Type":"Index Scan","Index Name":"users_pk","Total Cost":8.0,"Plan Rows":1}
+          ]},"Execution Time":12.3}]"#;
+        let plan = parse_pg(json, true).unwrap();
+        assert_eq!(plan.mode, "actual");
+        let root = plan.root.unwrap();
+        assert_eq!(root.operation, "HashJoin");
+        assert_eq!(root.children.len(), 2);
+        assert_eq!(root.children[0].operation, "SeqScan");
+        assert!(root.children[0].is_hotspot, "seq scan 50k rows phải là hotspot");
+        assert_eq!(root.children[1].operation, "IndexScan");
+        assert_eq!(plan.summary.total_time_ms, Some(12.3));
+        assert!(plan.summary.warnings.iter().any(|w| w.contains("orders")));
+    }
+
+    #[test]
+    fn sqlite_eqp_tree() {
+        let rows = vec![
+            (2, 0, "SCAN TABLE orders".to_string()),
+            (3, 0, "SEARCH TABLE users USING INDEX users_pk (id=?)".to_string()),
+        ];
+        let plan = parse_sqlite(&rows);
+        let root = plan.root.unwrap();
+        assert_eq!(root.children.len(), 2);
+        assert!(root.children[0].is_hotspot, "SCAN không index → hotspot");
+        assert!(!root.children[1].is_hotspot, "SEARCH USING INDEX → không hotspot");
+    }
+
+    #[test]
+    fn mysql_json_access_type() {
+        let json = r#"{"query_block":{"table":{"table_name":"orders","access_type":"ALL",
+          "rows_examined_per_scan":50000,"cost_info":{"read_cost":"1234.5"}}}}"#;
+        let plan = parse_mysql(json, "mysql").unwrap();
+        let root = plan.root.unwrap();
+        assert_eq!(root.operation, "SeqScan");
+        assert!(root.is_hotspot);
+    }
+
+    #[test]
+    fn not_applicable_for_messaging() {
+        assert_eq!(QueryPlan::not_applicable("redis").mode, "not_applicable");
+    }
+}

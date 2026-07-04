@@ -108,6 +108,8 @@ pub fn run() {
             commands::cassandra::cassandra_table_ddl,
             // clickhouse advanced (Phase 5)
             commands::clickhouse::ch_table_meta,
+            // query plan visualizer (Phase 5)
+            commands::plan::explain_plan,
             // schema
             commands::schema::list_schemas,
             commands::schema::list_tables,

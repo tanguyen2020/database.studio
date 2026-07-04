@@ -270,6 +270,26 @@ class TabsStore {
     return tab
   }
 
+  /** Mở tab Query Plan cho một câu lệnh (visualize EXPLAIN). */
+  openQueryPlan(connectionId: string, sql: string): TabState {
+    const profile = connections.byId(connectionId)
+    const tab: TabState = {
+      id: uuid(),
+      connectionId,
+      connectionName: profile?.name ?? '',
+      systemType: (profile?.system as SystemType) ?? 'orphan',
+      contentType: 'query-plan',
+      title: 'Query Plan',
+      isPinned: false,
+      isDirty: false,
+      state: { query: sql },
+    }
+    this.tabs.push(tab)
+    this.activeTabId = tab.id
+    this.schedulePersist()
+    return tab
+  }
+
   /** Mở Table Designer — New Table (schema/table rỗng) hoặc Design bảng có sẵn. */
   openTableDesigner(connectionId: string, schema: string, table: string): TabState {
     const existing = this.tabs.find(
