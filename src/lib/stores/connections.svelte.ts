@@ -193,6 +193,8 @@ class ConnectionsStore {
       // mssql_auth tái dùng làm "auth mode": mssql='sql', kafka=SASL mechanism ('' none)
       mssql_auth: system === 'mssql' ? 'sql' : '',
       schema_registry_url: '',
+      cassandra_dc: system === 'cassandra' ? 'dc1' : '',
+      cassandra_consistency: system === 'cassandra' ? 'LOCAL_QUORUM' : '',
       has_password: false,
       connected: false,
     }

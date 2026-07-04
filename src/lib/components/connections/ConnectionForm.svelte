@@ -47,9 +47,16 @@
   const isRedis = $derived(draft?.system === 'redis')
   const isNats = $derived(draft?.system === 'nats')
   const isKafka = $derived(draft?.system === 'kafka')
-  const hostLabel = $derived(isKafka ? 'Bootstrap servers' : 'Host')
+  const isCassandra = $derived(draft?.system === 'cassandra')
+  const hostLabel = $derived(isKafka ? 'Bootstrap servers' : isCassandra ? 'Contact points' : 'Host')
   const hostPlaceholder = $derived(
-    isSqlite ? '/data/local.db' : isKafka ? 'broker1:9092,broker2:9092' : 'localhost',
+    isSqlite
+      ? '/data/local.db'
+      : isKafka
+        ? 'broker1:9092,broker2:9092'
+        : isCassandra
+          ? '10.0.5.1,10.0.5.2'
+          : 'localhost',
   )
   const dbPlaceholder = $derived(draft?.system === 'postgres' ? 'postgres' : '')
   // port từ dòng 5791-5796: auth flags MSSQL
@@ -327,6 +334,25 @@
               <div style="grid-column:1/3">
                 <div class="cm-label">Schema Registry URL <span style="color:var(--muted);font-weight:400">(tùy chọn)</span></div>
                 <input class="cm-input mono" bind:value={draft.schema_registry_url} placeholder="http://localhost:8081" />
+              </div>
+            {/if}
+
+            {#if isCassandra}
+              <!-- Cassandra: Local datacenter + Consistency level (prototype dòng 2188-2191) -->
+              <div>
+                <div class="cm-label">Local datacenter</div>
+                <input class="cm-input mono" bind:value={draft.cassandra_dc} placeholder="dc1" />
+              </div>
+              <div>
+                <div class="cm-label">Consistency level</div>
+                <select class="cm-input" bind:value={draft.cassandra_consistency}>
+                  <option value="LOCAL_QUORUM">LOCAL_QUORUM</option>
+                  <option value="QUORUM">QUORUM</option>
+                  <option value="ONE">ONE</option>
+                  <option value="ALL">ALL</option>
+                  <option value="LOCAL_ONE">LOCAL_ONE</option>
+                  <option value="EACH_QUORUM">EACH_QUORUM</option>
+                </select>
               </div>
             {/if}
 

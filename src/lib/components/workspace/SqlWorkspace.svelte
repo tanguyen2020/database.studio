@@ -334,6 +334,12 @@
     <div class="wk-tbtn" onclick={doExplain} onkeydown={(e) => e.key === 'Enter' && doExplain()} role="button" tabindex="0" title="Explain (Ctrl+Shift+E) — visual plan ở Phase 5">
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="20" x2="6" y2="13"></line><line x1="12" y1="20" x2="12" y2="8"></line><line x1="18" y1="20" x2="18" y2="11"></line></svg>Explain
     </div>
+    {#if tab.systemType === 'cassandra'}
+      <!-- Ring (prototype dòng 257-259) — mở Ring Topology, màu accent Cassandra -->
+      <div class="wk-tbtn" style="color:#1287B1" onclick={() => tab.connectionId && tabs.openCassandraRing(tab.connectionId)} onkeydown={(e) => e.key === 'Enter' && tab.connectionId && tabs.openCassandraRing(tab.connectionId)} role="button" tabindex="0" title="Ring Topology">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9" stroke-dasharray="3 3"></circle><circle cx="12" cy="3" r="2" fill="currentColor" stroke="none"></circle><circle cx="20" cy="17" r="2" fill="currentColor" stroke="none"></circle><circle cx="4" cy="17" r="2" fill="currentColor" stroke="none"></circle></svg>Ring
+      </div>
+    {/if}
     <div class="wk-tbtn" onclick={() => toasts.show('Convert dialect — Phase 2')} onkeydown={(e) => e.key === 'Enter' && toasts.show('Convert dialect — Phase 2')} role="button" tabindex="0" title="Convert SQL dialect">
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h13l-3-3M20 17H7l3 3"></path></svg>Convert
     </div>

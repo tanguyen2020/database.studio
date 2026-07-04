@@ -155,6 +155,8 @@ async fn quick_connect_ephemeral_id_is_queryable_via_registry() {
         sqlite_mode: SqliteMode::ReadWrite,
         mssql_auth: String::new(),
         schema_registry_url: String::new(),
+        cassandra_dc: String::new(),
+        cassandra_consistency: String::new(),
     };
 
     let registry = Registry::default();
@@ -1178,6 +1180,193 @@ async fn kafka_connect_and_metadata() {
     // cleanup bọc timeout — round-trip đã PASS, cleanup treo không fail test.
     let _ = tokio::time::timeout(Duration::from_secs(30), drv.delete_topic("phase4_itest")).await;
     eprintln!("CHK delete_topic done — test end");
+}
+
+// ---------------------------------------------------------------------------
+// Cassandra (Phase 4b) — 6 kịch bản self-test của CASSANDRA_SPEC_ADDENDUM §9
+// ---------------------------------------------------------------------------
+
+async fn start_cassandra() -> (ContainerAsync<GenericImage>, u16) {
+    // Cassandra khởi động chậm (gossip + CQL, ~60-90s). Không dùng WaitFor log
+    // (dễ StartupTimeout); để retry() 240s xử lý CQL readiness như pg/redis/nats.
+    let c = GenericImage::new("cassandra", "5.0")
+        .with_exposed_port(9042.tcp())
+        .with_env_var("HEAP_NEWSIZE", "128M")
+        .with_env_var("MAX_HEAP_SIZE", "512M")
+        .start()
+        .await
+        .expect("start cassandra container (Docker daemon phải đang chạy)");
+    let port = c.get_host_port_ipv4(9042).await.unwrap();
+    (c, port)
+}
+
+#[tokio::test]
+async fn cassandra_cql_semantics_paging_and_ddl_roundtrip() {
+    use database_studio_lib::drivers::cassandra::{CassandraConnParams, CassandraDriver};
+
+    let (_c, port) = start_cassandra().await;
+    let params = CassandraConnParams {
+        contact_points: vec![format!("127.0.0.1:{port}")],
+        user: String::new(),
+        password: String::new(),
+        datacenter: "datacenter1".into(), // default DC name của image cassandra
+        consistency: "ONE".into(),
+        keyspace: String::new(),
+        ssl: false,
+        ssl_ca: String::new(),
+    };
+
+    // Node nhận control-connection trước khi sẵn sàng nhận query → reconnect tới
+    // khi ping (query thật) OK. Deadline 240s cho Cassandra khởi động chậm.
+    let drv = {
+        let deadline = Instant::now() + Duration::from_secs(240);
+        let mut last = String::new();
+        loop {
+            // testcontainers: node quảng bá IP nội bộ → dịch mọi địa chỉ về
+            // 127.0.0.1:mapped_port để pool kết nối được từ host.
+            match CassandraDriver::connect_translating_to(&params, "127.0.0.1", port).await {
+                Ok(d) => match d
+                    .exec_cql("SELECT release_version FROM system.local", None, None)
+                    .await
+                {
+                    Ok(_) => break d,
+                    Err(e) => last = format!("query: {}", e.message),
+                },
+                Err(e) => last = format!("connect: {}", e.message),
+            }
+            if Instant::now() >= deadline {
+                panic!("cassandra: hết 240s chờ node sẵn sàng — lỗi cuối: {last}");
+            }
+            tokio::time::sleep(Duration::from_secs(3)).await;
+        }
+    };
+    eprintln!("CHK connect + ping OK");
+
+    // --- setup: keyspace + bảng composite PK + clustering order + dữ liệu ---
+    drv.exec_cql(
+        "CREATE KEYSPACE IF NOT EXISTS itest_ks WITH replication = \
+         {'class': 'SimpleStrategy', 'replication_factor': 1}",
+        None,
+        None,
+    )
+    .await
+    .expect("create keyspace");
+    drv.exec_cql(
+        "CREATE TABLE itest_ks.grades ( \
+           student_id int, term text, course text, grade text, \
+           PRIMARY KEY ((student_id, term), course) \
+         ) WITH CLUSTERING ORDER BY (course DESC)",
+        None,
+        None,
+    )
+    .await
+    .expect("create table");
+    for i in 0..7 {
+        drv.exec_cql(
+            &format!(
+                "INSERT INTO itest_ks.grades (student_id, term, course, grade) \
+                 VALUES (1, 'Fall2025', 'CS{i}', 'A')"
+            ),
+            None,
+            None,
+        )
+        .await
+        .expect("insert");
+    }
+    eprintln!("CHK setup keyspace/table/rows OK");
+
+    // (1) SELECT đủ partition key → trả rows.
+    let r1 = drv
+        .exec_cql(
+            "SELECT course, grade FROM itest_ks.grades WHERE student_id = 1 AND term = 'Fall2025'",
+            None,
+            None,
+        )
+        .await
+        .expect("select theo full PK phải chạy");
+    match r1.outcome {
+        StatementOutcome::Rows { result } => assert_eq!(result.rows.len(), 7, "phải 7 rows"),
+        _ => panic!("phải là Rows"),
+    }
+    eprintln!("CHK (1) SELECT full partition key → rows OK");
+
+    // (2) WHERE trên cột non-index KHÔNG ALLOW FILTERING → lỗi từ driver.
+    let r2 = drv
+        .exec_cql("SELECT * FROM itest_ks.grades WHERE grade = 'A'", None, None)
+        .await;
+    assert!(r2.is_err(), "WHERE cột non-index thiếu ALLOW FILTERING phải LỖI, nhận: {r2:?}");
+    eprintln!("CHK (2) WHERE non-index no ALLOW FILTERING → error OK");
+
+    // (3) Cùng query + ALLOW FILTERING → chạy được.
+    let r3 = drv
+        .exec_cql(
+            "SELECT * FROM itest_ks.grades WHERE grade = 'A' ALLOW FILTERING",
+            None,
+            None,
+        )
+        .await
+        .expect("ALLOW FILTERING phải chạy");
+    assert!(matches!(r3.outcome, StatementOutcome::Rows { .. }), "ALLOW FILTERING phải trả rows");
+    eprintln!("CHK (3) ALLOW FILTERING → rows OK");
+
+    // (4) JOIN → driver từ chối (CQL không có JOIN → SyntaxError/InvalidRequest).
+    let r4 = drv
+        .exec_cql("SELECT * FROM itest_ks.grades JOIN x ON a = b", None, None)
+        .await;
+    assert!(r4.is_err(), "JOIN phải bị từ chối");
+    eprintln!("CHK (4) JOIN → rejected OK");
+
+    // (5) Paging: page_size nhỏ → có next_page; fetch trang 2 qua paging state.
+    let p1 = drv
+        .exec_cql(
+            "SELECT course FROM itest_ks.grades WHERE student_id = 1 AND term = 'Fall2025'",
+            Some(3),
+            None,
+        )
+        .await
+        .expect("page 1");
+    let n1 = match &p1.outcome {
+        StatementOutcome::Rows { result } => result.rows.len(),
+        _ => panic!("page1 phải Rows"),
+    };
+    assert!(p1.next_page.is_some(), "trang 1 (size 3/7) phải còn next_page");
+    let p2 = drv
+        .exec_cql(
+            "SELECT course FROM itest_ks.grades WHERE student_id = 1 AND term = 'Fall2025'",
+            Some(3),
+            p1.next_page.as_deref(),
+        )
+        .await
+        .expect("page 2 qua paging state");
+    let n2 = match &p2.outcome {
+        StatementOutcome::Rows { result } => result.rows.len(),
+        _ => panic!("page2 phải Rows"),
+    };
+    assert!(n1 <= 3 && n2 >= 1, "paging: trang 1 ≤3 rows, trang 2 có thêm rows (n1={n1}, n2={n2})");
+    eprintln!("CHK (5) paging state trang 2 OK (n1={n1}, n2={n2})");
+
+    // (6) DDL round-trip: đọc lại metadata thấy đúng composite PK + clustering.
+    let ddl = drv.table_ddl("itest_ks", "grades").await.expect("table_ddl");
+    assert!(
+        ddl.contains("PRIMARY KEY ((student_id, term), course)"),
+        "DDL phải giữ composite partition key: {ddl}"
+    );
+    assert!(ddl.contains("CLUSTERING ORDER BY (course DESC)"), "DDL phải giữ clustering order: {ddl}");
+    // introspection tree phản ánh đúng kind cột
+    let tree = drv.keyspace_tree("itest_ks").await.expect("keyspace_tree");
+    let grades = tree.tables.iter().find(|t| t.name == "grades").expect("thấy table grades");
+    let parts: Vec<&str> = grades
+        .columns
+        .iter()
+        .filter(|c| c.kind == "partition_key")
+        .map(|c| c.name.as_str())
+        .collect();
+    assert_eq!(parts, vec!["student_id", "term"], "2 partition key đúng thứ tự");
+    assert!(
+        grades.columns.iter().any(|c| c.name == "course" && c.kind == "clustering"),
+        "course phải là clustering"
+    );
+    eprintln!("CHK (6) DDL + metadata round-trip composite PK OK — test end");
 }
 
 /// Schema Registry (T7) — Confluent REST API là HTTP thuần (như driver ClickHouse

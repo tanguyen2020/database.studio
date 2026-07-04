@@ -81,6 +81,8 @@
       if (p.system === 'redis') tabs.openRedisTab(p.id)
       else if (p.system === 'nats') tabs.openNatsTab(p.id)
       else if (p.system === 'kafka') tabs.openKafkaTab(p.id)
+      // Cassandra: CQL editor (tái dùng SQL editor + result grid, title Untitled CQL)
+      else if (p.system === 'cassandra') tabs.openSqlTab({ connectionId: p.id, title: 'Untitled CQL' })
     }
   }
 

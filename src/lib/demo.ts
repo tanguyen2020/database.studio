@@ -38,6 +38,8 @@ const conn = (
   sqlite_mode: 'read-write',
   mssql_auth: 'sql',
   schema_registry_url: '',
+  cassandra_dc: '',
+  cassandra_consistency: '',
   has_password: true,
   connected: false,
   ...opts,
@@ -475,6 +477,109 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
       const r = reg[a.subject] ?? reg['enrollment.events-value']
       return ok({ subject: a.subject, version: a.version, id: 1000 + a.version, fmt: r.fmt, schema: r.schema, compat: r.compat })
     }
+    // ---- Cassandra (Phase 4b) ----
+    case 'cql_exec': {
+      const cql = String((args?.cql as string) ?? '').toLowerCase()
+      // JOIN/subquery đã bị lint chặn ở editor; ở đây engine cũng từ chối rõ.
+      if (/\bjoin\b/.test(cql)) {
+        return ok({
+          ok: false,
+          error: { message: 'CQL không hỗ trợ JOIN', detail: 'InvalidRequest' },
+          duration_ms: 1,
+          warnings: [],
+        })
+      }
+      // WHERE trên cột không-index thiếu ALLOW FILTERING → lỗi từ "driver".
+      if (/where/.test(cql) && /\bname\s*=/.test(cql) && !/allow\s+filtering/.test(cql)) {
+        return ok({
+          ok: false,
+          error: {
+            message:
+              'Cannot execute this query as it might involve data filtering... use ALLOW FILTERING',
+            detail: 'InvalidRequest',
+          },
+          duration_ms: 2,
+          warnings: [],
+        })
+      }
+      const rows = Array.from({ length: 25 }, (_, i) => ({
+        student_id: `s${1000 + i}`,
+        email: `student.${i}@student.greenfield.edu`,
+        name: `Student ${i}`,
+        grade_level: 9 + (i % 4),
+        created_at: '2026-05-01T08:00:00+00:00',
+      }))
+      const warnings = /allow\s+filtering/.test(cql)
+        ? ['Query uses ALLOW FILTERING and may be slow (full cluster scan)']
+        : []
+      return ok({
+        ok: true,
+        result: {
+          cols: [
+            ['student_id', 'Uuid'],
+            ['email', 'Text'],
+            ['name', 'Text'],
+            ['grade_level', 'Int'],
+            ['created_at', 'Timestamp'],
+          ],
+          rows,
+          total: rows.length,
+        },
+        duration_ms: 12,
+        next_page: 'DEMO_PAGE_2',
+        warnings,
+      })
+    }
+    case 'cassandra_keyspaces':
+      return ok(['campus_ks'])
+    case 'cassandra_tree':
+      return ok({
+        keyspace: 'campus_ks',
+        replication: "{ 'class': 'NetworkTopologyStrategy', 'dc1': '3' }",
+        tables: [
+          {
+            name: 'students_by_id',
+            columns: [
+              { name: 'student_id', data_type: 'uuid', kind: 'partition_key', clustering_order: '', position: 0 },
+              { name: 'email', data_type: 'text', kind: 'regular', clustering_order: '', position: -1 },
+              { name: 'name', data_type: 'text', kind: 'regular', clustering_order: '', position: -1 },
+              { name: 'grade_level', data_type: 'int', kind: 'regular', clustering_order: '', position: -1 },
+              { name: 'created_at', data_type: 'timestamp', kind: 'regular', clustering_order: '', position: -1 },
+            ],
+          },
+          {
+            name: 'grades_by_student',
+            columns: [
+              { name: 'student_id', data_type: 'uuid', kind: 'partition_key', clustering_order: '', position: 0 },
+              { name: 'term_course', data_type: 'text', kind: 'clustering', clustering_order: 'asc', position: 0 },
+              { name: 'grade', data_type: 'text', kind: 'regular', clustering_order: '', position: -1 },
+              { name: 'points', data_type: 'decimal', kind: 'regular', clustering_order: '', position: -1 },
+            ],
+          },
+          {
+            name: 'sessions',
+            columns: [
+              { name: 'session_id', data_type: 'uuid', kind: 'partition_key', clustering_order: '', position: 0 },
+              { name: 'student_id', data_type: 'uuid', kind: 'regular', clustering_order: '', position: -1 },
+              { name: 'last_seen', data_type: 'timestamp', kind: 'regular', clustering_order: '', position: -1 },
+            ],
+          },
+        ],
+        views: [{ name: 'students_by_email', base_table: 'students_by_id' }],
+        types: [{ name: 'address', fields: [['street', 'text'], ['city', 'text']] }],
+        functions: [{ name: 'avg_state', kind: 'function', signature: 'avg_state(double, double)' }],
+        indexes: [{ name: 'grades_grade_idx', table: 'grades_by_student', kind: 'COMPOSITES', target: 'grade' }],
+      })
+    case 'cassandra_ring':
+      return ok([
+        { host: '10.0.5.1', dc: 'dc1', rack: 'rack1', state: 'UN', load: '256 tokens', owns: '33.3%', version: '4.1.3' },
+        { host: '10.0.5.2', dc: 'dc1', rack: 'rack2', state: 'UN', load: '256 tokens', owns: '33.3%', version: '4.1.3' },
+        { host: '10.0.5.3', dc: 'dc2', rack: 'rack1', state: 'UN', load: '256 tokens', owns: '33.4%', version: '4.1.3' },
+      ])
+    case 'cassandra_table_ddl':
+      return ok(
+        'CREATE TABLE campus_ks.grades_by_student (\n  student_id uuid,\n  term_course text,\n  grade text,\n  points decimal,\n  PRIMARY KEY ((student_id), term_course)\n)\nWITH CLUSTERING ORDER BY (term_course ASC);',
+      )
     default:
       return Promise.reject(new Error(`demo: chưa mock command "${cmd}"`))
   }

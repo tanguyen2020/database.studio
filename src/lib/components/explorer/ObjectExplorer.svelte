@@ -8,6 +8,7 @@
   // MSSQL Schemas/TVF/Scalar; SQLite file → main → Tables 🔒/Views/Triggers).
   // Introspection lazy qua explorer store (IPC thật).
   import * as ContextMenu from '$lib/components/ui/context-menu'
+  import * as ipc from '$lib/ipc'
   import SystemIcon from '$lib/components/SystemIcon.svelte'
   import { connections } from '$lib/stores/connections.svelte'
   import { explorer } from '$lib/stores/explorer.svelte'
@@ -43,6 +44,37 @@
       untrack(() => void explorer.loadSchemas(s.id))
     }
   })
+
+  // Cassandra (Phase 4b): cây keyspace lấy qua command chuyên biệt (cassandra_tree),
+  // không đi qua explorer store quan hệ.
+  const isCassandra = $derived(selected?.system === 'cassandra')
+  let cassTree = $state<ipc.CassKeyspaceTree | null>(null)
+  let cassError = $state<string | null>(null)
+  $effect(() => {
+    const s = selected
+    if (s?.connected && s.system === 'cassandra') {
+      untrack(() => void loadCass(s.id))
+    }
+  })
+  async function loadCass(id: string) {
+    cassError = null
+    try {
+      const kss = await ipc.cassandraKeyspaces(id)
+      const ks = connections.byId(id)?.database || kss[0]
+      cassTree = ks ? await ipc.cassandraTree(id, ks) : null
+    } catch (e) {
+      cassError = String(e)
+      cassTree = null
+    }
+  }
+  // meta hậu tố phân biệt partition key / clustering / FK (prototype dòng 3968-3970).
+  function colMeta(c: ipc.CassColumn): string {
+    let suffix = ''
+    if (c.kind === 'partition_key') suffix = ' · PK'
+    else if (c.kind === 'clustering') suffix = ' · CK'
+    else if (/_id$/.test(c.name)) suffix = ' · FK'
+    return `${c.data_type}${suffix}`
+  }
 
   function toggle(key: string) {
     const next = new Set(expanded)
@@ -124,6 +156,26 @@
   function routineLabel(r: RoutineInfo): string {
     const params = r.params.map((p) => p.data_type).join(', ')
     return `${r.name}(${params})`
+  }
+
+  // Cassandra DDL viewer (Phase 4b · T5) — native CQL sinh từ metadata thật.
+  async function cassDdlTab(table: string) {
+    if (!selected || !cassTree) return
+    try {
+      const ddl = await ipc.cassandraTableDdl(selected.id, cassTree.keyspace, table)
+      tabs.openSqlTab({ connectionId: selected.id, title: `${table} DDL`, query: ddl })
+    } catch (e) {
+      toasts.error(`${e}`)
+    }
+  }
+
+  function cassSelectTab(table: string) {
+    if (!selected || !cassTree) return
+    tabs.openSqlTab({
+      connectionId: selected.id,
+      title: table,
+      query: `SELECT * FROM ${cassTree.keyspace}.${table} LIMIT 100;`,
+    })
   }
 
   function collapseAll() {
@@ -236,6 +288,82 @@
       </div>
     {:else if cache?.error}
       <div style="padding:var(--px-12);font-size:var(--px-11_5);color:var(--error)">{cache.error}</div>
+    {:else if isCassandra}
+      <!-- Cassandra keyspace tree (Phase 4b) — cassandra_tree, PK/CK meta -->
+      {#if cassError}
+        <div style="padding:var(--px-12);font-size:var(--px-11_5);color:var(--error)">{cassError}</div>
+      {:else if cassTree}
+        {@const ksKey = `cass:ks`}
+        {@render row({ key: ksKey, depth: 0, glyph: '▤', color: C.schema, name: cassTree.keyspace, meta: 'keyspace', head: true, expandable: true, onClick: () => toggle(ksKey) })}
+        {#if expanded.has(ksKey)}
+          <!-- Tables -->
+          {@const tKey = `cass:tables`}
+          {@render row({ key: tKey, depth: 1, glyph: '▤', color: C.folder, name: 'Tables', meta: String(cassTree.tables.length), head: true, expandable: true, onClick: () => toggle(tKey) })}
+          {#if expanded.has(tKey)}
+            {#each cassTree.tables as t (t.name)}
+              {@const tbKey = `cass:t:${t.name}`}
+              {#snippet cassMenu()}
+                <ContextMenu.Content>
+                  <ContextMenu.Item onclick={() => cassSelectTab(t.name)}>SELECT * (LIMIT 100)</ContextMenu.Item>
+                  <ContextMenu.Item onclick={() => cassDdlTab(t.name)}>View DDL (CQL)</ContextMenu.Item>
+                </ContextMenu.Content>
+              {/snippet}
+              {@render row({ key: tbKey, depth: 2, glyph: '▦', color: C.table, name: t.name, expandable: true, onClick: () => toggle(tbKey), onDblClick: () => cassSelectTab(t.name) }, cassMenu)}
+              {#if expanded.has(tbKey)}
+                {#each t.columns as c (c.name)}
+                  {@render row({ key: `cass:c:${t.name}.${c.name}`, depth: 3, glyph: '▸', color: C.col, name: c.name, meta: colMeta(c) })}
+                {/each}
+              {/if}
+            {/each}
+          {/if}
+          <!-- Materialized Views -->
+          {#if cassTree.views.length}
+            {@const vKey = `cass:views`}
+            {@render row({ key: vKey, depth: 1, glyph: '◫', color: C.view, name: 'Materialized Views', meta: String(cassTree.views.length), head: true, expandable: true, onClick: () => toggle(vKey) })}
+            {#if expanded.has(vKey)}
+              {#each cassTree.views as v (v.name)}
+                {@render row({ key: `cass:v:${v.name}`, depth: 2, glyph: '◫', color: C.view, name: v.name, meta: v.base_table })}
+              {/each}
+            {/if}
+          {/if}
+          <!-- User Types -->
+          {#if cassTree.types.length}
+            {@const uKey = `cass:types`}
+            {@render row({ key: uKey, depth: 1, glyph: '▢', color: C.folder, name: 'User Types', meta: String(cassTree.types.length), head: true, expandable: true, onClick: () => toggle(uKey) })}
+            {#if expanded.has(uKey)}
+              {#each cassTree.types as ty (ty.name)}
+                {@render row({ key: `cass:u:${ty.name}`, depth: 2, glyph: '▢', color: C.col, name: ty.name, meta: 'udt' })}
+              {/each}
+            {/if}
+          {/if}
+          <!-- Functions -->
+          {#if cassTree.functions.length}
+            {@const fKey = `cass:fns`}
+            {@render row({ key: fKey, depth: 1, glyph: 'ƒ', color: C.folder, name: 'Functions', meta: String(cassTree.functions.length), head: true, expandable: true, onClick: () => toggle(fKey) })}
+            {#if expanded.has(fKey)}
+              {#each cassTree.functions as fn (fn.signature)}
+                {@render row({ key: `cass:f:${fn.signature}`, depth: 2, glyph: 'ƒ', color: C.col, name: fn.name, meta: fn.kind === 'aggregate' ? 'uda' : 'udf' })}
+              {/each}
+            {/if}
+          {/if}
+          <!-- Secondary Indexes -->
+          {#if cassTree.indexes.length}
+            {@const iKey = `cass:idx`}
+            {@render row({ key: iKey, depth: 1, glyph: '⌗', color: C.idx, name: 'Secondary Indexes', meta: String(cassTree.indexes.length), head: true, expandable: true, onClick: () => toggle(iKey) })}
+            {#if expanded.has(iKey)}
+              {#each cassTree.indexes as ix (ix.name)}
+                {@render row({ key: `cass:i:${ix.name}`, depth: 2, glyph: '⌗', color: C.idx, name: ix.name, meta: ix.kind === 'CUSTOM' ? 'SASI' : ix.target })}
+              {/each}
+            {/if}
+          {/if}
+          <!-- replication (properties) -->
+          {#if cassTree.replication}
+            {@render row({ key: `cass:repl`, depth: 1, glyph: '⚙', color: C.col, name: 'replication', meta: cassTree.replication })}
+          {/if}
+        {/if}
+      {:else}
+        <div style="padding:var(--px-16) var(--px-12);text-align:center;font-size:var(--px-12);color:var(--muted)">Đang tải keyspace…</div>
+      {/if}
     {:else}
       {#if isSqlite}
         {@render row({

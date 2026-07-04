@@ -1070,6 +1070,7 @@ version = "0.1.0"
 dependencies = [
  "aes-gcm",
  "async-nats",
+ "async-trait",
  "base64 0.22.1",
  "bigdecimal",
  "bytes",

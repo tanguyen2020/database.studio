@@ -27,6 +27,8 @@ function p(name: string, system: string, group: string): ProfilePublic {
     sqlite_mode: 'read-write',
     mssql_auth: 'sql',
     schema_registry_url: '',
+    cassandra_dc: '',
+    cassandra_consistency: '',
     has_password: false,
     connected: false,
   }

@@ -24,6 +24,7 @@
   import KafkaConsumer from '$lib/components/workspace/KafkaConsumer.svelte'
   import KafkaProducer from '$lib/components/workspace/KafkaProducer.svelte'
   import SchemaRegistryWorkspace from '$lib/components/workspace/SchemaRegistryWorkspace.svelte'
+  import CassandraRing from '$lib/components/workspace/CassandraRing.svelte'
   import HistoryTab from '$lib/components/workspace/HistoryTab.svelte'
   import SavedQueriesTab from '$lib/components/workspace/SavedQueriesTab.svelte'
   import { connections } from '$lib/stores/connections.svelte'
@@ -160,6 +161,8 @@
             <KafkaProducer tab={t} />
           {:else if t.contentType === 'kafka-schema-registry'}
             <SchemaRegistryWorkspace tab={t} />
+          {:else if t.contentType === 'cassandra-ring'}
+            <CassandraRing tab={t} />
           {:else}
             <SqlWorkspace tab={t} />
           {/if}

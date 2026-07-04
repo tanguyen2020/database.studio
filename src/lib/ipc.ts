@@ -372,6 +372,76 @@ export const kafkaSrVersions = (connId: string, subject: string) =>
 export const kafkaSrSchema = (connId: string, subject: string, version: number) =>
   invoke<SrSchema>('kafka_sr_schema', { connId, subject, version })
 
+// ---- Cassandra (Phase 4b) --------------------------------------------------
+
+export interface CqlExecResponse {
+  ok: boolean
+  result?: { cols: [string, string][]; rows: Record<string, unknown>[]; total: number }
+  error?: { message: string; detail?: string; statement_index?: number }
+  duration_ms: number
+  next_page?: string
+  warnings: string[]
+}
+
+export interface CassColumn {
+  name: string
+  data_type: string
+  kind: string // partition_key | clustering | regular | static
+  clustering_order: string
+  position: number
+}
+export interface CassTable {
+  name: string
+  columns: CassColumn[]
+}
+export interface CassView {
+  name: string
+  base_table: string
+}
+export interface CassType {
+  name: string
+  fields: [string, string][]
+}
+export interface CassFunction {
+  name: string
+  kind: string
+  signature: string
+}
+export interface CassIndex {
+  name: string
+  table: string
+  kind: string
+  target: string
+}
+export interface CassKeyspaceTree {
+  keyspace: string
+  replication: string
+  tables: CassTable[]
+  views: CassView[]
+  types: CassType[]
+  functions: CassFunction[]
+  indexes: CassIndex[]
+}
+export interface RingNode {
+  host: string
+  dc: string
+  rack: string
+  state: string
+  load: string
+  owns: string
+  version: string
+}
+
+export const cqlExec = (connId: string, cql: string, pageSize?: number, pageToken?: string) =>
+  invoke<CqlExecResponse>('cql_exec', { connId, cql, pageSize, pageToken })
+export const cassandraKeyspaces = (connId: string) =>
+  invoke<string[]>('cassandra_keyspaces', { connId })
+export const cassandraTree = (connId: string, keyspace: string) =>
+  invoke<CassKeyspaceTree>('cassandra_tree', { connId, keyspace })
+export const cassandraRing = (connId: string) => invoke<RingNode[]>('cassandra_ring', { connId })
+export const cassandraTableDdl = (connId: string, keyspace: string, table: string) =>
+  invoke<string>('cassandra_table_ddl', { connId, keyspace, table })
+
 // ---- schema (Object Explorer) ----------------------------------------------
 
 export const listSchemas = (connId: string) => invoke<SchemaInfo[]>('list_schemas', { connId })

@@ -47,6 +47,8 @@ export interface ConnectionProfile {
   sqlite_mode: SqliteMode
   mssql_auth: string
   schema_registry_url: string
+  cassandra_dc: string
+  cassandra_consistency: string
 }
 
 /** Profile as returned by the backend: never carries ciphertext. */
@@ -194,6 +196,7 @@ export type TabContentType =
   | 'kafka-consumer'
   | 'kafka-producer'
   | 'kafka-schema-registry'
+  | 'cassandra-ring'
 
 export interface TabState {
   id: string

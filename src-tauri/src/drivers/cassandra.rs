@@ -15,7 +15,7 @@ use std::sync::Arc;
 use scylla::client::execution_profile::ExecutionProfile;
 use scylla::client::session::Session;
 use scylla::client::session_builder::SessionBuilder;
-use scylla::errors::{ExecutionError, NewSessionError, PrepareError};
+use scylla::errors::{ExecutionError, NewSessionError};
 use scylla::policies::load_balancing::DefaultPolicy;
 use scylla::response::{PagingState, PagingStateResponse};
 use scylla::statement::unprepared::Statement;
@@ -52,6 +52,7 @@ pub struct CassandraDriver {
 
 /// Result of a single CQL execution — the locked outcome plus an opaque paging
 /// token (base64) when more pages remain.
+#[derive(Debug)]
 pub struct CqlOutcome {
     pub outcome: StatementOutcome,
     pub next_page: Option<String>,
@@ -101,10 +102,6 @@ pub fn map_exec_err(e: ExecutionError) -> QueryError {
     QueryError::new("cassandra", friendly, raw)
 }
 
-fn prepare_err(e: PrepareError) -> QueryError {
-    QueryError::new("cassandra", format!("Prepare CQL thất bại: {e}"), format!("{e}"))
-}
-
 /// Build a rustls ClientConfig for Cassandra TLS. Uses the ring provider (no
 /// aws-lc → no C compiler). Verification: server certs accepted without a CA
 /// store (dev-oriented desktop client, giống ghi chú SASL_SSL của Kafka) —
@@ -121,13 +118,38 @@ fn build_tls(_ssl_ca: &str) -> Arc<rustls::ClientConfig> {
     Arc::new(config)
 }
 
+/// Address translator that maps EVERY node's advertised address to a single
+/// reachable endpoint. Dùng khi cả cluster nhìn thấy qua 1 host:port (NAT,
+/// SSH tunnel, testcontainers) — node quảng bá IP nội bộ không định tuyến được.
+struct ForceTranslator(std::net::SocketAddr);
+
+#[async_trait::async_trait]
+impl scylla::policies::address_translator::AddressTranslator for ForceTranslator {
+    async fn translate_address(
+        &self,
+        _peer: &scylla::policies::address_translator::UntranslatedPeer,
+    ) -> Result<std::net::SocketAddr, scylla::errors::TranslationError> {
+        Ok(self.0)
+    }
+}
+
 impl CassandraDriver {
     async fn build_session(params: &CassandraConnParams) -> Result<Session, NewSessionError> {
+        Self::build_session_with(params, None).await
+    }
+
+    async fn build_session_with(
+        params: &CassandraConnParams,
+        translator: Option<std::sync::Arc<dyn scylla::policies::address_translator::AddressTranslator>>,
+    ) -> Result<Session, NewSessionError> {
         let policy = if params.datacenter.trim().is_empty() {
             DefaultPolicy::builder().build()
         } else {
+            // Prefer local DC, nhưng cho phép failover sang DC khác để tránh
+            // "no available nodes" khi tên DC lệch (an toàn cho desktop tool).
             DefaultPolicy::builder()
                 .prefer_datacenter(params.datacenter.trim().to_string())
+                .permit_dc_failover(true)
                 .build()
         };
         let profile = ExecutionProfile::builder()
@@ -148,11 +170,36 @@ impl CassandraDriver {
         if !params.keyspace.trim().is_empty() {
             builder = builder.use_keyspace(params.keyspace.trim().to_string(), false);
         }
+        if let Some(t) = translator {
+            builder = builder.address_translator(t);
+        }
         builder.build().await
     }
 
     pub async fn connect(params: &CassandraConnParams) -> Result<Self, QueryError> {
         let session = Self::build_session(params).await.map_err(new_session_err)?;
+        Ok(Self {
+            session: Arc::new(session),
+            keyspace: params.keyspace.trim().to_string(),
+        })
+    }
+
+    /// Connect nhưng dịch MỌI địa chỉ node → một endpoint duy nhất (host:port).
+    /// Dùng khi cluster chỉ tiếp cận được qua 1 cổng (SSH tunnel / NAT / test
+    /// container quảng bá IP nội bộ). Single-node là trường hợp phổ biến.
+    pub async fn connect_translating_to(
+        params: &CassandraConnParams,
+        host: &str,
+        port: u16,
+    ) -> Result<Self, QueryError> {
+        let addr: std::net::SocketAddr = format!("{host}:{port}")
+            .parse()
+            .map_err(|e| QueryError::new("cassandra", "Địa chỉ dịch không hợp lệ", format!("{e}")))?;
+        let translator = std::sync::Arc::new(ForceTranslator(addr))
+            as std::sync::Arc<dyn scylla::policies::address_translator::AddressTranslator>;
+        let session = Self::build_session_with(params, Some(translator))
+            .await
+            .map_err(new_session_err)?;
         Ok(Self {
             session: Arc::new(session),
             keyspace: params.keyspace.trim().to_string(),
@@ -677,48 +724,109 @@ impl CassandraDriver {
                 "table not found",
             ));
         }
-        let mut lines: Vec<String> = cols
+        Ok(format_table_ddl(keyspace, table, &cols))
+    }
+}
+
+/// Pure CREATE TABLE builder — composite partition key `((p1, p2), c1, c2)` +
+/// `WITH CLUSTERING ORDER BY`. Extracted for unit testing without a cluster.
+pub fn format_table_ddl(keyspace: &str, table: &str, cols: &[CassColumn]) -> String {
+    let mut lines: Vec<String> = cols
+        .iter()
+        .map(|c| format!("  {} {}", c.name, c.data_type))
+        .collect();
+
+    let partition: Vec<&str> = cols
+        .iter()
+        .filter(|c| c.kind == "partition_key")
+        .map(|c| c.name.as_str())
+        .collect();
+    let clustering: Vec<&CassColumn> = cols.iter().filter(|c| c.kind == "clustering").collect();
+
+    // Composite partition key luôn bọc ngoặc trong để phân biệt với clustering.
+    let pk = if clustering.is_empty() {
+        format!("({})", partition.join(", "))
+    } else {
+        format!(
+            "({}), {}",
+            partition.join(", "),
+            clustering.iter().map(|c| c.name.as_str()).collect::<Vec<_>>().join(", ")
+        )
+    };
+    lines.push(format!("  PRIMARY KEY ({pk})"));
+
+    let mut ddl = format!("CREATE TABLE {}.{} (\n{}\n)", keyspace, table, lines.join(",\n"));
+    if !clustering.is_empty() {
+        let orders: Vec<String> = clustering
             .iter()
-            .map(|c| format!("  {} {}", c.name, c.data_type))
+            .map(|c| {
+                let o = if c.clustering_order == "desc" { "DESC" } else { "ASC" };
+                format!("{} {}", c.name, o)
+            })
             .collect();
+        ddl.push_str(&format!("\nWITH CLUSTERING ORDER BY ({})", orders.join(", ")));
+    }
+    ddl.push(';');
+    ddl
+}
 
-        let partition: Vec<&str> = cols
-            .iter()
-            .filter(|c| c.kind == "partition_key")
-            .map(|c| c.name.as_str())
-            .collect();
-        let clustering: Vec<&CassColumn> =
-            cols.iter().filter(|c| c.kind == "clustering").collect();
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-        let pk = if clustering.is_empty() {
-            format!("({})", partition.join(", "))
-        } else {
-            format!(
-                "({}), {}",
-                partition.join(", "),
-                clustering.iter().map(|c| c.name.as_str()).collect::<Vec<_>>().join(", ")
-            )
-        };
-        lines.push(format!("  PRIMARY KEY ({pk})"));
-
-        let mut ddl = format!(
-            "CREATE TABLE {}.{} (\n{}\n)",
-            keyspace,
-            table,
-            lines.join(",\n")
-        );
-        if !clustering.is_empty() {
-            let orders: Vec<String> = clustering
-                .iter()
-                .map(|c| {
-                    let o = if c.clustering_order == "desc" { "DESC" } else { "ASC" };
-                    format!("{} {}", c.name, o)
-                })
-                .collect();
-            ddl.push_str(&format!("\nWITH CLUSTERING ORDER BY ({})", orders.join(", ")));
+    fn col(name: &str, ty: &str, kind: &str, order: &str) -> CassColumn {
+        CassColumn {
+            name: name.into(),
+            data_type: ty.into(),
+            kind: kind.into(),
+            clustering_order: order.into(),
+            position: 0,
         }
-        ddl.push(';');
-        Ok(ddl)
+    }
+
+    #[test]
+    fn ddl_composite_partition_key_and_clustering_order() {
+        let cols = vec![
+            col("student_id", "uuid", "partition_key", ""),
+            col("term", "text", "partition_key", ""),
+            col("course", "text", "clustering", "asc"),
+            col("posted_at", "timestamp", "clustering", "desc"),
+            col("grade", "text", "regular", ""),
+        ];
+        let ddl = format_table_ddl("campus_ks", "grades", &cols);
+        // composite partition key bọc ngoặc trong; clustering đứng sau
+        assert!(ddl.contains("PRIMARY KEY ((student_id, term), course, posted_at)"), "{ddl}");
+        assert!(ddl.contains("WITH CLUSTERING ORDER BY (course ASC, posted_at DESC)"), "{ddl}");
+        assert!(ddl.starts_with("CREATE TABLE campus_ks.grades ("));
+        assert!(ddl.ends_with(';'));
+    }
+
+    #[test]
+    fn ddl_single_partition_key_no_clustering() {
+        let cols = vec![
+            col("id", "uuid", "partition_key", ""),
+            col("email", "text", "regular", ""),
+        ];
+        let ddl = format_table_ddl("ks", "users", &cols);
+        assert!(ddl.contains("PRIMARY KEY ((id))"), "{ddl}");
+        assert!(!ddl.contains("CLUSTERING ORDER"), "{ddl}");
+    }
+
+    #[test]
+    fn consistency_parsing() {
+        assert!(matches!(consistency_from_str("quorum"), Consistency::Quorum));
+        assert!(matches!(consistency_from_str("LOCAL_ONE"), Consistency::LocalOne));
+        assert!(matches!(consistency_from_str("weird"), Consistency::LocalQuorum));
+    }
+
+    #[test]
+    fn replication_clause_render() {
+        let mut m = std::collections::HashMap::new();
+        m.insert("class".to_string(), "org.apache.cassandra.locator.NetworkTopologyStrategy".to_string());
+        m.insert("dc1".to_string(), "3".to_string());
+        let s = format_replication(&m);
+        assert!(s.contains("'class': 'NetworkTopologyStrategy'"), "{s}");
+        assert!(s.contains("'dc1': '3'"), "{s}");
     }
 }
 

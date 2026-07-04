@@ -81,6 +81,8 @@ rdkafka = { version = "0.38", default-features = false, features = ["cmake-build
 scylla = { version = "1.1", default-features = false, features = ["rustls-023", "chrono-04"] }
 # rustls dùng ring (không aws-lc → khỏi cần C compiler) để dựng ClientConfig cho Cassandra TLS.
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+# async-trait: impl scylla AddressTranslator (dùng cho Cassandra qua NAT/tunnel/port-forward).
+async-trait = "0.1"
 
 # Misc
 uuid = { version = "1", features = ["v4"] }
