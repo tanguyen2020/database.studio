@@ -33,6 +33,7 @@
   import CommandPalette from '$lib/components/CommandPalette.svelte'
   import ClickHouseTtlDialog from '$lib/components/ClickHouseTtlDialog.svelte'
   import ImportDialog from '$lib/components/ImportDialog.svelte'
+  import ExportDialog from '$lib/components/ExportDialog.svelte'
   import Settings from '$lib/components/Settings.svelte'
   import { palette } from '$lib/stores/palette.svelte'
   import { settings } from '$lib/stores/settings.svelte'
@@ -275,5 +276,6 @@
 <CommandPalette />
 <ClickHouseTtlDialog />
 <ImportDialog />
+<ExportDialog />
 <Settings />
 <Toasts />

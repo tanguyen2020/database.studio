@@ -12,6 +12,7 @@
   import type { SubResult, TabExecution } from '$lib/stores/results.svelte'
   import { mapErrorToDocument } from '$lib/sql/errors'
   import { toCsv, toJson, toSqlInsert, toExcelHtml, download } from '$lib/export/rows'
+  import { exportWizard } from '$lib/stores/export.svelte'
 
   type ViewMode = 'grid' | 'json' | 'single' | 'chart'
 
@@ -21,10 +22,12 @@
     accent?: string
     /** editable grid khi result đến từ 1 bảng đã biết (Table Viewer) */
     editTarget?: EditTarget
+    /** connection id — để Export wizard (custom) biết hệ khi cần */
+    connId?: string | null
     onJump?: (line: number, col: number) => void
   }
 
-  let { exec, accent = 'var(--primary)', editTarget, onJump }: Props = $props()
+  let { exec, accent = 'var(--primary)', editTarget, connId, onJump }: Props = $props()
 
   let grid = $state<ResultGrid | null>(null)
   let rawError = $state<string | null>(null)
@@ -42,6 +45,14 @@
     else if (fmt === 'json') download('result.json', toJson(rows), 'application/json')
     else if (fmt === 'sql') download('result.sql', toSqlInsert('result', headers, rows), 'text/plain')
     else download('result.xls', toExcelHtml(headers, rows), 'application/vnd.ms-excel')
+  }
+
+  // Export wizard (T14) — column subset / limit / filename cho result hiện tại.
+  function openExportWizard() {
+    exportOpen = false
+    const r = activeResult?.kind === 'rows' ? activeResult.result : undefined
+    if (!r) return
+    exportWizard.showResult(connId ?? '', r.cols.map((c) => c[0]), r.rows as Record<string, unknown>[])
   }
 
   const MESSAGES = -1
@@ -144,6 +155,7 @@
             {#each [['csv', 'CSV'], ['json', 'JSON'], ['sql', 'SQL INSERT'], ['xls', 'Excel (.xls)']] as [fmt, label] (fmt)}
               <div onclick={() => doExport(fmt as 'csv' | 'json' | 'sql' | 'xls')} onkeydown={(e) => e.key === 'Enter' && doExport(fmt as 'csv' | 'json' | 'sql' | 'xls')} role="button" tabindex="0" style="padding:var(--px-7) var(--px-12);font-size:var(--px-12);cursor:pointer;color:var(--text2)">{label}</div>
             {/each}
+            <div onclick={openExportWizard} onkeydown={(e) => e.key === 'Enter' && openExportWizard()} role="button" tabindex="0" style="padding:var(--px-7) var(--px-12);font-size:var(--px-12);cursor:pointer;color:var(--text2);border-top:var(--px-1) solid var(--border)">Custom… (columns/limit)</div>
           </div>
         {/if}
       </div>

@@ -419,7 +419,7 @@
   <!-- results -->
   <div style="min-height:0;flex:1;display:flex;flex-direction:column">
     {#if exec}
-      <ResultPanel {exec} accent={systemMeta(tab.systemType).accent} onJump={jump} />
+      <ResultPanel {exec} connId={tab.connectionId} accent={systemMeta(tab.systemType).accent} onJump={jump} />
     {:else}
       <div style="flex:1;display:flex;align-items:center;justify-content:center;font-size:var(--px-12);color:var(--muted)">
         Chạy query (F5) để xem kết quả · Ctrl+Enter chạy statement tại cursor

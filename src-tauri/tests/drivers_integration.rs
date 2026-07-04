@@ -1786,3 +1786,78 @@ async fn pg_import_100k_rows_batched_and_count() {
     );
     eprintln!("CHK import 100k + count + skip-conflict OK");
 }
+
+/// Phase 5 · T14 — Export wizard round-trip. Seed a PG table, run the export
+/// SELECT (column subset + WHERE, exactly what buildExportSelect emits), then
+/// re-import the exported rows into a fresh table and assert the count matches
+/// the WHERE-filtered subset (seed → verify, derived counts — nothing hard-coded).
+#[tokio::test]
+async fn pg_export_column_subset_where_reimport_count() {
+    let (_c, port) = start_pg().await;
+    let params = PgConnParams {
+        host: "localhost".into(),
+        port,
+        database: "testdb".into(),
+        user: "postgres".into(),
+        password: PASS.into(),
+        ssl: false,
+        ssl_ca: String::new(),
+        ssl_cert: String::new(),
+        ssl_key: String::new(),
+    };
+    let mut drv = retry("postgres", || PgDriver::connect(&params)).await;
+
+    drv.exec("CREATE TABLE it_exp (id int, region text, amount int)")
+        .await
+        .unwrap();
+    let mut seed = String::from("INSERT INTO it_exp (id, region, amount) VALUES ");
+    for i in 1..=1000 {
+        if i != 1 {
+            seed.push(',');
+        }
+        let region = if i % 3 == 0 { "north" } else { "south" };
+        seed.push_str(&format!("({i}, '{region}', {})", i * 2));
+    }
+    drv.exec(&seed).await.unwrap();
+
+    // Export: column subset {id, amount} + WHERE region='north'
+    let out = drv
+        .exec("SELECT \"id\", \"amount\" FROM \"public\".\"it_exp\" WHERE region = 'north'")
+        .await
+        .unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    let exported = result.rows.clone();
+    let expected_north = (1..=1000usize).filter(|i| i % 3 == 0).count();
+    assert_eq!(exported.len(), expected_north, "export phải trả đúng subset WHERE");
+    // chỉ 2 cột được project (column subset)
+    assert_eq!(result.cols.len(), 2);
+    assert!(result.cols.iter().any(|c| c.0 == "id"));
+    assert!(result.cols.iter().any(|c| c.0 == "amount"));
+
+    // Re-import các dòng đã export vào bảng mới rồi đếm ngược
+    drv.exec("CREATE TABLE it_exp_copy (id int, amount int)").await.unwrap();
+    let mut reimport = String::from("INSERT INTO it_exp_copy (id, amount) VALUES ");
+    for (k, row) in exported.iter().enumerate() {
+        if k != 0 {
+            reimport.push(',');
+        }
+        let id = row["id"].as_i64().expect("id là số");
+        let amount = row["amount"].as_i64().expect("amount là số");
+        reimport.push_str(&format!("({id}, {amount})"));
+    }
+    drv.exec(&reimport).await.unwrap();
+
+    let out = drv.exec("SELECT count(*) AS n FROM it_exp_copy").await.unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    assert_eq!(
+        result.rows[0]["n"],
+        serde_json::json!(expected_north as i64),
+        "re-import phải khớp số dòng đã export"
+    );
+
+    // giá trị round-trip đúng: north id nhỏ nhất = 3, amount = id*2 = 6
+    let out = drv.exec("SELECT amount FROM it_exp_copy WHERE id = 3").await.unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    assert_eq!(result.rows[0]["amount"], serde_json::json!(6));
+    eprintln!("CHK export subset+WHERE → reimport count OK");
+}
