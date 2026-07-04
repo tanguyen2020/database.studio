@@ -20,6 +20,7 @@
   import RedisWorkspace from '$lib/components/workspace/RedisWorkspace.svelte'
   import RedisPubSub from '$lib/components/workspace/RedisPubSub.svelte'
   import NatsWorkspace from '$lib/components/workspace/NatsWorkspace.svelte'
+  import KafkaWorkspace from '$lib/components/workspace/KafkaWorkspace.svelte'
   import HistoryTab from '$lib/components/workspace/HistoryTab.svelte'
   import SavedQueriesTab from '$lib/components/workspace/SavedQueriesTab.svelte'
   import { connections } from '$lib/stores/connections.svelte'
@@ -148,6 +149,8 @@
             <RedisPubSub tab={t} />
           {:else if t.contentType === 'nats'}
             <NatsWorkspace tab={t} />
+          {:else if t.contentType === 'kafka'}
+            <KafkaWorkspace tab={t} />
           {:else}
             <SqlWorkspace tab={t} />
           {/if}

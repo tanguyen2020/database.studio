@@ -1071,4 +1071,25 @@ async fn kafka_connect_and_metadata() {
         "server_version phải có broker count, nhận: {:?}",
         t.server_version
     );
+
+    // --- cluster overview (T2) ---
+    let cluster = drv.cluster_info().await.unwrap();
+    assert!(!cluster.brokers.is_empty(), "phải có >=1 broker");
+
+    // --- topic browser (T3): create → list → delete (RF=1 vì single-node) ---
+    drv.create_topic("phase4_itest", 2, 1).await.unwrap();
+    let mut found = None;
+    for _ in 0..20 {
+        let list = drv.topics().await.unwrap();
+        if let Some(t) = list.into_iter().find(|t| t.name == "phase4_itest") {
+            found = Some(t);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    let topic = found.expect("phải thấy topic phase4_itest sau create");
+    assert_eq!(topic.partitions.len(), 2, "phải có 2 partitions");
+    assert!(!topic.internal);
+
+    drv.delete_topic("phase4_itest").await.unwrap();
 }

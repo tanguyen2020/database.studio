@@ -80,6 +80,7 @@
     if (connections.byId(p.id)?.connected) {
       if (p.system === 'redis') tabs.openRedisTab(p.id)
       else if (p.system === 'nats') tabs.openNatsTab(p.id)
+      else if (p.system === 'kafka') tabs.openKafkaTab(p.id)
     }
   }
 

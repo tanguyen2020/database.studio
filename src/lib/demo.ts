@@ -358,6 +358,33 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
       ])
     case 'nats_js_peek':
       return ok({ seq: (args?.seq as number) ?? 1, subject: 'orders.new', payload: '{"id":1001,"total":42.5}', time: '2026-06-30T10:23:14Z' })
+    case 'kafka_cluster':
+      return ok({
+        brokers: [
+          { id: 1, host: 'kafka-1', port: 9092 },
+          { id: 2, host: 'kafka-2', port: 9092 },
+          { id: 3, host: 'kafka-3', port: 9092 },
+        ],
+        controller_id: 1,
+        topic_count: 2,
+        partition_count: 18,
+      })
+    case 'kafka_topics':
+      return ok([
+        {
+          name: 'payments',
+          internal: false,
+          partitions: Array.from({ length: 3 }, (_, i) => ({ id: i, leader: (i % 3) + 1, replicas: [1, 2, 3], isr: [1, 2, 3], low: 0, high: 15200 + i * 100, lag: 15200 + i * 100 })),
+        },
+        {
+          name: 'enrollment.events',
+          internal: false,
+          partitions: Array.from({ length: 2 }, (_, i) => ({ id: i, leader: (i % 3) + 1, replicas: [1, 2], isr: [1, 2], low: 40, high: 980 + i * 50, lag: 940 + i * 50 })),
+        },
+      ])
+    case 'kafka_create_topic':
+    case 'kafka_delete_topic':
+      return ok(null)
     default:
       return Promise.reject(new Error(`demo: chưa mock command "${cmd}"`))
   }

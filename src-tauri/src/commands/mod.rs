@@ -1,6 +1,7 @@
 pub mod connections;
 pub mod files;
 pub mod grid;
+pub mod kafka;
 pub mod library;
 pub mod lint;
 pub mod nats;

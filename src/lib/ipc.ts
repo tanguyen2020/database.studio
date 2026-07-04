@@ -210,6 +210,41 @@ export const natsJsConsumers = (connId: string, stream: string) =>
 export const natsJsPeek = (connId: string, stream: string, seq: number) =>
   invoke<NatsJsMessage>('nats_js_peek', { connId, stream, seq })
 
+// ---- kafka (Phase 4) --------------------------------------------------------
+
+export interface KafkaBroker {
+  id: number
+  host: string
+  port: number
+}
+export interface KafkaCluster {
+  brokers: KafkaBroker[]
+  controller_id: number
+  topic_count: number
+  partition_count: number
+}
+export interface KafkaPartition {
+  id: number
+  leader: number
+  replicas: number[]
+  isr: number[]
+  low: number
+  high: number
+  lag: number
+}
+export interface KafkaTopic {
+  name: string
+  partitions: KafkaPartition[]
+  internal: boolean
+}
+
+export const kafkaCluster = (connId: string) => invoke<KafkaCluster>('kafka_cluster', { connId })
+export const kafkaTopics = (connId: string) => invoke<KafkaTopic[]>('kafka_topics', { connId })
+export const kafkaCreateTopic = (connId: string, name: string, partitions: number, replication: number) =>
+  invoke<void>('kafka_create_topic', { connId, name, partitions, replication })
+export const kafkaDeleteTopic = (connId: string, name: string) =>
+  invoke<void>('kafka_delete_topic', { connId, name })
+
 // ---- schema (Object Explorer) ----------------------------------------------
 
 export const listSchemas = (connId: string) => invoke<SchemaInfo[]>('list_schemas', { connId })

@@ -61,6 +61,11 @@ pub fn run() {
             commands::nats::nats_js_streams,
             commands::nats::nats_js_consumers,
             commands::nats::nats_js_peek,
+            // kafka
+            commands::kafka::kafka_cluster,
+            commands::kafka::kafka_topics,
+            commands::kafka::kafka_create_topic,
+            commands::kafka::kafka_delete_topic,
             // schema
             commands::schema::list_schemas,
             commands::schema::list_tables,

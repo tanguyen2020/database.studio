@@ -189,6 +189,7 @@ export type TabContentType =
   | 'redis'
   | 'redis-pubsub'
   | 'nats'
+  | 'kafka'
 
 export interface TabState {
   id: string
