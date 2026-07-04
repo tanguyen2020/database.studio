@@ -266,6 +266,13 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
           { table: 'enrollments', columns: [], reason: '840 seq scan (idx scan 12), đọc TB 5200 rows/scan trên ~12480 rows — cân nhắc thêm index vào cột lọc' },
         ],
       })
+    case 'object_definition': {
+      const kind = String(args?.kind ?? 'object')
+      const name = String(args?.name ?? 'obj')
+      if (kind === 'view') return ok(`SELECT id, first_name, gpa\nFROM students\nWHERE status = 'active'`)
+      if (kind === 'trigger') return ok(`CREATE TRIGGER ${name} BEFORE INSERT ON students\nFOR EACH ROW EXECUTE FUNCTION log_insert();`)
+      return ok(`CREATE OR REPLACE FUNCTION ${name}(x integer)\n RETURNS integer\n LANGUAGE sql\nAS $function$ SELECT x + 1 $function$`)
+    }
     case 'list_foreign_keys':
       return ok([
         { name: 'fk_enrollments_student', from_table: 'enrollments', from_column: 'student_id', to_table: 'students', to_column: 'id' },
@@ -274,7 +281,12 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
     case 'list_indexes':
     case 'list_constraints':
     case 'list_routines':
+      return ok([
+        { schema: 'public', name: 'add_one', kind: 'function', params: [{ name: 'x', data_type: 'int4' }], return_type: 'int4' },
+        { schema: 'public', name: 'refresh_stats', kind: 'procedure', params: [] },
+      ])
     case 'list_triggers':
+      return ok([{ schema: 'public', name: 'trg_audit', table: 'students', event: 'BEFORE INSERT' }])
     case 'list_sequences':
       return ok([])
     case 'exec_statement':

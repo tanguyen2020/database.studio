@@ -490,6 +490,10 @@ export interface IndexScanResult {
 export const scanIndexes = (connId: string, schema: string) =>
   invoke<IndexScanResult>('scan_indexes', { connId, schema })
 
+/** Show Definition (T18): text định nghĩa thật của view/trigger/procedure/function. */
+export const objectDefinition = (connId: string, schema: string, kind: string, name: string) =>
+  invoke<string>('object_definition', { connId, schema, kind, name })
+
 // ---- Query Plan Visualizer (Phase 5 · T1) ----------------------------------
 
 export interface PlanNode {

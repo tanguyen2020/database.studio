@@ -39,6 +39,30 @@
 
   let expanded = $state<Set<string>>(new Set())
   let treeSel = $state<string | null>(null)
+  // T18 — tree filter (Ctrl+F)
+  let search = $state('')
+  let searchEl = $state<HTMLInputElement | null>(null)
+  function matchSearch(name: string): boolean {
+    const s = search.trim().toLowerCase()
+    return !s || name.toLowerCase().includes(s)
+  }
+  // T18 — Object Properties panel: suy ra type/schema/name từ key node đang chọn.
+  const selProps = $derived.by(() => {
+    const k = treeSel
+    if (!k || k.indexOf(':') < 0 || !selected) return null
+    const prefix = k.slice(0, k.indexOf(':'))
+    const rest = k.slice(k.indexOf(':') + 1)
+    const dot = rest.indexOf('.')
+    const typeMap: Record<string, string> = {
+      t: 'Table', v: 'View', p: 'Procedure', fn: 'Function', tg: 'Trigger',
+      col: 'Column', vcol: 'Column', s: 'Schema', i: 'Indexes', seq: 'Sequence', dic: 'Dictionary', f: 'Folder',
+    }
+    return {
+      type: typeMap[prefix] ?? prefix,
+      schema: dot >= 0 ? rest.slice(0, dot) : rest,
+      name: dot >= 0 ? rest.slice(dot + 1) : rest,
+    }
+  })
 
   // untrack: loadSchemas() đọc+ghi explorer.cache đồng bộ (conn()/track()) → nếu
   // trong vùng track của effect sẽ read+write cùng $state → effect_update_depth
@@ -169,6 +193,36 @@
     tabs.openSqlTab({ connectionId: selected.id, title, query: sql })
   }
 
+  // T18 — Show Definition: lấy text định nghĩa THẬT từ server (view/trigger/proc/func).
+  async function showDefinition(kind: string, schema: string, name: string) {
+    if (!selected) return
+    try {
+      const def = await ipc.objectDefinition(selected.id, schema, kind, name)
+      tabs.openSqlTab({ connectionId: selected.id, title: `${name} · definition`, query: def })
+    } catch (e) {
+      toasts.error(String(e))
+    }
+  }
+
+  // T18 — Drop: sinh câu DROP mở trong editor để review (không tự chạy).
+  function dropObject(kind: string, schema: string, name: string, table?: string) {
+    if (!selected) return
+    const sys = selected.system
+    const q = (x: string) => quoteIdent(sys, x)
+    const qual = schema && sys !== 'sqlite' ? `${q(schema)}.${q(name)}` : q(name)
+    let sql: string
+    if (kind === 'view') {
+      sql = `DROP VIEW IF EXISTS ${qual};`
+    } else if (kind === 'trigger') {
+      const on = table ? ` ON ${schema && sys !== 'sqlite' ? `${q(schema)}.${q(table)}` : q(table)}` : ''
+      sql = `-- Kiểm tra bảng đích trước khi chạy\nDROP TRIGGER IF EXISTS ${q(name)}${on};`
+    } else {
+      const kw = kind === 'procedure' ? 'PROCEDURE' : 'FUNCTION'
+      sql = `-- PG có thể cần chữ ký tham số: DROP ${kw} ${qual}(...)\nDROP ${kw} IF EXISTS ${qual};`
+    }
+    stmtTab(`Drop ${name}`, sql)
+  }
+
   function routineLabel(r: RoutineInfo): string {
     const params = r.params.map((p) => p.data_type).join(', ')
     return `${r.name}(${params})`
@@ -264,7 +318,18 @@
 {/snippet}
 
 <!-- explorer — dòng 136 -->
-<div style="flex:1;display:flex;flex-direction:column;min-height:0">
+<div
+  style="flex:1;display:flex;flex-direction:column;min-height:0"
+  role="tree"
+  tabindex="-1"
+  onkeydown={(e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
+      e.preventDefault()
+      searchEl?.focus()
+      searchEl?.select()
+    }
+  }}
+>
   <!-- header — dòng 137-142 -->
   <div style="flex:none;display:flex;align-items:center;gap:var(--px-8);padding:var(--px-9) var(--px-12) var(--px-7)">
     <span style="font-size:var(--px-10_5);font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--muted)">Explorer</span>
@@ -281,6 +346,19 @@
       style="margin-left:auto;cursor:pointer;color:var(--muted);font-size:var(--px-13)"
     >⟳</span>
   </div>
+
+  <!-- tree filter (Ctrl+F) — T18 -->
+  {#if selected}
+    <div style="flex:none;padding:var(--px-4) var(--px-8) var(--px-6)">
+      <input
+        bind:this={searchEl}
+        bind:value={search}
+        placeholder="Lọc cây (Ctrl+F)…"
+        aria-label="Filter tree"
+        style="width:100%;background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-8);color:var(--text);font-size:var(--px-11_5)"
+      />
+    </div>
+  {/if}
 
   <!-- tree — dòng 143-152 -->
   <div style="flex:1;overflow:auto;padding:0 var(--px-6) var(--px-10)">
@@ -416,10 +494,10 @@
         }, schemaMenu)}
 
         {#if sOpen && sc}
-          {@const tables = sc.tables?.filter((t) => t.kind !== 'view') ?? []}
-          {@const views = sc.tables?.filter((t) => t.kind === 'view') ?? []}
-          {@const procs = sc.routines?.filter((r) => r.kind === 'procedure') ?? []}
-          {@const fns = sc.routines?.filter((r) => r.kind !== 'procedure') ?? []}
+          {@const tables = sc.tables?.filter((t) => t.kind !== 'view' && matchSearch(t.name)) ?? []}
+          {@const views = sc.tables?.filter((t) => t.kind === 'view' && matchSearch(t.name)) ?? []}
+          {@const procs = sc.routines?.filter((r) => r.kind === 'procedure' && matchSearch(r.name)) ?? []}
+          {@const fns = sc.routines?.filter((r) => r.kind !== 'procedure' && matchSearch(r.name)) ?? []}
           {@const tvfs = fns.filter((r) => r.kind === 'table_function')}
           {@const scalarFns = fns.filter((r) => r.kind !== 'table_function')}
 
@@ -608,11 +686,16 @@
           })}
           {#if expanded.has(`f:${schema.name}:views`)}
             {#each views as v (v.name)}
+              {@const vOpen = expanded.has(`t:${schema.name}.${v.name}`)}
+              {@const vDetail = sc.tableDetails[v.name]}
               {#snippet viewMenu()}
                 <ContextMenu.Content class="w-44">
                   <ContextMenu.Item onclick={() => openData(schema.name, v)}>Open Data</ContextMenu.Item>
+                  <ContextMenu.Item onclick={() => showDefinition('view', schema.name, v.name)}>Show Definition</ContextMenu.Item>
                   <ContextMenu.Item onclick={() => newQuery(schema.name, v.name)}>New Query</ContextMenu.Item>
                   <ContextMenu.Item onclick={() => copyName(v.name)}>Copy Name</ContextMenu.Item>
+                  <ContextMenu.Separator />
+                  <ContextMenu.Item variant="destructive" onclick={() => dropObject('view', schema.name, v.name)}>Drop</ContextMenu.Item>
                 </ContextMenu.Content>
               {/snippet}
               {@render row(
@@ -622,10 +705,24 @@
                   glyph: '◫',
                   color: C.view,
                   name: v.name,
+                  expandable: true,
+                  onClick: () => expandTable(schema.name, v.name),
                   onDblClick: () => openData(schema.name, v),
                 },
                 viewMenu,
               )}
+              {#if vOpen && vDetail}
+                {#each vDetail.columns ?? [] as col (col.name)}
+                  {@render row({
+                    key: `vcol:${schema.name}.${v.name}.${col.name}`,
+                    depth: base + 3,
+                    glyph: '▸',
+                    color: C.col,
+                    name: col.name,
+                    meta: `${col.data_type}${!col.nullable ? ' · NN' : ''}`,
+                  })}
+                {/each}
+              {/if}
             {/each}
           {/if}
 
@@ -675,13 +772,21 @@
             })}
             {#if expanded.has(`f:${schema.name}:procs`)}
               {#each procs as r (r.name)}
+                {#snippet procMenu()}
+                  <ContextMenu.Content class="w-44">
+                    <ContextMenu.Item onclick={() => showDefinition('procedure', schema.name, r.name)}>Show Definition</ContextMenu.Item>
+                    <ContextMenu.Item onclick={() => copyName(r.name)}>Copy Name</ContextMenu.Item>
+                    <ContextMenu.Separator />
+                    <ContextMenu.Item variant="destructive" onclick={() => dropObject('procedure', schema.name, r.name)}>Drop</ContextMenu.Item>
+                  </ContextMenu.Content>
+                {/snippet}
                 {@render row({
                   key: `p:${schema.name}.${r.name}`,
                   depth: base + 2,
                   glyph: '⚙',
                   color: C.proc,
                   name: routineLabel(r),
-                })}
+                }, procMenu)}
               {/each}
             {/if}
 
@@ -700,7 +805,15 @@
               })}
               {#if expanded.has(`f:${schema.name}:tvf`)}
                 {#each tvfs as r (r.name)}
-                  {@render row({ key: `fn:${schema.name}.${r.name}`, depth: base + 2, glyph: 'ƒ', color: C.func, name: routineLabel(r) })}
+                  {#snippet tvfMenu()}
+                    <ContextMenu.Content class="w-44">
+                      <ContextMenu.Item onclick={() => showDefinition('function', schema.name, r.name)}>Show Definition</ContextMenu.Item>
+                      <ContextMenu.Item onclick={() => copyName(r.name)}>Copy Name</ContextMenu.Item>
+                      <ContextMenu.Separator />
+                      <ContextMenu.Item variant="destructive" onclick={() => dropObject('function', schema.name, r.name)}>Drop</ContextMenu.Item>
+                    </ContextMenu.Content>
+                  {/snippet}
+                  {@render row({ key: `fn:${schema.name}.${r.name}`, depth: base + 2, glyph: 'ƒ', color: C.func, name: routineLabel(r) }, tvfMenu)}
                 {/each}
               {/if}
               {@render row({
@@ -716,6 +829,14 @@
               })}
               {#if expanded.has(`f:${schema.name}:scalar`)}
                 {#each scalarFns as r (r.name)}
+                  {#snippet scalarMenu()}
+                    <ContextMenu.Content class="w-44">
+                      <ContextMenu.Item onclick={() => showDefinition('function', schema.name, r.name)}>Show Definition</ContextMenu.Item>
+                      <ContextMenu.Item onclick={() => copyName(r.name)}>Copy Name</ContextMenu.Item>
+                      <ContextMenu.Separator />
+                      <ContextMenu.Item variant="destructive" onclick={() => dropObject('function', schema.name, r.name)}>Drop</ContextMenu.Item>
+                    </ContextMenu.Content>
+                  {/snippet}
                   {@render row({
                     key: `fn:${schema.name}.${r.name}`,
                     depth: base + 2,
@@ -723,7 +844,7 @@
                     color: C.func,
                     name: routineLabel(r),
                     meta: r.return_type ? `→ ${r.return_type}` : '',
-                  })}
+                  }, scalarMenu)}
                 {/each}
               {/if}
             {:else}
@@ -741,6 +862,14 @@
               })}
               {#if expanded.has(`f:${schema.name}:fns`)}
                 {#each fns as r (r.name)}
+                  {#snippet fnMenu()}
+                    <ContextMenu.Content class="w-44">
+                      <ContextMenu.Item onclick={() => showDefinition('function', schema.name, r.name)}>Show Definition</ContextMenu.Item>
+                      <ContextMenu.Item onclick={() => copyName(r.name)}>Copy Name</ContextMenu.Item>
+                      <ContextMenu.Separator />
+                      <ContextMenu.Item variant="destructive" onclick={() => dropObject('function', schema.name, r.name)}>Drop</ContextMenu.Item>
+                    </ContextMenu.Content>
+                  {/snippet}
                   {@render row({
                     key: `fn:${schema.name}.${r.name}`,
                     depth: base + 2,
@@ -748,7 +877,7 @@
                     color: C.func,
                     name: routineLabel(r),
                     meta: r.return_type ? `→ ${r.return_type}` : '',
-                  })}
+                  }, fnMenu)}
                 {/each}
               {/if}
             {/if}
@@ -768,7 +897,15 @@
             onClick: () => toggle(`f:${schema.name}:triggers`),
           })}
           {#if expanded.has(`f:${schema.name}:triggers`)}
-            {#each sc.triggers ?? [] as tg (tg.name)}
+            {#each (sc.triggers ?? []).filter((tg) => matchSearch(tg.name)) as tg (tg.name)}
+              {#snippet trigMenu()}
+                <ContextMenu.Content class="w-44">
+                  <ContextMenu.Item onclick={() => showDefinition('trigger', schema.name, tg.name)}>Show Definition</ContextMenu.Item>
+                  <ContextMenu.Item onclick={() => copyName(tg.name)}>Copy Name</ContextMenu.Item>
+                  <ContextMenu.Separator />
+                  <ContextMenu.Item variant="destructive" onclick={() => dropObject('trigger', schema.name, tg.name, tg.table)}>Drop</ContextMenu.Item>
+                </ContextMenu.Content>
+              {/snippet}
               {@render row({
                 key: `tg:${schema.name}.${tg.name}`,
                 depth: base + 2,
@@ -776,7 +913,7 @@
                 color: C.trig,
                 name: tg.name,
                 meta: `${tg.event} ON ${tg.table}`,
-              })}
+              }, trigMenu)}
             {/each}
           {/if}
           {/if}
@@ -804,6 +941,20 @@
       {/each}
     {/if}
   </div>
+
+  <!-- Object Properties panel (T18) — thông tin object đang chọn -->
+  {#if selProps}
+    <div style="flex:none;border-top:var(--px-1) solid var(--border);background:var(--surface);padding:var(--px-7) var(--px-12)">
+      <div style="font-size:var(--px-9_5);font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-bottom:var(--px-3)">Properties</div>
+      <div style="display:flex;align-items:center;gap:var(--px-8);flex-wrap:wrap">
+        <span style="font-size:var(--px-9_5);font-weight:700;color:var(--hex-fff);background:var(--primary);border-radius:var(--px-3);padding:var(--px-1) var(--px-6)">{selProps.type}</span>
+        <span class="mono" style="font-size:var(--px-12);font-weight:600;color:var(--text)">{selProps.name}</span>
+      </div>
+      {#if selProps.schema && selProps.schema !== selProps.name}
+        <div class="mono" style="font-size:var(--px-10_5);color:var(--muted);margin-top:var(--px-2)">schema: {selProps.schema}</div>
+      {/if}
+    </div>
+  {/if}
 
   <!-- bottom toolbar — dòng 155-166 -->
   <div style="flex:none;display:flex;align-items:center;gap:var(--px-1);padding:var(--px-5) var(--px-8);border-top:var(--px-1) solid var(--border);background:var(--header);color:var(--text2)">

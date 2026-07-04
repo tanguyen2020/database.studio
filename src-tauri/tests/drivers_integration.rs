@@ -1957,6 +1957,46 @@ async fn pg_export_column_subset_where_reimport_count() {
     eprintln!("CHK export subset+WHERE → reimport count OK");
 }
 
+/// Phase 5 · T18 — Explorer "Show Definition" trả về text định nghĩa THẬT của
+/// server (không sinh lại). Tạo function → lấy pg_get_functiondef → chứa body.
+#[tokio::test]
+async fn pg_object_definition_returns_real_text() {
+    use database_studio_lib::commands::schema::definition_query;
+
+    let (_c, port) = start_pg().await;
+    let params = PgConnParams {
+        host: "localhost".into(),
+        port,
+        database: "testdb".into(),
+        user: "postgres".into(),
+        password: PASS.into(),
+        ssl: false,
+        ssl_ca: String::new(),
+        ssl_cert: String::new(),
+        ssl_key: String::new(),
+    };
+    let mut drv = retry("postgres", || PgDriver::connect(&params)).await;
+    drv.exec("CREATE FUNCTION add_one(x int) RETURNS int LANGUAGE sql AS 'SELECT x + 1'")
+        .await
+        .unwrap();
+
+    let q = definition_query("postgres", "function", "public", "add_one").expect("query");
+    let out = drv.exec(&q).await.unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    let def = result.rows[0]
+        .as_object()
+        .unwrap()
+        .values()
+        .next()
+        .unwrap()
+        .as_str()
+        .unwrap();
+    assert!(def.to_uppercase().contains("CREATE"), "def:\n{def}");
+    assert!(def.contains("add_one"), "phải nêu tên function:\n{def}");
+    assert!(def.contains("x + 1"), "phải chứa body thật:\n{def}");
+    eprintln!("CHK PG object_definition real text OK");
+}
+
 // --- T15 helpers: introspect a schema into a canonical, comparable signature ---
 async fn gs_rows(drv: &mut PgDriver, sql: &str) -> Vec<serde_json::Value> {
     match drv.exec(sql).await.unwrap() {
