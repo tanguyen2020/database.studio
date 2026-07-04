@@ -241,6 +241,112 @@ pub fn parse_sqlite(rows: &[(i64, i64, String)]) -> QueryPlan {
 }
 
 // ---------------------------------------------------------------------------
+// ClickHouse — EXPLAIN (indexes = 1): cây theo thụt đầu dòng (2 space / cấp).
+// ---------------------------------------------------------------------------
+
+/// Map tên bước ClickHouse → operation chuẩn hóa.
+fn ch_op(op: &str) -> String {
+    let low = op.to_lowercase();
+    if low.starts_with("readfrom") {
+        "SeqScan".into()
+    } else if low.contains("aggregat") {
+        "Aggregate".into()
+    } else if low.contains("sorting") {
+        "Sort".into()
+    } else if low.starts_with("limit") {
+        "Limit".into()
+    } else if low.contains("join") {
+        normalize_op(op)
+    } else {
+        // Expression/Filter/Distinct/Union… giữ nguyên native (normalize fallback).
+        normalize_op(op)
+    }
+}
+
+/// Parse output `EXPLAIN indexes = 1` của ClickHouse. Mỗi dòng non-empty là 1
+/// node; số space đầu dòng / 2 = độ sâu. Tên op = phần trước dấu '('.
+pub fn parse_clickhouse(text: &str) -> QueryPlan {
+    struct Raw {
+        depth: usize,
+        op: String,
+        detail: String,
+    }
+    let mut raws: Vec<Raw> = Vec::new();
+    let mut uses_index = false;
+    for line in text.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let indent = line.chars().take_while(|c| *c == ' ').count();
+        let content = line.trim();
+        if content.contains("PrimaryKey") || content.contains("Skip") || content.contains("MinMax") {
+            uses_index = true;
+        }
+        let op = content.split('(').next().unwrap_or(content).trim().trim_end_matches(':').to_string();
+        raws.push(Raw { depth: indent / 2, op, detail: content.to_string() });
+    }
+
+    let mut warnings = Vec::new();
+    // Stack-based tree build theo depth.
+    // Mỗi phần tử stack: (depth, index trong flat Vec<PlanNode> tạm) — dùng đệ quy chỉ số cha.
+    let mut nodes: Vec<PlanNode> = Vec::new();
+    let mut parent_of: Vec<Option<usize>> = Vec::new();
+    let mut stack: Vec<(usize, usize)> = Vec::new(); // (depth, node index)
+    for r in &raws {
+        while stack.last().map(|(d, _)| *d >= r.depth).unwrap_or(false) {
+            stack.pop();
+        }
+        let parent = stack.last().map(|(_, i)| *i);
+        let op = ch_op(&r.op);
+        let mut node = PlanNode::leaf(&op, &r.op);
+        node.extra.insert("detail".into(), Value::String(r.detail.clone()));
+        // relation trong ngoặc của ReadFrom…
+        if r.op.to_lowercase().starts_with("readfrom") {
+            if let (Some(a), Some(b)) = (r.detail.find('('), r.detail.rfind(')')) {
+                if b > a + 1 {
+                    node.extra.insert("relation".into(), Value::String(r.detail[a + 1..b].to_string()));
+                }
+            }
+        }
+        let idx = nodes.len();
+        nodes.push(node);
+        parent_of.push(parent);
+        stack.push((r.depth, idx));
+    }
+
+    // Full scan không dùng index → hotspot + cảnh báo.
+    if !uses_index {
+        for n in nodes.iter_mut() {
+            if n.operation == "SeqScan" {
+                n.is_hotspot = true;
+                let rel = n.extra.get("relation").and_then(Value::as_str).unwrap_or("table");
+                warnings.push(format!("ClickHouse đọc toàn bộ {rel} (không dùng index)"));
+            }
+        }
+    }
+
+    // Ghép cây từ dưới lên (con vào cha) — duyệt ngược để giữ thứ tự.
+    let mut built: Vec<Option<PlanNode>> = nodes.into_iter().map(Some).collect();
+    for i in (0..built.len()).rev() {
+        if let Some(p) = parent_of[i] {
+            let child = built[i].take().unwrap();
+            if let Some(parent) = built[p].as_mut() {
+                parent.children.insert(0, child);
+            }
+        }
+    }
+    let root = built.into_iter().find_map(|n| n);
+
+    QueryPlan {
+        system: "clickhouse".into(),
+        mode: "estimated".into(),
+        root,
+        summary: PlanSummary { total_cost: None, total_time_ms: None, warnings },
+        raw: text.to_string(),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Fallback text (MSSQL/ClickHouse trước khi có parser chuyên biệt): 1 node raw.
 // ---------------------------------------------------------------------------
 
@@ -357,5 +463,35 @@ mod tests {
     #[test]
     fn not_applicable_for_messaging() {
         assert_eq!(QueryPlan::not_applicable("redis").mode, "not_applicable");
+    }
+
+    #[test]
+    fn clickhouse_explain_indent_tree() {
+        // EXPLAIN plain (không index) → ReadFromMergeTree phải là SeqScan + hotspot.
+        let text = "Expression ((Projection + Before ORDER BY))\n  Aggregating\n    Expression (Before GROUP BY)\n      ReadFromMergeTree (default.students)";
+        let plan = parse_clickhouse(text);
+        let root = plan.root.expect("có root");
+        assert_eq!(root.native_op, "Expression");
+        // đi xuống theo cây tới ReadFromMergeTree
+        let agg = &root.children[0];
+        assert_eq!(agg.operation, "Aggregate");
+        let read = &agg.children[0].children[0];
+        assert_eq!(read.operation, "SeqScan");
+        assert_eq!(read.native_op, "ReadFromMergeTree");
+        assert_eq!(read.extra.get("relation").and_then(|v| v.as_str()), Some("default.students"));
+        assert!(read.is_hotspot, "full read không index → hotspot");
+        assert!(plan.summary.warnings.iter().any(|w| w.contains("default.students")));
+    }
+
+    #[test]
+    fn clickhouse_explain_with_index_no_hotspot() {
+        // Có section Indexes/PrimaryKey → không cảnh báo full-scan.
+        let text = "Expression (Projection)\n  ReadFromMergeTree (default.students)\n  Indexes:\n    PrimaryKey\n      Keys: id\n      Condition: (id in [5, 5])\n      Parts: 1/4";
+        let plan = parse_clickhouse(text);
+        let root = plan.root.unwrap();
+        let read = root.children.iter().find(|n| n.native_op == "ReadFromMergeTree").unwrap();
+        assert_eq!(read.operation, "SeqScan");
+        assert!(!read.is_hotspot, "dùng PrimaryKey → không hotspot");
+        assert!(plan.summary.warnings.is_empty());
     }
 }

@@ -2029,3 +2029,62 @@ async fn pg_generate_structure_roundtrip_identical() {
     assert!(src_sig.contains("OBJ v_children VIEW"));
     eprintln!("CHK generate-structure round-trip identical OK");
 }
+
+/// Phase 5 · T16 — ClickHouse EXPLAIN tree. Seed a MergeTree table, run
+/// `EXPLAIN indexes = 1`, and assert the normalized plan has a ReadFrom* node
+/// mapped to SeqScan referencing the table (seed → introspect the real plan).
+#[tokio::test]
+async fn clickhouse_explain_tree_has_read_node() {
+    use database_studio_lib::drivers::plan::{self, PlanNode};
+
+    let c = GenericImage::new("clickhouse/clickhouse-server", "24.8")
+        .with_exposed_port(8123.tcp())
+        .with_env_var("CLICKHOUSE_PASSWORD", PASS)
+        .start()
+        .await
+        .expect("start clickhouse container");
+    let port = c.get_host_port_ipv4(8123).await.unwrap();
+    let params = ChConnParams {
+        host: "localhost".into(),
+        port,
+        database: "default".into(),
+        user: "default".into(),
+        password: PASS.into(),
+        ssl: false,
+    };
+    let mut drv = retry("clickhouse", || ChDriver::connect(&params)).await;
+
+    drv.exec("CREATE TABLE it_plan (id UInt64, v String) ENGINE = MergeTree ORDER BY id")
+        .await
+        .unwrap();
+    drv.exec("INSERT INTO it_plan VALUES (1,'a'),(2,'b'),(3,'c')").await.unwrap();
+
+    let out = drv
+        .exec("EXPLAIN indexes = 1 SELECT * FROM it_plan WHERE id = 2")
+        .await
+        .unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!("EXPLAIN phải trả rows") };
+    let text = result
+        .rows
+        .iter()
+        .filter_map(|r| r.as_object().and_then(|o| o.values().next()))
+        .filter_map(|v| v.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(!text.is_empty(), "EXPLAIN phải có output");
+
+    let plan = plan::parse_clickhouse(&text);
+    let root = plan.root.expect("có root");
+
+    fn has_read(n: &PlanNode) -> bool {
+        (n.native_op.starts_with("ReadFrom") && n.operation == "SeqScan")
+            || n.children.iter().any(has_read)
+    }
+    fn refs_table(n: &PlanNode) -> bool {
+        n.extra.get("relation").and_then(|v| v.as_str()).map(|s| s.contains("it_plan")).unwrap_or(false)
+            || n.children.iter().any(refs_table)
+    }
+    assert!(has_read(&root), "cây CH phải có ReadFrom* → SeqScan. raw:\n{text}");
+    assert!(refs_table(&root), "node ReadFrom phải tham chiếu it_plan. raw:\n{text}");
+    eprintln!("CHK ClickHouse EXPLAIN tree OK");
+}

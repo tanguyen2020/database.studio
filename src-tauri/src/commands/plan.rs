@@ -56,7 +56,7 @@ fn build_explain(system: &str, sql: &str, actual: bool) -> String {
         }
         "mysql" | "mariadb" => format!("EXPLAIN FORMAT=JSON {sql}"),
         "sqlite" => format!("EXPLAIN QUERY PLAN {sql}"),
-        "clickhouse" => format!("EXPLAIN {sql}"),
+        "clickhouse" => format!("EXPLAIN indexes = 1 {sql}"),
         _ => format!("EXPLAIN {sql}"),
     }
 }
@@ -101,7 +101,7 @@ fn parse_for_system(
                 .filter_map(|v| v.as_str())
                 .collect::<Vec<_>>()
                 .join("\n");
-            Ok(plan::from_raw_text(system, &text))
+            Ok(plan::parse_clickhouse(&text))
         }
         _ => Ok(plan::from_raw_text(system, "")),
     }
