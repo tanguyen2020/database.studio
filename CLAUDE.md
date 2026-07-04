@@ -64,3 +64,11 @@ Stores are runes classes in `src/lib/stores/*.svelte.ts` (`connections`, `tabs`,
 
 ### Specs & process
 `spec/phase-1..6*.md` + `spec/Database Studio design/design_handoff_database_studio/*ADDENDUM.md` define scope; addendums override the base spec for their system (e.g. `CLICKHOUSE_SPEC_ADDENDUM` §7 = editable grid must generate async `ALTER TABLE … UPDATE/DELETE`, not OLTP). `GAP_REVIEW.md` / `SPEC_SUPPLEMENT.md` track outstanding design-vs-code gaps and the remaining `T10+` task backlog. Work proceeds phase-by-phase, committing per task with tests green.
+
+## Tiến độ task (T10–T23, theo SPEC_SUPPLEMENT.md)
+
+Cập nhật sau MỖI commit. Rule: 1 task/lần, unit+integration xanh mới commit `T<n>: …`, không nới assertion; kẹt >3 lần sửa → ghi tình trạng vào đây + hỏi.
+
+- **T10 — Connection Test/Cancel correctness — ✅ DONE** (commit `T10:`). Bounded timeout (`connect_timeout()`=10s) + cancellable `run_test_bounded` (token vs timeout vs test, SSH tunnel always `shutdown()`), `classify_connect_error`, `cancel_test` cmd, ConnectionForm uuid testId + cancel-on-close. Tests: unit (timeout/error-map) + integration `connection_test_bounded_and_cancellable` (live ok / closed-port bounded / cancel <1s) EXIT=0.
+- **T11 — Cancel running query verified — ⏳ NEXT**
+- T12..T23 — pending (see SPEC_SUPPLEMENT.md "Implementation priority").
