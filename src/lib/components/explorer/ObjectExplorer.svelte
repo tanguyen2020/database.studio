@@ -15,6 +15,7 @@
   import { tabs } from '$lib/stores/tabs.svelte'
   import { chTtl } from '$lib/stores/chttl.svelte'
   import { importWizard } from '$lib/stores/import.svelte'
+  import * as chops from '$lib/sql/chops'
   import { toasts } from '$lib/stores/toast.svelte'
   import { quoteIdent, selectStarSql } from '$lib/sql/dialect'
   import { genCreate, genDelete, genDrop, genInsert, genRename, genSelect, genTruncate, genUpdate } from '$lib/sql/ddl'
@@ -446,6 +447,16 @@
                   <ContextMenu.Item onclick={() => genSqlTab('ddl', schema.name, t.name)}>View DDL</ContextMenu.Item>
                   {#if isClickhouse}
                     <ContextMenu.Item onclick={() => chTtl.show(selected!.id, schema.name, t.name)}>TTL Policy…</ContextMenu.Item>
+                    <ContextMenu.Item onclick={() => stmtTab(`Optimize ${t.name}`, chops.optimizeFinal(schema.name, t.name))}>Optimize Table (FINAL)</ContextMenu.Item>
+                    <ContextMenu.Item onclick={() => stmtTab(`${t.name} · partitions`, chops.showPartitions(t.name))}>Show Partitions</ContextMenu.Item>
+                    <ContextMenu.Item onclick={() => stmtTab(`${t.name} · engine`, chops.showEngine(t.name))}>Show Engine / Settings</ContextMenu.Item>
+                    <ContextMenu.Item onclick={() => stmtTab(`${t.name} · mutations`, chops.showMutations(t.name))}>Show Mutations</ContextMenu.Item>
+                    {#if chops.needsFinal(t.engine)}
+                      <ContextMenu.Item onclick={() => stmtTab(`${t.name} · FINAL`, `SELECT * FROM ${quoteIdent(selected!.system, t.name)} FINAL LIMIT 100;`)}>Preview (SELECT … FINAL)</ContextMenu.Item>
+                    {/if}
+                    <ContextMenu.Item onclick={() => stmtTab(`Detach partition · ${t.name}`, chops.detachPartition(schema.name, t.name))}>Detach Partition…</ContextMenu.Item>
+                    <ContextMenu.Item onclick={() => stmtTab(`Freeze · ${t.name}`, chops.freezePartition(schema.name, t.name))}>Freeze (Backup) Partition</ContextMenu.Item>
+                    <ContextMenu.Item variant="destructive" onclick={() => stmtTab(`Drop partition · ${t.name}`, chops.dropPartition(schema.name, t.name))}>Drop Partition…</ContextMenu.Item>
                   {/if}
                   <ContextMenu.Separator />
                   <ContextMenu.Item onclick={() => copyName(t.name)}>Copy Name</ContextMenu.Item>
