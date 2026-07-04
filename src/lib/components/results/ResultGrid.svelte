@@ -18,7 +18,8 @@
   import { save as saveFileDialog } from '@tauri-apps/plugin-dialog'
   import { invoke } from '@tauri-apps/api/core'
   import { toasts } from '$lib/stores/toast.svelte'
-  import { applyGridChanges, previewGridChanges, type GridChange } from '$lib/ipc'
+  import { applyGridChanges, previewGridChanges, chGenerateMutations, type GridChange } from '$lib/ipc'
+  import { tabs } from '$lib/stores/tabs.svelte'
   import type { QueryResultSet } from '$lib/types'
 
   /** Bật editable grid khi mở từ Table Data Viewer (biết schema/table/pk). */
@@ -183,6 +184,21 @@
       toasts.error(String(e), editTarget.system)
     } finally {
       applying = false
+    }
+  }
+
+  // ClickHouse (SPEC_ADDENDUM §7): KHÔNG commit OLTP. Inline-edit không apply
+  // trực tiếp — pending changes → mutation async (ALTER TABLE … UPDATE/DELETE)
+  // mở trong SQL editor để review + chạy chủ động.
+  const isClickhouse = $derived(editTarget?.system === 'clickhouse')
+  async function generateMutation() {
+    if (!editTarget) return
+    try {
+      const sql = await chGenerateMutations(editTarget.connId, buildChanges())
+      tabs.openSqlTab({ connectionId: editTarget.connId, title: `Mutation · ${editTarget.table}`, query: sql })
+      discard()
+    } catch (e) {
+      toasts.error(String(e), editTarget.system)
     }
   }
 
@@ -355,18 +371,33 @@
   <div style="flex:none;display:flex;align-items:center;gap:var(--px-8);padding:var(--px-5) var(--px-12);border-bottom:var(--px-1) solid var(--border);background:var(--header);font-size:var(--px-11_5)">
     <span class="eg-btn" onclick={addRow} onkeydown={(e) => e.key === 'Enter' && addRow()} role="button" tabindex="0">＋ Insert row</span>
     <span class="eg-btn" onclick={toggleDeleteSelected} onkeydown={(e) => e.key === 'Enter' && toggleDeleteSelected()} role="button" tabindex="0" style="opacity:{selectedRows.size ? 1 : 0.5}">🗑 Delete row(s)</span>
+    {#if isClickhouse}
+      <span style="color:var(--muted);font-size:var(--px-10_5)">ClickHouse: sửa dữ liệu là mutation async — không commit OLTP</span>
+    {/if}
     {#if pendingCount > 0}
       <span style="color:var(--warn)">● {pendingCount} thay đổi chưa lưu</span>
       <div style="margin-left:auto;display:flex;gap:var(--px-8)">
-        <span class="eg-btn" onclick={openPreview} onkeydown={(e) => e.key === 'Enter' && openPreview()} role="button" tabindex="0">Preview diff</span>
-        <span class="eg-btn" onclick={discard} onkeydown={(e) => e.key === 'Enter' && discard()} role="button" tabindex="0">Discard</span>
-        <span
-          onclick={apply}
-          onkeydown={(e) => e.key === 'Enter' && apply()}
-          role="button"
-          tabindex="0"
-          style="font-size:var(--px-11_5);font-weight:600;background:var(--primary);color:var(--hex-fff);border-radius:var(--px-6);padding:var(--px-4) var(--px-12);cursor:pointer"
-        >{applying ? 'Applying…' : 'Apply'}</span>
+        {#if isClickhouse}
+          <!-- §7 option (a): route sang Generate mutation (ALTER TABLE … UPDATE/DELETE), KHÔNG apply OLTP -->
+          <span class="eg-btn" onclick={discard} onkeydown={(e) => e.key === 'Enter' && discard()} role="button" tabindex="0">Discard</span>
+          <span
+            onclick={generateMutation}
+            onkeydown={(e) => e.key === 'Enter' && generateMutation()}
+            role="button"
+            tabindex="0"
+            style="font-size:var(--px-11_5);font-weight:600;background:#FFCC00;color:#0f1219;border-radius:var(--px-6);padding:var(--px-4) var(--px-12);cursor:pointer"
+          >Generate mutation</span>
+        {:else}
+          <span class="eg-btn" onclick={openPreview} onkeydown={(e) => e.key === 'Enter' && openPreview()} role="button" tabindex="0">Preview diff</span>
+          <span class="eg-btn" onclick={discard} onkeydown={(e) => e.key === 'Enter' && discard()} role="button" tabindex="0">Discard</span>
+          <span
+            onclick={apply}
+            onkeydown={(e) => e.key === 'Enter' && apply()}
+            role="button"
+            tabindex="0"
+            style="font-size:var(--px-11_5);font-weight:600;background:var(--primary);color:var(--hex-fff);border-radius:var(--px-6);padding:var(--px-4) var(--px-12);cursor:pointer"
+          >{applying ? 'Applying…' : 'Apply'}</span>
+        {/if}
       </div>
     {/if}
   </div>

@@ -108,6 +108,7 @@ pub fn run() {
             commands::cassandra::cassandra_table_ddl,
             // clickhouse advanced (Phase 5)
             commands::clickhouse::ch_table_meta,
+            commands::clickhouse::ch_dictionaries,
             // query plan visualizer (Phase 5)
             commands::plan::explain_plan,
             // schema
@@ -138,6 +139,7 @@ pub fn run() {
             commands::grid::preview_grid_changes,
             commands::grid::apply_grid_changes,
             commands::grid::exec_filtered,
+            commands::grid::ch_generate_mutations,
             // tabs + app state
             commands::tabs::save_tabs,
             commands::tabs::load_tabs,

@@ -523,6 +523,13 @@ export interface ChTableMeta {
 export const chTableMeta = (connId: string, schema: string, table: string) =>
   invoke<ChTableMeta>('ch_table_meta', { connId, schema, table })
 
+/** CH editable-grid → mutation async (ALTER TABLE … UPDATE/DELETE) để review/chạy. */
+export const chGenerateMutations = (connId: string, changes: GridChange[]) =>
+  invoke<string>('ch_generate_mutations', { connId, changes })
+
+export const chDictionaries = (connId: string, schema: string) =>
+  invoke<string[]>('ch_dictionaries', { connId, schema })
+
 // ---- schema (Object Explorer) ----------------------------------------------
 
 export const listSchemas = (connId: string) => invoke<SchemaInfo[]>('list_schemas', { connId })

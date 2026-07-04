@@ -392,6 +392,18 @@ async fn clickhouse_roundtrip_types_and_errors() {
     // bảng không TTL → rỗng
     let meta2 = drv.table_meta("default", "it_events").await.unwrap();
     assert!(meta2.ttl_rules.is_empty(), "it_events không có TTL: {:?}", meta2.ttl_rules);
+
+    // Phase 5 T7c-pt2: Dictionaries node (§3) — seed dictionary thật rồi query ngược.
+    drv.exec("CREATE TABLE dict_src (id UInt64, name String) ENGINE = MergeTree ORDER BY id").await.unwrap();
+    drv.exec("INSERT INTO dict_src VALUES (1, 'alpha')").await.unwrap();
+    drv.exec(
+        "CREATE DICTIONARY it_dict (id UInt64, name String) PRIMARY KEY id \
+         SOURCE(CLICKHOUSE(TABLE 'dict_src')) LAYOUT(FLAT()) LIFETIME(0)",
+    )
+    .await
+    .unwrap();
+    let dicts = drv.dictionaries("default").await.unwrap();
+    assert!(dicts.iter().any(|d| d == "it_dict"), "dictionaries phải liệt kê it_dict, got {dicts:?}");
 }
 
 // ---------------------------------------------------------------------------

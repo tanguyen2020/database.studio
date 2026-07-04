@@ -642,6 +642,8 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
         raw: '[{"Plan":{"Node Type":"Hash Join","Total Cost":512.4,"Plan Rows":214}}]',
       })
     }
+    case 'ch_dictionaries':
+      return ok(['geo_regions', 'user_agents'])
     case 'ch_table_meta': {
       const tbl = (args?.table as string) ?? 'lms_events'
       return ok({

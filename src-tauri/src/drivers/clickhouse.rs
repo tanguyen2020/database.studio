@@ -261,6 +261,23 @@ impl ChDriver {
             .collect())
     }
 
+    /// Dictionaries trong 1 database (Explorer tree §3).
+    pub async fn dictionaries(&self, schema: &str) -> Result<Vec<String>, QueryError> {
+        let (body, _) = self
+            .raw_query(
+                "SELECT name FROM system.dictionaries WHERE database = {db:String} ORDER BY name",
+                &[("db", schema)],
+            )
+            .await?;
+        let parsed: ChJsonBody = serde_json::from_str(&body)
+            .map_err(|e| QueryError::new(SYSTEM, e.to_string(), body.clone()))?;
+        Ok(parsed
+            .data
+            .iter()
+            .filter_map(|r| r["name"].as_str().map(String::from))
+            .collect())
+    }
+
     /// Metadata bảng ClickHouse cho engine badge + TTL viewer (Phase 5 · T7c):
     /// engine, engine_full, create_table_query, partition/sorting key, TTL rules.
     pub async fn table_meta(&self, schema: &str, table: &str) -> Result<ChTableMeta, QueryError> {

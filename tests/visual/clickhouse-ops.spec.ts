@@ -30,5 +30,16 @@ test('clickhouse ops: table context menu → generated SQL editor', async ({ pag
   await page.waitForTimeout(300)
   await expect(page.getByText(/OPTIMIZE TABLE/).first()).toBeVisible()
 
+  // Dictionaries node (§3 clickhouseTree) → expand → Show Definition
+  await page.getByText('Dictionaries', { exact: true }).first().click()
+  await page.waitForTimeout(300)
+  await expect(page.getByText('geo_regions').first()).toBeVisible()
+  await page.getByText('geo_regions').first().click({ button: 'right' })
+  await page.waitForTimeout(200)
+  await expect(page.getByText('Show Definition').first()).toBeVisible()
+  await page.getByText('Show Definition').first().click()
+  await page.waitForTimeout(300)
+  await expect(page.getByText(/SHOW CREATE DICTIONARY/).first()).toBeVisible()
+
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })

@@ -23,6 +23,20 @@ pub fn preview_grid_changes(
     Ok(changes.iter().map(|c| grid::preview_sql(&system, c)).collect())
 }
 
+/// ClickHouse (SPEC_ADDENDUM §7): dịch pending changes thành mutation ASYNC
+/// (`ALTER TABLE … UPDATE/DELETE`) để mở trong SQL editor review + chạy chủ động.
+/// KHÔNG commit tự động — inline-edit đã tắt cho ClickHouse ở frontend.
+#[tauri::command]
+pub fn ch_generate_mutations(
+    _state: State<'_, AppState>,
+    changes: Vec<GridChange>,
+) -> Result<String, AppError> {
+    let header = "-- ClickHouse mutation (async — theo dõi qua system.mutations, KHÔNG commit tức thì).\n\
+                  -- Review kỹ trước khi chạy; chi phí cao trên bảng lớn.\n\n";
+    let body = changes.iter().map(grid::ch_mutation_sql).collect::<Vec<_>>().join("\n");
+    Ok(format!("{header}{body}"))
+}
+
 /// Table Data Viewer: SELECT có filter/sort/phân trang (server-side, tham số hóa).
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]

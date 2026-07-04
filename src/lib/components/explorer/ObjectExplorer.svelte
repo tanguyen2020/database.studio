@@ -70,6 +70,17 @@
       cassTree = null
     }
   }
+  // ClickHouse Dictionaries (§3) — nạp lười khi mở folder.
+  let chDicts = $state<Record<string, string[]>>({})
+  async function loadChDicts(connId: string, schema: string) {
+    if (chDicts[schema]) return
+    try {
+      chDicts = { ...chDicts, [schema]: await ipc.chDictionaries(connId, schema) }
+    } catch {
+      chDicts = { ...chDicts, [schema]: [] }
+    }
+  }
+
   // meta hậu tố phân biệt partition key / clustering / FK (prototype dòng 3968-3970).
   function colMeta(c: ipc.CassColumn): string {
     let suffix = ''
@@ -615,6 +626,37 @@
                 viewMenu,
               )}
             {/each}
+          {/if}
+
+          {#if isClickhouse}
+            <!-- Dictionaries (CLICKHOUSE_SPEC_ADDENDUM §3 clickhouseTree) -->
+            {@const dKey = `f:${schema.name}:dicts`}
+            {@render row({
+              key: dKey,
+              depth: base + 1,
+              glyph: '⊞',
+              color: C.folder,
+              name: 'Dictionaries',
+              meta: String((chDicts[schema.name] ?? []).length || ''),
+              head: true,
+              expandable: true,
+              onClick: () => { toggle(dKey); if (selected) loadChDicts(selected.id, schema.name) },
+            })}
+            {#if expanded.has(dKey)}
+              {#each chDicts[schema.name] ?? [] as dic (dic)}
+                {#snippet dictMenu()}
+                  <ContextMenu.Content class="w-48">
+                    <ContextMenu.Item onclick={() => stmtTab(`${dic} · DDL`, chops.dictShowDefinition(schema.name, dic))}>Show Definition</ContextMenu.Item>
+                    <ContextMenu.Item onclick={() => stmtTab(`Query ${dic}`, `SELECT * FROM ${schema.name}.${dic} LIMIT 100;`)}>Query</ContextMenu.Item>
+                    <ContextMenu.Item onclick={() => stmtTab(`Reload ${dic}`, chops.dictReload(dic))}>Reload</ContextMenu.Item>
+                    <ContextMenu.Item onclick={() => copyName(dic)}>Copy Name</ContextMenu.Item>
+                    <ContextMenu.Separator />
+                    <ContextMenu.Item variant="destructive" onclick={() => stmtTab(`Drop ${dic}`, `DROP DICTIONARY ${schema.name}.${dic};`)}>Drop</ContextMenu.Item>
+                  </ContextMenu.Content>
+                {/snippet}
+                {@render row({ key: `dic:${schema.name}.${dic}`, depth: base + 2, glyph: '⊞', color: C.view, name: dic, meta: 'dictionary' }, dictMenu)}
+              {/each}
+            {/if}
           {/if}
 
           {#if showRoutines}

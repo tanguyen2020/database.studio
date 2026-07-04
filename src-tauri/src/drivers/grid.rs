@@ -181,6 +181,51 @@ pub fn preview_sql(system: &str, change: &GridChange) -> String {
     }
 }
 
+/// ClickHouse "Generate mutation" (CLICKHOUSE_SPEC_ADDENDUM §7, option a): dịch
+/// pending change thành mutation ASYNC. UPDATE/DELETE = `ALTER TABLE … UPDATE/DELETE`
+/// (theo dõi qua system.mutations, KHÔNG commit OLTP tức thì); INSERT = INSERT lô.
+/// Chỉ render literal để review/mở trong editor — người dùng chủ động chạy.
+pub fn ch_mutation_sql(change: &GridChange) -> String {
+    let q = QuoteStyle::Backtick;
+    let lit = |v: &Value| -> String {
+        match v {
+            Value::Null => "NULL".into(),
+            Value::Bool(b) => b.to_string(),
+            Value::Number(num) => num.to_string(),
+            other => {
+                let s = other.as_str().map(String::from).unwrap_or_else(|| other.to_string());
+                format!("'{}'", s.replace('\'', "''"))
+            }
+        }
+    };
+    match change {
+        GridChange::Update { schema, table, pk, set } => {
+            let set_clause = set
+                .iter()
+                .map(|c| format!("{} = {}", quote_ident(&c.name, q), lit(&c.value)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let where_clause = preview_where(pk, q, &lit);
+            format!(
+                "ALTER TABLE {} UPDATE {set_clause} WHERE {where_clause};",
+                qualified("clickhouse", schema, table)
+            )
+        }
+        GridChange::Delete { schema, table, pk } => {
+            format!(
+                "ALTER TABLE {} DELETE WHERE {};",
+                qualified("clickhouse", schema, table),
+                preview_where(pk, q, &lit)
+            )
+        }
+        GridChange::Insert { schema, table, values } => {
+            let cols = values.iter().map(|c| quote_ident(&c.name, q)).collect::<Vec<_>>().join(", ");
+            let vals = values.iter().map(|c| lit(&c.value)).collect::<Vec<_>>().join(", ");
+            format!("INSERT INTO {} ({cols}) VALUES ({vals});", qualified("clickhouse", schema, table))
+        }
+    }
+}
+
 fn preview_where(cols: &[Col], q: QuoteStyle, lit: &dyn Fn(&Value) -> String) -> String {
     cols.iter()
         .map(|c| {
@@ -390,6 +435,32 @@ mod tests {
         let b = build_select("postgres", &None, "t", &[FilterCond { col: "a".into(), op: "; DROP TABLE t --".into(), value: json!(1) }], false, &[], 50, 0);
         assert!(!b.sql.contains("DROP"));
         assert!(!b.sql.contains("WHERE"));
+    }
+
+    #[test]
+    fn ch_mutation_update_delete_insert() {
+        // UPDATE → ALTER TABLE … UPDATE … WHERE (async mutation)
+        let u = ch_mutation_sql(&GridChange::Update {
+            schema: Some("analytics".into()),
+            table: "events".into(),
+            pk: vec![Col { name: "id".into(), value: json!(7) }],
+            set: vec![Col { name: "status".into(), value: json!("done") }],
+        });
+        assert_eq!(u, "ALTER TABLE `analytics`.`events` UPDATE `status` = 'done' WHERE `id` = 7;");
+        // DELETE → ALTER TABLE … DELETE WHERE
+        let d = ch_mutation_sql(&GridChange::Delete {
+            schema: None,
+            table: "events".into(),
+            pk: vec![Col { name: "id".into(), value: json!(7) }],
+        });
+        assert_eq!(d, "ALTER TABLE `events` DELETE WHERE `id` = 7;");
+        // INSERT → INSERT lô (không phải mutation)
+        let i = ch_mutation_sql(&GridChange::Insert {
+            schema: None,
+            table: "events".into(),
+            values: vec![Col { name: "a".into(), value: json!(1) }, Col { name: "b".into(), value: json!("x") }],
+        });
+        assert_eq!(i, "INSERT INTO `events` (`a`, `b`) VALUES (1, 'x');");
     }
 
     #[test]
