@@ -922,3 +922,42 @@ async fn redis_connect_auth_ping_and_version() {
     let bad = RedisDriver::connect(&p_bad).await;
     assert!(bad.is_err(), "thiếu password phải bị NOAUTH từ chối");
 }
+
+// ---------------------------------------------------------------------------
+// NATS (Phase 3 · T8) — connect + test + ping trên container thật
+// ---------------------------------------------------------------------------
+
+async fn start_nats() -> (ContainerAsync<GenericImage>, u16) {
+    let c = GenericImage::new("nats", "2.10-alpine")
+        .with_exposed_port(4222.tcp())
+        .start()
+        .await
+        .expect("start nats container (Docker daemon phải đang chạy)");
+    let port = c.get_host_port_ipv4(4222).await.unwrap();
+    (c, port)
+}
+
+#[tokio::test]
+async fn nats_connect_test_and_ping() {
+    use database_studio_lib::drivers::nats::{NatsConnParams, NatsDriver};
+
+    let (_c, port) = start_nats().await;
+    let params = NatsConnParams {
+        host: "localhost".into(),
+        port,
+        user: String::new(),
+        password: String::new(),
+        ssl: false,
+    };
+
+    let mut drv = retry("nats", || NatsDriver::connect(&params)).await;
+    assert!(drv.ping().await, "connection_state phải Connected");
+
+    let t = NatsDriver::test(&params).await;
+    assert!(t.ok, "test connection phải OK");
+    assert!(
+        t.server_version.as_deref().unwrap_or("").starts_with("NATS"),
+        "phải parse được server version, nhận: {:?}",
+        t.server_version
+    );
+}

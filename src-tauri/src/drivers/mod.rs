@@ -4,6 +4,7 @@ pub mod clickhouse;
 pub mod grid;
 pub mod mssql;
 pub mod mysql;
+pub mod nats;
 pub mod postgres;
 pub mod redis;
 pub mod sqlite;
@@ -17,6 +18,7 @@ use crate::error::QueryError;
 use clickhouse::{ChConnParams, ChDriver};
 use mssql::{MssqlConnParams, MssqlDriver};
 use mysql::{MySqlConnParams, MySqlDriver};
+use nats::{NatsConnParams, NatsDriver};
 use postgres::{PgConnParams, PgDriver};
 use redis::{RedisConnParams, RedisDriver};
 use sqlite::{SqliteConnParams, SqliteDriver};
@@ -36,6 +38,7 @@ pub enum LiveConnection {
     Mssql(MssqlDriver),
     Sqlite(SqliteDriver),
     Redis(RedisDriver),
+    Nats(NatsDriver),
 }
 
 fn pg_params(p: &ConnectionProfile, ep: &Endpoint, password: &str) -> PgConnParams {
@@ -118,6 +121,25 @@ fn redis_not_sql() -> QueryError {
     )
 }
 
+fn nats_params(p: &ConnectionProfile, ep: &Endpoint, password: &str) -> NatsConnParams {
+    NatsConnParams {
+        host: ep.host.clone(),
+        port: ep.port,
+        user: p.user.clone(),
+        password: password.to_string(),
+        ssl: p.ssl,
+    }
+}
+
+/// Lỗi cho thao tác SQL gọi nhầm trên NATS (messaging).
+fn nats_not_sql() -> QueryError {
+    QueryError::new(
+        "nats",
+        "NATS là messaging — dùng Subscriber / Publish / JetStream, không phải SQL",
+        "sql operation not applicable to nats",
+    )
+}
+
 impl LiveConnection {
     pub async fn connect(
         profile: &ConnectionProfile,
@@ -146,6 +168,9 @@ impl LiveConnection {
             SystemType::Redis => Ok(Self::Redis(
                 RedisDriver::connect(&redis_params(profile, endpoint, password)).await?,
             )),
+            SystemType::Nats => Ok(Self::Nats(
+                NatsDriver::connect(&nats_params(profile, endpoint, password)).await?,
+            )),
             other => Err(QueryError::new(
                 other.as_str(),
                 format!("Hệ {} chưa được hỗ trợ", other.as_str()),
@@ -171,6 +196,7 @@ impl LiveConnection {
             SystemType::Clickhouse => ChDriver::test(&ch_params(profile, endpoint, password)).await,
             SystemType::Sqlite => SqliteDriver::test(&sqlite_params(profile)).await,
             SystemType::Redis => RedisDriver::test(&redis_params(profile, endpoint, password)).await,
+            SystemType::Nats => NatsDriver::test(&nats_params(profile, endpoint, password)).await,
             other => TestResult {
                 ok: false,
                 latency_ms: None,
@@ -194,6 +220,7 @@ impl LiveConnection {
             Self::Sqlite(d) => Box::pin(d.exec(sql)),
             Self::Clickhouse(d) => Box::pin(d.exec(sql)),
             Self::Redis(_) => Box::pin(async { Err(redis_not_sql()) }),
+            Self::Nats(_) => Box::pin(async { Err(nats_not_sql()) }),
         }
     }
 
@@ -205,6 +232,7 @@ impl LiveConnection {
             Self::Sqlite(d) => d.ping().await,
             Self::Clickhouse(d) => d.ping().await,
             Self::Redis(d) => d.ping().await,
+            Self::Nats(d) => d.ping().await,
         }
     }
 
@@ -226,6 +254,7 @@ impl LiveConnection {
                 "clickhouse param select not supported yet",
             )),
             Self::Redis(_) => Err(redis_not_sql()),
+            Self::Nats(_) => Err(nats_not_sql()),
         }
     }
 
@@ -246,6 +275,7 @@ impl LiveConnection {
                 "editable grid not applicable to clickhouse",
             )),
             Self::Redis(_) => Err(redis_not_sql()),
+            Self::Nats(_) => Err(nats_not_sql()),
         }
     }
 
@@ -259,6 +289,7 @@ impl LiveConnection {
             Self::Sqlite(d) => d.schemas().await,
             Self::Clickhouse(d) => d.schemas().await,
             Self::Redis(_) => Ok(Vec::new()),
+            Self::Nats(_) => Ok(Vec::new()),
         }
     }
 
@@ -270,6 +301,7 @@ impl LiveConnection {
             Self::Sqlite(d) => d.tables(schema).await,
             Self::Clickhouse(d) => d.tables(schema).await,
             Self::Redis(_) => Ok(Vec::new()),
+            Self::Nats(_) => Ok(Vec::new()),
         }
     }
 
@@ -281,6 +313,7 @@ impl LiveConnection {
             Self::Sqlite(d) => d.columns(schema, table).await,
             Self::Clickhouse(d) => d.columns(schema, table).await,
             Self::Redis(_) => Ok(Vec::new()),
+            Self::Nats(_) => Ok(Vec::new()),
         }
     }
 
@@ -292,6 +325,7 @@ impl LiveConnection {
             Self::Sqlite(d) => d.indexes(schema, table).await,
             Self::Clickhouse(_) => Ok(Vec::new()), // data-skipping index → Phase 5 Index Scanner
             Self::Redis(_) => Ok(Vec::new()),
+            Self::Nats(_) => Ok(Vec::new()),
         }
     }
 
@@ -304,6 +338,7 @@ impl LiveConnection {
             Self::Sqlite(_) => Ok(Vec::new()),
             Self::Clickhouse(_) => Ok(Vec::new()),
             Self::Redis(_) => Ok(Vec::new()),
+            Self::Nats(_) => Ok(Vec::new()),
         }
     }
 
@@ -315,6 +350,7 @@ impl LiveConnection {
             Self::Sqlite(_) => Ok(Vec::new()), // SQLite has no stored routines
             Self::Clickhouse(_) => Ok(Vec::new()), // UDF → Phase 5
             Self::Redis(_) => Ok(Vec::new()),
+            Self::Nats(_) => Ok(Vec::new()),
         }
     }
 
@@ -326,6 +362,7 @@ impl LiveConnection {
             Self::Sqlite(d) => d.triggers(schema).await,
             Self::Clickhouse(_) => Ok(Vec::new()),
             Self::Redis(_) => Ok(Vec::new()),
+            Self::Nats(_) => Ok(Vec::new()),
         }
     }
 

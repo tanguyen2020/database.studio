@@ -45,6 +45,7 @@
   const isSqlite = $derived(draft?.system === 'sqlite')
   const isMssql = $derived(draft?.system === 'mssql')
   const isRedis = $derived(draft?.system === 'redis')
+  const isNats = $derived(draft?.system === 'nats')
   const hostLabel = 'Host' // Kafka/NATS (phase sau): 'Bootstrap servers'/'Servers'
   const hostPlaceholder = $derived(isSqlite ? '/data/local.db' : 'localhost')
   const dbPlaceholder = $derived(draft?.system === 'postgres' ? 'postgres' : '')
@@ -292,8 +293,8 @@
               </div>
             </div>
 
-            <!-- database — port dòng 2205-2207 (Redis: DB index 0–15 thay tên DB) -->
-            <div>
+            <!-- database — port dòng 2205-2207 (Redis: DB index 0–15; NATS: ẩn) -->
+            <div style={isNats ? 'display:none' : ''}>
               {#if isRedis}
                 <div class="cm-label">DB Index</div>
                 <select class="cm-input" bind:value={draft.database}>

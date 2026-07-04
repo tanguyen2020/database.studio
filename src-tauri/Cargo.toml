@@ -66,6 +66,9 @@ redis = { version = "0.27", default-features = false, features = [
   "keep-alive",
 ] }
 
+# NATS (Phase 3) — async client + JetStream (dùng rustls như phần còn lại của repo).
+async-nats = { version = "0.38", default-features = false, features = ["ring"] }
+
 # Misc
 uuid = { version = "1", features = ["v4"] }
 thiserror = "2"
