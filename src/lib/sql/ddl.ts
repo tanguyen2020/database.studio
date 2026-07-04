@@ -66,6 +66,19 @@ export function genCreate(system: string, schema: string, table: string, cols: C
   return `CREATE TABLE ${target(system, schema, table)} (\n${body}\n);`
 }
 
+/** ALTER TABLE … ADD CONSTRAINT … FOREIGN KEY — dialect-aware, schema-qualified.
+ *  Emitted after all CREATE TABLEs by the Generate Scripts flow (T15). */
+export function genForeignKey(
+  system: string,
+  schema: string,
+  fk: { name: string; from_table: string; from_column: string; to_table: string; to_column: string },
+): string {
+  const from = target(system, schema, fk.from_table)
+  const to = target(system, schema, fk.to_table)
+  const con = quoteIdent(system, fk.name)
+  return `ALTER TABLE ${from} ADD CONSTRAINT ${con} FOREIGN KEY (${quoteIdent(system, fk.from_column)}) REFERENCES ${to} (${quoteIdent(system, fk.to_column)});`
+}
+
 export function genRename(system: string, schema: string, table: string): string {
   const t = target(system, schema, table)
   return `ALTER TABLE ${t} RENAME TO ${quoteIdent(system, table + '_new')};`

@@ -2,7 +2,7 @@
 // dialect, MSSQL dùng TOP, ClickHouse UPDATE/DELETE là ALTER TABLE … mutation.
 
 import { describe, expect, it } from 'vitest'
-import { genCreate, genDelete, genDrop, genInsert, genRename, genSelect, genTruncate, genUpdate } from './ddl'
+import { genCreate, genDelete, genDrop, genForeignKey, genInsert, genRename, genSelect, genTruncate, genUpdate } from './ddl'
 import type { ColumnInfo } from '$lib/types'
 
 function col(name: string, data_type: string, opts: Partial<ColumnInfo> = {}): ColumnInfo {
@@ -94,5 +94,32 @@ describe('genRename / genTruncate / genDrop', () => {
   it('truncate + drop IF EXISTS', () => {
     expect(genTruncate('mysql', 'app', 'users')).toBe('TRUNCATE TABLE `app`.`users`;')
     expect(genDrop('mysql', 'app', 'users')).toBe('DROP TABLE IF EXISTS `app`.`users`;')
+  })
+})
+
+describe('genForeignKey', () => {
+  it('dialect-aware ALTER ADD CONSTRAINT … FK (Postgres)', () => {
+    expect(
+      genForeignKey('postgres', 'public', {
+        name: 'fk_enroll_student',
+        from_table: 'enrollments',
+        from_column: 'student_id',
+        to_table: 'students',
+        to_column: 'id',
+      }),
+    ).toBe(
+      'ALTER TABLE "public"."enrollments" ADD CONSTRAINT "fk_enroll_student" FOREIGN KEY ("student_id") REFERENCES "public"."students" ("id");',
+    )
+  })
+
+  it('MySQL backtick quoting', () => {
+    const sql = genForeignKey('mysql', 'app', {
+      name: 'fk1',
+      from_table: 'a',
+      from_column: 'b_id',
+      to_table: 'b',
+      to_column: 'id',
+    })
+    expect(sql).toBe('ALTER TABLE `app`.`a` ADD CONSTRAINT `fk1` FOREIGN KEY (`b_id`) REFERENCES `app`.`b` (`id`);')
   })
 })

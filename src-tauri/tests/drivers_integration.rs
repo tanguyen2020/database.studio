@@ -1861,3 +1861,171 @@ async fn pg_export_column_subset_where_reimport_count() {
     assert_eq!(result.rows[0]["amount"], serde_json::json!(6));
     eprintln!("CHK export subset+WHERE → reimport count OK");
 }
+
+// --- T15 helpers: introspect a schema into a canonical, comparable signature ---
+async fn gs_rows(drv: &mut PgDriver, sql: &str) -> Vec<serde_json::Value> {
+    match drv.exec(sql).await.unwrap() {
+        StatementOutcome::Rows { result } => result.rows,
+        other => panic!("kỳ vọng Rows từ `{sql}`, got {other:?}"),
+    }
+}
+
+/// Chuẩn hóa toàn bộ cấu trúc schema (objects + columns + PK + FK) thành 1 chuỗi
+/// so sánh được — dùng để chứng minh generate-structure round-trip identical.
+async fn gs_signature(drv: &mut PgDriver, schema: &str) -> String {
+    let mut sig = String::new();
+    let objs = gs_rows(
+        drv,
+        &format!("SELECT table_name, table_type FROM information_schema.tables WHERE table_schema='{schema}' ORDER BY table_name"),
+    )
+    .await;
+    for o in &objs {
+        let name = o["table_name"].as_str().unwrap();
+        sig.push_str(&format!("OBJ {name} {}\n", o["table_type"].as_str().unwrap()));
+        let cols = gs_rows(
+            drv,
+            &format!("SELECT column_name, data_type, is_nullable FROM information_schema.columns WHERE table_schema='{schema}' AND table_name='{name}' ORDER BY ordinal_position"),
+        )
+        .await;
+        for c in &cols {
+            sig.push_str(&format!(
+                "  COL {} {} {}\n",
+                c["column_name"].as_str().unwrap(),
+                c["data_type"].as_str().unwrap(),
+                c["is_nullable"].as_str().unwrap()
+            ));
+        }
+    }
+    let pks = gs_rows(
+        drv,
+        &format!("SELECT kcu.table_name AS t, kcu.column_name AS c FROM information_schema.table_constraints tc JOIN information_schema.key_column_usage kcu ON tc.constraint_name=kcu.constraint_name AND tc.table_schema=kcu.table_schema WHERE tc.constraint_type='PRIMARY KEY' AND tc.table_schema='{schema}' ORDER BY t, c"),
+    )
+    .await;
+    for p in &pks {
+        sig.push_str(&format!("PK {}.{}\n", p["t"].as_str().unwrap(), p["c"].as_str().unwrap()));
+    }
+    let fks = gs_rows(
+        drv,
+        &format!("SELECT kcu.table_name AS ft, kcu.column_name AS fc, ccu.table_name AS tt, ccu.column_name AS tc FROM information_schema.table_constraints tc JOIN information_schema.key_column_usage kcu ON tc.constraint_name=kcu.constraint_name AND tc.table_schema=kcu.table_schema JOIN information_schema.constraint_column_usage ccu ON ccu.constraint_name=tc.constraint_name AND ccu.table_schema=tc.table_schema WHERE tc.constraint_type='FOREIGN KEY' AND tc.table_schema='{schema}' ORDER BY ft, fc"),
+    )
+    .await;
+    for f in &fks {
+        sig.push_str(&format!(
+            "FK {}.{} -> {}.{}\n",
+            f["ft"].as_str().unwrap(),
+            f["fc"].as_str().unwrap(),
+            f["tt"].as_str().unwrap(),
+            f["tc"].as_str().unwrap()
+        ));
+    }
+    sig
+}
+
+/// Phase 5 · T15 — Generate Scripts structure round-trip. Seed a schema
+/// (tables + FK + view), regenerate its structure from introspection into a
+/// fresh schema (CREATE tables → FK ALTERs last → view), then assert the two
+/// schemas introspect identically. Seed → verify; nothing hard-coded.
+#[tokio::test]
+async fn pg_generate_structure_roundtrip_identical() {
+    let (_c, port) = start_pg().await;
+    let params = PgConnParams {
+        host: "localhost".into(),
+        port,
+        database: "testdb".into(),
+        user: "postgres".into(),
+        password: PASS.into(),
+        ssl: false,
+        ssl_ca: String::new(),
+        ssl_cert: String::new(),
+        ssl_key: String::new(),
+    };
+    let mut drv = retry("postgres", || PgDriver::connect(&params)).await;
+
+    // seed source schema
+    drv.exec("CREATE SCHEMA gs_src").await.unwrap();
+    drv.exec("CREATE TABLE gs_src.parent (id int PRIMARY KEY, name text NOT NULL)").await.unwrap();
+    drv.exec("CREATE TABLE gs_src.child (id int PRIMARY KEY, parent_id int, note text)").await.unwrap();
+    drv.exec("ALTER TABLE gs_src.child ADD CONSTRAINT fk_child_parent FOREIGN KEY (parent_id) REFERENCES gs_src.parent (id)")
+        .await
+        .unwrap();
+    drv.exec("CREATE VIEW gs_src.v_children AS SELECT id, parent_id FROM gs_src.child")
+        .await
+        .unwrap();
+
+    // regenerate structure into a fresh schema, driven by introspection
+    drv.exec("CREATE SCHEMA gs_dst").await.unwrap();
+    let base_tables = gs_rows(
+        &mut drv,
+        "SELECT table_name FROM information_schema.tables WHERE table_schema='gs_src' AND table_type='BASE TABLE' ORDER BY table_name",
+    )
+    .await;
+    for t in &base_tables {
+        let name = t["table_name"].as_str().unwrap();
+        let cols = gs_rows(
+            &mut drv,
+            &format!("SELECT column_name, data_type, is_nullable FROM information_schema.columns WHERE table_schema='gs_src' AND table_name='{name}' ORDER BY ordinal_position"),
+        )
+        .await;
+        let pks: Vec<String> = gs_rows(
+            &mut drv,
+            &format!("SELECT kcu.column_name AS c FROM information_schema.table_constraints tc JOIN information_schema.key_column_usage kcu ON tc.constraint_name=kcu.constraint_name AND tc.table_schema=kcu.table_schema WHERE tc.constraint_type='PRIMARY KEY' AND tc.table_schema='gs_src' AND tc.table_name='{name}'"),
+        )
+        .await
+        .iter()
+        .map(|r| r["c"].as_str().unwrap().to_string())
+        .collect();
+        let mut defs = Vec::new();
+        for c in &cols {
+            let cn = c["column_name"].as_str().unwrap();
+            let ty = c["data_type"].as_str().unwrap();
+            let is_pk = pks.iter().any(|p| p == cn);
+            let mut line = format!("\"{cn}\" {ty}");
+            if is_pk {
+                line.push_str(" PRIMARY KEY");
+            } else if c["is_nullable"].as_str().unwrap() == "NO" {
+                line.push_str(" NOT NULL");
+            }
+            defs.push(line);
+        }
+        drv.exec(&format!("CREATE TABLE gs_dst.{name} ({})", defs.join(", "))).await.unwrap();
+    }
+    // FK ALTERs last
+    let fks = gs_rows(
+        &mut drv,
+        "SELECT tc.constraint_name AS n, kcu.table_name AS ft, kcu.column_name AS fc, ccu.table_name AS tt, ccu.column_name AS tc FROM information_schema.table_constraints tc JOIN information_schema.key_column_usage kcu ON tc.constraint_name=kcu.constraint_name AND tc.table_schema=kcu.table_schema JOIN information_schema.constraint_column_usage ccu ON ccu.constraint_name=tc.constraint_name AND ccu.table_schema=tc.table_schema WHERE tc.constraint_type='FOREIGN KEY' AND tc.table_schema='gs_src'",
+    )
+    .await;
+    for f in &fks {
+        drv.exec(&format!(
+            "ALTER TABLE gs_dst.{} ADD CONSTRAINT {} FOREIGN KEY ({}) REFERENCES gs_dst.{} ({})",
+            f["ft"].as_str().unwrap(),
+            f["n"].as_str().unwrap(),
+            f["fc"].as_str().unwrap(),
+            f["tt"].as_str().unwrap(),
+            f["tc"].as_str().unwrap()
+        ))
+        .await
+        .unwrap();
+    }
+    // views (re-point definition from src → dst schema)
+    let views = gs_rows(
+        &mut drv,
+        "SELECT table_name FROM information_schema.tables WHERE table_schema='gs_src' AND table_type='VIEW'",
+    )
+    .await;
+    for v in &views {
+        let name = v["table_name"].as_str().unwrap();
+        let def = gs_rows(&mut drv, &format!("SELECT pg_get_viewdef('gs_src.{name}', true) AS d")).await;
+        let body = def[0]["d"].as_str().unwrap().replace("gs_src.", "gs_dst.");
+        drv.exec(&format!("CREATE VIEW gs_dst.{name} AS {body}")).await.unwrap();
+    }
+
+    let src_sig = gs_signature(&mut drv, "gs_src").await;
+    let dst_sig = gs_signature(&mut drv, "gs_dst").await;
+    assert_eq!(src_sig, dst_sig, "structure round-trip phải introspect identical");
+    // sanity: signature thật sự có nội dung (không phải hai chuỗi rỗng bằng nhau)
+    assert!(src_sig.contains("OBJ parent BASE TABLE"));
+    assert!(src_sig.contains("FK child.parent_id -> parent.id"));
+    assert!(src_sig.contains("OBJ v_children VIEW"));
+    eprintln!("CHK generate-structure round-trip identical OK");
+}

@@ -34,6 +34,7 @@
   import ClickHouseTtlDialog from '$lib/components/ClickHouseTtlDialog.svelte'
   import ImportDialog from '$lib/components/ImportDialog.svelte'
   import ExportDialog from '$lib/components/ExportDialog.svelte'
+  import GenerateScriptsDialog from '$lib/components/GenerateScriptsDialog.svelte'
   import Settings from '$lib/components/Settings.svelte'
   import { palette } from '$lib/stores/palette.svelte'
   import { settings } from '$lib/stores/settings.svelte'
@@ -277,5 +278,6 @@
 <ClickHouseTtlDialog />
 <ImportDialog />
 <ExportDialog />
+<GenerateScriptsDialog />
 <Settings />
 <Toasts />

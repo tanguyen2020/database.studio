@@ -6,6 +6,7 @@
   import { IS_TAURI } from '$lib/demo'
   import { systemMeta } from '$lib/systems'
   import { toasts } from '$lib/stores/toast.svelte'
+  import { scriptsWizard } from '$lib/stores/scripts.svelte'
 
   interface SqliteFileInfo {
     path: string
@@ -111,7 +112,7 @@
       <span class="sl-btn" onclick={() => onRunSql('VACUUM')} onkeydown={(e) => e.key === 'Enter' && onRunSql('VACUUM')} role="button" tabindex="0">VACUUM</span>
       <span class="sl-btn" onclick={integrityCheck} onkeydown={(e) => e.key === 'Enter' && integrityCheck()} role="button" tabindex="0">Integrity Check</span>
       <span class="sl-btn" onclick={() => onRunSql('ANALYZE')} onkeydown={(e) => e.key === 'Enter' && onRunSql('ANALYZE')} role="button" tabindex="0">Analyze</span>
-      <!-- Export .sql: gắn khi Generate Scripts (T15) hoàn thành — bỏ nút stub. -->
+      <span class="sl-btn" onclick={() => scriptsWizard.show(connId, 'main')} onkeydown={(e) => e.key === 'Enter' && scriptsWizard.show(connId, 'main')} role="button" tabindex="0">Export .sql</span>
       <span
         class="sl-btn"
         style="color:{pragmaOpen ? 'var(--text)' : 'var(--text2)'};background:{pragmaOpen ? 'var(--hover)' : 'var(--panel)'}"
