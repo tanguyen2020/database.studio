@@ -23,6 +23,7 @@
   import KafkaWorkspace from '$lib/components/workspace/KafkaWorkspace.svelte'
   import KafkaConsumer from '$lib/components/workspace/KafkaConsumer.svelte'
   import KafkaProducer from '$lib/components/workspace/KafkaProducer.svelte'
+  import SchemaRegistryWorkspace from '$lib/components/workspace/SchemaRegistryWorkspace.svelte'
   import HistoryTab from '$lib/components/workspace/HistoryTab.svelte'
   import SavedQueriesTab from '$lib/components/workspace/SavedQueriesTab.svelte'
   import { connections } from '$lib/stores/connections.svelte'
@@ -157,6 +158,8 @@
             <KafkaConsumer tab={t} />
           {:else if t.contentType === 'kafka-producer'}
             <KafkaProducer tab={t} />
+          {:else if t.contentType === 'kafka-schema-registry'}
+            <SchemaRegistryWorkspace tab={t} />
           {:else}
             <SqlWorkspace tab={t} />
           {/if}

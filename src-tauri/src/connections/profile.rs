@@ -86,6 +86,9 @@ pub struct ConnectionProfile {
     /// MSSQL only: "sql" | "windows" (Azure AD variants are out of Phase-1 scope).
     #[serde(default)]
     pub mssql_auth: String,
+    /// Kafka only: Confluent Schema Registry base URL (empty = no registry).
+    #[serde(default)]
+    pub schema_registry_url: String,
 }
 
 impl ConnectionProfile {

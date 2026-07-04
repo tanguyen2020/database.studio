@@ -41,5 +41,17 @@ test('kafka workspace: cluster overview + topic browser render', async ({ page }
   await page.getByText('payment-processor').first().click()
   await page.waitForTimeout(300)
   await expect(page.getByText('Lag per partition').first()).toBeVisible()
+
+  // Schema Registry (T7): open from header → subjects list + schema pane
+  await page.getByRole('button', { name: 'Schema Registry' }).click()
+  await page.waitForTimeout(400)
+  await expect(page.getByText('enrollment.events-value').first()).toBeVisible()
+  // version toggles + compatibility footer from selected subject
+  await expect(page.getByText(/Compatibility:/).first()).toBeVisible()
+  await expect(page.getByText('EnrollmentEvent').first()).toBeVisible()
+  // switch subject → different schema renders
+  await page.getByText('payment.received-value').first().click()
+  await page.waitForTimeout(300)
+  await expect(page.getByText('PaymentReceived').first()).toBeVisible()
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })

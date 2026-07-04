@@ -240,3 +240,45 @@ pub async fn kafka_produce(
         .map(|(partition, offset)| ProduceResult { partition, offset })
         .map_err(|e| AppError::Driver(e.message))
 }
+
+// ===== Schema Registry (T7) — read-only browser over the Confluent REST API =====
+
+use crate::drivers::schema_registry::{SchemaRegistryClient, SrSchema, SrSubject};
+
+fn sr_client(state: &State<'_, AppState>, conn_id: &str) -> Result<SchemaRegistryClient, AppError> {
+    let params = state.registry.schema_registry_params(conn_id)?;
+    SchemaRegistryClient::new(params).map_err(|e| AppError::Driver(e.message))
+}
+
+/// List subjects (name + format + latest version + compatibility).
+#[tauri::command]
+pub async fn kafka_sr_subjects(
+    state: State<'_, AppState>,
+    conn_id: String,
+) -> Result<Vec<SrSubject>, AppError> {
+    let client = sr_client(&state, &conn_id)?;
+    client.subjects().await.map_err(|e| AppError::Driver(e.message))
+}
+
+/// Version numbers registered for a subject.
+#[tauri::command]
+pub async fn kafka_sr_versions(
+    state: State<'_, AppState>,
+    conn_id: String,
+    subject: String,
+) -> Result<Vec<i32>, AppError> {
+    let client = sr_client(&state, &conn_id)?;
+    client.versions(&subject).await.map_err(|e| AppError::Driver(e.message))
+}
+
+/// A specific registered schema version.
+#[tauri::command]
+pub async fn kafka_sr_schema(
+    state: State<'_, AppState>,
+    conn_id: String,
+    subject: String,
+    version: i32,
+) -> Result<SrSchema, AppError> {
+    let client = sr_client(&state, &conn_id)?;
+    client.schema(&subject, version).await.map_err(|e| AppError::Driver(e.message))
+}

@@ -97,6 +97,9 @@ pub fn run() {
             commands::kafka::kafka_consumer_groups,
             commands::kafka::kafka_group_lag,
             commands::kafka::kafka_reset_offset,
+            commands::kafka::kafka_sr_subjects,
+            commands::kafka::kafka_sr_versions,
+            commands::kafka::kafka_sr_schema,
             // schema
             commands::schema::list_schemas,
             commands::schema::list_tables,

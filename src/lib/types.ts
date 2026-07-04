@@ -46,6 +46,7 @@ export interface ConnectionProfile {
   sqlite_path: string
   sqlite_mode: SqliteMode
   mssql_auth: string
+  schema_registry_url: string
 }
 
 /** Profile as returned by the backend: never carries ciphertext. */
@@ -192,6 +193,7 @@ export type TabContentType =
   | 'kafka'
   | 'kafka-consumer'
   | 'kafka-producer'
+  | 'kafka-schema-registry'
 
 export interface TabState {
   id: string

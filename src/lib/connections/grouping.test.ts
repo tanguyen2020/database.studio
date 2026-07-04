@@ -26,6 +26,7 @@ function p(name: string, system: string, group: string): ProfilePublic {
     sqlite_path: '',
     sqlite_mode: 'read-write',
     mssql_auth: 'sql',
+    schema_registry_url: '',
     has_password: false,
     connected: false,
   }

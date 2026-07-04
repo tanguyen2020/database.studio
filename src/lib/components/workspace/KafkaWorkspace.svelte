@@ -142,6 +142,7 @@
     {/if}
     <div style="margin-left:auto;display:flex;gap:var(--px-8)">
       <span onclick={toggleGroups} onkeydown={(e) => e.key === 'Enter' && toggleGroups()} role="button" tabindex="0" style="font-size:var(--px-11_5);background:{view === 'groups' ? 'var(--primary)' : 'var(--panel)'};color:{view === 'groups' ? 'var(--hex-fff)' : 'var(--text)'};border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-12);cursor:pointer;font-weight:600">Consumer Groups</span>
+      <span onclick={() => tab.connectionId && tabs.openKafkaSchemaRegistry(tab.connectionId)} onkeydown={(e) => e.key === 'Enter' && tab.connectionId && tabs.openKafkaSchemaRegistry(tab.connectionId)} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-12);cursor:pointer;font-weight:600">Schema Registry</span>
       {#if view === 'topics'}
         <span onclick={createTopic} onkeydown={(e) => e.key === 'Enter' && createTopic()} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-12);cursor:pointer;font-weight:600">＋ Topic</span>
       {/if}

@@ -37,6 +37,7 @@ const conn = (
   sqlite_path: '',
   sqlite_mode: 'read-write',
   mssql_auth: 'sql',
+  schema_registry_url: '',
   has_password: true,
   connected: false,
   ...opts,
@@ -434,6 +435,46 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
       ])
     case 'kafka_reset_offset':
       return ok(null)
+    case 'kafka_sr_subjects':
+      return ok([
+        { name: 'enrollment.events-value', fmt: 'AVRO', latest: 3, compat: 'BACKWARD' },
+        { name: 'grade.posted-value', fmt: 'AVRO', latest: 2, compat: 'FULL' },
+        { name: 'payment.received-value', fmt: 'PROTOBUF', latest: 1, compat: 'BACKWARD' },
+        { name: 'attendance.scan-value', fmt: 'JSON', latest: 2, compat: 'NONE' },
+      ])
+    case 'kafka_sr_versions': {
+      const subj = (args?.subject as string) ?? ''
+      const vers: Record<string, number[]> = {
+        'enrollment.events-value': [1, 2, 3],
+        'grade.posted-value': [1, 2],
+        'payment.received-value': [1],
+        'attendance.scan-value': [1, 2],
+      }
+      return ok(vers[subj] ?? [1])
+    }
+    case 'kafka_sr_schema': {
+      const a = { subject: (args?.subject as string) ?? '', version: (args?.version as number) ?? 1 }
+      const reg: Record<string, { fmt: string; compat: string; schema: string }> = {
+        'enrollment.events-value': {
+          fmt: 'AVRO', compat: 'BACKWARD',
+          schema: '{\n  "type": "record",\n  "name": "EnrollmentEvent",\n  "namespace": "edu.greenfield.sis",\n  "fields": [\n    { "name": "student_id", "type": "long" },\n    { "name": "course_code", "type": "string" },\n    { "name": "action", "type": { "type": "enum", "name": "Action", "symbols": ["enroll","drop","waitlist"] } },\n    { "name": "term", "type": "string" },\n    { "name": "ts", "type": { "type": "long", "logicalType": "timestamp-millis" } }\n  ]\n}',
+        },
+        'grade.posted-value': {
+          fmt: 'AVRO', compat: 'FULL',
+          schema: '{\n  "type": "record",\n  "name": "GradePosted",\n  "namespace": "edu.greenfield.sis",\n  "fields": [\n    { "name": "student_id", "type": "long" },\n    { "name": "course_id", "type": "long" },\n    { "name": "grade", "type": "string" },\n    { "name": "posted_at", "type": { "type": "long", "logicalType": "timestamp-millis" } }\n  ]\n}',
+        },
+        'payment.received-value': {
+          fmt: 'PROTOBUF', compat: 'BACKWARD',
+          schema: 'syntax = "proto3";\npackage edu.greenfield.finance;\n\nmessage PaymentReceived {\n  int64 student_id = 1;\n  double amount = 2;\n  string method = 3;\n  int64 ts = 4;\n}',
+        },
+        'attendance.scan-value': {
+          fmt: 'JSON', compat: 'NONE',
+          schema: '{\n  "$schema": "http://json-schema.org/draft-07/schema#",\n  "title": "AttendanceScan",\n  "type": "object",\n  "properties": {\n    "student_id": { "type": "integer" },\n    "device": { "type": "string" },\n    "status": { "enum": ["present","late","absent"] }\n  },\n  "required": ["student_id","status"]\n}',
+        },
+      }
+      const r = reg[a.subject] ?? reg['enrollment.events-value']
+      return ok({ subject: a.subject, version: a.version, id: 1000 + a.version, fmt: r.fmt, schema: r.schema, compat: r.compat })
+    }
     default:
       return Promise.reject(new Error(`demo: chưa mock command "${cmd}"`))
   }

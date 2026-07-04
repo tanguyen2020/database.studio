@@ -154,6 +154,7 @@ async fn quick_connect_ephemeral_id_is_queryable_via_registry() {
         sqlite_path: String::new(),
         sqlite_mode: SqliteMode::ReadWrite,
         mssql_auth: String::new(),
+        schema_registry_url: String::new(),
     };
 
     let registry = Registry::default();
@@ -1177,4 +1178,111 @@ async fn kafka_connect_and_metadata() {
     // cleanup bọc timeout — round-trip đã PASS, cleanup treo không fail test.
     let _ = tokio::time::timeout(Duration::from_secs(30), drv.delete_topic("phase4_itest")).await;
     eprintln!("CHK delete_topic done — test end");
+}
+
+/// Schema Registry (T7) — Confluent REST API là HTTP thuần (như driver ClickHouse
+/// qua HTTP). Container `cp-schema-registry` cần cả Kafka + shared network + JVM
+/// khởi động chậm → dễ EXIT=124. Thay bằng HTTP server in-process phục vụ đúng
+/// JSON Confluent để kiểm ĐƯỜNG THẬT: reqwest, dựng URL, parse, và fallback
+/// compat (config/{subject} 404 → config global). Deterministic, không cần Docker.
+mod schema_registry_http {
+    use std::io::{BufRead, BufReader, Write};
+    use std::net::TcpListener;
+    use std::thread;
+
+    use database_studio_lib::drivers::schema_registry::{
+        SchemaRegistryClient, SchemaRegistryParams,
+    };
+
+    fn respond(stream: &mut std::net::TcpStream, status: &str, body: &str) {
+        let resp = format!(
+            "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        let _ = stream.write_all(resp.as_bytes());
+        let _ = stream.flush();
+    }
+
+    /// Bật SR mock trên cổng ephemeral, trả về base_url. Server chạy nền, dừng
+    /// khi test kết thúc (thread daemon).
+    fn start_mock() -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock SR");
+        let port = listener.local_addr().unwrap().port();
+        thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { continue };
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut line = String::new();
+                if reader.read_line(&mut line).is_err() {
+                    continue;
+                }
+                // "GET /path HTTP/1.1"
+                let path = line.split_whitespace().nth(1).unwrap_or("/").to_string();
+                match path.as_str() {
+                    "/subjects" => respond(&mut stream, "200 OK", r#"["a-value","b-value"]"#),
+                    // a-value: schemaType vắng → phải chuẩn hoá thành AVRO
+                    "/subjects/a-value/versions/latest" => respond(
+                        &mut stream,
+                        "200 OK",
+                        r#"{"id":11,"version":2,"schema":"{\"type\":\"string\"}"}"#,
+                    ),
+                    "/subjects/b-value/versions/latest" => respond(
+                        &mut stream,
+                        "200 OK",
+                        r#"{"id":5,"version":1,"schema":"{}","schemaType":"JSON"}"#,
+                    ),
+                    "/subjects/a-value/versions" => respond(&mut stream, "200 OK", "[1,2]"),
+                    "/subjects/a-value/versions/1" => respond(
+                        &mut stream,
+                        "200 OK",
+                        r#"{"id":10,"version":1,"schema":"{\"type\":\"int\"}"}"#,
+                    ),
+                    // a-value không có compat override → 404 → client fallback /config global
+                    "/config/a-value" => respond(&mut stream, "404 Not Found", r#"{"error_code":40401}"#),
+                    "/config/b-value" => {
+                        respond(&mut stream, "200 OK", r#"{"compatibilityLevel":"NONE"}"#)
+                    }
+                    "/config" => respond(&mut stream, "200 OK", r#"{"compatibilityLevel":"BACKWARD"}"#),
+                    _ => respond(&mut stream, "404 Not Found", "{}"),
+                }
+            }
+        });
+        format!("http://127.0.0.1:{port}")
+    }
+
+    #[tokio::test]
+    async fn schema_registry_subjects_versions_schema_and_compat_fallback() {
+        let base_url = start_mock();
+        let client = SchemaRegistryClient::new(SchemaRegistryParams {
+            base_url,
+            user: String::new(),
+            password: String::new(),
+        })
+        .unwrap();
+
+        // subjects: fmt normalise + latest + compat (b override, a global fallback)
+        let subs = client.subjects().await.unwrap();
+        assert_eq!(subs.len(), 2);
+        let a = subs.iter().find(|s| s.name == "a-value").unwrap();
+        assert_eq!(a.fmt, "AVRO", "schemaType vắng phải hoá AVRO");
+        assert_eq!(a.latest, 2);
+        assert_eq!(a.compat, "BACKWARD", "a không có override → global BACKWARD");
+        let b = subs.iter().find(|s| s.name == "b-value").unwrap();
+        assert_eq!(b.fmt, "JSON");
+        assert_eq!(b.compat, "NONE", "b có override NONE");
+        eprintln!("CHK SR subjects OK");
+
+        // versions
+        assert_eq!(client.versions("a-value").await.unwrap(), vec![1, 2]);
+        eprintln!("CHK SR versions OK");
+
+        // schema cụ thể
+        let sc = client.schema("a-value", 1).await.unwrap();
+        assert_eq!(sc.version, 1);
+        assert_eq!(sc.id, 10);
+        assert_eq!(sc.fmt, "AVRO");
+        assert!(sc.schema.contains("int"));
+        assert_eq!(sc.compat, "BACKWARD");
+        eprintln!("CHK SR schema OK — test end");
+    }
 }

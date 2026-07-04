@@ -347,6 +347,31 @@ export const kafkaResetOffset = (
   offset: number,
 ) => invoke<void>('kafka_reset_offset', { connId, group, topic, partition, target, offset })
 
+// ---- Kafka Schema Registry (T7) --------------------------------------------
+
+export interface SrSubject {
+  name: string
+  fmt: string
+  latest: number
+  compat: string
+}
+
+export interface SrSchema {
+  subject: string
+  version: number
+  id: number
+  fmt: string
+  schema: string
+  compat: string
+}
+
+export const kafkaSrSubjects = (connId: string) =>
+  invoke<SrSubject[]>('kafka_sr_subjects', { connId })
+export const kafkaSrVersions = (connId: string, subject: string) =>
+  invoke<number[]>('kafka_sr_versions', { connId, subject })
+export const kafkaSrSchema = (connId: string, subject: string, version: number) =>
+  invoke<SrSchema>('kafka_sr_schema', { connId, subject, version })
+
 // ---- schema (Object Explorer) ----------------------------------------------
 
 export const listSchemas = (connId: string) => invoke<SchemaInfo[]>('list_schemas', { connId })

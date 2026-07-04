@@ -324,6 +324,10 @@
                   <option value="SCRAM-SHA-512">SASL/SCRAM-SHA-512</option>
                 </select>
               </div>
+              <div style="grid-column:1/3">
+                <div class="cm-label">Schema Registry URL <span style="color:var(--muted);font-weight:400">(tùy chọn)</span></div>
+                <input class="cm-input mono" bind:value={draft.schema_registry_url} placeholder="http://localhost:8081" />
+              </div>
             {/if}
 
             {#if isMssql}

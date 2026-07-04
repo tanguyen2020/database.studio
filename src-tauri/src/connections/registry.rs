@@ -235,6 +235,29 @@ impl Registry {
         })
     }
 
+    /// Schema Registry endpoint + basic auth cho một Kafka connection. Lấy
+    /// `schema_registry_url` từ profile; user/password tái dùng SASL creds.
+    pub fn schema_registry_params(
+        &self,
+        id: &str,
+    ) -> AppResult<crate::drivers::schema_registry::SchemaRegistryParams> {
+        let map = self.entries.lock().unwrap();
+        let e = map
+            .get(id)
+            .ok_or_else(|| AppError::Driver("Connection không tồn tại / chưa kết nối".into()))?;
+        let base_url = e.profile.schema_registry_url.trim().to_string();
+        if base_url.is_empty() {
+            return Err(AppError::Driver(
+                "Connection chưa cấu hình Schema Registry URL".into(),
+            ));
+        }
+        Ok(crate::drivers::schema_registry::SchemaRegistryParams {
+            base_url,
+            user: e.profile.user.clone(),
+            password: e.password.clone(),
+        })
+    }
+
     /// Clone NATS client của live connection (client multiplexed, dùng cho
     /// subscribe stream ở task nền độc lập với lock của registry).
     pub async fn nats_client(&self, id: &str) -> AppResult<async_nats::Client> {
