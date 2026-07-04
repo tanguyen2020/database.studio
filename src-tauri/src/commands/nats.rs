@@ -5,7 +5,7 @@
 use futures::StreamExt;
 use tauri::{AppHandle, Emitter, State};
 
-use crate::drivers::nats::{JsConsumer, JsMessage, JsStream};
+use crate::drivers::nats::{JsConsumer, JsMessage, JsStream, ObjInfo};
 use crate::drivers::LiveConnection;
 use crate::error::{AppError, QueryError};
 use crate::state::AppState;
@@ -182,6 +182,123 @@ pub async fn nats_js_consumers(
     inner.map_err(|e| AppError::Driver(e.message))
 }
 
+/// JetStream: tạo stream.
+#[tauri::command]
+pub async fn nats_js_create_stream(
+    state: State<'_, AppState>,
+    conn_id: String,
+    name: String,
+    subjects: Vec<String>,
+) -> Result<(), AppError> {
+    let inner = state
+        .registry
+        .with_driver(&conn_id, move |driver| async move {
+            let d = driver.lock().await;
+            match &*d {
+                LiveConnection::Nats(n) => n.js_create_stream(name, subjects).await,
+                _ => Err(not_nats()),
+            }
+        })
+        .await?;
+    inner.map_err(|e| AppError::Driver(e.message))
+}
+
+/// JetStream: xóa stream.
+#[tauri::command]
+pub async fn nats_js_delete_stream(state: State<'_, AppState>, conn_id: String, name: String) -> Result<(), AppError> {
+    let inner = state
+        .registry
+        .with_driver(&conn_id, move |driver| async move {
+            let d = driver.lock().await;
+            match &*d {
+                LiveConnection::Nats(n) => n.js_delete_stream(&name).await,
+                _ => Err(not_nats()),
+            }
+        })
+        .await?;
+    inner.map_err(|e| AppError::Driver(e.message))
+}
+
+/// JetStream: purge stream.
+#[tauri::command]
+pub async fn nats_js_purge_stream(state: State<'_, AppState>, conn_id: String, name: String) -> Result<(), AppError> {
+    let inner = state
+        .registry
+        .with_driver(&conn_id, move |driver| async move {
+            let d = driver.lock().await;
+            match &*d {
+                LiveConnection::Nats(n) => n.js_purge_stream(&name).await,
+                _ => Err(not_nats()),
+            }
+        })
+        .await?;
+    inner.map_err(|e| AppError::Driver(e.message))
+}
+
+/// JetStream: tạo consumer.
+#[tauri::command]
+pub async fn nats_js_create_consumer(
+    state: State<'_, AppState>,
+    conn_id: String,
+    stream: String,
+    durable: String,
+    filter: String,
+) -> Result<(), AppError> {
+    let inner = state
+        .registry
+        .with_driver(&conn_id, move |driver| async move {
+            let d = driver.lock().await;
+            match &*d {
+                LiveConnection::Nats(n) => n.js_create_consumer(&stream, durable, filter).await,
+                _ => Err(not_nats()),
+            }
+        })
+        .await?;
+    inner.map_err(|e| AppError::Driver(e.message))
+}
+
+/// JetStream: xóa consumer.
+#[tauri::command]
+pub async fn nats_js_delete_consumer(
+    state: State<'_, AppState>,
+    conn_id: String,
+    stream: String,
+    name: String,
+) -> Result<(), AppError> {
+    let inner = state
+        .registry
+        .with_driver(&conn_id, move |driver| async move {
+            let d = driver.lock().await;
+            match &*d {
+                LiveConnection::Nats(n) => n.js_delete_consumer(&stream, &name).await,
+                _ => Err(not_nats()),
+            }
+        })
+        .await?;
+    inner.map_err(|e| AppError::Driver(e.message))
+}
+
+/// JetStream: xóa message theo sequence.
+#[tauri::command]
+pub async fn nats_js_delete_message(
+    state: State<'_, AppState>,
+    conn_id: String,
+    stream: String,
+    seq: u64,
+) -> Result<(), AppError> {
+    let inner = state
+        .registry
+        .with_driver(&conn_id, move |driver| async move {
+            let d = driver.lock().await;
+            match &*d {
+                LiveConnection::Nats(n) => n.js_delete_message(&stream, seq).await,
+                _ => Err(not_nats()),
+            }
+        })
+        .await?;
+    inner.map_err(|e| AppError::Driver(e.message))
+}
+
 /// JetStream: peek message theo sequence.
 #[tauri::command]
 pub async fn nats_js_peek(
@@ -200,5 +317,135 @@ pub async fn nats_js_peek(
             }
         })
         .await?;
+    inner.map_err(|e| AppError::Driver(e.message))
+}
+
+// ---- KV Store (T9) ----------------------------------------------------------
+
+#[tauri::command]
+pub async fn nats_kv_buckets(state: State<'_, AppState>, conn_id: String) -> Result<Vec<String>, AppError> {
+    let inner = state.registry.with_driver(&conn_id, move |driver| async move {
+        let d = driver.lock().await;
+        match &*d { LiveConnection::Nats(n) => n.kv_buckets().await, _ => Err(not_nats()) }
+    }).await?;
+    inner.map_err(|e| AppError::Driver(e.message))
+}
+
+#[tauri::command]
+pub async fn nats_kv_create(state: State<'_, AppState>, conn_id: String, bucket: String) -> Result<(), AppError> {
+    let inner = state.registry.with_driver(&conn_id, move |driver| async move {
+        let d = driver.lock().await;
+        match &*d { LiveConnection::Nats(n) => n.kv_create(bucket).await, _ => Err(not_nats()) }
+    }).await?;
+    inner.map_err(|e| AppError::Driver(e.message))
+}
+
+#[tauri::command]
+pub async fn nats_kv_delete_bucket(state: State<'_, AppState>, conn_id: String, bucket: String) -> Result<(), AppError> {
+    let inner = state.registry.with_driver(&conn_id, move |driver| async move {
+        let d = driver.lock().await;
+        match &*d { LiveConnection::Nats(n) => n.kv_delete_bucket(&bucket).await, _ => Err(not_nats()) }
+    }).await?;
+    inner.map_err(|e| AppError::Driver(e.message))
+}
+
+#[tauri::command]
+pub async fn nats_kv_keys(state: State<'_, AppState>, conn_id: String, bucket: String) -> Result<Vec<String>, AppError> {
+    let inner = state.registry.with_driver(&conn_id, move |driver| async move {
+        let d = driver.lock().await;
+        match &*d { LiveConnection::Nats(n) => n.kv_keys(&bucket).await, _ => Err(not_nats()) }
+    }).await?;
+    inner.map_err(|e| AppError::Driver(e.message))
+}
+
+#[tauri::command]
+pub async fn nats_kv_get(state: State<'_, AppState>, conn_id: String, bucket: String, key: String) -> Result<Option<String>, AppError> {
+    let inner = state.registry.with_driver(&conn_id, move |driver| async move {
+        let d = driver.lock().await;
+        match &*d { LiveConnection::Nats(n) => n.kv_get(&bucket, &key).await, _ => Err(not_nats()) }
+    }).await?;
+    inner.map_err(|e| AppError::Driver(e.message))
+}
+
+#[tauri::command]
+pub async fn nats_kv_put(state: State<'_, AppState>, conn_id: String, bucket: String, key: String, value: String) -> Result<(), AppError> {
+    let inner = state.registry.with_driver(&conn_id, move |driver| async move {
+        let d = driver.lock().await;
+        match &*d { LiveConnection::Nats(n) => n.kv_put(&bucket, &key, value).await, _ => Err(not_nats()) }
+    }).await?;
+    inner.map_err(|e| AppError::Driver(e.message))
+}
+
+#[tauri::command]
+pub async fn nats_kv_delete(state: State<'_, AppState>, conn_id: String, bucket: String, key: String) -> Result<(), AppError> {
+    let inner = state.registry.with_driver(&conn_id, move |driver| async move {
+        let d = driver.lock().await;
+        match &*d { LiveConnection::Nats(n) => n.kv_delete(&bucket, &key).await, _ => Err(not_nats()) }
+    }).await?;
+    inner.map_err(|e| AppError::Driver(e.message))
+}
+
+// ---- Object Store (T9) ------------------------------------------------------
+
+#[tauri::command]
+pub async fn nats_obj_buckets(state: State<'_, AppState>, conn_id: String) -> Result<Vec<String>, AppError> {
+    let inner = state.registry.with_driver(&conn_id, move |driver| async move {
+        let d = driver.lock().await;
+        match &*d { LiveConnection::Nats(n) => n.obj_buckets().await, _ => Err(not_nats()) }
+    }).await?;
+    inner.map_err(|e| AppError::Driver(e.message))
+}
+
+#[tauri::command]
+pub async fn nats_obj_create(state: State<'_, AppState>, conn_id: String, bucket: String) -> Result<(), AppError> {
+    let inner = state.registry.with_driver(&conn_id, move |driver| async move {
+        let d = driver.lock().await;
+        match &*d { LiveConnection::Nats(n) => n.obj_create(bucket).await, _ => Err(not_nats()) }
+    }).await?;
+    inner.map_err(|e| AppError::Driver(e.message))
+}
+
+#[tauri::command]
+pub async fn nats_obj_delete_bucket(state: State<'_, AppState>, conn_id: String, bucket: String) -> Result<(), AppError> {
+    let inner = state.registry.with_driver(&conn_id, move |driver| async move {
+        let d = driver.lock().await;
+        match &*d { LiveConnection::Nats(n) => n.obj_delete_bucket(&bucket).await, _ => Err(not_nats()) }
+    }).await?;
+    inner.map_err(|e| AppError::Driver(e.message))
+}
+
+#[tauri::command]
+pub async fn nats_obj_list(state: State<'_, AppState>, conn_id: String, bucket: String) -> Result<Vec<ObjInfo>, AppError> {
+    let inner = state.registry.with_driver(&conn_id, move |driver| async move {
+        let d = driver.lock().await;
+        match &*d { LiveConnection::Nats(n) => n.obj_list(&bucket).await, _ => Err(not_nats()) }
+    }).await?;
+    inner.map_err(|e| AppError::Driver(e.message))
+}
+
+#[tauri::command]
+pub async fn nats_obj_put_file(state: State<'_, AppState>, conn_id: String, bucket: String, name: String, path: String) -> Result<(), AppError> {
+    let inner = state.registry.with_driver(&conn_id, move |driver| async move {
+        let d = driver.lock().await;
+        match &*d { LiveConnection::Nats(n) => n.obj_put_file(&bucket, name, &path).await, _ => Err(not_nats()) }
+    }).await?;
+    inner.map_err(|e| AppError::Driver(e.message))
+}
+
+#[tauri::command]
+pub async fn nats_obj_get_file(state: State<'_, AppState>, conn_id: String, bucket: String, name: String, path: String) -> Result<(), AppError> {
+    let inner = state.registry.with_driver(&conn_id, move |driver| async move {
+        let d = driver.lock().await;
+        match &*d { LiveConnection::Nats(n) => n.obj_get_file(&bucket, &name, &path).await, _ => Err(not_nats()) }
+    }).await?;
+    inner.map_err(|e| AppError::Driver(e.message))
+}
+
+#[tauri::command]
+pub async fn nats_obj_delete(state: State<'_, AppState>, conn_id: String, bucket: String, name: String) -> Result<(), AppError> {
+    let inner = state.registry.with_driver(&conn_id, move |driver| async move {
+        let d = driver.lock().await;
+        match &*d { LiveConnection::Nats(n) => n.obj_delete(&bucket, &name).await, _ => Err(not_nats()) }
+    }).await?;
     inner.map_err(|e| AppError::Driver(e.message))
 }

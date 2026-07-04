@@ -358,6 +358,35 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
       ])
     case 'nats_js_peek':
       return ok({ seq: (args?.seq as number) ?? 1, subject: 'orders.new', payload: '{"id":1001,"total":42.5}', time: '2026-06-30T10:23:14Z' })
+    case 'nats_js_create_stream':
+    case 'nats_js_delete_stream':
+    case 'nats_js_purge_stream':
+    case 'nats_js_create_consumer':
+    case 'nats_js_delete_consumer':
+    case 'nats_js_delete_message':
+    case 'nats_kv_create':
+    case 'nats_kv_delete_bucket':
+    case 'nats_kv_put':
+    case 'nats_kv_delete':
+    case 'nats_obj_create':
+    case 'nats_obj_delete_bucket':
+    case 'nats_obj_put_file':
+    case 'nats_obj_get_file':
+    case 'nats_obj_delete':
+      return ok(null)
+    case 'nats_kv_buckets':
+      return ok(['config', 'sessions'])
+    case 'nats_kv_keys':
+      return ok(['feature.flags', 'rate.limit', 'maintenance'])
+    case 'nats_kv_get':
+      return ok('{"enabled":true}')
+    case 'nats_obj_buckets':
+      return ok(['uploads', 'backups'])
+    case 'nats_obj_list':
+      return ok([
+        { name: 'report-2026.pdf', size: 284512, chunks: 3 },
+        { name: 'avatar.png', size: 10240, chunks: 1 },
+      ])
     case 'kafka_cluster':
       return ok({
         brokers: [

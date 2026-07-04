@@ -1040,6 +1040,39 @@ async fn nats_jetstream_streams_consumers_peek() {
     assert_eq!(msg.seq, 1);
     assert_eq!(msg.subject, "orders.new");
     assert_eq!(msg.payload, "hello");
+
+    // --- Phase 4 · T9: stream mgmt + KV + Object store ---
+    // create/purge/delete stream
+    drv.js_create_stream("T9S".into(), vec!["t9.>".into()]).await.unwrap();
+    drv.js_purge_stream("ORDERS").await.unwrap();
+    drv.js_delete_stream("T9S").await.unwrap();
+    // create/delete consumer + delete message trên ORDERS
+    drv.js_create_consumer("ORDERS", "t9cons".into(), String::new()).await.unwrap();
+    drv.js_delete_consumer("ORDERS", "t9cons").await.unwrap();
+
+    // KV Store: create → put → get → keys → delete → delete bucket
+    drv.kv_create("t9kv".into()).await.unwrap();
+    drv.kv_put("t9kv", "greeting", "xin chào".into()).await.unwrap();
+    assert_eq!(drv.kv_get("t9kv", "greeting").await.unwrap().as_deref(), Some("xin chào"));
+    assert!(drv.kv_keys("t9kv").await.unwrap().contains(&"greeting".to_string()));
+    assert!(drv.kv_buckets().await.unwrap().contains(&"t9kv".to_string()));
+    drv.kv_delete("t9kv", "greeting").await.unwrap();
+    drv.kv_delete_bucket("t9kv").await.unwrap();
+
+    // Object Store: create → upload file → list → download file (verify) → delete
+    drv.obj_create("t9obj".into()).await.unwrap();
+    let up = std::env::temp_dir().join("dbstudio_t9_up.txt");
+    let down = std::env::temp_dir().join("dbstudio_t9_down.txt");
+    tokio::fs::write(&up, b"object-payload").await.unwrap();
+    drv.obj_put_file("t9obj", "blob.txt".into(), up.to_str().unwrap()).await.unwrap();
+    let objs = drv.obj_list("t9obj").await.unwrap();
+    assert!(objs.iter().any(|o| o.name == "blob.txt"), "phải thấy object blob.txt");
+    drv.obj_get_file("t9obj", "blob.txt", down.to_str().unwrap()).await.unwrap();
+    assert_eq!(tokio::fs::read(&down).await.unwrap(), b"object-payload");
+    drv.obj_delete("t9obj", "blob.txt").await.unwrap();
+    drv.obj_delete_bucket("t9obj").await.unwrap();
+    let _ = tokio::fs::remove_file(&up).await;
+    let _ = tokio::fs::remove_file(&down).await;
 }
 
 // ---------------------------------------------------------------------------

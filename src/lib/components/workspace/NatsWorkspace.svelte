@@ -28,14 +28,25 @@
   let reqMsg = $state('')
   let reqReply = $state<string | null>(null)
 
-  // JetStream (T10)
-  let jsMode = $state(false)
+  // panel: '' = monitor (subscribe), 'js' = JetStream, 'kv' = KV, 'obj' = Object
+  let panel = $state<'' | 'js' | 'kv' | 'obj'>('')
+  const jsMode = $derived(panel === 'js')
   let jsStreams = $state<ipc.NatsJsStream[]>([])
   let jsSel = $state<string | null>(null)
   let jsConsumers = $state<ipc.NatsJsConsumer[]>([])
   let peekSeq = $state(1)
   let peekResult = $state<ipc.NatsJsMessage | null>(null)
   let jsError = $state<string | null>(null)
+
+  // KV Store (T9)
+  let kvBuckets = $state<string[]>([])
+  let kvSel = $state<string | null>(null)
+  let kvKeys = $state<string[]>([])
+  let kvValue = $state<{ key: string; value: string } | null>(null)
+  // Object Store (T9)
+  let objBuckets = $state<string[]>([])
+  let objSel = $state<string | null>(null)
+  let objList = $state<ipc.NatsObjInfo[]>([])
 
   function now(): string {
     const d = new Date()
@@ -98,9 +109,95 @@
     }
   }
 
-  async function toggleJs() {
-    jsMode = !jsMode
-    if (jsMode && jsStreams.length === 0) await loadStreams()
+  async function setPanel(p: '' | 'js' | 'kv' | 'obj') {
+    panel = panel === p ? '' : p
+    if (panel === 'js' && jsStreams.length === 0) await loadStreams()
+    if (panel === 'kv') await loadKv()
+    if (panel === 'obj') await loadObj()
+  }
+
+  // ---- KV Store (T9) ----
+  async function loadKv() {
+    if (!tab.connectionId) return
+    kvBuckets = await ipc.natsKvBuckets(tab.connectionId).catch(() => [])
+  }
+  async function selKvBucket(b: string) {
+    if (!tab.connectionId) return
+    kvSel = b
+    kvValue = null
+    kvKeys = await ipc.natsKvKeys(tab.connectionId, b).catch(() => [])
+  }
+  async function kvGet(key: string) {
+    if (!tab.connectionId || !kvSel) return
+    const v = await ipc.natsKvGet(tab.connectionId, kvSel, key).catch(() => null)
+    kvValue = { key, value: v ?? '(null)' }
+  }
+  async function kvPutNew() {
+    if (!tab.connectionId || !kvSel) return
+    const key = window.prompt('Key:')
+    if (!key) return
+    const value = window.prompt(`Value cho "${key}":`) ?? ''
+    try {
+      await ipc.natsKvPut(tab.connectionId, kvSel, key, value)
+      toasts.success(`PUT ${key}`)
+      await selKvBucket(kvSel)
+    } catch (e) {
+      toasts.error(`KV put lỗi: ${e}`)
+    }
+  }
+  async function kvDelKey(key: string) {
+    if (!tab.connectionId || !kvSel) return
+    await ipc.natsKvDelete(tab.connectionId, kvSel, key).catch((e) => toasts.error(`${e}`))
+    await selKvBucket(kvSel)
+  }
+  async function kvNewBucket() {
+    if (!tab.connectionId) return
+    const b = window.prompt('KV bucket name:')
+    if (!b) return
+    await ipc.natsKvCreate(tab.connectionId, b).then(() => loadKv()).catch((e) => toasts.error(`${e}`))
+  }
+
+  // ---- Object Store (T9) ----
+  async function loadObj() {
+    if (!tab.connectionId) return
+    objBuckets = await ipc.natsObjBuckets(tab.connectionId).catch(() => [])
+  }
+  async function selObjBucket(b: string) {
+    if (!tab.connectionId) return
+    objSel = b
+    objList = await ipc.natsObjList(tab.connectionId, b).catch(() => [])
+  }
+  async function objNewBucket() {
+    if (!tab.connectionId) return
+    const b = window.prompt('Object bucket name:')
+    if (!b) return
+    await ipc.natsObjCreate(tab.connectionId, b).then(() => loadObj()).catch((e) => toasts.error(`${e}`))
+  }
+  async function objUpload() {
+    if (!tab.connectionId || !objSel) return
+    const { open } = await import('@tauri-apps/plugin-dialog')
+    const path = await open({ multiple: false })
+    if (typeof path !== 'string') return
+    const name = path.split(/[\\/]/).pop() ?? 'object'
+    try {
+      await ipc.natsObjPutFile(tab.connectionId, objSel, name, path)
+      toasts.success(`Uploaded ${name}`)
+      await selObjBucket(objSel)
+    } catch (e) {
+      toasts.error(`Upload lỗi: ${e}`)
+    }
+  }
+  async function objDownload(name: string) {
+    if (!tab.connectionId || !objSel) return
+    const { save } = await import('@tauri-apps/plugin-dialog')
+    const path = await save({ defaultPath: name })
+    if (typeof path !== 'string') return
+    await ipc.natsObjGetFile(tab.connectionId, objSel, name, path).then(() => toasts.success('Downloaded')).catch((e) => toasts.error(`${e}`))
+  }
+  async function objDel(name: string) {
+    if (!tab.connectionId || !objSel) return
+    await ipc.natsObjDelete(tab.connectionId, objSel, name).catch((e) => toasts.error(`${e}`))
+    await selObjBucket(objSel)
   }
 
   async function loadStreams() {
@@ -143,7 +240,9 @@
     <span style="display:flex;align-items:center;gap:var(--px-6);font-size:var(--px-11_5);color:{subscribed ? '#27AE60' : 'var(--muted)'};font-weight:600"><span style="width:var(--px-7);height:var(--px-7);border-radius:50%;background:{subscribed ? '#27AE60' : 'var(--border2)'}"></span>{subscribed ? 'LIVE' : 'idle'}</span>
     <div style="margin-left:auto;display:flex;gap:var(--px-8);align-items:center">
       {#if info}<span class="mono" style="font-size:var(--px-10_5);color:var(--muted)">NATS {info.version} · {info.server_name}</span>{/if}
-      <span onclick={toggleJs} onkeydown={(e) => e.key === 'Enter' && toggleJs()} role="button" tabindex="0" style="font-size:var(--px-11_5);background:{jsMode ? 'var(--primary)' : 'var(--panel)'};color:{jsMode ? 'var(--hex-fff)' : 'var(--text)'};border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-12);cursor:pointer;font-weight:600">JetStream</span>
+      {#each [['js', 'JetStream'], ['kv', 'KV'], ['obj', 'Object']] as [p, label] (p)}
+        <span onclick={() => setPanel(p as '' | 'js' | 'kv' | 'obj')} onkeydown={(e) => e.key === 'Enter' && setPanel(p as '' | 'js' | 'kv' | 'obj')} role="button" tabindex="0" style="font-size:var(--px-11_5);background:{panel === p ? 'var(--primary)' : 'var(--panel)'};color:{panel === p ? 'var(--hex-fff)' : 'var(--text)'};border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-12);cursor:pointer;font-weight:600">{label}</span>
+      {/each}
       <span onclick={toggle} onkeydown={(e) => e.key === 'Enter' && toggle()} role="button" tabindex="0" style="font-size:var(--px-11_5);background:{subscribed ? '#27AE60' : 'var(--panel)'};color:{subscribed ? 'var(--hex-fff)' : 'var(--text)'};border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-12);cursor:pointer;font-weight:600">{subscribed ? 'Stop' : 'Subscribe'}</span>
       <span onclick={() => (paused = !paused)} onkeydown={(e) => e.key === 'Enter' && (paused = !paused)} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-12);cursor:pointer">{paused ? 'Resume' : 'Pause'}</span>
       <span onclick={() => (messages = [])} onkeydown={(e) => e.key === 'Enter' && (messages = [])} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-12);cursor:pointer">Clear</span>
@@ -211,6 +310,62 @@
         {/if}
       {/if}
     </div>
+  {:else if panel === 'kv'}
+    <!-- KV Store (T9) -->
+    <div style="flex:1;display:flex;min-height:0">
+      <div style="width:var(--px-220);flex:none;border-right:var(--px-1) solid var(--border);overflow:auto;padding:var(--px-6)">
+        <div style="display:flex;align-items:center;padding:var(--px-4) var(--px-8)"><span style="font-size:var(--px-10_5);color:var(--muted);text-transform:uppercase;letter-spacing:.06em;font-weight:700">Buckets</span><span onclick={kvNewBucket} onkeydown={(e) => e.key === 'Enter' && kvNewBucket()} role="button" tabindex="0" style="margin-left:auto;color:var(--primary);cursor:pointer;font-size:var(--px-12)">＋</span></div>
+        {#each kvBuckets as b (b)}
+          <div onclick={() => selKvBucket(b)} onkeydown={(e) => e.key === 'Enter' && selKvBucket(b)} role="button" tabindex="0" class="mono" style="padding:var(--px-5) var(--px-8);border-radius:var(--px-5);cursor:pointer;font-size:var(--px-12);background:{kvSel === b ? 'var(--hover)' : 'transparent'}">{b}</div>
+        {/each}
+      </div>
+      <div style="flex:1;overflow:auto;min-width:0;padding:var(--px-8) var(--px-12)">
+        {#if kvSel}
+          <div style="display:flex;align-items:center;gap:var(--px-8);margin-bottom:var(--px-8)"><span class="mono" style="font-size:var(--px-12_5);font-weight:600;color:#27AE60">{kvSel}</span><span onclick={kvPutNew} onkeydown={(e) => e.key === 'Enter' && kvPutNew()} role="button" tabindex="0" style="font-size:var(--px-11);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">＋ Key</span></div>
+          {#each kvKeys as k (k)}
+            <div class="mono" style="display:flex;align-items:center;gap:var(--px-8);padding:var(--px-4) var(--px-6);font-size:var(--px-12)">
+              <span onclick={() => kvGet(k)} onkeydown={(e) => e.key === 'Enter' && kvGet(k)} role="button" tabindex="0" style="cursor:pointer;color:var(--text2)">{k}</span>
+              <span onclick={() => kvDelKey(k)} onkeydown={(e) => e.key === 'Enter' && kvDelKey(k)} role="button" tabindex="0" style="margin-left:auto;color:var(--error);cursor:pointer">×</span>
+            </div>
+          {/each}
+          {#if kvValue}
+            <pre class="mono" style="margin-top:var(--px-10);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-8);font-size:var(--px-12);white-space:pre-wrap;word-break:break-word">{kvValue.key} = {kvValue.value}</pre>
+          {/if}
+        {:else}
+          <div style="color:var(--muted);font-size:var(--px-12)">Chọn bucket để xem keys.</div>
+        {/if}
+      </div>
+    </div>
+  {:else if panel === 'obj'}
+    <!-- Object Store (T9) -->
+    <div style="flex:1;display:flex;min-height:0">
+      <div style="width:var(--px-220);flex:none;border-right:var(--px-1) solid var(--border);overflow:auto;padding:var(--px-6)">
+        <div style="display:flex;align-items:center;padding:var(--px-4) var(--px-8)"><span style="font-size:var(--px-10_5);color:var(--muted);text-transform:uppercase;letter-spacing:.06em;font-weight:700">Buckets</span><span onclick={objNewBucket} onkeydown={(e) => e.key === 'Enter' && objNewBucket()} role="button" tabindex="0" style="margin-left:auto;color:var(--primary);cursor:pointer;font-size:var(--px-12)">＋</span></div>
+        {#each objBuckets as b (b)}
+          <div onclick={() => selObjBucket(b)} onkeydown={(e) => e.key === 'Enter' && selObjBucket(b)} role="button" tabindex="0" class="mono" style="padding:var(--px-5) var(--px-8);border-radius:var(--px-5);cursor:pointer;font-size:var(--px-12);background:{objSel === b ? 'var(--hover)' : 'transparent'}">{b}</div>
+        {/each}
+      </div>
+      <div style="flex:1;overflow:auto;min-width:0;padding:var(--px-8) var(--px-12)">
+        {#if objSel}
+          <div style="display:flex;align-items:center;gap:var(--px-8);margin-bottom:var(--px-8)"><span class="mono" style="font-size:var(--px-12_5);font-weight:600;color:#27AE60">{objSel}</span><span onclick={objUpload} onkeydown={(e) => e.key === 'Enter' && objUpload()} role="button" tabindex="0" style="font-size:var(--px-11);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">⬆ Upload</span></div>
+          <table class="mono" style="border-collapse:collapse;width:100%;font-size:var(--px-12)">
+            <thead><tr>{#each ['Name', 'Size', 'Chunks', ''] as h (h)}<th style="text-align:left;padding:var(--px-5) var(--px-10);border-bottom:var(--px-1) solid var(--border2);color:var(--text2);font-weight:600">{h}</th>{/each}</tr></thead>
+            <tbody>
+              {#each objList as o (o.name)}
+                <tr>
+                  <td style="padding:var(--px-5) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:var(--text2)">{o.name}</td>
+                  <td style="padding:var(--px-5) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:var(--muted)">{o.size.toLocaleString()} B</td>
+                  <td style="padding:var(--px-5) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:var(--muted)">{o.chunks}</td>
+                  <td style="padding:var(--px-5) var(--px-10);border-bottom:var(--px-1) solid var(--border)"><span onclick={() => objDownload(o.name)} onkeydown={(e) => e.key === 'Enter' && objDownload(o.name)} role="button" tabindex="0" style="color:var(--primary);cursor:pointer;font-size:var(--px-11)">⬇</span> <span onclick={() => objDel(o.name)} onkeydown={(e) => e.key === 'Enter' && objDel(o.name)} role="button" tabindex="0" style="color:var(--error);cursor:pointer;margin-left:var(--px-8)">×</span></td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        {:else}
+          <div style="color:var(--muted);font-size:var(--px-12)">Chọn bucket để xem objects.</div>
+        {/if}
+      </div>
+    </div>
   {:else}
   <!-- message stream — dòng 782-789 -->
   <div style="flex:1;overflow:auto;min-height:0;padding:var(--px-8) 0">
@@ -231,6 +386,7 @@
   {/if}
 
   <!-- publish + request/reply -->
+  {#if panel === ''}
   <div style="flex:none;border-top:var(--px-1) solid var(--border);background:var(--surface);padding:var(--px-10) var(--px-14);display:flex;flex-direction:column;gap:var(--px-8)">
     <div style="display:flex;gap:var(--px-8);align-items:center">
       <span style="font-size:var(--px-11);color:var(--muted);flex:none;width:var(--px-60)">Publish</span>
@@ -248,4 +404,5 @@
       <div class="mono" style="font-size:var(--px-11_5);color:var(--text2);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-6) var(--px-9);white-space:pre-wrap;word-break:break-word">↩ {reqReply}</div>
     {/if}
   </div>
+  {/if}
 </div>

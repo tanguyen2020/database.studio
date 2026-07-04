@@ -210,6 +210,43 @@ export const natsJsConsumers = (connId: string, stream: string) =>
 export const natsJsPeek = (connId: string, stream: string, seq: number) =>
   invoke<NatsJsMessage>('nats_js_peek', { connId, stream, seq })
 
+// JetStream management (T9)
+export const natsJsCreateStream = (connId: string, name: string, subjects: string[]) =>
+  invoke<void>('nats_js_create_stream', { connId, name, subjects })
+export const natsJsDeleteStream = (connId: string, name: string) =>
+  invoke<void>('nats_js_delete_stream', { connId, name })
+export const natsJsPurgeStream = (connId: string, name: string) =>
+  invoke<void>('nats_js_purge_stream', { connId, name })
+export const natsJsCreateConsumer = (connId: string, stream: string, durable: string, filter: string) =>
+  invoke<void>('nats_js_create_consumer', { connId, stream, durable, filter })
+export const natsJsDeleteConsumer = (connId: string, stream: string, name: string) =>
+  invoke<void>('nats_js_delete_consumer', { connId, stream, name })
+export const natsJsDeleteMessage = (connId: string, stream: string, seq: number) =>
+  invoke<void>('nats_js_delete_message', { connId, stream, seq })
+
+// KV Store (T9)
+export const natsKvBuckets = (connId: string) => invoke<string[]>('nats_kv_buckets', { connId })
+export const natsKvCreate = (connId: string, bucket: string) => invoke<void>('nats_kv_create', { connId, bucket })
+export const natsKvDeleteBucket = (connId: string, bucket: string) => invoke<void>('nats_kv_delete_bucket', { connId, bucket })
+export const natsKvKeys = (connId: string, bucket: string) => invoke<string[]>('nats_kv_keys', { connId, bucket })
+export const natsKvGet = (connId: string, bucket: string, key: string) => invoke<string | null>('nats_kv_get', { connId, bucket, key })
+export const natsKvPut = (connId: string, bucket: string, key: string, value: string) => invoke<void>('nats_kv_put', { connId, bucket, key, value })
+export const natsKvDelete = (connId: string, bucket: string, key: string) => invoke<void>('nats_kv_delete', { connId, bucket, key })
+
+// Object Store (T9)
+export interface NatsObjInfo {
+  name: string
+  size: number
+  chunks: number
+}
+export const natsObjBuckets = (connId: string) => invoke<string[]>('nats_obj_buckets', { connId })
+export const natsObjCreate = (connId: string, bucket: string) => invoke<void>('nats_obj_create', { connId, bucket })
+export const natsObjDeleteBucket = (connId: string, bucket: string) => invoke<void>('nats_obj_delete_bucket', { connId, bucket })
+export const natsObjList = (connId: string, bucket: string) => invoke<NatsObjInfo[]>('nats_obj_list', { connId, bucket })
+export const natsObjPutFile = (connId: string, bucket: string, name: string, path: string) => invoke<void>('nats_obj_put_file', { connId, bucket, name, path })
+export const natsObjGetFile = (connId: string, bucket: string, name: string, path: string) => invoke<void>('nats_obj_get_file', { connId, bucket, name, path })
+export const natsObjDelete = (connId: string, bucket: string, name: string) => invoke<void>('nats_obj_delete', { connId, bucket, name })
+
 // ---- kafka (Phase 4) --------------------------------------------------------
 
 export interface KafkaBroker {
