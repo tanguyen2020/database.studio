@@ -11,6 +11,7 @@
   import { connections } from '$lib/stores/connections.svelte'
   import { results } from '$lib/stores/results.svelte'
   import { tabs } from '$lib/stores/tabs.svelte'
+  import { settings } from '$lib/stores/settings.svelte'
   import { toasts } from '$lib/stores/toast.svelte'
   import { ui } from '$lib/stores/ui.svelte'
   import { explorer } from '$lib/stores/explorer.svelte'
@@ -157,6 +158,27 @@
   function cancel() {
     if (tab.connectionId) void results.cancel(tab.id, tab.connectionId)
   }
+
+  // Đồng hồ "running Ns" + cảnh báo query chạy lâu (> ngưỡng Settings) — T11.
+  let nowMs = $state(Date.now())
+  let longRunWarned = $state(false)
+  const runningSecs = $derived(
+    exec?.running && exec.startedAt ? Math.max(0, Math.floor((nowMs - exec.startedAt) / 1000)) : 0,
+  )
+  $effect(() => {
+    if (!exec?.running) {
+      longRunWarned = false
+      return
+    }
+    const iv = setInterval(() => {
+      nowMs = Date.now()
+      if (!longRunWarned && exec.startedAt && nowMs - exec.startedAt > settings.value.longRunningWarnMs) {
+        longRunWarned = true
+        toasts.show(`Query vẫn đang chạy > ${Math.round(settings.value.longRunningWarnMs / 1000)}s — Esc để hủy`)
+      }
+    }, 500)
+    return () => clearInterval(iv)
+  })
 
   // Format SQL (Ctrl+Shift+F) — dialect-aware, giữ 1 transaction để undo
   function doFormat() {
@@ -309,7 +331,7 @@
         title="Cancel (Ctrl+F5 / Esc)"
         style="display:flex;align-items:center;gap:var(--px-7);background:var(--error);color:var(--hex-fff);border-radius:var(--px-7);padding:var(--px-5) var(--px-13);cursor:pointer;font-weight:600;font-size:var(--px-12)"
       >
-        <span>■</span><span>Cancel</span><span class="mono" style="opacity:.7;font-size:var(--px-10)">Esc</span>
+        <span>■</span><span>Cancel</span><span class="mono" style="opacity:.85;font-size:var(--px-10)">running {runningSecs}s</span>
       </div>
     {:else}
       <div

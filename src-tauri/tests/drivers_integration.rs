@@ -1618,3 +1618,91 @@ async fn connection_test_bounded_and_cancellable() {
     assert!(!r.ok, "test bị hủy → not ok");
     eprintln!("CHK (c) cancel unreachable aborted in {:?} — test end", cstart.elapsed());
 }
+
+// ---------------------------------------------------------------------------
+// T11 — Cancel running query: abort <1s + connection usable for follow-up (PG)
+// ---------------------------------------------------------------------------
+#[tokio::test]
+async fn query_cancel_aborts_and_connection_recovers() {
+    use std::sync::Arc;
+    use database_studio_lib::connections::profile::{ConnectionProfile, Environment, SqliteMode, SshConfig};
+    use database_studio_lib::connections::registry::Registry;
+    use database_studio_lib::drivers::types::SystemType;
+
+    let (_c, port) = start_pg().await;
+    let profile = ConnectionProfile {
+        id: "pgcancel".into(),
+        name: "t".into(),
+        system: SystemType::Postgres,
+        host: "localhost".into(),
+        port,
+        database: "testdb".into(),
+        user: "postgres".into(),
+        password_enc: String::new(),
+        group: String::new(),
+        env: Environment::Development,
+        ssh: SshConfig::default(),
+        ssl: false,
+        ssl_ca: String::new(),
+        ssl_cert: String::new(),
+        ssl_key: String::new(),
+        sqlite_path: String::new(),
+        sqlite_mode: SqliteMode::ReadWrite,
+        mssql_auth: String::new(),
+        schema_registry_url: String::new(),
+        cassandra_dc: String::new(),
+        cassandra_consistency: String::new(),
+    };
+
+    let reg = Arc::new(Registry::default());
+    // connect với retry (container mới bật)
+    {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        loop {
+            match reg.connect(profile.clone(), PASS.into(), String::new()).await {
+                Ok(_) => break,
+                Err(e) => {
+                    assert!(Instant::now() < deadline, "connect PG thất bại: {e:?}");
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                }
+            }
+        }
+    }
+    eprintln!("CHK connected");
+
+    // chạy query chậm ở task nền
+    let r2 = reg.clone();
+    let handle = tokio::spawn(async move {
+        r2.exec_statement("pgcancel".into(), "SELECT pg_sleep(30)".into()).await
+    });
+    // đợi statement thực sự chạy + abort handle đã đăng ký
+    tokio::time::sleep(Duration::from_millis(600)).await;
+
+    let cstart = Instant::now();
+    assert!(reg.cancel("pgcancel"), "cancel phải tìm thấy statement đang chạy");
+    let joined = tokio::time::timeout(Duration::from_secs(3), handle)
+        .await
+        .expect("exec_statement phải trả ngay sau cancel")
+        .unwrap();
+    assert!(cstart.elapsed() < Duration::from_secs(1), "cancel phải < 1s, mất {:?}", cstart.elapsed());
+    // exec trả Ok(Err(CANCELLED))
+    match joined {
+        Ok(Err(qe)) => assert_eq!(qe.code.as_deref(), Some("CANCELLED"), "phải là CANCELLED, got {qe:?}"),
+        other => panic!("kỳ vọng Ok(Err(CANCELLED)), got {other:?}"),
+    }
+    eprintln!("CHK cancel aborted in {:?}", cstart.elapsed());
+
+    // follow-up query PHẢI chạy được (connection tự heal/reconnect)
+    let follow = reg
+        .exec_statement("pgcancel".into(), "SELECT 1 AS n".into())
+        .await
+        .expect("registry err")
+        .expect("follow-up query phải chạy được sau cancel");
+    match follow {
+        StatementOutcome::Rows { result } => {
+            assert_eq!(result.rows[0]["n"], serde_json::json!(1), "follow-up trả đúng");
+        }
+        other => panic!("kỳ vọng Rows, got {other:?}"),
+    }
+    eprintln!("CHK follow-up query OK — test end");
+}

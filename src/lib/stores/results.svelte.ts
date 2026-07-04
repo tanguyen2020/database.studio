@@ -39,6 +39,8 @@ export interface TabExecution {
   /** wall-clock summary for the status bar */
   totalMs: number
   lastRowCount: number | null
+  /** epoch ms khi bắt đầu chạy (cho hiển thị "running Ns" — T11) */
+  startedAt: number
 }
 
 /** Table name heuristic for the sub-tab label (`#N orders · X rows`). */
@@ -84,6 +86,7 @@ class ResultsStore {
       activeSub: 0,
       totalMs: 0,
       lastRowCount: null,
+      startedAt: Date.now(),
     }
     this.byTab[tabId] = exec
 
