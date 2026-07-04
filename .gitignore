@@ -22,3 +22,7 @@ Thumbs.db
 *.db
 *.sqlite
 !spec/**
+
+# integration test logs
+src-tauri/out*.log
+out.log
