@@ -70,5 +70,6 @@ Stores are runes classes in `src/lib/stores/*.svelte.ts` (`connections`, `tabs`,
 Cập nhật sau MỖI commit. Rule: 1 task/lần, unit+integration xanh mới commit `T<n>: …`, không nới assertion; kẹt >3 lần sửa → ghi tình trạng vào đây + hỏi.
 
 - **T10 — Connection Test/Cancel correctness — ✅ DONE** (commit `T10:`). Bounded timeout (`connect_timeout()`=10s) + cancellable `run_test_bounded` (token vs timeout vs test, SSH tunnel always `shutdown()`), `classify_connect_error`, `cancel_test` cmd, ConnectionForm uuid testId + cancel-on-close. Tests: unit (timeout/error-map) + integration `connection_test_bounded_and_cancellable` (live ok / closed-port bounded / cancel <1s) EXIT=0.
-- **T11 — Cancel running query verified — ⏳ NEXT**
-- T12..T23 — pending (see SPEC_SUPPLEMENT.md "Implementation priority").
+- **T11 — Cancel running query — ✅ DONE** (commit `T11:`). Verified registry cancel (abort task → CANCELLED + poison → heal on next stmt); UI: `TabExecution.startedAt` + "running Ns" timer on Cancel button + long-run warning toast (`settings.longRunningWarnMs`). Integration `query_cancel_aborts_and_connection_recovers` (pg_sleep→cancel ~1.16ms, follow-up SELECT 1 ok) EXIT=0.
+- **T12 — Wire dead stubs — ⏳ NEXT** (Set-as-Filter, Split btn, Chart PNG/SVG, SQLite Export.sql, Convert dialect, Export/Backup/Users routing).
+- T13..T23 — pending (see SPEC_SUPPLEMENT.md "Implementation priority").
