@@ -188,6 +188,7 @@ export type TabContentType =
   | 'saved'
   | 'redis'
   | 'redis-pubsub'
+  | 'nats'
 
 export interface TabState {
   id: string

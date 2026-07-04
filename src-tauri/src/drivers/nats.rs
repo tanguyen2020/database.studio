@@ -64,4 +64,55 @@ impl NatsDriver {
     pub async fn ping(&mut self) -> bool {
         matches!(self.client.connection_state(), async_nats::connection::State::Connected)
     }
+
+    /// Subscribe subject/wildcard (`>`, `*`) → Subscriber stream (task nền đọc).
+    pub async fn subscribe(&self, subject: String) -> Result<async_nats::Subscriber, QueryError> {
+        self.client
+            .subscribe(subject)
+            .await
+            .map_err(|e| err("Subscribe lỗi", e))
+    }
+
+    /// Publish payload lên subject (kèm reply-to tùy chọn), flush để chắc chắn gửi.
+    pub async fn publish(
+        &self,
+        subject: String,
+        payload: String,
+        reply: Option<String>,
+    ) -> Result<(), QueryError> {
+        let bytes = bytes::Bytes::from(payload.into_bytes());
+        match reply {
+            Some(r) => self
+                .client
+                .publish_with_reply(subject, r, bytes)
+                .await
+                .map_err(|e| err("Publish lỗi", e))?,
+            None => self.client.publish(subject, bytes).await.map_err(|e| err("Publish lỗi", e))?,
+        }
+        self.client.flush().await.map_err(|e| err("Flush lỗi", e))?;
+        Ok(())
+    }
+
+    /// Request/Reply với timeout → payload trả về (UTF-8) hoặc lỗi timeout.
+    pub async fn request(
+        &self,
+        subject: String,
+        payload: String,
+        timeout_ms: u64,
+    ) -> Result<String, QueryError> {
+        let fut = self.client.request(subject, bytes::Bytes::from(payload.into_bytes()));
+        let msg = tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), fut)
+            .await
+            .map_err(|_| err("Request timeout", "no reply within timeout"))?
+            .map_err(|e| err("Request lỗi", e))?;
+        Ok(String::from_utf8_lossy(&msg.payload).into_owned())
+    }
+
+    pub fn server_info(&self) -> async_nats::ServerInfo {
+        self.client.server_info()
+    }
+
+    pub fn client(&self) -> async_nats::Client {
+        self.client.clone()
+    }
 }

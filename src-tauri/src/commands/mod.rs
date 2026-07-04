@@ -3,6 +3,7 @@ pub mod files;
 pub mod grid;
 pub mod library;
 pub mod lint;
+pub mod nats;
 pub mod query;
 pub mod redis;
 pub mod schema;

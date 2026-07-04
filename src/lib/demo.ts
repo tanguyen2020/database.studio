@@ -338,6 +338,14 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
     }
     case 'redis_memory_usage':
       return ok(128)
+    case 'nats_info':
+      return ok({ version: '2.10.14', server_name: 'nats-demo', host: '10.0.1.9', port: 4222, max_payload: 1048576, client_id: 42, go: 'go1.22' })
+    case 'nats_subscribe':
+    case 'nats_unsubscribe':
+    case 'nats_publish':
+      return ok(null)
+    case 'nats_request':
+      return ok('{"ok":true,"demo":"reply"}')
     default:
       return Promise.reject(new Error(`demo: chưa mock command "${cmd}"`))
   }

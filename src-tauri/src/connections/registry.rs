@@ -235,6 +235,17 @@ impl Registry {
         })
     }
 
+    /// Clone NATS client của live connection (client multiplexed, dùng cho
+    /// subscribe stream ở task nền độc lập với lock của registry).
+    pub async fn nats_client(&self, id: &str) -> AppResult<async_nats::Client> {
+        let driver = self.driver_handle(id)?;
+        let d = driver.lock().await;
+        match &*d {
+            LiveConnection::Nats(n) => Ok(n.client()),
+            _ => Err(AppError::Driver("Connection không phải NATS".into())),
+        }
+    }
+
     /// Pings the live connection (used by the status bar / reconnect banner).
     pub async fn ping(&self, id: &str) -> bool {
         let Ok(driver) = self.driver_handle(id) else {

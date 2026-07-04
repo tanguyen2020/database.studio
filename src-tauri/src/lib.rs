@@ -52,6 +52,12 @@ pub fn run() {
             commands::redis::redis_subscribe,
             commands::redis::redis_unsubscribe,
             commands::redis::redis_publish,
+            // nats
+            commands::nats::nats_info,
+            commands::nats::nats_subscribe,
+            commands::nats::nats_unsubscribe,
+            commands::nats::nats_publish,
+            commands::nats::nats_request,
             // schema
             commands::schema::list_schemas,
             commands::schema::list_tables,

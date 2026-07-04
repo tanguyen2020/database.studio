@@ -139,6 +139,40 @@ export interface RedisPubSubMsg {
   payload: string
 }
 
+// ---- nats (Phase 3) ---------------------------------------------------------
+
+export interface NatsInfo {
+  version: string
+  server_name: string
+  host: string
+  port: number
+  max_payload: number
+  client_id: number
+  go: string
+}
+
+export const natsInfo = (connId: string) => invoke<NatsInfo>('nats_info', { connId })
+
+/** Subscribe subject/wildcard; messages arrive via `nats-msg` event. */
+export const natsSubscribe = (connId: string, subject: string) =>
+  invoke<void>('nats_subscribe', { connId, subject })
+
+export const natsUnsubscribe = (connId: string) => invoke<void>('nats_unsubscribe', { connId })
+
+export const natsPublish = (connId: string, subject: string, payload: string, reply?: string) =>
+  invoke<void>('nats_publish', { connId, subject, payload, reply: reply || null })
+
+export const natsRequest = (connId: string, subject: string, payload: string, timeoutMs: number) =>
+  invoke<string>('nats_request', { connId, subject, payload, timeoutMs })
+
+/** Payload of the `nats-msg` Tauri event. */
+export interface NatsMsg {
+  conn_id: string
+  subject: string
+  reply: string
+  payload: string
+}
+
 // ---- schema (Object Explorer) ----------------------------------------------
 
 export const listSchemas = (connId: string) => invoke<SchemaInfo[]>('list_schemas', { connId })

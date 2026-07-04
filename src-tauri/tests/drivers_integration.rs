@@ -960,4 +960,30 @@ async fn nats_connect_test_and_ping() {
         "phải parse được server version, nhận: {:?}",
         t.server_version
     );
+
+    // --- pub/sub (T9): subscribe wildcard rồi publish → nhận đúng ---
+    use futures::StreamExt;
+    let mut sub = drv.subscribe("demo.>".into()).await.unwrap();
+    drv.publish("demo.a".into(), "hi".into(), None).await.unwrap();
+    let msg = tokio::time::timeout(Duration::from_secs(5), sub.next())
+        .await
+        .expect("không nhận được message trong 5s")
+        .expect("subscription đóng sớm");
+    assert_eq!(msg.subject.to_string(), "demo.a");
+    assert_eq!(String::from_utf8_lossy(&msg.payload), "hi");
+
+    // --- request/reply (T9): responder echo lại payload ---
+    let client = drv.client();
+    let mut svc = client.subscribe("svc.echo").await.unwrap();
+    let responder = tokio::spawn(async move {
+        if let Some(m) = svc.next().await {
+            if let Some(reply) = m.reply {
+                let _ = client.publish(reply, m.payload).await;
+                let _ = client.flush().await;
+            }
+        }
+    });
+    let resp = drv.request("svc.echo".into(), "ping".into(), 3000).await.unwrap();
+    assert_eq!(resp, "ping", "request/reply phải echo lại payload");
+    responder.abort();
 }

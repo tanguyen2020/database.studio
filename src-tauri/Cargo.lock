@@ -989,6 +989,7 @@ dependencies = [
  "async-nats",
  "base64 0.22.1",
  "bigdecimal",
+ "bytes",
  "chrono",
  "dirs 5.0.1",
  "futures",

@@ -138,6 +138,33 @@ class TabsStore {
     return tab
   }
 
+  /** NATS workspace tab (subscriber/publish/request) — 1 tab / connection. */
+  openNatsTab(connectionId: string): TabState {
+    const existing = this.tabs.find(
+      (t) => t.contentType === 'nats' && t.connectionId === connectionId,
+    )
+    if (existing) {
+      this.activeTabId = existing.id
+      return existing
+    }
+    const profile = connections.byId(connectionId)
+    const tab: TabState = {
+      id: uuid(),
+      connectionId,
+      connectionName: profile?.name ?? '',
+      systemType: (profile?.system as SystemType) ?? 'orphan',
+      contentType: 'nats',
+      title: `${profile?.name ?? 'NATS'} · subjects`,
+      isPinned: false,
+      isDirty: false,
+      state: {},
+    }
+    this.tabs.push(tab)
+    this.activeTabId = tab.id
+    this.schedulePersist()
+    return tab
+  }
+
   /** Mở (hoặc focus nếu đã có) một tab tiện ích singleton — History / Saved. */
   openUtilityTab(contentType: 'history' | 'saved', title: string): TabState {
     const existing = this.tabs.find((t) => t.contentType === contentType)

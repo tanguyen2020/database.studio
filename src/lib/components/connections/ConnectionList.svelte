@@ -76,9 +76,10 @@
   async function openOrToggle(p: ProfilePublic) {
     connections.selectedId = p.id
     if (!p.connected) await connections.connect(p.id)
-    // Redis: mở Key Explorer tab (không phải SQL editor)
-    if (p.system === 'redis' && connections.byId(p.id)?.connected) {
-      tabs.openRedisTab(p.id)
+    // Redis/NATS: mở workspace chuyên biệt (không phải SQL editor)
+    if (connections.byId(p.id)?.connected) {
+      if (p.system === 'redis') tabs.openRedisTab(p.id)
+      else if (p.system === 'nats') tabs.openNatsTab(p.id)
     }
   }
 
