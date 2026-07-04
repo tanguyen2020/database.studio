@@ -115,3 +115,14 @@ pub async fn list_foreign_keys(
         driver.lock().await.foreign_keys(&schema).await
     })
 }
+
+#[tauri::command]
+pub async fn scan_indexes(
+    state: State<'_, AppState>,
+    conn_id: String,
+    schema: String,
+) -> Result<crate::drivers::index_scan::IndexScanResult, AppError> {
+    introspect!(state, conn_id, |driver| async move {
+        driver.lock().await.scan_indexes(&schema).await
+    })
+}

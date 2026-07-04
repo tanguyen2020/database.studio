@@ -3,6 +3,7 @@
 pub mod cassandra;
 pub mod clickhouse;
 pub mod grid;
+pub mod index_scan;
 pub mod kafka;
 pub mod mssql;
 pub mod mysql;
@@ -497,6 +498,34 @@ impl LiveConnection {
             Self::Sqlite(d) => d.foreign_keys(schema).await,
             _ => Ok(Vec::new()),
         }
+    }
+
+    /// Index Scanner (Phase 5 · T7b): quét index toàn schema + tính cờ sức khỏe.
+    pub async fn scan_indexes(
+        &mut self,
+        schema: &str,
+    ) -> Result<index_scan::IndexScanResult, QueryError> {
+        let (system, mut rows) = match self {
+            Self::Postgres(d) => ("postgres", d.scan_indexes(schema).await?),
+            Self::MySql(d) => (d.system_name(), d.scan_indexes(schema).await?),
+            Self::Sqlite(d) => ("sqlite", d.scan_indexes(schema).await?),
+            Self::Mssql(d) => ("mssql", d.scan_indexes(schema).await?),
+            _ => {
+                return Ok(index_scan::IndexScanResult {
+                    system: "unknown".into(),
+                    scope: schema.to_string(),
+                    indexes: Vec::new(),
+                    summary: index_scan::compute_flags(&mut []),
+                })
+            }
+        };
+        let summary = index_scan::compute_flags(&mut rows);
+        Ok(index_scan::IndexScanResult {
+            system: system.to_string(),
+            scope: schema.to_string(),
+            indexes: rows,
+            summary,
+        })
     }
 }
 

@@ -270,6 +270,36 @@ class TabsStore {
     return tab
   }
 
+  /** Mở tab Index Scanner cho một schema (singleton per conn+schema). */
+  openIndexScanner(connectionId: string, schema: string): TabState {
+    const existing = this.tabs.find(
+      (t) =>
+        t.contentType === 'index-scanner' &&
+        t.connectionId === connectionId &&
+        (t.state as { schema?: string }).schema === schema,
+    )
+    if (existing) {
+      this.activeTabId = existing.id
+      return existing
+    }
+    const profile = connections.byId(connectionId)
+    const tab: TabState = {
+      id: uuid(),
+      connectionId,
+      connectionName: profile?.name ?? '',
+      systemType: (profile?.system as SystemType) ?? 'orphan',
+      contentType: 'index-scanner',
+      title: `Indexes · ${schema}`,
+      isPinned: false,
+      isDirty: false,
+      state: { schema },
+    }
+    this.tabs.push(tab)
+    this.activeTabId = tab.id
+    this.schedulePersist()
+    return tab
+  }
+
   /** Mở tab Schema Compare (singleton). */
   openSchemaCompare(srcConnId: string | null): TabState {
     const existing = this.tabs.find((t) => t.contentType === 'schema-compare')

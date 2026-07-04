@@ -120,6 +120,7 @@ pub fn run() {
             commands::schema::list_triggers,
             commands::schema::list_sequences,
             commands::schema::list_foreign_keys,
+            commands::schema::scan_indexes,
             // files
             commands::files::write_text_file,
             // lint tầng 1

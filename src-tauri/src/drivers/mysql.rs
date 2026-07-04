@@ -377,6 +377,49 @@ impl MySqlDriver {
             .collect())
     }
 
+    pub fn system_name(&self) -> &'static str {
+        self.system
+    }
+
+    pub async fn scan_indexes(&mut self, schema: &str) -> Result<Vec<crate::drivers::index_scan::IndexScanRow>, QueryError> {
+        // information_schema.STATISTICS: 1 row/cột index → gộp theo (table, index).
+        let rows = sqlx::query(
+            "SELECT TABLE_NAME, INDEX_NAME, COLUMN_NAME, SEQ_IN_INDEX, NON_UNIQUE, INDEX_TYPE
+             FROM information_schema.STATISTICS
+             WHERE TABLE_SCHEMA = ?
+             ORDER BY TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX",
+        )
+        .bind(schema)
+        .fetch_all(&mut self.conn)
+        .await
+        .map_err(|e| map_error(self.system, &e))?;
+        use crate::drivers::index_scan::IndexScanRow;
+        use std::collections::BTreeMap;
+        let mut map: BTreeMap<(String, String), IndexScanRow> = BTreeMap::new();
+        for r in &rows {
+            let table: String = r.get(0);
+            let name: String = r.get(1);
+            let col: String = r.get(2);
+            let non_unique: i64 = r.try_get(4).unwrap_or(1);
+            let itype: String = r.try_get(5).unwrap_or_else(|_| "BTREE".into());
+            let entry = map.entry((table.clone(), name.clone())).or_insert_with(|| IndexScanRow {
+                name: name.clone(),
+                table,
+                columns: Vec::new(),
+                index_type: itype,
+                unique: non_unique == 0,
+                primary: name == "PRIMARY",
+                size_bytes: None,
+                usage: None,
+                fragmentation_pct: None,
+                valid: true,
+                flags: Vec::new(),
+            });
+            entry.columns.push(col);
+        }
+        Ok(map.into_values().collect())
+    }
+
     pub async fn foreign_keys(&mut self, schema: &str) -> Result<Vec<ForeignKey>, QueryError> {
         let rows = sqlx::query(
             "SELECT CONSTRAINT_NAME, TABLE_NAME, COLUMN_NAME, REFERENCED_TABLE_NAME, REFERENCED_COLUMN_NAME

@@ -29,6 +29,7 @@
   import PlanVisualizer from '$lib/components/workspace/PlanVisualizer.svelte'
   import ErDiagram from '$lib/components/workspace/ErDiagram.svelte'
   import SchemaCompare from '$lib/components/workspace/SchemaCompare.svelte'
+  import IndexScanner from '$lib/components/workspace/IndexScanner.svelte'
   import CommandPalette from '$lib/components/CommandPalette.svelte'
   import ClickHouseTtlDialog from '$lib/components/ClickHouseTtlDialog.svelte'
   import { palette } from '$lib/stores/palette.svelte'
@@ -181,6 +182,8 @@
             <ErDiagram tab={t} />
           {:else if t.contentType === 'schema-compare'}
             <SchemaCompare tab={t} />
+          {:else if t.contentType === 'index-scanner'}
+            <IndexScanner tab={t} />
           {:else}
             <SqlWorkspace tab={t} />
           {/if}

@@ -479,6 +479,53 @@ impl MssqlDriver {
             .collect())
     }
 
+    pub async fn scan_indexes(&mut self, schema: &str) -> Result<Vec<crate::drivers::index_scan::IndexScanRow>, QueryError> {
+        let rows = self
+            .client
+            .query(
+                "SELECT i.name, t.name AS tbl,
+                        (SELECT STRING_AGG(c.name, ',') WITHIN GROUP (ORDER BY ic.key_ordinal)
+                         FROM sys.index_columns ic
+                         JOIN sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
+                         WHERE ic.object_id = i.object_id AND ic.index_id = i.index_id AND ic.is_included_column = 0),
+                        i.type_desc, i.is_unique, i.is_primary_key,
+                        ISNULL(us.user_seeks + us.user_scans + us.user_lookups, 0) AS usage
+                 FROM sys.indexes i
+                 JOIN sys.tables t ON t.object_id = i.object_id
+                 LEFT JOIN sys.dm_db_index_usage_stats us ON us.object_id = i.object_id AND us.index_id = i.index_id
+                 WHERE SCHEMA_NAME(t.schema_id) = @P1 AND i.type <> 0 AND i.name IS NOT NULL
+                 ORDER BY t.name, i.name",
+                &[&schema],
+            )
+            .await
+            .map_err(|e| map_error(&e))?
+            .into_first_result()
+            .await
+            .map_err(|e| map_error(&e))?;
+        Ok(rows
+            .iter()
+            .map(|r| crate::drivers::index_scan::IndexScanRow {
+                name: r.get::<&str, _>(0).unwrap_or_default().to_string(),
+                table: r.get::<&str, _>(1).unwrap_or_default().to_string(),
+                columns: r
+                    .get::<&str, _>(2)
+                    .unwrap_or_default()
+                    .split(',')
+                    .filter(|s| !s.is_empty())
+                    .map(String::from)
+                    .collect(),
+                index_type: r.get::<&str, _>(3).unwrap_or("").to_string(),
+                unique: r.get::<bool, _>(4).unwrap_or(false),
+                primary: r.get::<bool, _>(5).unwrap_or(false),
+                usage: r.get::<i64, _>(6),
+                size_bytes: None,
+                fragmentation_pct: None,
+                valid: true,
+                flags: Vec::new(),
+            })
+            .collect())
+    }
+
     pub async fn foreign_keys(&mut self, schema: &str) -> Result<Vec<ForeignKey>, QueryError> {
         let rows = self
             .client

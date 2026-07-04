@@ -248,6 +248,19 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
         { name: 'first_name', data_type: 'varchar(80)', nullable: false, default: null, is_pk: false, is_fk: false },
         { name: 'status', data_type: 'varchar(20)', nullable: true, default: null, is_pk: false, is_fk: false },
       ])
+    case 'scan_indexes':
+      return ok({
+        system: 'postgres',
+        scope: 'public',
+        indexes: [
+          { name: 'students_pkey', table: 'students', columns: ['id'], index_type: 'BTREE', unique: true, primary: true, size_bytes: 16384, usage: 89231, valid: true, flags: [] },
+          { name: 'idx_students_email', table: 'students', columns: ['email'], index_type: 'BTREE', unique: true, primary: false, size_bytes: 24576, usage: 4210, valid: true, flags: [] },
+          { name: 'idx_students_name', table: 'students', columns: ['last_name'], index_type: 'BTREE', unique: false, primary: false, size_bytes: 32768, usage: 0, valid: true, flags: ['unused'] },
+          { name: 'idx_enroll_sc', table: 'enrollments', columns: ['student_id', 'course_id'], index_type: 'BTREE', unique: false, primary: false, size_bytes: 49152, usage: 1200, valid: true, flags: [] },
+          { name: 'idx_enroll_s', table: 'enrollments', columns: ['student_id'], index_type: 'BTREE', unique: false, primary: false, size_bytes: 40960, usage: 33, valid: true, flags: ['redundant'] },
+        ],
+        summary: { total: 5, total_size_bytes: 163840, unused: 1, redundant: 1, fragmented: 0, invalid: 0 },
+      })
     case 'list_foreign_keys':
       return ok([
         { name: 'fk_enrollments_student', from_table: 'enrollments', from_column: 'student_id', to_table: 'students', to_column: 'id' },

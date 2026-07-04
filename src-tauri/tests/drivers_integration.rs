@@ -140,6 +140,17 @@ async fn pg_roundtrip_null_multi_and_error_position() {
     );
     assert_eq!(plan.system, "postgres");
     assert!(!plan.raw.is_empty());
+
+    // --- Phase 5 T7b: Index Scanner thật (pg_stat + prefix redundancy) ---
+    drv.exec("CREATE INDEX idx_status ON it_orders (status)").await.unwrap();
+    let mut idxs = drv.scan_indexes("public").await.unwrap();
+    let summary = database_studio_lib::drivers::index_scan::compute_flags(&mut idxs);
+    let pk = idxs.iter().find(|i| i.primary).expect("phải thấy PK index");
+    assert!(pk.columns.iter().any(|c| c == "id"), "PK trên id");
+    let idx = idxs.iter().find(|i| i.name == "idx_status").expect("thấy idx_status");
+    assert_eq!(idx.columns, vec!["status".to_string()]);
+    assert!(idx.usage.is_some(), "PG có idx_scan usage");
+    assert!(summary.total >= 2);
 }
 
 /// Phase 2 · Section 8 — Quick Connect: một connection với id ephemeral (`quick-*`)

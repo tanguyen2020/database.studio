@@ -455,6 +455,31 @@ export interface ForeignKey {
 export const listForeignKeys = (connId: string, schema: string) =>
   invoke<ForeignKey[]>('list_foreign_keys', { connId, schema })
 
+// ---- Index Scanner/Analyzer (Phase 5 · T7b) --------------------------------
+
+export interface IndexScanRow {
+  name: string
+  table: string
+  columns: string[]
+  index_type: string
+  unique: boolean
+  primary: boolean
+  size_bytes?: number
+  usage?: number
+  fragmentation_pct?: number
+  valid: boolean
+  flags: string[]
+}
+export interface IndexScanResult {
+  system: string
+  scope: string
+  indexes: IndexScanRow[]
+  summary: { total: number; total_size_bytes: number; unused: number; redundant: number; fragmented: number; invalid: number }
+}
+
+export const scanIndexes = (connId: string, schema: string) =>
+  invoke<IndexScanResult>('scan_indexes', { connId, schema })
+
 // ---- Query Plan Visualizer (Phase 5 · T1) ----------------------------------
 
 export interface PlanNode {

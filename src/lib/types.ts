@@ -203,6 +203,7 @@ export type TabContentType =
   | 'query-plan'
   | 'er-diagram'
   | 'schema-compare'
+  | 'index-scanner'
 
 export interface TabState {
   id: string

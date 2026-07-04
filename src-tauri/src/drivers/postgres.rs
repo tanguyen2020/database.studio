@@ -413,6 +413,45 @@ impl PgDriver {
             .collect())
     }
 
+    pub async fn scan_indexes(&mut self, schema: &str) -> Result<Vec<crate::drivers::index_scan::IndexScanRow>, QueryError> {
+        let rows = sqlx::query(
+            "SELECT i.relname AS name, t.relname AS tbl,
+                    ARRAY(SELECT pg_get_indexdef(ix.indexrelid, k + 1, true)
+                          FROM generate_subscripts(ix.indkey, 1) k ORDER BY k) AS cols,
+                    am.amname AS itype, ix.indisunique, ix.indisprimary, ix.indisvalid,
+                    pg_relation_size(i.oid) AS sz,
+                    COALESCE(st.idx_scan, 0) AS usage
+             FROM pg_index ix
+             JOIN pg_class i ON i.oid = ix.indexrelid
+             JOIN pg_class t ON t.oid = ix.indrelid
+             JOIN pg_namespace n ON n.oid = t.relnamespace
+             JOIN pg_am am ON am.oid = i.relam
+             LEFT JOIN pg_stat_user_indexes st ON st.indexrelid = ix.indexrelid
+             WHERE n.nspname = $1
+             ORDER BY t.relname, i.relname",
+        )
+        .bind(schema)
+        .fetch_all(&mut self.conn)
+        .await
+        .map_err(|e| map_error("postgres", &e))?;
+        Ok(rows
+            .iter()
+            .map(|r| crate::drivers::index_scan::IndexScanRow {
+                name: r.get(0),
+                table: r.get(1),
+                columns: r.try_get::<Vec<String>, _>(2).unwrap_or_default(),
+                index_type: r.get::<String, _>(3).to_uppercase(),
+                unique: r.get(4),
+                primary: r.get(5),
+                valid: r.get(6),
+                size_bytes: r.try_get::<i64, _>(7).ok(),
+                usage: r.try_get::<i64, _>(8).ok(),
+                fragmentation_pct: None,
+                flags: Vec::new(),
+            })
+            .collect())
+    }
+
     pub async fn foreign_keys(&mut self, schema: &str) -> Result<Vec<ForeignKey>, QueryError> {
         let rows = sqlx::query(
             "SELECT tc.constraint_name, kcu.table_name, kcu.column_name,
