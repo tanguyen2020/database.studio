@@ -5,7 +5,8 @@ use tauri::State;
 
 use crate::drivers::plan::{self, QueryPlan};
 use crate::drivers::types::StatementOutcome;
-use crate::error::AppError;
+use crate::drivers::LiveConnection;
+use crate::error::{AppError, QueryError};
 use crate::state::AppState;
 
 /// EXPLAIN một câu lệnh → cây kế hoạch chuẩn hóa. `actual=true` sẽ THỰC SỰ chạy
@@ -24,8 +25,13 @@ pub async fn explain_plan(
         .unwrap_or_else(|_| "unknown".into());
 
     // Hệ không áp dụng: trả not_applicable (nút Explain disabled ở UI, không lỗi).
-    if matches!(system.as_str(), "redis" | "kafka" | "nats" | "cassandra") {
+    if matches!(system.as_str(), "redis" | "kafka" | "nats") {
         return Ok(QueryPlan::not_applicable(&system));
+    }
+
+    // Cassandra: không có EXPLAIN → chạy TRACING, dựng timeline + cờ ALLOW FILTERING.
+    if system == "cassandra" {
+        return explain_cassandra(state.inner(), &conn_id, &sql).await;
     }
 
     // MSSQL: SHOWPLAN_XML phải là statement duy nhất của batch → bật, chạy query
@@ -78,6 +84,29 @@ async fn explain_mssql(
         .and_then(|v| v.as_str())
         .ok_or_else(|| AppError::Driver("SHOWPLAN_XML rỗng".into()))?;
     plan::parse_mssql_xml(xml).map_err(AppError::Driver)
+}
+
+/// Cassandra query plan qua TRACING (không có EXPLAIN). Chạy CQL với tracing bật
+/// → timeline events; cờ ALLOW FILTERING suy ra ở tầng normalize.
+async fn explain_cassandra(
+    state: &AppState,
+    conn_id: &str,
+    cql: &str,
+) -> Result<QueryPlan, AppError> {
+    let cql_owned = cql.trim().trim_end_matches(';').to_string();
+    let traced = cql_owned.clone();
+    let (warnings, events) = state
+        .registry
+        .with_driver(conn_id, move |driver| async move {
+            let d = driver.lock().await;
+            match &*d {
+                LiveConnection::Cassandra(c) => c.trace_cql(&traced).await,
+                _ => Err(QueryError::new("cassandra", "Connection không phải Cassandra", "not cassandra")),
+            }
+        })
+        .await?
+        .map_err(|e| AppError::Driver(e.message))?;
+    Ok(plan::parse_cassandra_trace(&cql_owned, &warnings, &events))
 }
 
 /// Câu EXPLAIN native theo hệ.

@@ -334,6 +334,38 @@ impl CassandraDriver {
             warnings,
         })
     }
+
+    /// Query Plan cho Cassandra (T16): chạy CQL với TRACING bật → trả về
+    /// `(server_warnings, events)` với event = `(activity, source, elapsed_us)`.
+    /// Cassandra không có EXPLAIN nên plan = timeline thực tế; cờ ALLOW FILTERING
+    /// suy ra ở tầng normalize (drivers/plan.rs).
+    pub async fn trace_cql(
+        &self,
+        cql: &str,
+    ) -> Result<(Vec<String>, Vec<(String, String, i64)>), QueryError> {
+        let mut stmt = Statement::new(cql.to_string());
+        stmt.set_tracing(true);
+        stmt.set_page_size(DEFAULT_PAGE_SIZE);
+        let (result, _page) = self
+            .session
+            .query_single_page(stmt, &[], PagingState::start())
+            .await
+            .map_err(map_exec_err)?;
+        let warnings: Vec<String> = result.warnings().map(|w| w.to_string()).collect();
+        let mut events: Vec<(String, String, i64)> = Vec::new();
+        if let Some(tid) = result.tracing_id() {
+            if let Ok(info) = self.session.get_tracing_info(&tid).await {
+                for e in info.events {
+                    events.push((
+                        e.activity.unwrap_or_default(),
+                        e.source.map(|s| s.to_string()).unwrap_or_default(),
+                        e.source_elapsed.unwrap_or(0) as i64,
+                    ));
+                }
+            }
+        }
+        Ok((warnings, events))
+    }
 }
 
 /// Convert a CQL value to JSON for the grid. Non-JSON-native types render as

@@ -2183,3 +2183,71 @@ async fn clickhouse_explain_tree_has_read_node() {
     assert!(refs_table(&root), "node ReadFrom phải tham chiếu it_plan. raw:\n{text}");
     eprintln!("CHK ClickHouse EXPLAIN tree OK");
 }
+
+/// Phase 5 · T16 — Cassandra query plan qua TRACING (không có EXPLAIN). Seed
+/// bảng, chạy query cần ALLOW FILTERING với tracing bật → timeline events có nội
+/// dung + cờ ALLOW FILTERING được đánh dấu hotspot.
+#[tokio::test]
+async fn cassandra_trace_plan_flags_allow_filtering() {
+    use database_studio_lib::drivers::cassandra::{CassandraConnParams, CassandraDriver};
+    use database_studio_lib::drivers::plan;
+
+    let (_c, port) = start_cassandra().await;
+    let params = CassandraConnParams {
+        contact_points: vec![format!("127.0.0.1:{port}")],
+        user: String::new(),
+        password: String::new(),
+        datacenter: "datacenter1".into(),
+        consistency: "ONE".into(),
+        keyspace: String::new(),
+        ssl: false,
+        ssl_ca: String::new(),
+    };
+    let drv = {
+        let deadline = Instant::now() + Duration::from_secs(240);
+        let mut last = String::new();
+        loop {
+            match CassandraDriver::connect_translating_to(&params, "127.0.0.1", port).await {
+                Ok(d) => match d.exec_cql("SELECT release_version FROM system.local", None, None).await {
+                    Ok(_) => break d,
+                    Err(e) => last = format!("query: {}", e.message),
+                },
+                Err(e) => last = format!("connect: {}", e.message),
+            }
+            if Instant::now() >= deadline {
+                panic!("cassandra: hết 240s chờ node — lỗi cuối: {last}");
+            }
+            tokio::time::sleep(Duration::from_secs(3)).await;
+        }
+    };
+
+    drv.exec_cql(
+        "CREATE KEYSPACE IF NOT EXISTS itplan_ks WITH replication = {'class':'SimpleStrategy','replication_factor':1}",
+        None,
+        None,
+    )
+    .await
+    .expect("create keyspace");
+    drv.exec_cql("CREATE TABLE itplan_ks.t (pk int PRIMARY KEY, v int)", None, None)
+        .await
+        .expect("create table");
+    for i in 1..=5 {
+        drv.exec_cql(&format!("INSERT INTO itplan_ks.t (pk, v) VALUES ({i}, {})", i * 10), None, None)
+            .await
+            .expect("insert");
+    }
+
+    // query lọc trên cột không phải partition key → cần ALLOW FILTERING
+    let cql = "SELECT * FROM itplan_ks.t WHERE v = 30 ALLOW FILTERING";
+    let (warnings, events) = drv.trace_cql(cql).await.expect("trace_cql");
+    let p = plan::parse_cassandra_trace(cql, &warnings, &events);
+    let root = p.root.expect("có root");
+    assert!(root.is_hotspot, "ALLOW FILTERING → hotspot");
+    assert!(
+        p.summary.warnings.iter().any(|w| w.to_uppercase().contains("ALLOW FILTERING")),
+        "phải có cảnh báo ALLOW FILTERING"
+    );
+    assert!(!events.is_empty(), "TRACING phải trả về timeline events");
+    assert!(!root.children.is_empty(), "timeline phải có node event");
+    eprintln!("CHK Cassandra TRACING + ALLOW FILTERING flag OK ({} events)", events.len());
+}

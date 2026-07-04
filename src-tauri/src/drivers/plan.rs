@@ -412,6 +412,60 @@ fn build_mssql_node(relop: roxmltree::Node, warnings: &mut Vec<String>) -> PlanN
 }
 
 // ---------------------------------------------------------------------------
+// Cassandra — không có EXPLAIN; dùng TRACING timeline + cờ ALLOW FILTERING.
+// ---------------------------------------------------------------------------
+
+/// Dựng QueryPlan cho Cassandra từ: câu CQL, cảnh báo server, và các event trace
+/// `(activity, source, source_elapsed_us)`. Cờ ALLOW FILTERING (quét toàn cluster)
+/// → hotspot + warning. Root = node đọc CQL; con = timeline các event trace.
+pub fn parse_cassandra_trace(
+    cql: &str,
+    server_warnings: &[String],
+    events: &[(String, String, i64)],
+) -> QueryPlan {
+    let filtering = cql.to_uppercase().contains("ALLOW FILTERING")
+        || server_warnings.iter().any(|w| w.to_uppercase().contains("FILTER"))
+        || events.iter().any(|(a, _, _)| {
+            let up = a.to_uppercase();
+            up.contains("ALLOW FILTERING") || up.contains("FILTERING")
+        });
+
+    let mut warnings: Vec<String> = server_warnings.to_vec();
+    let mut root = PlanNode::leaf(if filtering { "SeqScan" } else { "CqlRead" }, "CQL Read");
+    if filtering {
+        root.is_hotspot = true;
+        warnings.push("ALLOW FILTERING: quét toàn bộ partitions (không dùng partition key) — tốn kém".into());
+    }
+
+    for (activity, source, elapsed) in events {
+        let mut n = PlanNode::leaf("TraceEvent", activity);
+        n.actual_time_ms = Some(*elapsed as f64 / 1000.0);
+        n.extra.insert("activity".into(), Value::String(activity.clone()));
+        if !source.is_empty() {
+            n.extra.insert("source".into(), Value::String(source.clone()));
+        }
+        root.children.push(n);
+    }
+
+    let total = events.iter().map(|(_, _, e)| *e).max().unwrap_or(0) as f64 / 1000.0;
+    QueryPlan {
+        system: "cassandra".into(),
+        mode: "actual".into(),
+        summary: PlanSummary {
+            total_cost: None,
+            total_time_ms: if total > 0.0 { Some(total) } else { None },
+            warnings,
+        },
+        root: Some(root),
+        raw: events
+            .iter()
+            .map(|(a, s, e)| format!("{e}us {s} {a}"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Fallback text (ClickHouse/khác trước khi có parser chuyên biệt): 1 node raw.
 // ---------------------------------------------------------------------------
 
@@ -543,6 +597,36 @@ mod tests {
     #[test]
     fn not_applicable_for_messaging() {
         assert_eq!(QueryPlan::not_applicable("redis").mode, "not_applicable");
+    }
+
+    #[test]
+    fn cassandra_trace_flags_allow_filtering() {
+        let events = vec![
+            ("Parsing CQL query".into(), "10.0.0.1".into(), 50i64),
+            ("Executing seq scan across all ranges".into(), "10.0.0.1".into(), 4200i64),
+        ];
+        let plan = parse_cassandra_trace(
+            "SELECT * FROM ks.t WHERE v = 1 ALLOW FILTERING",
+            &[],
+            &events,
+        );
+        let root = plan.root.unwrap();
+        assert_eq!(root.operation, "SeqScan");
+        assert!(root.is_hotspot, "ALLOW FILTERING → hotspot");
+        assert!(plan.summary.warnings.iter().any(|w| w.contains("ALLOW FILTERING")));
+        assert_eq!(root.children.len(), 2, "2 trace event → 2 timeline node");
+        assert_eq!(plan.summary.total_time_ms, Some(4.2)); // max elapsed 4200us
+        assert_eq!(plan.mode, "actual");
+    }
+
+    #[test]
+    fn cassandra_trace_partition_key_not_hotspot() {
+        // Query dùng partition key (không ALLOW FILTERING) → không hotspot.
+        let plan = parse_cassandra_trace("SELECT * FROM ks.t WHERE pk = 1", &[], &[]);
+        let root = plan.root.unwrap();
+        assert_eq!(root.operation, "CqlRead");
+        assert!(!root.is_hotspot);
+        assert!(plan.summary.warnings.is_empty());
     }
 
     #[test]
