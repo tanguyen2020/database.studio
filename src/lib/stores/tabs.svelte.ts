@@ -270,6 +270,37 @@ class TabsStore {
     return tab
   }
 
+  /** Mở Table Designer — New Table (schema/table rỗng) hoặc Design bảng có sẵn. */
+  openTableDesigner(connectionId: string, schema: string, table: string): TabState {
+    const existing = this.tabs.find(
+      (t) =>
+        t.contentType === 'table-designer' &&
+        t.connectionId === connectionId &&
+        (t.state as { schema?: string; table?: string }).schema === schema &&
+        (t.state as { table?: string }).table === table,
+    )
+    if (existing) {
+      this.activeTabId = existing.id
+      return existing
+    }
+    const profile = connections.byId(connectionId)
+    const tab: TabState = {
+      id: uuid(),
+      connectionId,
+      connectionName: profile?.name ?? '',
+      systemType: (profile?.system as SystemType) ?? 'orphan',
+      contentType: 'table-designer',
+      title: table ? `${table} · design` : 'new_table · design',
+      isPinned: false,
+      isDirty: false,
+      state: { schema, table },
+    }
+    this.tabs.push(tab)
+    this.activeTabId = tab.id
+    this.schedulePersist()
+    return tab
+  }
+
   /** Mở (hoặc focus) tab Ring Topology của Cassandra — singleton per connection. */
   openCassandraRing(connectionId: string): TabState {
     const existing = this.tabs.find(

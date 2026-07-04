@@ -25,6 +25,7 @@
   import KafkaProducer from '$lib/components/workspace/KafkaProducer.svelte'
   import SchemaRegistryWorkspace from '$lib/components/workspace/SchemaRegistryWorkspace.svelte'
   import CassandraRing from '$lib/components/workspace/CassandraRing.svelte'
+  import TableDesigner from '$lib/components/workspace/TableDesigner.svelte'
   import CommandPalette from '$lib/components/CommandPalette.svelte'
   import ClickHouseTtlDialog from '$lib/components/ClickHouseTtlDialog.svelte'
   import { palette } from '$lib/stores/palette.svelte'
@@ -169,6 +170,8 @@
             <SchemaRegistryWorkspace tab={t} />
           {:else if t.contentType === 'cassandra-ring'}
             <CassandraRing tab={t} />
+          {:else if t.contentType === 'table-designer'}
+            <TableDesigner tab={t} />
           {:else}
             <SqlWorkspace tab={t} />
           {/if}

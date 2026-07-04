@@ -422,7 +422,7 @@
                   <ContextMenu.Item onclick={() => openData(schema.name, t)}>Open Data</ContextMenu.Item>
                   <ContextMenu.Item onclick={() => newQuery(schema.name, t.name)}>New Query</ContextMenu.Item>
                   <ContextMenu.Separator />
-                  <ContextMenu.Item onclick={() => later('Design Table')}>Design Table</ContextMenu.Item>
+                  <ContextMenu.Item onclick={() => selected && tabs.openTableDesigner(selected.id, schema.name, t.name)}>Design Table</ContextMenu.Item>
                   <ContextMenu.Item
                     onclick={() => stmtTab(`Rename ${t.name}`, genRename(selected!.system, schema.name, t.name))}
                   >
@@ -743,7 +743,7 @@
 
   <!-- bottom toolbar — dòng 155-166 -->
   <div style="flex:none;display:flex;align-items:center;gap:var(--px-1);padding:var(--px-5) var(--px-8);border-top:var(--px-1) solid var(--border);background:var(--header);color:var(--text2)">
-    <span class="xbtn" onclick={() => later('New table')} onkeydown={(e) => e.key === 'Enter' && later('New table')} role="button" tabindex="0" title="New table">
+    <span class="xbtn" onclick={() => selected && tabs.openTableDesigner(selected.id, cache?.schemas?.[0]?.name ?? '', '')} onkeydown={(e) => e.key === 'Enter' && selected && tabs.openTableDesigner(selected.id, cache?.schemas?.[0]?.name ?? '', '')} role="button" tabindex="0" title="New table">
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="1.5"></rect><path d="M3 9h18M9 9v11" stroke-linecap="round"></path><path d="M16.5 14v5M14 16.5h5" stroke-linecap="round"></path></svg>
     </span>
     <span class="xbtn" onclick={() => newQuery(cache?.schemas?.[0]?.name ?? '')} onkeydown={(e) => e.key === 'Enter' && newQuery(cache?.schemas?.[0]?.name ?? '')} role="button" tabindex="0" title="Open query console">

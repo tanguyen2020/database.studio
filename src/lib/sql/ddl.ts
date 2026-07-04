@@ -78,3 +78,62 @@ export function genTruncate(system: string, schema: string, table: string): stri
 export function genDrop(system: string, schema: string, table: string): string {
   return `DROP TABLE IF EXISTS ${target(system, schema, table)};`
 }
+
+// ---- Table Designer (Phase 5 · T3) -----------------------------------------
+
+/** Cột trong Table Designer form (mô hình riêng, richer hơn ColumnInfo). */
+export interface DesignerCol {
+  name: string
+  type: string
+  len: string
+  pk: boolean
+  nullable: boolean
+  dflt: string
+}
+
+/** Danh sách kiểu dữ liệu cho dropdown, theo dialect. */
+export function designerTypes(system: string): string[] {
+  switch (system) {
+    case 'mysql':
+    case 'mariadb':
+      return ['int', 'bigint', 'decimal', 'varchar', 'text', 'tinyint', 'datetime', 'date', 'char', 'json']
+    case 'mssql':
+      return ['int', 'bigint', 'decimal', 'nvarchar', 'varchar', 'bit', 'datetime2', 'date', 'uniqueidentifier', 'nvarchar(max)']
+    case 'sqlite':
+      return ['INTEGER', 'REAL', 'TEXT', 'BLOB', 'NUMERIC']
+    case 'clickhouse':
+      return ['Int32', 'Int64', 'UInt32', 'Float64', 'String', 'LowCardinality(String)', 'Date', 'DateTime', 'UUID', 'Bool']
+    default: // postgres
+      return ['int4', 'int8', 'numeric', 'varchar', 'text', 'boolean', 'timestamptz', 'date', 'uuid', 'jsonb']
+  }
+}
+
+/** Sinh CREATE TABLE từ mô hình designer (port designerDDL dòng 3158-3162,
+ *  mở rộng dialect-aware quoting + ENGINE cho ClickHouse). */
+export function designerDdl(system: string, schema: string, table: string, cols: DesignerCol[]): string {
+  const sch = schema || defaultSchema(system)
+  const tbl = table || 'new_table'
+  const name = sch ? target(system, sch, tbl) : quoteIdent(system, tbl)
+  const lines = cols.map((c) => {
+    let t = c.type || 'varchar'
+    if (c.len.trim()) t += `(${c.len.trim()})`
+    let line = `  ${quoteIdent(system, c.name || 'column')} ${t}`
+    if (c.pk) line += ' PRIMARY KEY'
+    if (!c.nullable && !c.pk) line += ' NOT NULL'
+    if (c.dflt.trim()) line += ` DEFAULT ${c.dflt.trim()}`
+    return line
+  })
+  let ddl = `CREATE TABLE ${name} (\n${lines.join(',\n')}\n)`
+  if (system === 'clickhouse') {
+    const pk = cols.filter((c) => c.pk).map((c) => quoteIdent(system, c.name))
+    ddl += `\nENGINE = MergeTree\nORDER BY ${pk.length ? `(${pk.join(', ')})` : 'tuple()'}`
+  }
+  return ddl + ';'
+}
+
+function defaultSchema(system: string): string {
+  if (system === 'sqlite') return 'main'
+  if (system === 'mysql' || system === 'mariadb' || system === 'clickhouse') return ''
+  if (system === 'mssql') return 'dbo'
+  return 'public'
+}
