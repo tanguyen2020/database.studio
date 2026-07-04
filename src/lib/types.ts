@@ -201,6 +201,7 @@ export type TabContentType =
   | 'cassandra-ring'
   | 'table-designer'
   | 'query-plan'
+  | 'er-diagram'
 
 export interface TabState {
   id: string

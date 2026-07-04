@@ -283,6 +283,49 @@ impl SqliteDriver {
         .await
     }
 
+    pub async fn foreign_keys(&self, schema: &str) -> Result<Vec<ForeignKey>, QueryError> {
+        let schema = schema.to_string();
+        self.with_conn(move |c| {
+            let master = format!("{}.sqlite_master", quote_ident(&schema, QuoteStyle::DoubleQuote));
+            let list_sql = format!("SELECT name FROM {master} WHERE type = 'table' ORDER BY name");
+            let mut stmt = c.prepare(&list_sql).map_err(|e| map_rusqlite_error(&e))?;
+            let tables: Vec<String> = stmt
+                .query_map([], |r| r.get::<_, String>(0))
+                .map_err(|e| map_rusqlite_error(&e))?
+                .collect::<Result<_, _>>()
+                .map_err(|e| map_rusqlite_error(&e))?;
+            drop(stmt);
+            let mut out = Vec::new();
+            for t in tables {
+                // PRAGMA foreign_key_list(table): id, seq, table(ref), from, to, ...
+                let pragma = format!("PRAGMA foreign_key_list({})", quote_ident(&t, QuoteStyle::DoubleQuote));
+                let mut ps = c.prepare(&pragma).map_err(|e| map_rusqlite_error(&e))?;
+                let fks = ps
+                    .query_map([], |r| {
+                        Ok((
+                            r.get::<_, i64>(0)?,        // id
+                            r.get::<_, String>(2)?,     // referenced table
+                            r.get::<_, String>(3)?,     // from column
+                            r.get::<_, Option<String>>(4)?, // to column (NULL → ref PK)
+                        ))
+                    })
+                    .map_err(|e| map_rusqlite_error(&e))?;
+                for fk in fks {
+                    let (id, ref_table, from_col, to_col) = fk.map_err(|e| map_rusqlite_error(&e))?;
+                    out.push(ForeignKey {
+                        name: format!("fk_{t}_{id}"),
+                        from_table: t.clone(),
+                        from_column: from_col,
+                        to_table: ref_table,
+                        to_column: to_col.unwrap_or_else(|| "rowid".into()),
+                    });
+                }
+            }
+            Ok(out)
+        })
+        .await
+    }
+
     pub async fn columns(&self, schema: &str, table: &str) -> Result<Vec<ColumnInfo>, QueryError> {
         let schema = schema.to_string();
         let table = table.to_string();

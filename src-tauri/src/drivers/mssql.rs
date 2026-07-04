@@ -478,6 +478,37 @@ impl MssqlDriver {
             })
             .collect())
     }
+
+    pub async fn foreign_keys(&mut self, schema: &str) -> Result<Vec<ForeignKey>, QueryError> {
+        let rows = self
+            .client
+            .query(
+                "SELECT fk.name, OBJECT_NAME(fkc.parent_object_id), pc.name,
+                        OBJECT_NAME(fkc.referenced_object_id), rc.name
+                 FROM sys.foreign_keys fk
+                 JOIN sys.foreign_key_columns fkc ON fkc.constraint_object_id = fk.object_id
+                 JOIN sys.columns pc ON pc.object_id = fkc.parent_object_id AND pc.column_id = fkc.parent_column_id
+                 JOIN sys.columns rc ON rc.object_id = fkc.referenced_object_id AND rc.column_id = fkc.referenced_column_id
+                 WHERE SCHEMA_NAME(fk.schema_id) = @P1
+                 ORDER BY OBJECT_NAME(fkc.parent_object_id), fk.name",
+                &[&schema],
+            )
+            .await
+            .map_err(|e| map_error(&e))?
+            .into_first_result()
+            .await
+            .map_err(|e| map_error(&e))?;
+        Ok(rows
+            .iter()
+            .map(|r| ForeignKey {
+                name: r.get::<&str, _>(0).unwrap_or_default().to_string(),
+                from_table: r.get::<&str, _>(1).unwrap_or_default().to_string(),
+                from_column: r.get::<&str, _>(2).unwrap_or_default().to_string(),
+                to_table: r.get::<&str, _>(3).unwrap_or_default().to_string(),
+                to_column: r.get::<&str, _>(4).unwrap_or_default().to_string(),
+            })
+            .collect())
+    }
 }
 
 // ---------------------------------------------------------------------------

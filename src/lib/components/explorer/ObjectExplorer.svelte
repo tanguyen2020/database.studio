@@ -381,6 +381,14 @@
       {#each cache?.schemas ?? [] as schema (schema.name)}
         {@const sOpen = expanded.has(`s:${schema.name}`)}
         {@const sc = cache?.bySchema[schema.name]}
+        {#snippet schemaMenu()}
+          <ContextMenu.Content class="w-52">
+            <ContextMenu.Item onclick={() => selected && tabs.openErDiagram(selected.id, schema.name)}>View ER Diagram</ContextMenu.Item>
+            <ContextMenu.Item onclick={() => selected && tabs.openTableDesigner(selected.id, schema.name, '')}>New Table…</ContextMenu.Item>
+            <ContextMenu.Separator />
+            <ContextMenu.Item onclick={() => selected && explorer.refresh(selected.id, { kind: 'schema', schema: schema.name })}>Refresh</ContextMenu.Item>
+          </ContextMenu.Content>
+        {/snippet}
         {@render row({
           key: `s:${schema.name}`,
           depth: base,
@@ -391,7 +399,7 @@
           head: true,
           expandable: true,
           onClick: () => expandSchema(schema.name),
-        })}
+        }, schemaMenu)}
 
         {#if sOpen && sc}
           {@const tables = sc.tables?.filter((t) => t.kind !== 'view') ?? []}

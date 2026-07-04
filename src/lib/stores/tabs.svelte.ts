@@ -270,6 +270,36 @@ class TabsStore {
     return tab
   }
 
+  /** Mở tab ER Diagram cho một schema (singleton per conn+schema). */
+  openErDiagram(connectionId: string, schema: string): TabState {
+    const existing = this.tabs.find(
+      (t) =>
+        t.contentType === 'er-diagram' &&
+        t.connectionId === connectionId &&
+        (t.state as { schema?: string }).schema === schema,
+    )
+    if (existing) {
+      this.activeTabId = existing.id
+      return existing
+    }
+    const profile = connections.byId(connectionId)
+    const tab: TabState = {
+      id: uuid(),
+      connectionId,
+      connectionName: profile?.name ?? '',
+      systemType: (profile?.system as SystemType) ?? 'orphan',
+      contentType: 'er-diagram',
+      title: `ER · ${schema}`,
+      isPinned: false,
+      isDirty: false,
+      state: { schema },
+    }
+    this.tabs.push(tab)
+    this.activeTabId = tab.id
+    this.schedulePersist()
+    return tab
+  }
+
   /** Mở tab Query Plan cho một câu lệnh (visualize EXPLAIN). */
   openQueryPlan(connectionId: string, sql: string): TabState {
     const profile = connections.byId(connectionId)

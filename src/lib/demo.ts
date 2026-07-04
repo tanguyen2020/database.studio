@@ -248,6 +248,11 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
         { name: 'first_name', data_type: 'varchar(80)', nullable: false, default: null, is_pk: false, is_fk: false },
         { name: 'status', data_type: 'varchar(20)', nullable: true, default: null, is_pk: false, is_fk: false },
       ])
+    case 'list_foreign_keys':
+      return ok([
+        { name: 'fk_enrollments_student', from_table: 'enrollments', from_column: 'student_id', to_table: 'students', to_column: 'id' },
+        { name: 'fk_enrollments_course', from_table: 'enrollments', from_column: 'course_id', to_table: 'courses', to_column: 'id' },
+      ])
     case 'list_indexes':
     case 'list_constraints':
     case 'list_routines':

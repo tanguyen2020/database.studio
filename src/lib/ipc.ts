@@ -442,6 +442,19 @@ export const cassandraRing = (connId: string) => invoke<RingNode[]>('cassandra_r
 export const cassandraTableDdl = (connId: string, keyspace: string, table: string) =>
   invoke<string>('cassandra_table_ddl', { connId, keyspace, table })
 
+// ---- Foreign keys (ER Diagram · Schema Compare — Phase 5) -------------------
+
+export interface ForeignKey {
+  name: string
+  from_table: string
+  from_column: string
+  to_table: string
+  to_column: string
+}
+
+export const listForeignKeys = (connId: string, schema: string) =>
+  invoke<ForeignKey[]>('list_foreign_keys', { connId, schema })
+
 // ---- Query Plan Visualizer (Phase 5 · T1) ----------------------------------
 
 export interface PlanNode {

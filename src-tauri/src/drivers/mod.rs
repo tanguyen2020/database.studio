@@ -487,6 +487,17 @@ impl LiveConnection {
             _ => Ok(Vec::new()),
         }
     }
+
+    /// Foreign keys của schema (ER Diagram · Phase 5). Hệ không quan hệ / không FK → rỗng.
+    pub async fn foreign_keys(&mut self, schema: &str) -> Result<Vec<ForeignKey>, QueryError> {
+        match self {
+            Self::Postgres(d) => d.foreign_keys(schema).await,
+            Self::MySql(d) => d.foreign_keys(schema).await,
+            Self::Mssql(d) => d.foreign_keys(schema).await,
+            Self::Sqlite(d) => d.foreign_keys(schema).await,
+            _ => Ok(Vec::new()),
+        }
+    }
 }
 
 #[cfg(test)]

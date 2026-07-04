@@ -227,3 +227,13 @@ pub struct SequenceInfo {
     pub schema: String,
     pub name: String,
 }
+
+/// Foreign-key relationship (ER Diagram + Schema Compare).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ForeignKey {
+    pub name: String,
+    pub from_table: String,
+    pub from_column: String,
+    pub to_table: String,
+    pub to_column: String,
+}

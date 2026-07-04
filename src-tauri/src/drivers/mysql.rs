@@ -376,6 +376,29 @@ impl MySqlDriver {
             })
             .collect())
     }
+
+    pub async fn foreign_keys(&mut self, schema: &str) -> Result<Vec<ForeignKey>, QueryError> {
+        let rows = sqlx::query(
+            "SELECT CONSTRAINT_NAME, TABLE_NAME, COLUMN_NAME, REFERENCED_TABLE_NAME, REFERENCED_COLUMN_NAME
+             FROM information_schema.KEY_COLUMN_USAGE
+             WHERE TABLE_SCHEMA = ? AND REFERENCED_TABLE_NAME IS NOT NULL
+             ORDER BY TABLE_NAME, CONSTRAINT_NAME",
+        )
+        .bind(schema)
+        .fetch_all(&mut self.conn)
+        .await
+        .map_err(|e| map_error(self.system, &e))?;
+        Ok(rows
+            .iter()
+            .map(|r| ForeignKey {
+                name: r.get(0),
+                from_table: r.get(1),
+                from_column: r.get(2),
+                to_table: r.get(3),
+                to_column: r.get(4),
+            })
+            .collect())
+    }
 }
 
 // Monomorphic helpers with a named connection lifetime — see postgres.rs for

@@ -119,6 +119,7 @@ pub fn run() {
             commands::schema::list_routines,
             commands::schema::list_triggers,
             commands::schema::list_sequences,
+            commands::schema::list_foreign_keys,
             // files
             commands::files::write_text_file,
             // lint tầng 1

@@ -27,6 +27,7 @@
   import CassandraRing from '$lib/components/workspace/CassandraRing.svelte'
   import TableDesigner from '$lib/components/workspace/TableDesigner.svelte'
   import PlanVisualizer from '$lib/components/workspace/PlanVisualizer.svelte'
+  import ErDiagram from '$lib/components/workspace/ErDiagram.svelte'
   import CommandPalette from '$lib/components/CommandPalette.svelte'
   import ClickHouseTtlDialog from '$lib/components/ClickHouseTtlDialog.svelte'
   import { palette } from '$lib/stores/palette.svelte'
@@ -175,6 +176,8 @@
             <TableDesigner tab={t} />
           {:else if t.contentType === 'query-plan'}
             <PlanVisualizer tab={t} />
+          {:else if t.contentType === 'er-diagram'}
+            <ErDiagram tab={t} />
           {:else}
             <SqlWorkspace tab={t} />
           {/if}

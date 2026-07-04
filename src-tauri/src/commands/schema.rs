@@ -104,3 +104,14 @@ pub async fn list_sequences(
         driver.lock().await.sequences(&schema).await
     })
 }
+
+#[tauri::command]
+pub async fn list_foreign_keys(
+    state: State<'_, AppState>,
+    conn_id: String,
+    schema: String,
+) -> Result<Vec<ForeignKey>, AppError> {
+    introspect!(state, conn_id, |driver| async move {
+        driver.lock().await.foreign_keys(&schema).await
+    })
+}

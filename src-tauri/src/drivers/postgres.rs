@@ -412,6 +412,34 @@ impl PgDriver {
             .map(|r| SequenceInfo { schema: schema.to_string(), name: r.get(0) })
             .collect())
     }
+
+    pub async fn foreign_keys(&mut self, schema: &str) -> Result<Vec<ForeignKey>, QueryError> {
+        let rows = sqlx::query(
+            "SELECT tc.constraint_name, kcu.table_name, kcu.column_name,
+                    ccu.table_name AS ref_table, ccu.column_name AS ref_col
+             FROM information_schema.table_constraints tc
+             JOIN information_schema.key_column_usage kcu
+               ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema
+             JOIN information_schema.constraint_column_usage ccu
+               ON ccu.constraint_name = tc.constraint_name AND ccu.table_schema = tc.table_schema
+             WHERE tc.constraint_type = 'FOREIGN KEY' AND tc.table_schema = $1
+             ORDER BY kcu.table_name, tc.constraint_name",
+        )
+        .bind(schema)
+        .fetch_all(&mut self.conn)
+        .await
+        .map_err(|e| map_error("postgres", &e))?;
+        Ok(rows
+            .iter()
+            .map(|r| ForeignKey {
+                name: r.get(0),
+                from_table: r.get(1),
+                from_column: r.get(2),
+                to_table: r.get(3),
+                to_column: r.get(4),
+            })
+            .collect())
+    }
 }
 
 // Monomorphic helpers with a *named* connection lifetime. Calling sqlx
