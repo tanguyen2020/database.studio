@@ -202,6 +202,7 @@ export type TabContentType =
   | 'table-designer'
   | 'query-plan'
   | 'er-diagram'
+  | 'schema-compare'
 
 export interface TabState {
   id: string

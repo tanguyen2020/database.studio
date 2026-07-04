@@ -270,6 +270,30 @@ class TabsStore {
     return tab
   }
 
+  /** Mở tab Schema Compare (singleton). */
+  openSchemaCompare(srcConnId: string | null): TabState {
+    const existing = this.tabs.find((t) => t.contentType === 'schema-compare')
+    if (existing) {
+      this.activeTabId = existing.id
+      return existing
+    }
+    const tab: TabState = {
+      id: uuid(),
+      connectionId: srcConnId,
+      connectionName: '',
+      systemType: 'orphan',
+      contentType: 'schema-compare',
+      title: 'Schema Compare',
+      isPinned: false,
+      isDirty: false,
+      state: { srcConn: srcConnId },
+    }
+    this.tabs.push(tab)
+    this.activeTabId = tab.id
+    this.schedulePersist()
+    return tab
+  }
+
   /** Mở tab ER Diagram cho một schema (singleton per conn+schema). */
   openErDiagram(connectionId: string, schema: string): TabState {
     const existing = this.tabs.find(

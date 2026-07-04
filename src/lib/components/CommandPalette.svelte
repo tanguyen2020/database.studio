@@ -88,6 +88,8 @@
         }
       }
     }
+    // Tools
+    out.push({ id: 'tool:compare', icon: '⇄', iconColor: '#56b6c2', label: 'Compare schemas…', hint: '', category: 'Tools', run: () => tabs.openSchemaCompare(connections.selectedId) })
     // Settings
     out.push({ id: 'set:theme', icon: '☾', iconColor: '#e8c547', label: 'Toggle theme (dark / light)', hint: '', category: 'Settings', run: () => ui.toggleTheme() })
     return out

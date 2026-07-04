@@ -1,0 +1,184 @@
+<script lang="ts">
+  // Schema Compare (Phase 5 · T9) — port dòng 1353-1430. Chọn SOURCE/TARGET
+  // (cùng system), diff cấu trúc (tables/columns), filter, migration SQL.
+  import { untrack } from 'svelte'
+  import * as ipc from '$lib/ipc'
+  import { connections } from '$lib/stores/connections.svelte'
+  import { tabs } from '$lib/stores/tabs.svelte'
+  import {
+    compareSchemas,
+    diffCounts,
+    genMigration,
+    type ObjectDiff,
+    type SchemaSnapshot,
+  } from '$lib/compare/diff'
+  import type { TabState } from '$lib/types'
+
+  interface Props {
+    tab: TabState
+  }
+  let { tab }: Props = $props()
+
+  const options = $derived(connections.profiles.filter((p) => p.connected))
+  let srcConn = $state<string | null>((untrack(() => tab.state) as { srcConn?: string }).srcConn ?? null)
+  let tgtConn = $state<string | null>(null)
+  let mode = $state<'diff' | 'sync'>('diff')
+  let showIdentical = $state(false)
+  let filter = $state<'all' | 'different' | 'src_only' | 'tgt_only'>('all')
+  let selected = $state<Set<string>>(new Set())
+  let diffs = $state<ObjectDiff[]>([])
+  let warn = $state<string | null>(null)
+  let loading = $state(false)
+
+  const srcProfile = $derived(connections.byId(srcConn))
+  const tgtProfile = $derived(connections.byId(tgtConn))
+
+  async function snapshot(connId: string): Promise<SchemaSnapshot> {
+    const schemas = await ipc.listSchemas(connId)
+    const schema = schemas.find((s) => s.is_default)?.name ?? schemas[0]?.name ?? 'public'
+    const tbls = await ipc.listTables(connId, schema)
+    const tables = []
+    for (const t of tbls.filter((x) => x.kind !== 'system')) {
+      const cols = await ipc.listColumns(connId, schema, t.name)
+      tables.push({
+        name: t.name,
+        kind: (t.kind === 'view' ? 'view' : 'table') as 'table' | 'view',
+        columns: cols.map((c) => ({ name: c.name, type: c.data_type, nullable: c.nullable, pk: c.is_pk })),
+      })
+    }
+    return { tables }
+  }
+
+  async function compare() {
+    warn = null
+    diffs = []
+    if (!srcConn || !tgtConn) return
+    if (srcProfile?.system !== tgtProfile?.system) {
+      warn = `Không thể so sánh chéo hệ: ${srcProfile?.system} vs ${tgtProfile?.system}. Chọn 2 connection CÙNG loại.`
+      return
+    }
+    loading = true
+    try {
+      const [s, t] = await Promise.all([snapshot(srcConn), snapshot(tgtConn)])
+      diffs = compareSchemas(s, t)
+      selected = new Set(diffs.filter((d) => d.status !== 'identical').map((d) => d.name))
+    } catch (e) {
+      warn = String(e)
+    } finally {
+      loading = false
+    }
+  }
+
+  $effect(() => {
+    void srcConn
+    void tgtConn
+    untrack(() => void compare())
+  })
+
+  const counts = $derived(diffCounts(diffs))
+  const visible = $derived(
+    diffs.filter((d) => {
+      if (!showIdentical && d.status === 'identical') return false
+      if (filter === 'all') return true
+      return d.status === filter
+    }),
+  )
+  const migration = $derived(srcProfile ? genMigration(diffs, srcProfile.system, selected) : '')
+
+  function swap() {
+    ;[srcConn, tgtConn] = [tgtConn, srcConn]
+  }
+  function toggleSel(name: string) {
+    const next = new Set(selected)
+    if (next.has(name)) next.delete(name)
+    else next.add(name)
+    selected = next
+  }
+  function openMigration() {
+    if (tgtConn) tabs.openSqlTab({ connectionId: tgtConn, title: 'Migration', query: migration })
+  }
+
+  const statusMeta: Record<string, { label: string; color: string; icon: string }> = {
+    identical: { label: 'Identical', color: '#6b7486', icon: '●' },
+    different: { label: 'Different', color: '#f0a020', icon: '≠' },
+    src_only: { label: 'Src only', color: '#27AE60', icon: '＋' },
+    tgt_only: { label: 'Tgt only', color: '#e06c75', icon: '－' },
+  }
+</script>
+
+<div style="flex:1;display:flex;flex-direction:column;min-height:0">
+  <!-- toolbar -->
+  <div style="flex:none;display:flex;align-items:center;gap:var(--px-10);padding:var(--px-10) var(--px-14);border-bottom:var(--px-1) solid var(--border);background:var(--surface);flex-wrap:wrap">
+    <span style="font-size:var(--px-11_5);font-weight:700">Structure</span>
+    <span style="font-size:var(--px-10_5);color:var(--muted);border:var(--px-1) solid var(--border);border-radius:var(--px-5);padding:var(--px-2) var(--px-7)">tables · views · columns — data is not compared</span>
+    <span style="font-size:var(--px-11);color:var(--muted);font-weight:600">SOURCE</span>
+    <select bind:value={srcConn} style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-7);padding:var(--px-5) var(--px-10);font-size:var(--px-12_5);color:var(--text);outline:none;cursor:pointer">
+      <option value={null}>—</option>
+      {#each options as o (o.id)}<option value={o.id}>{o.name} ({o.system})</option>{/each}
+    </select>
+    <span onclick={swap} onkeydown={(e) => e.key === 'Enter' && swap()} role="button" tabindex="0" title="Swap" style="cursor:pointer;color:var(--text2);font-size:var(--px-15)">⇄</span>
+    <span style="font-size:var(--px-11);color:var(--muted);font-weight:600">TARGET</span>
+    <select bind:value={tgtConn} style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-7);padding:var(--px-5) var(--px-10);font-size:var(--px-12_5);color:var(--text);outline:none;cursor:pointer">
+      <option value={null}>—</option>
+      {#each options as o (o.id)}<option value={o.id}>{o.name} ({o.system})</option>{/each}
+    </select>
+    <div style="display:flex;background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-7);overflow:hidden;margin-left:var(--px-8)">
+      <span onclick={() => (mode = 'diff')} onkeydown={(e) => e.key === 'Enter' && (mode = 'diff')} role="button" tabindex="0" style="padding:var(--px-5) var(--px-13);font-size:var(--px-12);font-weight:600;cursor:pointer;background:{mode === 'diff' ? 'var(--primary)' : 'transparent'};color:{mode === 'diff' ? 'var(--hex-fff)' : 'var(--text2)'}">Diff</span>
+      <span onclick={() => (mode = 'sync')} onkeydown={(e) => e.key === 'Enter' && (mode = 'sync')} role="button" tabindex="0" style="padding:var(--px-5) var(--px-13);font-size:var(--px-12);font-weight:600;cursor:pointer;background:{mode === 'sync' ? 'var(--primary)' : 'transparent'};color:{mode === 'sync' ? 'var(--hex-fff)' : 'var(--text2)'};border-left:var(--px-1) solid var(--border)">Sync Script</span>
+    </div>
+  </div>
+
+  {#if warn}
+    <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:var(--px-10);color:var(--muted);padding:var(--px-30)">
+      <span style="font-size:var(--px-26);color:#f0a020">⚠</span>
+      <div style="font-size:var(--px-13);max-width:var(--px-420);text-align:center;line-height:1.5">{warn}</div>
+    </div>
+  {:else if !srcConn || !tgtConn}
+    <div style="flex:1;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:var(--px-12_5)">Chọn SOURCE và TARGET (cùng loại hệ) để so sánh.</div>
+  {:else if loading}
+    <div style="flex:1;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:var(--px-12_5)">Đang so sánh…</div>
+  {:else if mode === 'diff'}
+    <div style="flex:none;display:flex;align-items:center;gap:var(--px-14);padding:var(--px-8) var(--px-14);border-bottom:var(--px-1) solid var(--border)">
+      <span style="font-size:var(--px-11_5);font-weight:700;color:var(--hex-fff);background:#27AE60;border-radius:var(--px-4);padding:var(--px-2) var(--px-8)">＋ {counts.add} add</span>
+      <span style="font-size:var(--px-11_5);font-weight:700;color:var(--hex-fff);background:#f0a020;border-radius:var(--px-4);padding:var(--px-2) var(--px-8)">≠ {counts.changed} changed</span>
+      <span style="font-size:var(--px-11_5);font-weight:700;color:var(--hex-fff);background:#e06c75;border-radius:var(--px-4);padding:var(--px-2) var(--px-8)">－ {counts.del} delete</span>
+      <select bind:value={filter} style="margin-left:var(--px-8);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-3) var(--px-8);font-size:var(--px-11);color:var(--text)">
+        <option value="all">All</option>
+        <option value="different">Different</option>
+        <option value="src_only">Src only</option>
+        <option value="tgt_only">Tgt only</option>
+      </select>
+      <label style="margin-left:auto;display:flex;align-items:center;gap:var(--px-6);font-size:var(--px-11_5);color:var(--text2);cursor:pointer">
+        <input type="checkbox" bind:checked={showIdentical} /> Show identical
+      </label>
+    </div>
+    <div style="flex:1;overflow:auto;min-height:0">
+      <div style="display:flex;font-size:var(--px-10);color:var(--muted);font-weight:700;text-transform:uppercase;border-bottom:var(--px-1) solid var(--border2);position:sticky;top:0;background:var(--header)">
+        <span style="flex:1;padding:var(--px-7) var(--px-14)">Origin · {srcProfile?.name}</span>
+        <span style="flex:1;padding:var(--px-7) var(--px-14)">Target · {tgtProfile?.name}</span>
+      </div>
+      {#each visible as d (d.name)}
+        {@const sm = statusMeta[d.status]}
+        <div style="display:flex;align-items:stretch;border-bottom:var(--px-1) solid var(--border)">
+          <div style="flex:1;display:flex;align-items:center;gap:var(--px-8);padding:var(--px-7) var(--px-14);box-shadow:inset var(--px-3) 0 0 {sm.color}">
+            {#if d.status !== 'tgt_only'}<input type="checkbox" checked={selected.has(d.name)} onchange={() => toggleSel(d.name)} />{/if}
+            <span class="mono" style="font-size:var(--px-8);font-weight:700;color:var(--muted);border:var(--px-1) solid var(--border2);border-radius:var(--px-3);padding:var(--px-1) var(--px-4)">{d.kind}</span>
+            <span class="mono" style="font-size:var(--px-12_5);font-weight:600;color:{d.status === 'tgt_only' ? 'var(--muted)' : 'var(--text)'}">{d.status === 'tgt_only' ? '—' : d.name}</span>
+          </div>
+          <div style="flex:1;display:flex;align-items:center;gap:var(--px-8);padding:var(--px-7) var(--px-14)">
+            <span class="mono" style="font-size:var(--px-12_5);font-weight:600;color:{d.status === 'src_only' ? 'var(--muted)' : 'var(--text)'}">{d.status === 'src_only' ? '—' : d.name}</span>
+            <span style="margin-left:auto;font-size:var(--px-10);font-weight:700;color:var(--hex-fff);background:{sm.color};border-radius:var(--px-4);padding:var(--px-1) var(--px-7)">{sm.icon} {sm.label}</span>
+          </div>
+        </div>
+      {/each}
+    </div>
+  {:else}
+    <div style="flex:none;display:flex;align-items:center;gap:var(--px-10);padding:var(--px-8) var(--px-14);border-bottom:var(--px-1) solid var(--border)">
+      <span style="font-size:var(--px-11_5);color:var(--muted)">Migration đồng bộ TARGET ({tgtProfile?.name}) theo SOURCE — {selected.size} object đã chọn</span>
+      <span onclick={openMigration} onkeydown={(e) => e.key === 'Enter' && openMigration()} role="button" tabindex="0" style="margin-left:auto;font-size:var(--px-11_5);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-6);padding:var(--px-5) var(--px-12);cursor:pointer;font-weight:600">Open in editor</span>
+    </div>
+    <div style="flex:1;overflow:auto;background:var(--bg)">
+      <pre class="mono" style="margin:0;padding:var(--px-16) var(--px-18);font-size:var(--px-12_5);line-height:1.6;white-space:pre;color:var(--text)">{migration}</pre>
+    </div>
+  {/if}
+</div>
