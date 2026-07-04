@@ -23,6 +23,9 @@ test('index scanner: table + health flags + filter', async ({ page }) => {
   await expect(page.getByText('unused').first()).toBeVisible()
   await expect(page.getByText('redundant').first()).toBeVisible()
 
+  // T17 — missing-index suggestions section
+  await expect(page.getByText(/Missing-index suggestions/).first()).toBeVisible()
+
   // filter to Unused → only the unused index row remains
   await page.getByRole('button', { name: /Unused 1/ }).first().click()
   await page.waitForTimeout(200)

@@ -452,6 +452,34 @@ impl PgDriver {
             .collect())
     }
 
+    /// Missing-index gợi ý từ pg_stat_user_tables (nhiều seq scan) — T17.
+    pub async fn missing_indexes(
+        &mut self,
+        schema: &str,
+    ) -> Result<Vec<crate::drivers::index_scan::MissingIndexSuggestion>, QueryError> {
+        use crate::drivers::index_scan::{suggest_missing_pg, TableScanStat};
+        let rows = sqlx::query(
+            "SELECT relname, COALESCE(seq_scan,0), COALESCE(idx_scan,0),
+                    COALESCE(seq_tup_read,0), COALESCE(n_live_tup,0)
+             FROM pg_stat_user_tables WHERE schemaname = $1",
+        )
+        .bind(schema)
+        .fetch_all(&mut self.conn)
+        .await
+        .map_err(|e| map_error("postgres", &e))?;
+        let stats: Vec<TableScanStat> = rows
+            .iter()
+            .map(|r| TableScanStat {
+                table: r.get(0),
+                seq_scan: r.get(1),
+                idx_scan: r.get(2),
+                seq_tup_read: r.get(3),
+                live_rows: r.get(4),
+            })
+            .collect();
+        Ok(suggest_missing_pg(&stats))
+    }
+
     pub async fn foreign_keys(&mut self, schema: &str) -> Result<Vec<ForeignKey>, QueryError> {
         let rows = sqlx::query(
             "SELECT tc.constraint_name, kcu.table_name, kcu.column_name,

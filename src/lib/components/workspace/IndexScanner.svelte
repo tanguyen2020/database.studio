@@ -100,6 +100,16 @@
       {:else if loading}
         <div style="padding:var(--px-14);color:var(--muted);font-size:var(--px-12)">Đang quét…</div>
       {:else}
+        {#if result?.suggestions?.length}
+          <div style="margin:var(--px-10) var(--px-12);padding:var(--px-10) var(--px-12);border:var(--px-1) solid var(--border2);border-left:var(--px-3) solid #f0a020;border-radius:var(--px-6);background:var(--surface)">
+            <div style="font-size:var(--px-11_5);font-weight:700;color:#f0a020;margin-bottom:var(--px-6)">Missing-index suggestions ({result.suggestions.length})</div>
+            {#each result.suggestions as s (s.table + s.reason)}
+              <div style="font-size:var(--px-11);color:var(--text2);margin-bottom:var(--px-3)">
+                <span class="mono" style="font-weight:600;color:var(--text)">{s.table}{s.columns.length ? ` (${s.columns.join(', ')})` : ''}</span> — {s.reason}{s.estimated_benefit != null ? ` · impact ~${s.estimated_benefit.toFixed(0)}%` : ''}
+              </div>
+            {/each}
+          </div>
+        {/if}
         <table class="mono" style="border-collapse:collapse;width:100%;font-size:var(--px-12)">
           <thead><tr>
             {#each ['Index', 'Table', 'Columns', 'Type', 'U', 'PK', 'Size', 'Usage', 'Health'] as h (h)}

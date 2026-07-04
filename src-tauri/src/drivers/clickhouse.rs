@@ -278,6 +278,42 @@ impl ChDriver {
             .collect())
     }
 
+    /// Index Scanner (T17): data-skipping indices trong 1 database.
+    pub async fn scan_indexes(
+        &self,
+        schema: &str,
+    ) -> Result<Vec<crate::drivers::index_scan::IndexScanRow>, QueryError> {
+        let (body, _) = self
+            .raw_query(
+                "SELECT table, name, type_full, expr, data_compressed_bytes \
+                 FROM system.data_skipping_indices WHERE database = {db:String} ORDER BY table, name",
+                &[("db", schema)],
+            )
+            .await?;
+        let parsed: ChJsonBody = serde_json::from_str(&body)
+            .map_err(|e| QueryError::new(SYSTEM, e.to_string(), body.clone()))?;
+        Ok(parsed
+            .data
+            .iter()
+            .map(|r| crate::drivers::index_scan::IndexScanRow {
+                name: r["name"].as_str().unwrap_or("").to_string(),
+                table: r["table"].as_str().unwrap_or("").to_string(),
+                columns: vec![r["expr"].as_str().unwrap_or("").to_string()],
+                index_type: r["type_full"].as_str().unwrap_or("").to_string(),
+                unique: false,
+                primary: false,
+                // UInt64 render dạng string trong FORMAT JSON.
+                size_bytes: r["data_compressed_bytes"]
+                    .as_i64()
+                    .or_else(|| r["data_compressed_bytes"].as_str().and_then(|s| s.parse().ok())),
+                usage: None,
+                fragmentation_pct: None,
+                valid: true,
+                flags: Vec::new(),
+            })
+            .collect())
+    }
+
     /// Metadata bảng ClickHouse cho engine badge + TTL viewer (Phase 5 · T7c):
     /// engine, engine_full, create_table_query, partition/sorting key, TTL rules.
     pub async fn table_meta(&self, schema: &str, table: &str) -> Result<ChTableMeta, QueryError> {

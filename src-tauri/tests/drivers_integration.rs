@@ -2182,6 +2182,18 @@ async fn clickhouse_explain_tree_has_read_node() {
     assert!(has_read(&root), "cây CH phải có ReadFrom* → SeqScan. raw:\n{text}");
     assert!(refs_table(&root), "node ReadFrom phải tham chiếu it_plan. raw:\n{text}");
     eprintln!("CHK ClickHouse EXPLAIN tree OK");
+
+    // T17 — data-skipping index scanner: tạo index minmax rồi quét ngược verify.
+    drv.exec("ALTER TABLE it_plan ADD INDEX idx_v v TYPE minmax GRANULARITY 4")
+        .await
+        .unwrap();
+    drv.exec("ALTER TABLE it_plan MATERIALIZE INDEX idx_v").await.ok();
+    let idxs = drv.scan_indexes("default").await.expect("scan_indexes CH");
+    let idx = idxs.iter().find(|i| i.name == "idx_v").expect("thấy idx_v trong data_skipping_indices");
+    assert_eq!(idx.table, "it_plan");
+    assert!(idx.index_type.contains("minmax"), "type_full = {}", idx.index_type);
+    assert!(idx.columns.iter().any(|c| c.contains('v')), "expr chứa cột v: {:?}", idx.columns);
+    eprintln!("CHK ClickHouse data-skipping index scan OK");
 }
 
 /// Phase 5 · T16 — Cassandra query plan qua TRACING (không có EXPLAIN). Seed
@@ -2250,4 +2262,12 @@ async fn cassandra_trace_plan_flags_allow_filtering() {
     assert!(!events.is_empty(), "TRACING phải trả về timeline events");
     assert!(!root.children.is_empty(), "timeline phải có node event");
     eprintln!("CHK Cassandra TRACING + ALLOW FILTERING flag OK ({} events)", events.len());
+
+    // T17 — secondary index scanner: tạo index rồi quét ngược verify.
+    drv.exec_cql("CREATE INDEX idx_v ON itplan_ks.t (v)", None, None).await.expect("create index");
+    let idxs = drv.scan_indexes("itplan_ks").await.expect("scan_indexes cassandra");
+    let idx = idxs.iter().find(|i| i.name == "idx_v").expect("thấy idx_v trong system_schema.indexes");
+    assert_eq!(idx.table, "t");
+    assert!(idx.columns.iter().any(|c| c.contains('v')), "target chứa cột v: {:?}", idx.columns);
+    eprintln!("CHK Cassandra secondary index scan OK");
 }

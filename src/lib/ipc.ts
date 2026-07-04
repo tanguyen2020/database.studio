@@ -473,11 +473,18 @@ export interface IndexScanRow {
   valid: boolean
   flags: string[]
 }
+export interface MissingIndexSuggestion {
+  table: string
+  columns: string[]
+  reason: string
+  estimated_benefit?: number
+}
 export interface IndexScanResult {
   system: string
   scope: string
   indexes: IndexScanRow[]
   summary: { total: number; total_size_bytes: number; unused: number; redundant: number; fragmented: number; invalid: number }
+  suggestions?: MissingIndexSuggestion[]
 }
 
 export const scanIndexes = (connId: string, schema: string) =>

@@ -538,6 +538,54 @@ impl MssqlDriver {
             .collect())
     }
 
+    /// Missing-index gợi ý từ DMV sys.dm_db_missing_index_* — T17.
+    pub async fn missing_indexes(
+        &mut self,
+        schema: &str,
+    ) -> Result<Vec<crate::drivers::index_scan::MissingIndexSuggestion>, QueryError> {
+        let rows = self
+            .client
+            .query(
+                "SELECT OBJECT_NAME(d.object_id) AS tbl,
+                        ISNULL(d.equality_columns, '') +
+                          CASE WHEN d.inequality_columns IS NOT NULL
+                               THEN ',' + d.inequality_columns ELSE '' END AS cols,
+                        CAST(gs.avg_user_impact AS float) AS impact,
+                        CAST(gs.user_seeks AS bigint) AS seeks
+                 FROM sys.dm_db_missing_index_details d
+                 JOIN sys.dm_db_missing_index_groups g ON g.index_handle = d.index_handle
+                 JOIN sys.dm_db_missing_index_group_stats gs ON gs.group_handle = g.index_group_handle
+                 WHERE d.database_id = DB_ID() AND OBJECT_SCHEMA_NAME(d.object_id) = @P1
+                 ORDER BY gs.avg_user_impact DESC",
+                &[&schema],
+            )
+            .await
+            .map_err(|e| map_error(&e))?
+            .into_first_result()
+            .await
+            .map_err(|e| map_error(&e))?;
+        Ok(rows
+            .iter()
+            .map(|r| {
+                let impact = r.get::<f64, _>(2).unwrap_or(0.0);
+                let seeks = r.get::<i64, _>(3).unwrap_or(0);
+                crate::drivers::index_scan::MissingIndexSuggestion {
+                    table: r.get::<&str, _>(0).unwrap_or_default().to_string(),
+                    columns: r
+                        .get::<&str, _>(1)
+                        .unwrap_or_default()
+                        .replace(['[', ']'], "")
+                        .split(',')
+                        .filter(|s| !s.trim().is_empty())
+                        .map(|s| s.trim().to_string())
+                        .collect(),
+                    reason: format!("thiếu index (impact {impact:.0}%, {seeks} seeks)"),
+                    estimated_benefit: Some(impact),
+                }
+            })
+            .collect())
+    }
+
     pub async fn foreign_keys(&mut self, schema: &str) -> Result<Vec<ForeignKey>, QueryError> {
         let rows = self
             .client

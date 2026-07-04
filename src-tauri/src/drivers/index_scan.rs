@@ -35,12 +35,63 @@ pub struct IndexScanSummary {
     pub invalid: usize,
 }
 
+/// Gợi ý tạo index (missing-index). Nguồn: PG pg_stat_user_tables (nhiều seq
+/// scan), MSSQL missing-index DMV. Dùng pattern chuẩn (không "anti_pattern").
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct MissingIndexSuggestion {
+    pub table: String,
+    /// Cột đề xuất (MSSQL DMV cung cấp; PG heuristic để trống).
+    pub columns: Vec<String>,
+    pub reason: String,
+    /// Lợi ích ước lượng (MSSQL avg_user_impact %); None nếu không có.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub estimated_benefit: Option<f64>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct IndexScanResult {
     pub system: String,
     pub scope: String,
     pub indexes: Vec<IndexScanRow>,
     pub summary: IndexScanSummary,
+    /// Gợi ý tạo index (missing-index) — rỗng nếu hệ không hỗ trợ.
+    pub suggestions: Vec<MissingIndexSuggestion>,
+}
+
+/// Số liệu table-scan (PG pg_stat_user_tables) để suy ra missing-index.
+pub struct TableScanStat {
+    pub table: String,
+    pub seq_scan: i64,
+    pub idx_scan: i64,
+    pub seq_tup_read: i64,
+    pub live_rows: i64,
+}
+
+/// Heuristic missing-index cho Postgres (thuần, test được): bảng bị quét tuần
+/// tự nhiều hơn quét index, có kích thước đáng kể, và đọc trung bình mỗi seq
+/// scan lớn → khả năng thiếu index. Ngưỡng thận trọng để tránh báo động giả.
+pub fn suggest_missing_pg(stats: &[TableScanStat]) -> Vec<MissingIndexSuggestion> {
+    stats
+        .iter()
+        .filter(|s| {
+            s.seq_scan > s.idx_scan
+                && s.seq_scan >= 50
+                && s.live_rows >= 1_000
+                && (s.seq_tup_read / s.seq_scan.max(1)) >= 500
+        })
+        .map(|s| MissingIndexSuggestion {
+            table: s.table.clone(),
+            columns: Vec::new(),
+            reason: format!(
+                "{} seq scan (idx scan {}), đọc TB {} rows/scan trên ~{} rows — cân nhắc thêm index vào cột lọc",
+                s.seq_scan,
+                s.idx_scan,
+                s.seq_tup_read / s.seq_scan.max(1),
+                s.live_rows
+            ),
+            estimated_benefit: None,
+        })
+        .collect()
 }
 
 /// Tính cờ sức khỏe trên tập index (in-place) + trả summary. Thuần.
@@ -141,5 +192,21 @@ mod tests {
         rows[0].usage = Some(0);
         compute_flags(&mut rows);
         assert!(rows[0].flags.is_empty(), "primary không bị gắn cờ: {:?}", rows[0].flags);
+    }
+
+    #[test]
+    fn missing_index_suggests_only_heavy_seq_scan() {
+        let stats = vec![
+            // đủ ngưỡng → gợi ý
+            TableScanStat { table: "orders".into(), seq_scan: 200, idx_scan: 5, seq_tup_read: 400_000, live_rows: 50_000 },
+            // idx_scan > seq_scan → bỏ qua
+            TableScanStat { table: "users".into(), seq_scan: 10, idx_scan: 900, seq_tup_read: 5_000, live_rows: 50_000 },
+            // bảng nhỏ → bỏ qua (seq scan bảng nhỏ là bình thường)
+            TableScanStat { table: "lookup".into(), seq_scan: 500, idx_scan: 0, seq_tup_read: 2_500, live_rows: 5 },
+        ];
+        let sug = suggest_missing_pg(&stats);
+        assert_eq!(sug.len(), 1);
+        assert_eq!(sug[0].table, "orders");
+        assert!(sug[0].reason.contains("seq scan"));
     }
 }

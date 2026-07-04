@@ -262,6 +262,9 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
           { name: 'idx_enroll_s', table: 'enrollments', columns: ['student_id'], index_type: 'BTREE', unique: false, primary: false, size_bytes: 40960, usage: 33, valid: true, flags: ['redundant'] },
         ],
         summary: { total: 5, total_size_bytes: 163840, unused: 1, redundant: 1, fragmented: 0, invalid: 0 },
+        suggestions: [
+          { table: 'enrollments', columns: [], reason: '840 seq scan (idx scan 12), đọc TB 5200 rows/scan trên ~12480 rows — cân nhắc thêm index vào cột lọc' },
+        ],
       })
     case 'list_foreign_keys':
       return ok([

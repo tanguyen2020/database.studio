@@ -505,17 +505,28 @@ impl LiveConnection {
         &mut self,
         schema: &str,
     ) -> Result<index_scan::IndexScanResult, QueryError> {
-        let (system, mut rows) = match self {
-            Self::Postgres(d) => ("postgres", d.scan_indexes(schema).await?),
-            Self::MySql(d) => (d.system_name(), d.scan_indexes(schema).await?),
-            Self::Sqlite(d) => ("sqlite", d.scan_indexes(schema).await?),
-            Self::Mssql(d) => ("mssql", d.scan_indexes(schema).await?),
+        let (system, mut rows, suggestions) = match self {
+            Self::Postgres(d) => (
+                "postgres",
+                d.scan_indexes(schema).await?,
+                d.missing_indexes(schema).await.unwrap_or_default(),
+            ),
+            Self::MySql(d) => (d.system_name(), d.scan_indexes(schema).await?, Vec::new()),
+            Self::Sqlite(d) => ("sqlite", d.scan_indexes(schema).await?, Vec::new()),
+            Self::Mssql(d) => (
+                "mssql",
+                d.scan_indexes(schema).await?,
+                d.missing_indexes(schema).await.unwrap_or_default(),
+            ),
+            Self::Clickhouse(d) => ("clickhouse", d.scan_indexes(schema).await?, Vec::new()),
+            Self::Cassandra(d) => ("cassandra", d.scan_indexes(schema).await?, Vec::new()),
             _ => {
                 return Ok(index_scan::IndexScanResult {
                     system: "unknown".into(),
                     scope: schema.to_string(),
                     indexes: Vec::new(),
                     summary: index_scan::compute_flags(&mut []),
+                    suggestions: Vec::new(),
                 })
             }
         };
@@ -525,6 +536,7 @@ impl LiveConnection {
             scope: schema.to_string(),
             indexes: rows,
             summary,
+            suggestions,
         })
     }
 }

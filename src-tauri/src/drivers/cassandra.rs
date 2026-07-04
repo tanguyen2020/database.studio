@@ -703,6 +703,37 @@ impl CassandraDriver {
         })
     }
 
+    /// Index Scanner (T17): secondary indexes trong 1 keyspace từ
+    /// system_schema.indexes (target column trong options).
+    pub async fn scan_indexes(
+        &self,
+        keyspace: &str,
+    ) -> Result<Vec<crate::drivers::index_scan::IndexScanRow>, QueryError> {
+        let rows = self
+            .rows::<(String, String, String, std::collections::HashMap<String, String>)>(
+                "SELECT index_name, table_name, kind, options FROM system_schema.indexes WHERE keyspace_name = ?",
+                (keyspace,),
+            )
+            .await
+            .unwrap_or_default();
+        Ok(rows
+            .into_iter()
+            .map(|(name, table, kind, options)| crate::drivers::index_scan::IndexScanRow {
+                columns: vec![options.get("target").cloned().unwrap_or_default()],
+                name,
+                table,
+                index_type: kind, // COMPOSITES / KEYS / CUSTOM
+                unique: false,
+                primary: false,
+                size_bytes: None,
+                usage: None,
+                fragmentation_pct: None,
+                valid: true,
+                flags: Vec::new(),
+            })
+            .collect())
+    }
+
     /// Ring topology from `system.local` + `system.peers` (never hardcoded).
     pub async fn ring(&self) -> Result<Vec<RingNode>, QueryError> {
         let mut nodes = Vec::new();
