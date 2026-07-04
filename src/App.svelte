@@ -33,7 +33,9 @@
   import CommandPalette from '$lib/components/CommandPalette.svelte'
   import ClickHouseTtlDialog from '$lib/components/ClickHouseTtlDialog.svelte'
   import ImportDialog from '$lib/components/ImportDialog.svelte'
+  import Settings from '$lib/components/Settings.svelte'
   import { palette } from '$lib/stores/palette.svelte'
+  import { settings } from '$lib/stores/settings.svelte'
   import HistoryTab from '$lib/components/workspace/HistoryTab.svelte'
   import SavedQueriesTab from '$lib/components/workspace/SavedQueriesTab.svelte'
   import { connections } from '$lib/stores/connections.svelte'
@@ -45,6 +47,7 @@
   onMount(() => {
     void (async () => {
       await ui.loadPersisted()
+      await settings.load()
       await connections.load()
       await tabs.restore()
       ready = true
@@ -64,6 +67,9 @@
     if (key === 'p' && !e.shiftKey) {
       e.preventDefault()
       palette.toggle()
+    } else if (e.key === ',') {
+      e.preventDefault()
+      settings.show()
     } else if (key === 'h') {
       e.preventDefault()
       tabs.openUtilityTab('history', 'Query History')
@@ -247,4 +253,5 @@
 <CommandPalette />
 <ClickHouseTtlDialog />
 <ImportDialog />
+<Settings />
 <Toasts />

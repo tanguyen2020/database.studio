@@ -7,6 +7,7 @@
   import { tabs } from '$lib/stores/tabs.svelte'
   import { explorer } from '$lib/stores/explorer.svelte'
   import { ui } from '$lib/stores/ui.svelte'
+  import { settings } from '$lib/stores/settings.svelte'
 
   interface Action {
     id: string
@@ -92,6 +93,7 @@
     out.push({ id: 'tool:compare', icon: '⇄', iconColor: '#56b6c2', label: 'Compare schemas…', hint: '', category: 'Tools', run: () => tabs.openSchemaCompare(connections.selectedId) })
     // Settings
     out.push({ id: 'set:theme', icon: '☾', iconColor: '#e8c547', label: 'Toggle theme (dark / light)', hint: '', category: 'Settings', run: () => ui.toggleTheme() })
+    out.push({ id: 'set:open', icon: '⚙', iconColor: '#e8923a', label: 'Open Settings', hint: 'Ctrl+,', category: 'Settings', run: () => settings.show() })
     return out
   })
 
