@@ -58,6 +58,9 @@ pub fn run() {
             commands::nats::nats_unsubscribe,
             commands::nats::nats_publish,
             commands::nats::nats_request,
+            commands::nats::nats_js_streams,
+            commands::nats::nats_js_consumers,
+            commands::nats::nats_js_peek,
             // schema
             commands::schema::list_schemas,
             commands::schema::list_tables,

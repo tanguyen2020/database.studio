@@ -987,3 +987,57 @@ async fn nats_connect_test_and_ping() {
     assert_eq!(resp, "ping", "request/reply phải echo lại payload");
     responder.abort();
 }
+
+#[tokio::test]
+async fn nats_jetstream_streams_consumers_peek() {
+    use async_nats::jetstream;
+    use database_studio_lib::drivers::nats::{NatsConnParams, NatsDriver};
+
+    // NATS bật JetStream (-js)
+    let c = GenericImage::new("nats", "2.10-alpine")
+        .with_exposed_port(4222.tcp())
+        .with_cmd(vec!["-js"])
+        .start()
+        .await
+        .expect("start nats -js");
+    let port = c.get_host_port_ipv4(4222).await.unwrap();
+    let params = NatsConnParams { host: "localhost".into(), port, user: String::new(), password: String::new(), ssl: false };
+    let drv = retry("nats-js", || NatsDriver::connect(&params)).await;
+
+    // tạo stream + publish + consumer qua jetstream context
+    let js = jetstream::new(drv.client());
+    js.create_stream(jetstream::stream::Config {
+        name: "ORDERS".into(),
+        subjects: vec!["orders.>".into()],
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    js.publish("orders.new", bytes::Bytes::from_static(b"hello"))
+        .await
+        .unwrap()
+        .await
+        .unwrap();
+    let stream = js.get_stream("ORDERS").await.unwrap();
+    stream
+        .create_consumer(jetstream::consumer::pull::Config {
+            durable_name: Some("proc".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+    // driver methods
+    let streams = drv.js_streams().await.unwrap();
+    let orders = streams.iter().find(|s| s.name == "ORDERS").expect("phải thấy stream ORDERS");
+    assert!(orders.messages >= 1, "ORDERS phải có >=1 message");
+    assert_eq!(orders.subjects, vec!["orders.>".to_string()]);
+
+    let cons = drv.js_consumers("ORDERS").await.unwrap();
+    assert!(cons.iter().any(|c| c.name == "proc"), "phải thấy consumer proc");
+
+    let msg = drv.js_peek("ORDERS", 1).await.unwrap();
+    assert_eq!(msg.seq, 1);
+    assert_eq!(msg.subject, "orders.new");
+    assert_eq!(msg.payload, "hello");
+}

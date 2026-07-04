@@ -28,6 +28,15 @@
   let reqMsg = $state('')
   let reqReply = $state<string | null>(null)
 
+  // JetStream (T10)
+  let jsMode = $state(false)
+  let jsStreams = $state<ipc.NatsJsStream[]>([])
+  let jsSel = $state<string | null>(null)
+  let jsConsumers = $state<ipc.NatsJsConsumer[]>([])
+  let peekSeq = $state(1)
+  let peekResult = $state<ipc.NatsJsMessage | null>(null)
+  let jsError = $state<string | null>(null)
+
   function now(): string {
     const d = new Date()
     const p = (n: number) => String(n).padStart(2, '0')
@@ -88,6 +97,41 @@
       toasts.error(`Request thất bại: ${e}`)
     }
   }
+
+  async function toggleJs() {
+    jsMode = !jsMode
+    if (jsMode && jsStreams.length === 0) await loadStreams()
+  }
+
+  async function loadStreams() {
+    if (!tab.connectionId) return
+    jsError = null
+    try {
+      jsStreams = await ipc.natsJsStreams(tab.connectionId)
+    } catch (e) {
+      jsError = String(e)
+    }
+  }
+
+  async function selectStream(name: string) {
+    if (!tab.connectionId) return
+    jsSel = name
+    peekResult = null
+    try {
+      jsConsumers = await ipc.natsJsConsumers(tab.connectionId, name)
+    } catch (e) {
+      jsError = String(e)
+    }
+  }
+
+  async function peek() {
+    if (!tab.connectionId || !jsSel) return
+    try {
+      peekResult = await ipc.natsJsPeek(tab.connectionId, jsSel, peekSeq)
+    } catch (e) {
+      toasts.error(`Peek thất bại: ${e}`)
+    }
+  }
 </script>
 
 <div style="flex:1;display:flex;flex-direction:column;min-height:0">
@@ -99,12 +143,75 @@
     <span style="display:flex;align-items:center;gap:var(--px-6);font-size:var(--px-11_5);color:{subscribed ? '#27AE60' : 'var(--muted)'};font-weight:600"><span style="width:var(--px-7);height:var(--px-7);border-radius:50%;background:{subscribed ? '#27AE60' : 'var(--border2)'}"></span>{subscribed ? 'LIVE' : 'idle'}</span>
     <div style="margin-left:auto;display:flex;gap:var(--px-8);align-items:center">
       {#if info}<span class="mono" style="font-size:var(--px-10_5);color:var(--muted)">NATS {info.version} · {info.server_name}</span>{/if}
+      <span onclick={toggleJs} onkeydown={(e) => e.key === 'Enter' && toggleJs()} role="button" tabindex="0" style="font-size:var(--px-11_5);background:{jsMode ? 'var(--primary)' : 'var(--panel)'};color:{jsMode ? 'var(--hex-fff)' : 'var(--text)'};border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-12);cursor:pointer;font-weight:600">JetStream</span>
       <span onclick={toggle} onkeydown={(e) => e.key === 'Enter' && toggle()} role="button" tabindex="0" style="font-size:var(--px-11_5);background:{subscribed ? '#27AE60' : 'var(--panel)'};color:{subscribed ? 'var(--hex-fff)' : 'var(--text)'};border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-12);cursor:pointer;font-weight:600">{subscribed ? 'Stop' : 'Subscribe'}</span>
       <span onclick={() => (paused = !paused)} onkeydown={(e) => e.key === 'Enter' && (paused = !paused)} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-12);cursor:pointer">{paused ? 'Resume' : 'Pause'}</span>
       <span onclick={() => (messages = [])} onkeydown={(e) => e.key === 'Enter' && (messages = [])} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-12);cursor:pointer">Clear</span>
     </div>
   </div>
 
+  {#if jsMode}
+    <!-- JetStream panel (T10): streams → consumers + peek by seq -->
+    <div style="flex:1;overflow:auto;min-height:0;padding:var(--px-10) var(--px-14);display:flex;flex-direction:column;gap:var(--px-12)">
+      {#if jsError}
+        <div style="font-size:var(--px-12);color:var(--error)">{jsError}</div>
+      {/if}
+      <div style="font-size:var(--px-10_5);color:var(--muted);text-transform:uppercase;letter-spacing:.06em;font-weight:700">Streams</div>
+      <table class="mono" style="border-collapse:collapse;width:100%;font-size:var(--px-12)">
+        <thead><tr>
+          {#each ['Stream', 'Subjects', 'Retention', 'Storage', 'Messages', 'Consumers'] as h (h)}
+            <th style="text-align:left;padding:var(--px-6) var(--px-10);border-bottom:var(--px-1) solid var(--border2);color:var(--text2);font-weight:600">{h}</th>
+          {/each}
+        </tr></thead>
+        <tbody>
+          {#each jsStreams as s (s.name)}
+            <tr onclick={() => selectStream(s.name)} onkeydown={(e) => e.key === 'Enter' && selectStream(s.name)} role="button" tabindex="0" style="cursor:pointer;background:{jsSel === s.name ? 'var(--hover)' : 'transparent'}">
+              <td style="padding:var(--px-6) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:#27AE60;font-weight:600">{s.name}</td>
+              <td style="padding:var(--px-6) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:var(--text2)">{s.subjects.join(', ')}</td>
+              <td style="padding:var(--px-6) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:var(--muted)">{s.retention}</td>
+              <td style="padding:var(--px-6) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:var(--muted)">{s.storage}</td>
+              <td style="padding:var(--px-6) var(--px-10);border-bottom:var(--px-1) solid var(--border)">{s.messages.toLocaleString()}</td>
+              <td style="padding:var(--px-6) var(--px-10);border-bottom:var(--px-1) solid var(--border)">{s.consumers}</td>
+            </tr>
+          {/each}
+        </tbody>
+      </table>
+
+      {#if jsSel}
+        <div style="font-size:var(--px-10_5);color:var(--muted);text-transform:uppercase;letter-spacing:.06em;font-weight:700">Consumers · {jsSel}</div>
+        <table class="mono" style="border-collapse:collapse;width:100%;font-size:var(--px-12)">
+          <thead><tr>
+            {#each ['Consumer', 'Deliver', 'Ack', 'Filter', 'Pending'] as h (h)}
+              <th style="text-align:left;padding:var(--px-6) var(--px-10);border-bottom:var(--px-1) solid var(--border2);color:var(--text2);font-weight:600">{h}</th>
+            {/each}
+          </tr></thead>
+          <tbody>
+            {#each jsConsumers as c (c.name)}
+              <tr>
+                <td style="padding:var(--px-6) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:#e8c547">{c.name}</td>
+                <td style="padding:var(--px-6) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:var(--muted)">{c.deliver_policy}</td>
+                <td style="padding:var(--px-6) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:var(--muted)">{c.ack_policy}</td>
+                <td style="padding:var(--px-6) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:var(--text2)">{c.filter_subject || '—'}</td>
+                <td style="padding:var(--px-6) var(--px-10);border-bottom:var(--px-1) solid var(--border)">{c.num_pending}</td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+
+        <div style="display:flex;align-items:center;gap:var(--px-8)">
+          <span style="font-size:var(--px-11);color:var(--muted)">Peek seq</span>
+          <input type="number" bind:value={peekSeq} class="mono" style="width:var(--px-96);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-9);font-size:var(--px-12);color:var(--text);outline:none" />
+          <span onclick={peek} onkeydown={(e) => e.key === 'Enter' && peek()} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-12);cursor:pointer">Peek</span>
+        </div>
+        {#if peekResult}
+          <div class="mono" style="font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-8) var(--px-10)">
+            <div style="color:var(--muted)">#{peekResult.seq} · {peekResult.subject} · {peekResult.time}</div>
+            <div style="color:var(--text2);white-space:pre-wrap;word-break:break-word;margin-top:var(--px-4)">{peekResult.payload}</div>
+          </div>
+        {/if}
+      {/if}
+    </div>
+  {:else}
   <!-- message stream — dòng 782-789 -->
   <div style="flex:1;overflow:auto;min-height:0;padding:var(--px-8) 0">
     {#if messages.length === 0}
@@ -121,6 +228,7 @@
       {/each}
     {/if}
   </div>
+  {/if}
 
   <!-- publish + request/reply -->
   <div style="flex:none;border-top:var(--px-1) solid var(--border);background:var(--surface);padding:var(--px-10) var(--px-14);display:flex;flex-direction:column;gap:var(--px-8)">

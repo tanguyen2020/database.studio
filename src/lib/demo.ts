@@ -346,6 +346,18 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
       return ok(null)
     case 'nats_request':
       return ok('{"ok":true,"demo":"reply"}')
+    case 'nats_js_streams':
+      return ok([
+        { name: 'ORDERS', subjects: ['orders.>'], retention: 'Limits', storage: 'File', messages: 1240, bytes: 98304, consumers: 2 },
+        { name: 'EVENTS', subjects: ['events.*'], retention: 'WorkQueue', storage: 'Memory', messages: 57, bytes: 8192, consumers: 1 },
+      ])
+    case 'nats_js_consumers':
+      return ok([
+        { name: 'order-processor', deliver_policy: 'All', ack_policy: 'Explicit', filter_subject: 'orders.new', num_pending: 12, num_ack_pending: 0 },
+        { name: 'audit', deliver_policy: 'New', ack_policy: 'None', filter_subject: '', num_pending: 0, num_ack_pending: 0 },
+      ])
+    case 'nats_js_peek':
+      return ok({ seq: (args?.seq as number) ?? 1, subject: 'orders.new', payload: '{"id":1001,"total":42.5}', time: '2026-06-30T10:23:14Z' })
     default:
       return Promise.reject(new Error(`demo: chưa mock command "${cmd}"`))
   }

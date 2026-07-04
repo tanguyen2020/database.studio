@@ -173,6 +173,43 @@ export interface NatsMsg {
   payload: string
 }
 
+// ---- nats JetStream (Phase 3 · T10) ----------------------------------------
+
+export interface NatsJsStream {
+  name: string
+  subjects: string[]
+  retention: string
+  storage: string
+  messages: number
+  bytes: number
+  consumers: number
+}
+
+export interface NatsJsConsumer {
+  name: string
+  deliver_policy: string
+  ack_policy: string
+  filter_subject: string
+  num_pending: number
+  num_ack_pending: number
+}
+
+export interface NatsJsMessage {
+  seq: number
+  subject: string
+  payload: string
+  time: string
+}
+
+export const natsJsStreams = (connId: string) =>
+  invoke<NatsJsStream[]>('nats_js_streams', { connId })
+
+export const natsJsConsumers = (connId: string, stream: string) =>
+  invoke<NatsJsConsumer[]>('nats_js_consumers', { connId, stream })
+
+export const natsJsPeek = (connId: string, stream: string, seq: number) =>
+  invoke<NatsJsMessage>('nats_js_peek', { connId, stream, seq })
+
 // ---- schema (Object Explorer) ----------------------------------------------
 
 export const listSchemas = (connId: string) => invoke<SchemaInfo[]>('list_schemas', { connId })

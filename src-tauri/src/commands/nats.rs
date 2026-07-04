@@ -5,6 +5,7 @@
 use futures::StreamExt;
 use tauri::{AppHandle, Emitter, State};
 
+use crate::drivers::nats::{JsConsumer, JsMessage, JsStream};
 use crate::drivers::LiveConnection;
 use crate::error::{AppError, QueryError};
 use crate::state::AppState;
@@ -135,6 +136,66 @@ pub async fn nats_request(
             let d = driver.lock().await;
             match &*d {
                 LiveConnection::Nats(n) => n.request(subject, payload, timeout_ms).await,
+                _ => Err(not_nats()),
+            }
+        })
+        .await?;
+    inner.map_err(|e| AppError::Driver(e.message))
+}
+
+/// JetStream: list streams.
+#[tauri::command]
+pub async fn nats_js_streams(
+    state: State<'_, AppState>,
+    conn_id: String,
+) -> Result<Vec<JsStream>, AppError> {
+    let inner = state
+        .registry
+        .with_driver(&conn_id, move |driver| async move {
+            let d = driver.lock().await;
+            match &*d {
+                LiveConnection::Nats(n) => n.js_streams().await,
+                _ => Err(not_nats()),
+            }
+        })
+        .await?;
+    inner.map_err(|e| AppError::Driver(e.message))
+}
+
+/// JetStream: list consumers của 1 stream.
+#[tauri::command]
+pub async fn nats_js_consumers(
+    state: State<'_, AppState>,
+    conn_id: String,
+    stream: String,
+) -> Result<Vec<JsConsumer>, AppError> {
+    let inner = state
+        .registry
+        .with_driver(&conn_id, move |driver| async move {
+            let d = driver.lock().await;
+            match &*d {
+                LiveConnection::Nats(n) => n.js_consumers(&stream).await,
+                _ => Err(not_nats()),
+            }
+        })
+        .await?;
+    inner.map_err(|e| AppError::Driver(e.message))
+}
+
+/// JetStream: peek message theo sequence.
+#[tauri::command]
+pub async fn nats_js_peek(
+    state: State<'_, AppState>,
+    conn_id: String,
+    stream: String,
+    seq: u64,
+) -> Result<JsMessage, AppError> {
+    let inner = state
+        .registry
+        .with_driver(&conn_id, move |driver| async move {
+            let d = driver.lock().await;
+            match &*d {
+                LiveConnection::Nats(n) => n.js_peek(&stream, seq).await,
                 _ => Err(not_nats()),
             }
         })
