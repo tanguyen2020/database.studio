@@ -278,6 +278,38 @@ export const kafkaProduce = (
   partition: number | null,
 ) => invoke<KafkaProduceResult>('kafka_produce', { connId, topic, key, value, partition })
 
+export interface KafkaMember {
+  member_id: string
+  client_id: string
+  host: string
+}
+export interface KafkaGroup {
+  name: string
+  state: string
+  protocol: string
+  members: KafkaMember[]
+}
+export interface KafkaLag {
+  topic: string
+  partition: number
+  committed: number
+  high: number
+  lag: number
+}
+
+export const kafkaConsumerGroups = (connId: string) =>
+  invoke<KafkaGroup[]>('kafka_consumer_groups', { connId })
+export const kafkaGroupLag = (connId: string, group: string) =>
+  invoke<KafkaLag[]>('kafka_group_lag', { connId, group })
+export const kafkaResetOffset = (
+  connId: string,
+  group: string,
+  topic: string,
+  partition: number,
+  target: string,
+  offset: number,
+) => invoke<void>('kafka_reset_offset', { connId, group, topic, partition, target, offset })
+
 // ---- schema (Object Explorer) ----------------------------------------------
 
 export const listSchemas = (connId: string) => invoke<SchemaInfo[]>('list_schemas', { connId })

@@ -74,6 +74,9 @@ pub fn run() {
             commands::kafka::kafka_consume,
             commands::kafka::kafka_stop_consume,
             commands::kafka::kafka_produce,
+            commands::kafka::kafka_consumer_groups,
+            commands::kafka::kafka_group_lag,
+            commands::kafka::kafka_reset_offset,
             // schema
             commands::schema::list_schemas,
             commands::schema::list_tables,

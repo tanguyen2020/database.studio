@@ -389,6 +389,22 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
       return ok(null)
     case 'kafka_produce':
       return ok({ partition: 0, offset: 15201 })
+    case 'kafka_consumer_groups':
+      return ok([
+        { name: 'payment-processor', state: 'Stable', protocol: 'range', members: [
+          { member_id: 'consumer-1-abc', client_id: 'svc-payments', host: '/10.0.1.20' },
+          { member_id: 'consumer-2-def', client_id: 'svc-payments', host: '/10.0.1.21' },
+        ] },
+        { name: 'audit-log', state: 'Empty', protocol: '', members: [] },
+      ])
+    case 'kafka_group_lag':
+      return ok([
+        { topic: 'payments', partition: 0, committed: 15100, high: 15200, lag: 100 },
+        { topic: 'payments', partition: 1, committed: 15290, high: 15301, lag: 11 },
+        { topic: 'payments', partition: 2, committed: 15400, high: 15400, lag: 0 },
+      ])
+    case 'kafka_reset_offset':
+      return ok(null)
     default:
       return Promise.reject(new Error(`demo: chưa mock command "${cmd}"`))
   }

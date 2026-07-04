@@ -73,7 +73,7 @@ bytes = "1"
 # Kafka (Phase 4) — rdkafka bọc librdkafka. Build từ source qua CMake (VS ships cmake).
 # KHÔNG bật ssl (Windows thiếu nasm/perl để build OpenSSL) → PLAINTEXT + SASL/PLAIN;
 # SASL_SSL/SCRAM là hạn chế đã ghi nhận. cmake-build + tokio runtime.
-rdkafka = { version = "0.36", default-features = false, features = ["cmake-build", "tokio"] }
+rdkafka = { version = "0.38", default-features = false, features = ["cmake-build", "tokio"] }
 
 # Misc
 uuid = { version = "1", features = ["v4"] }

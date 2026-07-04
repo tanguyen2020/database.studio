@@ -3,7 +3,9 @@
 
 use tauri::{AppHandle, Emitter, State};
 
-use crate::drivers::kafka::{borrowed_to_message, KafkaCluster, KafkaMessage, KafkaTopic};
+use crate::drivers::kafka::{
+    borrowed_to_message, KafkaCluster, KafkaGroup, KafkaLag, KafkaMessage, KafkaTopic,
+};
 use crate::drivers::LiveConnection;
 use crate::error::{AppError, QueryError};
 use crate::state::AppState;
@@ -92,6 +94,69 @@ pub async fn kafka_delete_topic(
             let d = driver.lock().await;
             match &*d {
                 LiveConnection::Kafka(k) => k.delete_topic(&name).await,
+                _ => Err(not_kafka()),
+            }
+        })
+        .await?;
+    inner.map_err(|e| AppError::Driver(e.message))
+}
+
+/// List consumer groups + members.
+#[tauri::command]
+pub async fn kafka_consumer_groups(
+    state: State<'_, AppState>,
+    conn_id: String,
+) -> Result<Vec<KafkaGroup>, AppError> {
+    let inner = state
+        .registry
+        .with_driver(&conn_id, move |driver| async move {
+            let d = driver.lock().await;
+            match &*d {
+                LiveConnection::Kafka(k) => k.consumer_groups().await,
+                _ => Err(not_kafka()),
+            }
+        })
+        .await?;
+    inner.map_err(|e| AppError::Driver(e.message))
+}
+
+/// Lag per topic-partition của 1 group.
+#[tauri::command]
+pub async fn kafka_group_lag(
+    state: State<'_, AppState>,
+    conn_id: String,
+    group: String,
+) -> Result<Vec<KafkaLag>, AppError> {
+    let inner = state
+        .registry
+        .with_driver(&conn_id, move |driver| async move {
+            let d = driver.lock().await;
+            match &*d {
+                LiveConnection::Kafka(k) => k.group_lag(group).await,
+                _ => Err(not_kafka()),
+            }
+        })
+        .await?;
+    inner.map_err(|e| AppError::Driver(e.message))
+}
+
+/// Reset offset của group cho 1 topic-partition.
+#[tauri::command]
+pub async fn kafka_reset_offset(
+    state: State<'_, AppState>,
+    conn_id: String,
+    group: String,
+    topic: String,
+    partition: i32,
+    target: String,
+    offset: i64,
+) -> Result<(), AppError> {
+    let inner = state
+        .registry
+        .with_driver(&conn_id, move |driver| async move {
+            let d = driver.lock().await;
+            match &*d {
+                LiveConnection::Kafka(k) => k.reset_group_offset(group, topic, partition, target, offset).await,
                 _ => Err(not_kafka()),
             }
         })

@@ -1099,7 +1099,7 @@ async fn kafka_connect_and_metadata() {
     // --- produce (T5) → consume (T4) round-trip ---
     use database_studio_lib::drivers::kafka::borrowed_to_message;
     use rdkafka::consumer::Consumer;
-    let (_part, off) = drv.produce("phase4_itest", "k1", "hello-kafka", None).await.unwrap();
+    let (_part, off) = drv.produce("phase4_itest", "k1", "hello-kafka", Some(0)).await.unwrap();
     assert!(off >= 0, "offset produce phải >= 0");
     eprintln!("CHK produce OK (offset {off})");
     // BaseConsumer (assign, không group) — build trước, chỉ move consumer vào
@@ -1122,6 +1122,24 @@ async fn kafka_connect_and_metadata() {
     .unwrap();
     assert_eq!(value, "hello-kafka", "consume phải nhận đúng payload");
     eprintln!("CHK consume OK");
+
+    // --- consumer groups + lag + reset (T6) ---
+    drv.reset_group_offset("itest_group".into(), "phase4_itest".into(), 0, "offset".into(), 0)
+        .await
+        .unwrap();
+    eprintln!("CHK reset_offset OK");
+    let lag = drv.group_lag("itest_group".into()).await.unwrap();
+    let p0 = lag
+        .iter()
+        .find(|l| l.topic == "phase4_itest" && l.partition == 0)
+        .expect("phải có lag cho partition 0");
+    assert_eq!(p0.committed, 0, "committed = 0 sau reset");
+    assert_eq!(p0.high, 1, "high = 1 (đã produce 1 message vào p0)");
+    assert_eq!(p0.lag, 1, "lag = high - committed = 1");
+    eprintln!("CHK group_lag OK");
+    let groups = drv.consumer_groups().await.unwrap();
+    assert!(groups.iter().any(|g| g.name == "itest_group"), "consumer_groups phải liệt kê itest_group");
+    eprintln!("CHK consumer_groups OK");
 
     // cleanup bọc timeout — round-trip đã PASS, cleanup treo không fail test.
     let _ = tokio::time::timeout(Duration::from_secs(30), drv.delete_topic("phase4_itest")).await;

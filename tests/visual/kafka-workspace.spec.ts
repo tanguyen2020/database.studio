@@ -31,5 +31,15 @@ test('kafka workspace: cluster overview + topic browser render', async ({ page }
   await page.getByTitle('Open Producer').first().click()
   await page.waitForTimeout(300)
   await expect(page.getByRole('button', { name: 'Produce' })).toBeVisible()
+
+  // Consumer Groups (T6): back to cluster tab → toggle groups → group + lag
+  await page.getByRole('tab', { name: /cluster/ }).first().click()
+  await page.waitForTimeout(200)
+  await page.getByRole('button', { name: 'Consumer Groups' }).click()
+  await page.waitForTimeout(300)
+  await expect(page.getByText('payment-processor').first()).toBeVisible()
+  await page.getByText('payment-processor').first().click()
+  await page.waitForTimeout(300)
+  await expect(page.getByText('Lag per partition').first()).toBeVisible()
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })

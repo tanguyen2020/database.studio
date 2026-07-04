@@ -245,8 +245,132 @@ impl KafkaDriver {
         producer
             .send(record, Duration::from_secs(15))
             .await
-            .map(|(part, off)| (part, off))
+            .map(|d| (d.partition, d.offset))
             .map_err(|(e, _)| err("Produce lỗi", e))
+    }
+
+    // ---- consumer groups (T6) -----------------------------------------------
+
+    /// List consumer groups + members (id/client/host).
+    pub async fn consumer_groups(&self) -> Result<Vec<KafkaGroup>, QueryError> {
+        let c = self.consumer.clone();
+        let out = tokio::task::spawn_blocking(move || -> Result<Vec<KafkaGroup>, String> {
+            let gl = c.fetch_group_list(None, META_TIMEOUT).map_err(|e| e.to_string())?;
+            let mut groups = Vec::new();
+            for g in gl.groups() {
+                let members = g
+                    .members()
+                    .iter()
+                    .map(|m| KafkaMember {
+                        member_id: m.id().to_string(),
+                        client_id: m.client_id().to_string(),
+                        host: m.client_host().to_string(),
+                    })
+                    .collect();
+                groups.push(KafkaGroup {
+                    name: g.name().to_string(),
+                    state: g.state().to_string(),
+                    protocol: g.protocol().to_string(),
+                    members,
+                });
+            }
+            Ok(groups)
+        })
+        .await
+        .map_err(|e| err("spawn_blocking lỗi", e))?
+        .map_err(|e| err("fetch_group_list lỗi", e))?;
+        Ok(out)
+    }
+
+    /// Lag per topic-partition của 1 group: committed offset vs high watermark.
+    /// Chỉ trả các partition group đã commit (committed >= 0).
+    pub async fn group_lag(&self, group: String) -> Result<Vec<KafkaLag>, QueryError> {
+        let cfg = self.config.clone();
+        let meta = self.consumer.clone();
+        let out = tokio::task::spawn_blocking(move || -> Result<Vec<KafkaLag>, String> {
+            // TPL tất cả partition của topic non-internal
+            let md = meta.fetch_metadata(None, META_TIMEOUT).map_err(|e| e.to_string())?;
+            let mut tpl = TopicPartitionList::new();
+            for t in md.topics() {
+                if t.name().starts_with("__") {
+                    continue;
+                }
+                for p in t.partitions() {
+                    tpl.add_partition(t.name(), p.id());
+                }
+            }
+            // consumer với group.id = group để lấy committed offsets
+            let mut gcfg = cfg;
+            gcfg.set("group.id", &group);
+            let gc: BaseConsumer = gcfg.create().map_err(|e| e.to_string())?;
+            let committed = gc.committed_offsets(tpl, META_TIMEOUT).map_err(|e| e.to_string())?;
+            let mut out = Vec::new();
+            for elem in committed.elements() {
+                let off = match elem.offset() {
+                    rdkafka::Offset::Offset(o) => o,
+                    _ => continue, // group chưa commit partition này
+                };
+                let (_low, high) = gc
+                    .fetch_watermarks(elem.topic(), elem.partition(), Duration::from_secs(5))
+                    .unwrap_or((0, off));
+                out.push(KafkaLag {
+                    topic: elem.topic().to_string(),
+                    partition: elem.partition(),
+                    committed: off,
+                    high,
+                    lag: (high - off).max(0),
+                });
+            }
+            Ok(out)
+        })
+        .await
+        .map_err(|e| err("spawn_blocking lỗi", e))?
+        .map_err(|e| err("group_lag lỗi", e))?;
+        Ok(out)
+    }
+
+    /// Reset offset của group cho 1 topic-partition → target (earliest/latest/offset).
+    /// Chỉ chạy được khi group KHÔNG có member active (Kafka từ chối commit lúc active).
+    pub async fn reset_group_offset(
+        &self,
+        group: String,
+        topic: String,
+        partition: i32,
+        target: String,
+        offset: i64,
+    ) -> Result<(), QueryError> {
+        let cfg = self.config.clone();
+        let meta = self.consumer.clone();
+        tokio::task::spawn_blocking(move || -> Result<(), String> {
+            // xác định offset đích
+            let target_off = match target.as_str() {
+                "offset" => offset,
+                "latest" => {
+                    let (_l, h) = meta
+                        .fetch_watermarks(&topic, partition, Duration::from_secs(5))
+                        .map_err(|e| e.to_string())?;
+                    h
+                }
+                _ => {
+                    let (l, _h) = meta
+                        .fetch_watermarks(&topic, partition, Duration::from_secs(5))
+                        .map_err(|e| e.to_string())?;
+                    l
+                }
+            };
+            let mut gcfg = cfg;
+            gcfg.set("group.id", &group);
+            let gc: BaseConsumer = gcfg.create().map_err(|e| e.to_string())?;
+            let mut tpl = TopicPartitionList::new();
+            tpl.add_partition_offset(&topic, partition, rdkafka::Offset::Offset(target_off))
+                .map_err(|e| e.to_string())?;
+            gc.commit(&tpl, rdkafka::consumer::CommitMode::Sync).map_err(|e| e.to_string())?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| err("spawn_blocking lỗi", e))?
+        .map_err(|e| err("reset offset lỗi (group đang active?)", e))?;
+        Ok(())
     }
 
     /// Tạo topic (admin) — partitions + replication factor.
@@ -312,6 +436,30 @@ pub fn borrowed_to_message(m: &rdkafka::message::BorrowedMessage) -> KafkaMessag
         value,
         headers,
     }
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct KafkaMember {
+    pub member_id: String,
+    pub client_id: String,
+    pub host: String,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct KafkaGroup {
+    pub name: String,
+    pub state: String,
+    pub protocol: String,
+    pub members: Vec<KafkaMember>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct KafkaLag {
+    pub topic: String,
+    pub partition: i32,
+    pub committed: i64,
+    pub high: i64,
+    pub lag: i64,
 }
 
 #[derive(Debug, serde::Serialize)]
