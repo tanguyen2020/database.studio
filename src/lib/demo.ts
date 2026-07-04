@@ -384,7 +384,11 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
       ])
     case 'kafka_create_topic':
     case 'kafka_delete_topic':
+    case 'kafka_consume':
+    case 'kafka_stop_consume':
       return ok(null)
+    case 'kafka_produce':
+      return ok({ partition: 0, offset: 15201 })
     default:
       return Promise.reject(new Error(`demo: chưa mock command "${cmd}"`))
   }

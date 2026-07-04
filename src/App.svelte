@@ -21,6 +21,8 @@
   import RedisPubSub from '$lib/components/workspace/RedisPubSub.svelte'
   import NatsWorkspace from '$lib/components/workspace/NatsWorkspace.svelte'
   import KafkaWorkspace from '$lib/components/workspace/KafkaWorkspace.svelte'
+  import KafkaConsumer from '$lib/components/workspace/KafkaConsumer.svelte'
+  import KafkaProducer from '$lib/components/workspace/KafkaProducer.svelte'
   import HistoryTab from '$lib/components/workspace/HistoryTab.svelte'
   import SavedQueriesTab from '$lib/components/workspace/SavedQueriesTab.svelte'
   import { connections } from '$lib/stores/connections.svelte'
@@ -151,6 +153,10 @@
             <NatsWorkspace tab={t} />
           {:else if t.contentType === 'kafka'}
             <KafkaWorkspace tab={t} />
+          {:else if t.contentType === 'kafka-consumer'}
+            <KafkaConsumer tab={t} />
+          {:else if t.contentType === 'kafka-producer'}
+            <KafkaProducer tab={t} />
           {:else}
             <SqlWorkspace tab={t} />
           {/if}

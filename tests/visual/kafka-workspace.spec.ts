@@ -19,5 +19,17 @@ test('kafka workspace: cluster overview + topic browser render', async ({ page }
   await page.getByText('payments').first().click()
   await page.waitForTimeout(300)
   await expect(page.getByText('Leader').first()).toBeVisible()
+
+  // Open Consumer (T4) → consumer tab với nút Consume
+  await page.getByTitle('Open Consumer').first().click()
+  await page.waitForTimeout(300)
+  await expect(page.getByRole('button', { name: 'Consume' })).toBeVisible()
+
+  // Produce (T5): mở workspace lại → Open Producer
+  await page.getByRole('tab', { name: /cluster/ }).first().click()
+  await page.waitForTimeout(200)
+  await page.getByTitle('Open Producer').first().click()
+  await page.waitForTimeout(300)
+  await expect(page.getByRole('button', { name: 'Produce' })).toBeVisible()
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })

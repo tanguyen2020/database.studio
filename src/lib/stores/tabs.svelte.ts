@@ -215,6 +215,34 @@ class TabsStore {
     return tab
   }
 
+  /** Kafka consumer/producer tab cho 1 topic (contentType 'kafka-consumer'|'kafka-producer'). */
+  openKafkaTool(connectionId: string, kind: 'kafka-consumer' | 'kafka-producer', topic: string): TabState {
+    const existing = this.tabs.find(
+      (t) => t.contentType === kind && t.connectionId === connectionId && (t.state as { topic?: string }).topic === topic,
+    )
+    if (existing) {
+      this.activeTabId = existing.id
+      return existing
+    }
+    const profile = connections.byId(connectionId)
+    const label = kind === 'kafka-consumer' ? 'consume' : 'produce'
+    const tab: TabState = {
+      id: uuid(),
+      connectionId,
+      connectionName: profile?.name ?? '',
+      systemType: (profile?.system as SystemType) ?? 'orphan',
+      contentType: kind,
+      title: `${topic} · ${label}`,
+      isPinned: false,
+      isDirty: false,
+      state: { topic },
+    }
+    this.tabs.push(tab)
+    this.activeTabId = tab.id
+    this.schedulePersist()
+    return tab
+  }
+
   /** Mở (hoặc focus nếu đã có) một tab tiện ích singleton — History / Saved. */
   openUtilityTab(contentType: 'history' | 'saved', title: string): TabState {
     const existing = this.tabs.find((t) => t.contentType === contentType)

@@ -22,7 +22,12 @@ pub fn run() {
                 .app_data_dir()
                 .expect("cannot resolve app data dir");
             let storage = Storage::open(data_dir)?;
-            app.manage(AppState { storage, registry: Registry::default(), pubsub: Default::default() });
+            app.manage(AppState {
+                storage,
+                registry: Registry::default(),
+                pubsub: Default::default(),
+                kafka_stops: Default::default(),
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -66,6 +71,9 @@ pub fn run() {
             commands::kafka::kafka_topics,
             commands::kafka::kafka_create_topic,
             commands::kafka::kafka_delete_topic,
+            commands::kafka::kafka_consume,
+            commands::kafka::kafka_stop_consume,
+            commands::kafka::kafka_produce,
             // schema
             commands::schema::list_schemas,
             commands::schema::list_tables,

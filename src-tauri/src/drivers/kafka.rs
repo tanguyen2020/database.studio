@@ -11,6 +11,9 @@ use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
 use rdkafka::client::DefaultClientContext;
 use rdkafka::config::ClientConfig;
 use rdkafka::consumer::{BaseConsumer, Consumer};
+use rdkafka::message::{Headers, Message};
+use rdkafka::producer::{FutureProducer, FutureRecord};
+use rdkafka::{Offset, TopicPartitionList};
 
 use crate::drivers::types::TestResult;
 use crate::error::QueryError;
@@ -179,13 +182,81 @@ impl KafkaDriver {
 }
 
 impl KafkaDriver {
+    /// Tạo BaseConsumer để DUYỆT message: assign trực tiếp partitions (KHÔNG
+    /// subscribe consumer-group). Dùng BaseConsumer + poll trong OS thread riêng
+    /// (StreamConsumer async close deadlock nếu ngừng poll — rdkafka gotcha).
+    /// from: "earliest" | "latest" | "offset". partition None = tất cả partitions.
+    pub fn browse_consumer(
+        &self,
+        topic: &str,
+        from: &str,
+        offset: i64,
+        partition: Option<i32>,
+    ) -> Result<BaseConsumer, QueryError> {
+        let mut cfg = self.config.clone();
+        cfg.set("group.id", format!("dbstudio-browse-{}", uuid::Uuid::new_v4()));
+        cfg.set("enable.auto.commit", "false");
+        let consumer: BaseConsumer = cfg.create().map_err(|e| err("Tạo BaseConsumer lỗi", e))?;
+
+        let partitions: Vec<i32> = match partition {
+            Some(p) => vec![p],
+            None => {
+                let md = self
+                    .consumer
+                    .fetch_metadata(Some(topic), META_TIMEOUT)
+                    .map_err(|e| err("fetch_metadata (partitions) lỗi", e))?;
+                md.topics()
+                    .iter()
+                    .find(|t| t.name() == topic)
+                    .map(|t| t.partitions().iter().map(|p| p.id()).collect())
+                    .unwrap_or_default()
+            }
+        };
+        let off = match from {
+            "offset" => Offset::Offset(offset),
+            "latest" => Offset::End,
+            _ => Offset::Beginning,
+        };
+        let mut tpl = TopicPartitionList::new();
+        for p in partitions {
+            tpl.add_partition_offset(topic, p, off).map_err(|e| err("TPL lỗi", e))?;
+        }
+        consumer.assign(&tpl).map_err(|e| err("assign lỗi", e))?;
+        Ok(consumer)
+    }
+
+    /// Produce 1 message → (partition, offset) đã land.
+    pub async fn produce(
+        &self,
+        topic: &str,
+        key: &str,
+        value: &str,
+        partition: Option<i32>,
+    ) -> Result<(i32, i64), QueryError> {
+        let producer: FutureProducer =
+            self.config.create().map_err(|e| err("Tạo producer lỗi", e))?;
+        let mut record = FutureRecord::to(topic).payload(value);
+        if !key.is_empty() {
+            record = record.key(key);
+        }
+        if let Some(p) = partition {
+            record = record.partition(p);
+        }
+        producer
+            .send(record, Duration::from_secs(15))
+            .await
+            .map(|(part, off)| (part, off))
+            .map_err(|(e, _)| err("Produce lỗi", e))
+    }
+
     /// Tạo topic (admin) — partitions + replication factor.
     pub async fn create_topic(&self, name: &str, partitions: i32, replication: i32) -> Result<(), QueryError> {
         let admin: AdminClient<DefaultClientContext> =
             self.config.create().map_err(|e| err("Tạo admin client lỗi", e))?;
         let nt = NewTopic::new(name, partitions, TopicReplication::Fixed(replication));
+        let opts = AdminOptions::new().operation_timeout(Some(Duration::from_secs(30)));
         let res = admin
-            .create_topics([&nt], &AdminOptions::new())
+            .create_topics([&nt], &opts)
             .await
             .map_err(|e| err("create_topics lỗi", e))?;
         for r in res {
@@ -198,14 +269,48 @@ impl KafkaDriver {
     pub async fn delete_topic(&self, name: &str) -> Result<(), QueryError> {
         let admin: AdminClient<DefaultClientContext> =
             self.config.create().map_err(|e| err("Tạo admin client lỗi", e))?;
+        let opts = AdminOptions::new().operation_timeout(Some(Duration::from_secs(30)));
         let res = admin
-            .delete_topics(&[name], &AdminOptions::new())
+            .delete_topics(&[name], &opts)
             .await
             .map_err(|e| err("delete_topics lỗi", e))?;
         for r in res {
             r.map_err(|(t, e)| err(format!("Xóa topic '{t}' lỗi"), e))?;
         }
         Ok(())
+    }
+}
+
+/// Message consume được (value/key decode UTF-8 lossy; frontend tự pretty JSON).
+#[derive(Debug, serde::Serialize, Clone)]
+pub struct KafkaMessage {
+    pub partition: i32,
+    pub offset: i64,
+    pub timestamp: i64,
+    pub key: String,
+    pub value: String,
+    pub headers: Vec<(String, String)>,
+}
+
+/// Convert 1 BorrowedMessage (từ StreamConsumer.recv) → KafkaMessage.
+pub fn borrowed_to_message(m: &rdkafka::message::BorrowedMessage) -> KafkaMessage {
+    let key = m.key().map(|b| String::from_utf8_lossy(b).into_owned()).unwrap_or_default();
+    let value = m.payload().map(|b| String::from_utf8_lossy(b).into_owned()).unwrap_or_default();
+    let mut headers = Vec::new();
+    if let Some(hs) = m.headers() {
+        for i in 0..hs.count() {
+            let h = hs.get(i);
+            let v = h.value.map(|b| String::from_utf8_lossy(b).into_owned()).unwrap_or_default();
+            headers.push((h.key.to_string(), v));
+        }
+    }
+    KafkaMessage {
+        partition: m.partition(),
+        offset: m.offset(),
+        timestamp: m.timestamp().to_millis().unwrap_or(0),
+        key,
+        value,
+        headers,
     }
 }
 

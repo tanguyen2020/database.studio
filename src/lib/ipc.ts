@@ -245,6 +245,39 @@ export const kafkaCreateTopic = (connId: string, name: string, partitions: numbe
 export const kafkaDeleteTopic = (connId: string, name: string) =>
   invoke<void>('kafka_delete_topic', { connId, name })
 
+export interface KafkaMsg {
+  conn_id: string
+  partition: number
+  offset: number
+  timestamp: number
+  key: string
+  value: string
+  headers: [string, string][]
+}
+
+/** Consume topic → messages arrive via `kafka-msg` event. from: earliest|latest|offset. */
+export const kafkaConsume = (
+  connId: string,
+  topic: string,
+  from: string,
+  offset: number,
+  partition: number | null,
+) => invoke<void>('kafka_consume', { connId, topic, from, offset, partition })
+
+export const kafkaStopConsume = (connId: string) => invoke<void>('kafka_stop_consume', { connId })
+
+export interface KafkaProduceResult {
+  partition: number
+  offset: number
+}
+export const kafkaProduce = (
+  connId: string,
+  topic: string,
+  key: string,
+  value: string,
+  partition: number | null,
+) => invoke<KafkaProduceResult>('kafka_produce', { connId, topic, key, value, partition })
+
 // ---- schema (Object Explorer) ----------------------------------------------
 
 export const listSchemas = (connId: string) => invoke<SchemaInfo[]>('list_schemas', { connId })

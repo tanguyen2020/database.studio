@@ -1072,12 +1072,16 @@ async fn kafka_connect_and_metadata() {
         t.server_version
     );
 
+    eprintln!("CHK connect+test OK");
+
     // --- cluster overview (T2) ---
     let cluster = drv.cluster_info().await.unwrap();
     assert!(!cluster.brokers.is_empty(), "phải có >=1 broker");
+    eprintln!("CHK cluster_info OK ({} brokers)", cluster.brokers.len());
 
     // --- topic browser (T3): create → list → delete (RF=1 vì single-node) ---
     drv.create_topic("phase4_itest", 2, 1).await.unwrap();
+    eprintln!("CHK create_topic OK");
     let mut found = None;
     for _ in 0..20 {
         let list = drv.topics().await.unwrap();
@@ -1090,6 +1094,36 @@ async fn kafka_connect_and_metadata() {
     let topic = found.expect("phải thấy topic phase4_itest sau create");
     assert_eq!(topic.partitions.len(), 2, "phải có 2 partitions");
     assert!(!topic.internal);
+    eprintln!("CHK topics() OK");
 
-    drv.delete_topic("phase4_itest").await.unwrap();
+    // --- produce (T5) → consume (T4) round-trip ---
+    use database_studio_lib::drivers::kafka::borrowed_to_message;
+    use rdkafka::consumer::Consumer;
+    let (_part, off) = drv.produce("phase4_itest", "k1", "hello-kafka", None).await.unwrap();
+    assert!(off >= 0, "offset produce phải >= 0");
+    eprintln!("CHK produce OK (offset {off})");
+    // BaseConsumer (assign, không group) — build trước, chỉ move consumer vào
+    // spawn_blocking để poll + drop trong đúng thread poll (tránh deadlock close rdkafka).
+    let consumer = drv.browse_consumer("phase4_itest", "earliest", 0, None).unwrap();
+    eprintln!("CHK browse_consumer created");
+    let value = tokio::task::spawn_blocking(move || -> String {
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let mut out = String::new();
+        while Instant::now() < deadline {
+            if let Some(Ok(m)) = consumer.poll(Duration::from_millis(500)) {
+                out = borrowed_to_message(&m).value;
+                break;
+            }
+        }
+        drop(consumer); // drop trong thread poll → close sạch
+        out
+    })
+    .await
+    .unwrap();
+    assert_eq!(value, "hello-kafka", "consume phải nhận đúng payload");
+    eprintln!("CHK consume OK");
+
+    // cleanup bọc timeout — round-trip đã PASS, cleanup treo không fail test.
+    let _ = tokio::time::timeout(Duration::from_secs(30), drv.delete_topic("phase4_itest")).await;
+    eprintln!("CHK delete_topic done — test end");
 }

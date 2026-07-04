@@ -1,5 +1,6 @@
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use tokio::task::AbortHandle;
 
@@ -27,8 +28,30 @@ impl PubSubTasks {
     }
 }
 
+/// Cờ dừng cho consumer Kafka (chạy trong OS thread riêng, không phải tokio task —
+/// rdkafka consumer phải được drop trong thread poll của nó, tránh deadlock async).
+#[derive(Default)]
+pub struct KafkaStops(Mutex<HashMap<String, Arc<AtomicBool>>>);
+
+impl KafkaStops {
+    /// Đăng ký cờ mới cho connId, bật cờ cũ (dừng consumer cũ) nếu có.
+    pub fn set(&self, id: String, flag: Arc<AtomicBool>) {
+        if let Some(old) = self.0.lock().unwrap().insert(id, flag) {
+            old.store(true, Ordering::Relaxed);
+        }
+    }
+
+    /// Bật cờ dừng + gỡ khỏi map.
+    pub fn stop(&self, id: &str) {
+        if let Some(f) = self.0.lock().unwrap().remove(id) {
+            f.store(true, Ordering::Relaxed);
+        }
+    }
+}
+
 pub struct AppState {
     pub storage: Storage,
     pub registry: Registry,
     pub pubsub: PubSubTasks,
+    pub kafka_stops: KafkaStops,
 }

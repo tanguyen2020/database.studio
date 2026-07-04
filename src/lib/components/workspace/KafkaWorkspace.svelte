@@ -6,6 +6,7 @@
   import { untrack } from 'svelte'
   import * as ipc from '$lib/ipc'
   import { connections } from '$lib/stores/connections.svelte'
+  import { tabs } from '$lib/stores/tabs.svelte'
   import { toasts } from '$lib/stores/toast.svelte'
   import type { TabState } from '$lib/types'
 
@@ -139,13 +140,35 @@
           <span
             onclick={(e) => {
               e.stopPropagation()
+              tab.connectionId && tabs.openKafkaTool(tab.connectionId, 'kafka-consumer', t.name)
+            }}
+            onkeydown={(e) => e.key === 'Enter' && tab.connectionId && tabs.openKafkaTool(tab.connectionId, 'kafka-consumer', t.name)}
+            role="button"
+            tabindex="0"
+            title="Open Consumer"
+            style="margin-left:auto;flex:none;color:var(--primary);font-size:var(--px-10_5);cursor:pointer;padding:0 var(--px-5)"
+          >Consume</span>
+          <span
+            onclick={(e) => {
+              e.stopPropagation()
+              tab.connectionId && tabs.openKafkaTool(tab.connectionId, 'kafka-producer', t.name)
+            }}
+            onkeydown={(e) => e.key === 'Enter' && tab.connectionId && tabs.openKafkaTool(tab.connectionId, 'kafka-producer', t.name)}
+            role="button"
+            tabindex="0"
+            title="Open Producer"
+            style="flex:none;color:var(--primary);font-size:var(--px-10_5);cursor:pointer;padding:0 var(--px-5)"
+          >Produce</span>
+          <span
+            onclick={(e) => {
+              e.stopPropagation()
               deleteTopic(t.name)
             }}
             onkeydown={(e) => e.key === 'Enter' && (e.stopPropagation(), deleteTopic(t.name))}
             role="button"
             tabindex="0"
             title="Delete topic"
-            style="margin-left:auto;flex:none;color:var(--error);font-size:var(--px-12);cursor:pointer;padding:0 var(--px-6)"
+            style="flex:none;color:var(--error);font-size:var(--px-12);cursor:pointer;padding:0 var(--px-6)"
           >×</span>
         </div>
         {#if open}
