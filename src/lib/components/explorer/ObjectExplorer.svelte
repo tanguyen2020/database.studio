@@ -196,9 +196,6 @@
     expanded = new Set()
   }
 
-  function later(label: string) {
-    toasts.show(`${label} — phase sau`)
-  }
 
   // map C trong Component (dòng 3947): màu glyph per loại object
   const C = {
@@ -525,7 +522,7 @@
                         <ContextMenu.Item onclick={() => copyName(col.name)}>Copy Name</ContextMenu.Item>
                         <ContextMenu.Item onclick={() => copyName(`${t.name}.${col.name}`)}>Copy as table.column</ContextMenu.Item>
                         <ContextMenu.Separator />
-                        <ContextMenu.Item onclick={() => later('Set as Filter')}>Set as Filter</ContextMenu.Item>
+                        <ContextMenu.Item onclick={() => selected && tabs.openTableViewer(selected.id, schema.name, t.name, [{ col: col.name, op: '=', value: '' }])}>Set as Filter</ContextMenu.Item>
                       </ContextMenu.Content>
                     {/snippet}
                     {@render row(
@@ -816,15 +813,8 @@
     <span class="xbtn" onclick={() => selected && importWizard.show(selected.id, cache?.schemas?.[0]?.name ?? '')} onkeydown={(e) => e.key === 'Enter' && selected && importWizard.show(selected.id, cache?.schemas?.[0]?.name ?? '')} role="button" tabindex="0" title="Import data from file">
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 10l5 5 5-5"></path><path d="M5 21h14"></path></svg>
     </span>
-    <span class="xbtn" onclick={() => later('Export / dump')} onkeydown={(e) => e.key === 'Enter' && later('Export / dump')} role="button" tabindex="0" title="Export / dump to file">
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3M7 8l5-5 5 5"></path><path d="M5 21h14"></path></svg>
-    </span>
-    <span class="xbtn" onclick={() => later('Backup database')} onkeydown={(e) => e.key === 'Enter' && later('Backup database')} role="button" tabindex="0" title="Backup database">
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="6" rx="7" ry="2.6"></ellipse><path d="M5 6v12c0 1.4 3.1 2.6 7 2.6s7-1.2 7-2.6V6"></path><path d="M9 13.5l3 3 3-3"></path></svg>
-    </span>
-    <span class="xbtn" onclick={() => later('Users & privileges')} onkeydown={(e) => e.key === 'Enter' && later('Users & privileges')} role="button" tabindex="0" title="Users & privileges">
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.4"></circle><path d="M5.5 20a6.5 6.5 0 0 1 13 0"></path></svg>
-    </span>
+    <!-- Export/dump (T14), Backup (T22), Users & privileges (T23): gỡ nút stub —
+         sẽ gắn lại khi feature tương ứng hoàn thành, tránh nút bấm-không-chạy. -->
     <span style="margin-left:auto;display:flex;gap:var(--px-1)">
       <span class="xbtn2" onclick={() => cache?.schemas?.forEach((s) => expandSchema(s.name))} onkeydown={(e) => e.key === 'Enter' && cache?.schemas?.forEach((s) => expandSchema(s.name))} role="button" tabindex="0" title="Expand all">⊕</span>
       <span class="xbtn2" onclick={collapseAll} onkeydown={(e) => e.key === 'Enter' && collapseAll()} role="button" tabindex="0" title="Collapse all">⊖</span>

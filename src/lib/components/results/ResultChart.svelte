@@ -2,7 +2,6 @@
   // Chart mode — port 1:1 builder rail (dòng 504-530) + buildChart() (dòng
   // 2537-2580). Group by X, agg Y (sum/avg/count/min/max) 12 nhóm đầu; SVG
   // bar/line/pie/area, màu theo accent hệ. Export PNG/SVG stub (Phase 5 Backup/Export).
-  import { toasts } from '$lib/stores/toast.svelte'
   import type { QueryResultSet } from '$lib/types'
 
   interface Props {
@@ -11,6 +10,51 @@
   }
 
   let { data, accent }: Props = $props()
+
+  // Export PNG/SVG thật (T12) — serialize SVG, resolve CSS var() theo theme hiện tại.
+  let chartSvg = $state<SVGSVGElement | null>(null)
+  function serializeChart(): string | null {
+    if (!chartSvg) return null
+    let s = new XMLSerializer().serializeToString(chartSvg)
+    // gán width/height thực từ viewBox để Image/canvas có kích thước
+    const vb = chartSvg.getAttribute('viewBox')?.split(/\s+/)
+    if (vb && vb.length === 4) {
+      s = s.replace(/<svg /, `<svg width="${vb[2]}" height="${vb[3]}" `)
+    }
+    // resolve var(--x) → giá trị computed (màu/px) cho SVG standalone
+    const cs = getComputedStyle(document.documentElement)
+    const names = [...new Set([...s.matchAll(/var\((--[a-z0-9-]+)\)/g)].map((m) => m[1]))]
+    const decls = names.map((n) => `${n}: ${cs.getPropertyValue(n).trim()};`).join('')
+    return s.replace(/(<svg[^>]*>)/, `$1<style>:root{${decls}}</style>`)
+  }
+  function dl(filename: string, blob: Blob) {
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+  function exportChart(fmt: 'svg' | 'png') {
+    const s = serializeChart()
+    if (!s) return
+    if (fmt === 'svg') {
+      dl('chart.svg', new Blob([s], { type: 'image/svg+xml' }))
+      return
+    }
+    const img = new Image()
+    img.onload = () => {
+      const canvas = document.createElement('canvas')
+      canvas.width = img.width * 2
+      canvas.height = img.height * 2
+      const ctx = canvas.getContext('2d')
+      if (!ctx) return
+      ctx.scale(2, 2)
+      ctx.drawImage(img, 0, 0)
+      canvas.toBlob((b) => b && dl('chart.png', b), 'image/png')
+    }
+    img.src = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(s)))
+  }
 
   const names = $derived(data.cols.map(([n]) => n))
   const numNames = $derived(
@@ -148,8 +192,8 @@
       </select>
     </label>
     <div style="margin-top:auto;display:flex;gap:var(--px-6)">
-      <span class="ch-exp" onclick={() => toasts.show('Export PNG — Phase 5')} onkeydown={(e) => e.key === 'Enter' && toasts.show('Export PNG — Phase 5')} role="button" tabindex="0">PNG</span>
-      <span class="ch-exp" onclick={() => toasts.show('Export SVG — Phase 5')} onkeydown={(e) => e.key === 'Enter' && toasts.show('Export SVG — Phase 5')} role="button" tabindex="0">SVG</span>
+      <span class="ch-exp" onclick={() => exportChart('png')} onkeydown={(e) => e.key === 'Enter' && exportChart('png')} role="button" tabindex="0">PNG</span>
+      <span class="ch-exp" onclick={() => exportChart('svg')} onkeydown={(e) => e.key === 'Enter' && exportChart('svg')} role="button" tabindex="0">SVG</span>
     </div>
   </div>
 
@@ -158,7 +202,7 @@
     {#if chartData.length === 0}
       <div style="color:var(--muted);font-size:var(--px-13)">No data to chart</div>
     {:else}
-      <svg viewBox="0 0 {W} {H}" style="width:100%;max-width:var(--px-720);height:auto">
+      <svg bind:this={chartSvg} viewBox="0 0 {W} {H}" style="width:100%;max-width:var(--px-720);height:auto">
         {#if chartType !== 'pie'}
           <!-- gridlines + y labels -->
           {#each gridLines as g, i (i)}

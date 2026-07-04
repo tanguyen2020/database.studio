@@ -88,7 +88,12 @@ class TabsStore {
     return tab
   }
 
-  openTableViewer(connectionId: string, schema: string, table: string): TabState {
+  openTableViewer(
+    connectionId: string,
+    schema: string,
+    table: string,
+    initialFilters?: { col: string; op: string; value: unknown }[],
+  ): TabState {
     const profile = connections.byId(connectionId)
     const tab: TabState = {
       id: uuid(),
@@ -99,7 +104,7 @@ class TabsStore {
       title: `${table}`,
       isPinned: false,
       isDirty: false,
-      state: { schema, table },
+      state: { schema, table, initialFilters },
     }
     this.tabs.push(tab)
     this.activeTabId = tab.id

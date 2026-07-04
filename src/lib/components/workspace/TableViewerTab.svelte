@@ -30,9 +30,11 @@
   let pkCols = $state<string[]>([])
   let columnNames = $state<string[]>([])
 
-  // filter builder state
-  let filtersOpen = $state(false)
-  let filters = $state<FilterCond[]>([])
+  // filter builder state — seed từ initialFilters (Set as Filter · T12) nếu có
+  // svelte-ignore state_referenced_locally
+  const seedFilters = (tab.state.initialFilters as FilterCond[] | undefined) ?? []
+  let filtersOpen = $state(seedFilters.length > 0)
+  let filters = $state<FilterCond[]>(seedFilters.map((f) => ({ ...f })))
   let combinatorOr = $state(false)
   // sort đa cột
   let sorts = $state<SortSpec[]>([])

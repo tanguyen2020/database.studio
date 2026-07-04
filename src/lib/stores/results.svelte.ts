@@ -78,7 +78,7 @@ class ResultsStore {
       if (!ok) return
     }
 
-    const exec: TabExecution = {
+    const seed: TabExecution = {
       running: true,
       cancelled: false,
       subResults: [],
@@ -88,7 +88,11 @@ class ResultsStore {
       lastRowCount: null,
       startedAt: Date.now(),
     }
-    this.byTab[tabId] = exec
+    this.byTab[tabId] = seed
+    // Re-acquire the $state proxy: subsequent mutations (subResults.push,
+    // activeSub, running) must go through the proxy to trigger reactivity.
+    // Mutating the raw `seed` object would bypass the proxy → view never updates.
+    const exec = this.byTab[tabId] as TabExecution
 
     for (let i = 0; i < statements.length; i++) {
       const stmt = statements[i]
