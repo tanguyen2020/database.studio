@@ -9,6 +9,8 @@
     compareSchemas,
     diffCounts,
     genMigration,
+    lineDiff,
+    type CmpRoutine,
     type ObjectDiff,
     type SchemaSnapshot,
   } from '$lib/compare/diff'
@@ -46,7 +48,20 @@
         columns: cols.map((c) => ({ name: c.name, type: c.data_type, nullable: c.nullable, pk: c.is_pk })),
       })
     }
-    return { tables }
+    // T19 — procedures/functions/triggers: so theo text DDL thật.
+    const routines: CmpRoutine[] = []
+    const rs = await ipc.listRoutines(connId, schema).catch(() => [])
+    for (const r of rs) {
+      const kind: CmpRoutine['kind'] = r.kind === 'procedure' ? 'procedure' : 'function'
+      const ddl = await ipc.objectDefinition(connId, schema, kind, r.name).catch(() => '')
+      routines.push({ name: r.name, kind, ddl })
+    }
+    const tgs = await ipc.listTriggers(connId, schema).catch(() => [])
+    for (const tg of tgs) {
+      const ddl = await ipc.objectDefinition(connId, schema, 'trigger', tg.name).catch(() => '')
+      routines.push({ name: tg.name, kind: 'trigger', ddl })
+    }
+    return { tables, routines }
   }
 
   async function compare() {
@@ -96,6 +111,17 @@
   }
   function openMigration() {
     if (tgtConn) tabs.openSqlTab({ connectionId: tgtConn, title: 'Migration', query: migration })
+  }
+
+  // T19 — side-by-side DDL diff panel (routine/trigger) + prev/next điều hướng.
+  let selDiff = $state<ObjectDiff | null>(null)
+  const ddlDiffs = $derived(visible.filter((d) => d.srcDdl != null || d.tgtDdl != null))
+  const ddlLines = $derived(selDiff ? lineDiff(selDiff.tgtDdl ?? '', selDiff.srcDdl ?? '') : [])
+  function stepDiff(delta: number) {
+    if (!ddlDiffs.length) return
+    const i = selDiff ? ddlDiffs.findIndex((d) => d.kind === selDiff!.kind && d.name === selDiff!.name) : -1
+    const next = (i + delta + ddlDiffs.length) % ddlDiffs.length
+    selDiff = ddlDiffs[next]
   }
 
   const statusMeta: Record<string, { label: string; color: string; icon: string }> = {
@@ -157,9 +183,17 @@
         <span style="flex:1;padding:var(--px-7) var(--px-14)">Origin · {srcProfile?.name}</span>
         <span style="flex:1;padding:var(--px-7) var(--px-14)">Target · {tgtProfile?.name}</span>
       </div>
-      {#each visible as d (d.name)}
+      {#each visible as d (d.kind + ':' + d.name)}
         {@const sm = statusMeta[d.status]}
-        <div style="display:flex;align-items:stretch;border-bottom:var(--px-1) solid var(--border)">
+        {@const hasDdl = d.srcDdl != null || d.tgtDdl != null}
+        <div
+          style="display:flex;align-items:stretch;border-bottom:var(--px-1) solid var(--border);cursor:{hasDdl ? 'pointer' : 'default'}"
+          onclick={() => hasDdl && (selDiff = d)}
+          onkeydown={(e) => e.key === 'Enter' && hasDdl && (selDiff = d)}
+          role="button"
+          tabindex="0"
+          title={hasDdl ? 'Xem DDL diff' : ''}
+        >
           <div style="flex:1;display:flex;align-items:center;gap:var(--px-8);padding:var(--px-7) var(--px-14);box-shadow:inset var(--px-3) 0 0 {sm.color}">
             {#if d.status !== 'tgt_only'}<input type="checkbox" checked={selected.has(d.name)} onchange={() => toggleSel(d.name)} />{/if}
             <span class="mono" style="font-size:var(--px-8);font-weight:700;color:var(--muted);border:var(--px-1) solid var(--border2);border-radius:var(--px-3);padding:var(--px-1) var(--px-4)">{d.kind}</span>
@@ -179,6 +213,34 @@
     </div>
     <div style="flex:1;overflow:auto;background:var(--bg)">
       <pre class="mono" style="margin:0;padding:var(--px-16) var(--px-18);font-size:var(--px-12_5);line-height:1.6;white-space:pre;color:var(--text)">{migration}</pre>
+    </div>
+  {/if}
+
+  <!-- T19 — side-by-side DDL diff panel (routine/trigger) -->
+  {#if selDiff}
+    <div onclick={() => (selDiff = null)} onkeydown={(e) => e.key === 'Escape' && (selDiff = null)} role="presentation" style="position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:56">
+      <div onclick={(e) => e.stopPropagation()} onkeydown={() => {}} role="dialog" aria-modal="true" tabindex="-1" style="width:var(--px-900);max-width:96vw;height:80vh;background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-12);box-shadow:0 var(--px-30) var(--px-70) rgba(0,0,0,.55);display:flex;flex-direction:column;overflow:hidden">
+        <div style="flex:none;display:flex;align-items:center;gap:var(--px-10);padding:var(--px-12) var(--px-16);border-bottom:var(--px-1) solid var(--border)">
+          <span class="mono" style="font-size:var(--px-8);font-weight:700;color:var(--muted);border:var(--px-1) solid var(--border2);border-radius:var(--px-3);padding:var(--px-1) var(--px-4)">{selDiff.kind}</span>
+          <span class="mono" style="font-size:var(--px-14);font-weight:700">{selDiff.name}</span>
+          <span style="font-size:var(--px-10);font-weight:700;color:var(--hex-fff);background:{statusMeta[selDiff.status].color};border-radius:var(--px-4);padding:var(--px-1) var(--px-7)">{statusMeta[selDiff.status].label}</span>
+          <span onclick={() => stepDiff(-1)} onkeydown={(e) => e.key === 'Enter' && stepDiff(-1)} role="button" tabindex="0" title="Previous" style="margin-left:auto;cursor:pointer;color:var(--text2);font-size:var(--px-14);padding:0 var(--px-6)">◀ Prev</span>
+          <span onclick={() => stepDiff(1)} onkeydown={(e) => e.key === 'Enter' && stepDiff(1)} role="button" tabindex="0" title="Next" style="cursor:pointer;color:var(--text2);font-size:var(--px-14);padding:0 var(--px-6)">Next ▶</span>
+          <span onclick={() => (selDiff = null)} onkeydown={(e) => e.key === 'Enter' && (selDiff = null)} role="button" tabindex="0" style="cursor:pointer;color:var(--muted);font-size:var(--px-20);margin-left:var(--px-6)">×</span>
+        </div>
+        <div style="flex:none;display:flex;font-size:var(--px-10);color:var(--muted);font-weight:700;text-transform:uppercase;border-bottom:var(--px-1) solid var(--border2)">
+          <span style="flex:1;padding:var(--px-6) var(--px-14)">Target · {tgtProfile?.name}</span>
+          <span style="flex:1;padding:var(--px-6) var(--px-14);border-left:var(--px-1) solid var(--border)">Source · {srcProfile?.name}</span>
+        </div>
+        <div style="flex:1;overflow:auto;background:var(--bg)">
+          {#each ddlLines as l, i (i)}
+            <div style="display:flex;font-size:var(--px-12);line-height:1.55">
+              <div class="mono" style="flex:1;padding:0 var(--px-14);white-space:pre-wrap;background:{l.type === 'del' ? 'rgba(224,108,117,.16)' : 'transparent'};color:{l.type === 'del' ? '#e06c75' : 'var(--text2)'}">{l.type !== 'add' ? l.text : ''}</div>
+              <div class="mono" style="flex:1;padding:0 var(--px-14);white-space:pre-wrap;border-left:var(--px-1) solid var(--border);background:{l.type === 'add' ? 'rgba(39,174,96,.16)' : 'transparent'};color:{l.type === 'add' ? '#27AE60' : 'var(--text2)'}">{l.type !== 'del' ? l.text : ''}</div>
+            </div>
+          {/each}
+        </div>
+      </div>
     </div>
   {/if}
 </div>

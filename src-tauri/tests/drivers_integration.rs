@@ -1997,6 +1997,61 @@ async fn pg_object_definition_returns_real_text() {
     eprintln!("CHK PG object_definition real text OK");
 }
 
+/// Phase 5 · T19 — Schema Compare depth: 2 schema PG khác nhau 1 cột + 1 function.
+/// Introspect → phát hiện khác biệt → chạy migration → hội tụ (TARGET khớp SOURCE).
+#[tokio::test]
+async fn pg_schema_compare_proc_and_column_then_migrate() {
+    use database_studio_lib::commands::schema::definition_query;
+
+    let (_c, port) = start_pg().await;
+    let params = PgConnParams {
+        host: "localhost".into(),
+        port,
+        database: "testdb".into(),
+        user: "postgres".into(),
+        password: PASS.into(),
+        ssl: false,
+        ssl_ca: String::new(),
+        ssl_cert: String::new(),
+        ssl_key: String::new(),
+    };
+    let mut drv = retry("postgres", || PgDriver::connect(&params)).await;
+
+    // SOURCE = cmp_a (t có cột extra, f trả 1); TARGET = cmp_b (t thiếu extra, f trả 2).
+    drv.exec("CREATE SCHEMA cmp_a").await.unwrap();
+    drv.exec("CREATE SCHEMA cmp_b").await.unwrap();
+    drv.exec("CREATE TABLE cmp_a.t (id int, extra text)").await.unwrap();
+    drv.exec("CREATE TABLE cmp_b.t (id int)").await.unwrap();
+    drv.exec("CREATE FUNCTION cmp_a.f() RETURNS int LANGUAGE sql AS 'SELECT 1'").await.unwrap();
+    drv.exec("CREATE FUNCTION cmp_b.f() RETURNS int LANGUAGE sql AS 'SELECT 2'").await.unwrap();
+
+    let has_extra = |rows: &[serde_json::Value]| rows.iter().any(|r| r["column_name"].as_str() == Some("extra"));
+    let cols_b = gs_rows(&mut drv, "SELECT column_name FROM information_schema.columns WHERE table_schema='cmp_b' AND table_name='t'").await;
+    assert!(!has_extra(&cols_b), "TARGET chưa có cột extra (khác SOURCE)");
+
+    // function def khác nhau (body 1 vs 2)
+    let qb = definition_query("postgres", "function", "cmp_b", "f").unwrap();
+    let def_b = {
+        let StatementOutcome::Rows { result } = drv.exec(&qb).await.unwrap() else { panic!() };
+        result.rows[0].as_object().unwrap().values().next().unwrap().as_str().unwrap().to_string()
+    };
+    assert!(def_b.contains("SELECT 2"), "TARGET.f ban đầu trả 2");
+
+    // migration đồng bộ TARGET ← SOURCE
+    drv.exec("ALTER TABLE cmp_b.t ADD COLUMN extra text").await.unwrap();
+    drv.exec("CREATE OR REPLACE FUNCTION cmp_b.f() RETURNS int LANGUAGE sql AS 'SELECT 1'").await.unwrap();
+
+    // hội tụ: cột extra xuất hiện + function body khớp SOURCE
+    let cols_b2 = gs_rows(&mut drv, "SELECT column_name FROM information_schema.columns WHERE table_schema='cmp_b' AND table_name='t'").await;
+    assert!(has_extra(&cols_b2), "sau migration TARGET.t có extra");
+    let def_b2 = {
+        let StatementOutcome::Rows { result } = drv.exec(&qb).await.unwrap() else { panic!() };
+        result.rows[0].as_object().unwrap().values().next().unwrap().as_str().unwrap().to_string()
+    };
+    assert!(def_b2.contains("SELECT 1"), "sau migration TARGET.f khớp SOURCE:\n{def_b2}");
+    eprintln!("CHK PG schema compare proc+column → migrate converge OK");
+}
+
 // --- T15 helpers: introspect a schema into a canonical, comparable signature ---
 async fn gs_rows(drv: &mut PgDriver, sql: &str) -> Vec<serde_json::Value> {
     match drv.exec(sql).await.unwrap() {

@@ -28,6 +28,17 @@ test('schema compare: pick source/target + diff view + sync script', async ({ pa
   // diff toolbar badges render (add/changed/delete counts)
   await expect(page.getByText(/add$/).first()).toBeVisible()
   await expect(page.getByText(/changed$/).first()).toBeVisible()
+
+  // T19 — routine rows + side-by-side DDL diff panel (prev/next)
+  await page.getByText('Show identical').first().click()
+  await page.waitForTimeout(200)
+  await page.getByText(/add_one/).first().click()
+  await page.waitForTimeout(200)
+  await expect(page.getByRole('dialog').getByText(/Source ·/).first()).toBeVisible()
+  await expect(page.getByText(/Next ▶/).first()).toBeVisible()
+  await page.getByRole('dialog').getByText('×').first().click()
+  await page.waitForTimeout(150)
+
   // Sync Script mode shows migration pre
   await page.getByText('Sync Script', { exact: true }).first().click()
   await page.waitForTimeout(200)
