@@ -263,6 +263,51 @@ async fn mariadb_roundtrip() {
     mysql_like_roundtrip(("mariadb", "11"), "MARIADB", "mariadb").await;
 }
 
+/// Phase 5 · T16 — MariaDB `ANALYZE FORMAT=JSON` (số liệu thực tế). Seed rows,
+/// chạy ANALYZE, parse → mode=actual + node có actual_rows (r_rows).
+#[tokio::test]
+async fn mariadb_analyze_actual_plan() {
+    use database_studio_lib::drivers::plan::{self, PlanNode};
+
+    let c = GenericImage::new("mariadb", "11")
+        .with_exposed_port(3306.tcp())
+        .with_env_var("MARIADB_ROOT_PASSWORD", PASS)
+        .with_env_var("MARIADB_DATABASE", "testdb")
+        .start()
+        .await
+        .expect("start mariadb container");
+    let port = c.get_host_port_ipv4(3306).await.unwrap();
+    let params = MySqlConnParams {
+        host: "localhost".into(),
+        port,
+        database: "testdb".into(),
+        user: "root".into(),
+        password: PASS.into(),
+        ssl: false,
+        ssl_ca: String::new(),
+        ssl_cert: String::new(),
+        ssl_key: String::new(),
+    };
+    let mut drv = retry("mariadb", || MySqlDriver::connect(&params, "mariadb")).await;
+
+    drv.exec("CREATE TABLE it_an (id int PRIMARY KEY, v varchar(20))").await.unwrap();
+    drv.exec("INSERT INTO it_an VALUES (1,'a'),(2,'b'),(3,'c'),(4,'d'),(5,'e')").await.unwrap();
+
+    let out = drv.exec("ANALYZE FORMAT=JSON SELECT * FROM it_an WHERE v = 'c'").await.unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!("ANALYZE phải trả rows") };
+    let cell = result.rows[0].as_object().unwrap().values().next().unwrap();
+    let json = cell.as_str().map(String::from).unwrap_or_else(|| cell.to_string());
+
+    let p = plan::parse_mysql(&json, "mariadb", true).expect("parse ANALYZE JSON");
+    assert_eq!(p.mode, "actual", "ANALYZE → mode actual");
+    let root = p.root.expect("có root");
+    fn has_actual(n: &PlanNode) -> bool {
+        n.actual_rows.is_some() || n.children.iter().any(has_actual)
+    }
+    assert!(has_actual(&root), "ANALYZE phải có actual_rows (r_rows). raw:\n{json}");
+    eprintln!("CHK MariaDB ANALYZE actual OK");
+}
+
 // ---------------------------------------------------------------------------
 // MSSQL
 // ---------------------------------------------------------------------------

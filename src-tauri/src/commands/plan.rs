@@ -54,6 +54,8 @@ fn build_explain(system: &str, sql: &str, actual: bool) -> String {
                 format!("EXPLAIN (FORMAT JSON) {sql}")
             }
         }
+        // MariaDB hỗ trợ ANALYZE FORMAT=JSON (số liệu thực tế r_rows/r_total_time_ms).
+        "mariadb" if actual => format!("ANALYZE FORMAT=JSON {sql}"),
         "mysql" | "mariadb" => format!("EXPLAIN FORMAT=JSON {sql}"),
         "sqlite" => format!("EXPLAIN QUERY PLAN {sql}"),
         "clickhouse" => format!("EXPLAIN indexes = 1 {sql}"),
@@ -79,7 +81,7 @@ fn parse_for_system(
         "mysql" | "mariadb" => {
             let cell = first_cell(rows).ok_or("MySQL EXPLAIN rỗng")?;
             let json = cell.as_str().map(String::from).unwrap_or_else(|| cell.to_string());
-            plan::parse_mysql(&json, system)
+            plan::parse_mysql(&json, system, actual && system == "mariadb")
         }
         "sqlite" => {
             // mỗi row: { id, parent, notused, detail }

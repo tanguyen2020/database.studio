@@ -154,25 +154,27 @@ fn parse_pg_node(plan: &Value, warnings: &mut Vec<String>) -> PlanNode {
 // MySQL / MariaDB — EXPLAIN FORMAT=JSON (query_block → nested table nodes)
 // ---------------------------------------------------------------------------
 
-/// Parse `EXPLAIN FORMAT=JSON` của MySQL/MariaDB (đơn giản hóa: 1 nhánh chính
-/// theo query_block/nested_loop/table). Đủ để hiển thị access type + rows.
-pub fn parse_mysql(json_text: &str, system: &str) -> Result<QueryPlan, String> {
+/// Parse `EXPLAIN FORMAT=JSON` (estimated) hoặc `ANALYZE FORMAT=JSON` (actual —
+/// MariaDB, có `r_rows`/`r_total_time_ms`). Đơn giản hóa: 1 nhánh chính theo
+/// query_block/nested_loop/table.
+pub fn parse_mysql(json_text: &str, system: &str, actual: bool) -> Result<QueryPlan, String> {
     let v: Value = serde_json::from_str(json_text).map_err(|e| format!("MySQL plan JSON lỗi: {e}"))?;
     let qb = v.get("query_block").ok_or("thiếu query_block")?;
     let mut warnings = Vec::new();
-    let root = parse_mysql_block(qb, &mut warnings);
-    QueryPlan_ok(system, false, root, None, warnings, json_text)
+    let root = parse_mysql_block(qb, actual, &mut warnings);
+    let total_time = qb.get("r_total_time_ms").and_then(Value::as_f64);
+    QueryPlan_ok(system, actual, root, total_time, warnings, json_text)
 }
 
-fn parse_mysql_block(block: &Value, warnings: &mut Vec<String>) -> PlanNode {
+fn parse_mysql_block(block: &Value, actual: bool, warnings: &mut Vec<String>) -> PlanNode {
     // nested_loop → join; table → scan
     if let Some(nested) = block.get("nested_loop").and_then(Value::as_array) {
         let mut node = PlanNode::leaf("NestedLoop", "nested_loop");
-        node.children = nested.iter().map(|t| parse_mysql_block(t, warnings)).collect();
+        node.children = nested.iter().map(|t| parse_mysql_block(t, actual, warnings)).collect();
         return node;
     }
     if let Some(table) = block.get("table") {
-        return parse_mysql_table(table, warnings);
+        return parse_mysql_table(table, actual, warnings);
     }
     if let Some(cost) = block.get("cost_info").and_then(|c| c.get("query_cost")).and_then(Value::as_str) {
         let mut n = PlanNode::leaf("QueryBlock", "query_block");
@@ -183,7 +185,7 @@ fn parse_mysql_block(block: &Value, warnings: &mut Vec<String>) -> PlanNode {
     PlanNode::leaf("QueryBlock", "query_block")
 }
 
-fn parse_mysql_table(table: &Value, warnings: &mut Vec<String>) -> PlanNode {
+fn parse_mysql_table(table: &Value, actual: bool, warnings: &mut Vec<String>) -> PlanNode {
     let access = table.get("access_type").and_then(Value::as_str).unwrap_or("ALL");
     let native = format!("{access} access");
     let op = match access {
@@ -194,6 +196,11 @@ fn parse_mysql_table(table: &Value, warnings: &mut Vec<String>) -> PlanNode {
     };
     let mut node = PlanNode::leaf(op, &native);
     node.estimated_rows = table.get("rows_examined_per_scan").and_then(Value::as_f64);
+    if actual {
+        // ANALYZE FORMAT=JSON: r_rows (thực tế / loop), r_total_time_ms
+        node.actual_rows = table.get("r_rows").and_then(Value::as_f64);
+        node.actual_time_ms = table.get("r_total_time_ms").and_then(Value::as_f64);
+    }
     if let Some(name) = table.get("table_name").and_then(Value::as_str) {
         node.extra.insert("Relation Name".into(), Value::String(name.into()));
     }
@@ -454,10 +461,25 @@ mod tests {
     fn mysql_json_access_type() {
         let json = r#"{"query_block":{"table":{"table_name":"orders","access_type":"ALL",
           "rows_examined_per_scan":50000,"cost_info":{"read_cost":"1234.5"}}}}"#;
-        let plan = parse_mysql(json, "mysql").unwrap();
+        let plan = parse_mysql(json, "mysql", false).unwrap();
         let root = plan.root.unwrap();
         assert_eq!(root.operation, "SeqScan");
         assert!(root.is_hotspot);
+    }
+
+    #[test]
+    fn mariadb_analyze_actual_rows() {
+        // ANALYZE FORMAT=JSON: r_rows/r_total_time_ms → actual + mode=actual.
+        let json = r#"{"query_block":{"r_total_time_ms":4.2,"table":{"table_name":"orders",
+          "access_type":"ALL","rows_examined_per_scan":1000,"r_rows":950,"r_total_time_ms":3.1}}}"#;
+        let plan = parse_mysql(json, "mariadb", true).unwrap();
+        assert_eq!(plan.mode, "actual");
+        assert_eq!(plan.summary.total_time_ms, Some(4.2));
+        let root = plan.root.unwrap();
+        assert_eq!(root.operation, "SeqScan");
+        assert_eq!(root.actual_rows, Some(950.0));
+        assert_eq!(root.actual_time_ms, Some(3.1));
+        assert_eq!(root.estimated_rows, Some(1000.0));
     }
 
     #[test]
