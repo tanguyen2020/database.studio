@@ -16,6 +16,12 @@ function uuid(): string {
 class TabsStore {
   tabs = $state<TabState[]>([])
   activeTabId = $state<string | null>(null)
+  /** Split view (T11): null = 1 pane; 'v' = trái|phải; 'h' = trên/dưới. */
+  splitDir = $state<null | 'v' | 'h'>(null)
+  /** active tab của pane 1 (pane 0 dùng activeTabId). */
+  activeTabId1 = $state<string | null>(null)
+  /** pane đang focus (0/1) — quyết định tab.active + nơi mở tab mới. */
+  activePane = $state<0 | 1>(0)
   /** stack of recently closed tabs for Ctrl+Shift+T */
   private closedStack: TabState[] = []
   /** tabs pending the save-before-close dialog */
@@ -23,11 +29,21 @@ class TabsStore {
   restored = $state(false)
 
   get active(): TabState | null {
-    return this.tabs.find((t) => t.id === this.activeTabId) ?? null
+    const id = this.activePane === 1 ? this.activeTabId1 : this.activeTabId
+    return this.tabs.find((t) => t.id === id) ?? null
   }
 
-  byId(id: string): TabState | null {
+  byId(id: string | null | undefined): TabState | null {
     return this.tabs.find((t) => t.id === id) ?? null
+  }
+
+  /** Tabs thuộc pane (0 mặc định cho tab chưa gắn pane). */
+  tabsInPane(pane: 0 | 1): TabState[] {
+    return this.tabs.filter((t) => (t.pane ?? 0) === pane)
+  }
+
+  activeInPane(pane: 0 | 1): TabState | null {
+    return this.byId(pane === 1 ? this.activeTabId1 : this.activeTabId)
   }
 
   tabsForConnection(connId: string): TabState[] {
@@ -42,12 +58,14 @@ class TabsStore {
     title?: string
     query?: string
     activate?: boolean
+    pane?: 0 | 1
   }): TabState {
     const connId =
       opts?.connectionId !== undefined
         ? opts.connectionId
         : this.active?.connectionId ?? connections.selectedId
     const profile = connections.byId(connId)
+    const pane = opts?.pane ?? (this.splitDir ? this.activePane : 0)
     const tab: TabState = {
       id: uuid(),
       connectionId: connId ?? null,
@@ -57,10 +75,15 @@ class TabsStore {
       title: opts?.title ?? `Untitled ${nextUntitled++}`,
       isPinned: false,
       isDirty: false,
+      pane,
       state: { query: opts?.query ?? '' },
     }
     this.tabs.push(tab)
-    if (opts?.activate !== false) this.activeTabId = tab.id
+    if (opts?.activate !== false) {
+      this.activePane = pane
+      if (pane === 1) this.activeTabId1 = tab.id
+      else this.activeTabId = tab.id
+    }
     this.schedulePersist()
     return tab
   }
@@ -190,7 +213,46 @@ class TabsStore {
   }
 
   activate(id: string) {
-    if (this.byId(id)) this.activeTabId = id
+    const t = this.byId(id)
+    if (!t) return
+    const pane = (t.pane ?? 0) as 0 | 1
+    this.activePane = pane
+    if (pane === 1) this.activeTabId1 = id
+    else this.activeTabId = id
+  }
+
+  focusPane(pane: 0 | 1) {
+    this.activePane = pane
+  }
+
+  // ---- split view (T11) ----------------------------------------------------
+
+  /** Đưa tab sang pane còn lại → bật split (mặc định dọc). */
+  moveToSplit(id: string, dir: 'v' | 'h' = 'v') {
+    const t = this.byId(id)
+    if (!t) return
+    if (!this.splitDir) this.splitDir = dir
+    t.pane = 1
+    this.activeTabId1 = id
+    this.activePane = 1
+    // nếu pane 0 rỗng thì kéo active pane 0 về tab đầu còn lại
+    if (!this.tabsInPane(0).some((x) => x.id === this.activeTabId)) {
+      this.activeTabId = this.tabsInPane(0)[0]?.id ?? null
+    }
+    this.schedulePersist()
+  }
+
+  toggleSplitDir() {
+    if (this.splitDir) this.splitDir = this.splitDir === 'v' ? 'h' : 'v'
+  }
+
+  /** Gộp tất cả tab về pane 0, tắt split. */
+  closeSplit() {
+    for (const t of this.tabs) t.pane = 0
+    this.splitDir = null
+    this.activePane = 0
+    this.activeTabId1 = null
+    this.schedulePersist()
   }
 
   next() {
@@ -240,12 +302,31 @@ class TabsStore {
     if (this.closedStack.length > MAX_CLOSED_STACK) {
       this.closedStack.splice(0, this.closedStack.length - MAX_CLOSED_STACK)
     }
-    const wasActive = ids.includes(this.activeTabId ?? '')
-    const oldIdx = this.tabs.findIndex((t) => t.id === this.activeTabId)
-    this.tabs = this.tabs.filter((t) => !ids.includes(t.id))
-    if (wasActive) {
-      const idx = Math.min(oldIdx, this.tabs.length - 1)
-      this.activeTabId = idx >= 0 ? this.tabs[idx].id : null
+    if (!this.splitDir) {
+      // hành vi gốc (1 pane) — giữ nguyên để không đổi test hiện có
+      const wasActive = ids.includes(this.activeTabId ?? '')
+      const oldIdx = this.tabs.findIndex((t) => t.id === this.activeTabId)
+      this.tabs = this.tabs.filter((t) => !ids.includes(t.id))
+      if (wasActive) {
+        const idx = Math.min(oldIdx, this.tabs.length - 1)
+        this.activeTabId = idx >= 0 ? this.tabs[idx].id : null
+      }
+    } else {
+      // split: dọn active từng pane, tự tắt split khi pane 1 rỗng
+      const was0 = ids.includes(this.activeTabId ?? '')
+      const was1 = ids.includes(this.activeTabId1 ?? '')
+      const i0 = this.tabsInPane(0).findIndex((t) => t.id === this.activeTabId)
+      const i1 = this.tabsInPane(1).findIndex((t) => t.id === this.activeTabId1)
+      this.tabs = this.tabs.filter((t) => !ids.includes(t.id))
+      if (was0) {
+        const p0 = this.tabsInPane(0)
+        this.activeTabId = p0[Math.min(Math.max(i0, 0), p0.length - 1)]?.id ?? null
+      }
+      if (was1) {
+        const p1 = this.tabsInPane(1)
+        this.activeTabId1 = p1[Math.min(Math.max(i1, 0), p1.length - 1)]?.id ?? null
+      }
+      if (this.tabsInPane(1).length === 0) this.closeSplit()
     }
     this.pendingClose = null
     this.schedulePersist()
@@ -388,6 +469,8 @@ class TabsStore {
           p.connectionId = null
           p.systemType = 'orphan'
         }
+        // split layout không persist → gộp về pane 0 để không có tab "ẩn"
+        p.pane = 0
         restored.push(p)
       }
       this.tabs = restored

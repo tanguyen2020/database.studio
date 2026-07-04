@@ -199,6 +199,8 @@ export interface TabState {
   title: string
   isPinned: boolean
   isDirty: boolean
+  /** Split view: pane index (0 = left/top, 1 = right/bottom). undefined = 0. */
+  pane?: number
   /** Editor buffer, selected schema/table, scroll position, ... */
   state: Record<string, unknown>
 }

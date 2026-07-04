@@ -16,6 +16,9 @@ import { tabs } from './tabs.svelte'
 function reset() {
   tabs.tabs = []
   tabs.activeTabId = null
+  tabs.activeTabId1 = null
+  tabs.splitDir = null
+  tabs.activePane = 0
   tabs.pendingClose = null
   tabs.restored = true
 }
@@ -159,5 +162,53 @@ describe('tab store — persist', () => {
     const call = vi.mocked(ipc.saveTabs).mock.lastCall![0] as Array<{ id: string }>
     expect(call[0].id).toBe(b.id)
     expect(call[1].id).toBe(a.id)
+  })
+})
+
+describe('split view (T11)', () => {
+  it('moveToSplit đưa tab sang pane 1 + bật split', () => {
+    const a = tabs.openSqlTab({ connectionId: null })
+    const b = tabs.openSqlTab({ connectionId: null })
+    tabs.moveToSplit(b.id, 'v')
+    expect(tabs.splitDir).toBe('v')
+    expect(tabs.tabsInPane(0).map((t) => t.id)).toEqual([a.id])
+    expect(tabs.tabsInPane(1).map((t) => t.id)).toEqual([b.id])
+    expect(tabs.activePane).toBe(1)
+    expect(tabs.activeInPane(1)?.id).toBe(b.id)
+    expect(tabs.active?.id).toBe(b.id)
+  })
+
+  it('openSqlTab({pane:1}) mở tab trong pane 1 khi đang split', () => {
+    const a = tabs.openSqlTab({ connectionId: null })
+    tabs.moveToSplit(a.id, 'v') // giờ pane 0 rỗng, split bật
+    const c = tabs.openSqlTab({ connectionId: null, pane: 0 })
+    expect(tabs.tabsInPane(0).map((t) => t.id)).toEqual([c.id])
+  })
+
+  it('closeSplit gộp mọi tab về pane 0', () => {
+    const a = tabs.openSqlTab({ connectionId: null })
+    const b = tabs.openSqlTab({ connectionId: null })
+    tabs.moveToSplit(b.id)
+    tabs.closeSplit()
+    expect(tabs.splitDir).toBeNull()
+    expect(tabs.tabsInPane(1)).toHaveLength(0)
+    expect(tabs.tabsInPane(0).map((t) => t.id).sort()).toEqual([a.id, b.id].sort())
+  })
+
+  it('đóng tab cuối của pane 1 → tự tắt split', () => {
+    const a = tabs.openSqlTab({ connectionId: null })
+    const b = tabs.openSqlTab({ connectionId: null })
+    tabs.moveToSplit(b.id)
+    tabs.forceClose([b.id])
+    expect(tabs.splitDir).toBeNull()
+    expect(tabs.active?.id).toBe(a.id)
+  })
+
+  it('toggleSplitDir đổi v↔h', () => {
+    const a = tabs.openSqlTab({ connectionId: null })
+    const b = tabs.openSqlTab({ connectionId: null })
+    tabs.moveToSplit(b.id, 'v')
+    tabs.toggleSplitDir()
+    expect(tabs.splitDir).toBe('h')
   })
 })

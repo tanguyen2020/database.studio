@@ -10,6 +10,11 @@
   import { systemMeta } from '$lib/systems'
   import { tabs } from '$lib/stores/tabs.svelte'
 
+  // pane = 0 (mặc định / khi không split) hoặc 1 (pane thứ hai của split view)
+  let { pane = 0 }: { pane?: 0 | 1 } = $props()
+  const paneTabs = $derived(tabs.tabsInPane(pane))
+  const activeId = $derived(pane === 1 ? tabs.activeTabId1 : tabs.activeTabId)
+
   let stripEl = $state<HTMLDivElement | null>(null)
   let dragIdx = $state<number | null>(null)
   let dropIdx = $state<number | null>(null)
@@ -63,10 +68,17 @@
 </script>
 
 <!-- TAB BAR — dòng 175 -->
-<div style="flex:none;display:flex;align-items:stretch;background:var(--header);border-bottom:var(--px-1) solid var(--border);height:var(--px-40);overflow-x:auto;overflow-y:hidden" bind:this={stripEl} class="scrollbar-none">
-  {#each tabs.tabs as tab, idx (tab.id)}
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div
+  style="flex:none;display:flex;align-items:stretch;background:var(--header);border-bottom:var(--px-1) solid var(--border);height:var(--px-40);overflow-x:auto;overflow-y:hidden;{tabs.splitDir && tabs.activePane === pane ? 'box-shadow:inset 0 var(--px-2) 0 var(--primary)' : ''}"
+  bind:this={stripEl}
+  class="scrollbar-none"
+  onpointerdown={() => tabs.focusPane(pane)}
+>
+  {#each paneTabs as tab (tab.id)}
+    {@const idx = tabs.tabs.indexOf(tab)}
     {@const meta = systemMeta(tab.systemType)}
-    {@const isActive = tab.id === tabs.activeTabId}
+    {@const isActive = tab.id === activeId}
     <ContextMenu.Root>
       <ContextMenu.Trigger style="display:flex;align-items:stretch;min-width:0">
         <!-- tab — dòng 177 -->
@@ -149,19 +161,39 @@
           Close to the Right
         </ContextMenu.Item>
         <ContextMenu.Item onclick={() => tabs.requestClose(tabs.tabs.map((t) => t.id))}>Close All</ContextMenu.Item>
+        <ContextMenu.Separator />
+        {#if !tabs.splitDir}
+          <ContextMenu.Item disabled={tabs.tabs.length <= 1} onclick={() => tabs.moveToSplit(tab.id, 'v')}>Split Right</ContextMenu.Item>
+          <ContextMenu.Item disabled={tabs.tabs.length <= 1} onclick={() => tabs.moveToSplit(tab.id, 'h')}>Split Down</ContextMenu.Item>
+        {:else}
+          <ContextMenu.Item onclick={() => tabs.moveToSplit(tab.id)}>Move to Other Pane</ContextMenu.Item>
+          <ContextMenu.Item onclick={() => tabs.toggleSplitDir()}>Toggle Split Direction</ContextMenu.Item>
+          <ContextMenu.Item onclick={() => tabs.closeSplit()}>Close Split (Merge)</ContextMenu.Item>
+        {/if}
       </ContextMenu.Content>
     </ContextMenu.Root>
   {/each}
 
-  <!-- nút + — dòng 188 -->
+  <!-- nút + — dòng 188 (mở trong pane hiện tại của bar) -->
   <div
-    onclick={() => tabs.openSqlTab({})}
-    onkeydown={(e) => e.key === 'Enter' && tabs.openSqlTab({})}
+    onclick={() => tabs.openSqlTab({ pane })}
+    onkeydown={(e) => e.key === 'Enter' && tabs.openSqlTab({ pane })}
     role="button"
     tabindex="0"
     title="New SQL tab (Ctrl+T)"
     style="display:flex;align-items:center;padding:0 var(--px-12);cursor:pointer;color:var(--muted);font-size:var(--px-16)"
   >+</div>
+
+  {#if tabs.splitDir}
+    <div
+      onclick={() => tabs.closeSplit()}
+      onkeydown={(e) => e.key === 'Enter' && tabs.closeSplit()}
+      role="button"
+      tabindex="0"
+      title="Đóng split (gộp về 1 pane)"
+      style="display:flex;align-items:center;padding:0 var(--px-10);cursor:pointer;color:var(--muted);font-size:var(--px-13)"
+    >⊟</div>
+  {/if}
 
   {#if hasOverflow}
     <DropdownMenu.Root>
@@ -170,7 +202,7 @@
         title="More tabs"
       >⌄</DropdownMenu.Trigger>
       <DropdownMenu.Content class="max-h-[50vh] w-64 overflow-y-auto" align="end">
-        {#each tabs.tabs as tab (tab.id)}
+        {#each paneTabs as tab (tab.id)}
           <DropdownMenu.Item onclick={() => tabs.activate(tab.id)}>
             <SystemIcon system={tab.systemType} size={15} />
             <span style="margin-left:var(--px-6);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{tab.title}</span>

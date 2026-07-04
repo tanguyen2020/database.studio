@@ -134,43 +134,64 @@
 
     <!-- MAIN — dòng 173 -->
     <main style="flex:1;display:flex;flex-direction:column;min-width:0;background:var(--bg);overflow:hidden">
-      <TabBar />
-      <div style="flex:1;display:flex;flex-direction:column;min-height:0">
-        {#if !ready}
-          <div style="flex:1;display:flex;align-items:center;justify-content:center;font-size:var(--px-12);color:var(--muted)">
-            Đang khởi động…
+      {#snippet paneBody(t: import('$lib/types').TabState)}
+        {#key t.id}
+          {#if t.contentType === 'table-viewer'}
+            <TableViewerTab tab={t} />
+          {:else if t.contentType === 'history'}
+            <HistoryTab />
+          {:else if t.contentType === 'saved'}
+            <SavedQueriesTab />
+          {:else if t.contentType === 'redis'}
+            <RedisWorkspace tab={t} />
+          {:else if t.contentType === 'redis-pubsub'}
+            <RedisPubSub tab={t} />
+          {:else if t.contentType === 'nats'}
+            <NatsWorkspace tab={t} />
+          {:else}
+            <SqlWorkspace tab={t} />
+          {/if}
+        {/key}
+      {/snippet}
+
+      {#snippet emptyPane()}
+        <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:var(--px-8);font-size:var(--px-13);color:var(--muted)">
+          <p>Chưa có tab nào mở</p>
+          <div
+            onclick={() => tabs.openSqlTab({})}
+            onkeydown={(e) => e.key === 'Enter' && tabs.openSqlTab({})}
+            role="button"
+            tabindex="0"
+            style="color:var(--primary);cursor:pointer"
+          >+ New SQL tab (Ctrl+T)</div>
+        </div>
+      {/snippet}
+
+      {#if !ready}
+        <div style="flex:1;display:flex;align-items:center;justify-content:center;font-size:var(--px-12);color:var(--muted)">Đang khởi động…</div>
+      {:else if tabs.splitDir}
+        <!-- split view (T11): 2 pane — v = trái|phải, h = trên/dưới -->
+        <div style="flex:1;display:flex;flex-direction:{tabs.splitDir === 'v' ? 'row' : 'column'};min-height:0;min-width:0">
+          <div style="flex:1;display:flex;flex-direction:column;min-width:0;min-height:0">
+            <TabBar pane={0} />
+            <div style="flex:1;display:flex;flex-direction:column;min-height:0">
+              {#if tabs.activeInPane(0)}{@render paneBody(tabs.activeInPane(0)!)}{:else}{@render emptyPane()}{/if}
+            </div>
           </div>
-        {:else if tabs.active}
-          {#key tabs.active.id}
-            {#if tabs.active.contentType === 'table-viewer'}
-              <TableViewerTab tab={tabs.active} />
-            {:else if tabs.active.contentType === 'history'}
-              <HistoryTab />
-            {:else if tabs.active.contentType === 'saved'}
-              <SavedQueriesTab />
-            {:else if tabs.active.contentType === 'redis'}
-              <RedisWorkspace tab={tabs.active} />
-            {:else if tabs.active.contentType === 'redis-pubsub'}
-              <RedisPubSub tab={tabs.active} />
-            {:else if tabs.active.contentType === 'nats'}
-              <NatsWorkspace tab={tabs.active} />
-            {:else}
-              <SqlWorkspace tab={tabs.active} />
-            {/if}
-          {/key}
-        {:else}
-          <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:var(--px-8);font-size:var(--px-13);color:var(--muted)">
-            <p>Chưa có tab nào mở</p>
-            <div
-              onclick={() => tabs.openSqlTab({})}
-              onkeydown={(e) => e.key === 'Enter' && tabs.openSqlTab({})}
-              role="button"
-              tabindex="0"
-              style="color:var(--primary);cursor:pointer"
-            >+ New SQL tab (Ctrl+T)</div>
+          <div style="flex:none;{tabs.splitDir === 'v' ? 'width:var(--px-1)' : 'height:var(--px-1)'};background:var(--border2)"></div>
+          <div style="flex:1;display:flex;flex-direction:column;min-width:0;min-height:0">
+            <TabBar pane={1} />
+            <div style="flex:1;display:flex;flex-direction:column;min-height:0">
+              {#if tabs.activeInPane(1)}{@render paneBody(tabs.activeInPane(1)!)}{:else}{@render emptyPane()}{/if}
+            </div>
           </div>
-        {/if}
-      </div>
+        </div>
+      {:else}
+        <TabBar />
+        <div style="flex:1;display:flex;flex-direction:column;min-height:0">
+          {#if tabs.active}{@render paneBody(tabs.active)}{:else}{@render emptyPane()}{/if}
+        </div>
+      {/if}
       <!-- STATUS BAR nằm trong cột main — dòng 1501 -->
       <StatusBar />
     </main>
