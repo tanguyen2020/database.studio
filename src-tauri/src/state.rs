@@ -49,9 +49,34 @@ impl KafkaStops {
     }
 }
 
+/// Cancellation tokens cho các lần Test connection đang chạy (T10). Mỗi lần Test
+/// mang 1 test_id; Cancel/đóng dialog gọi cancel(test_id) để hủy THẬT ở backend.
+#[derive(Default)]
+pub struct TestCancels(Mutex<HashMap<String, tokio_util::sync::CancellationToken>>);
+
+impl TestCancels {
+    /// Tạo + đăng ký token cho test_id (thay token cũ cùng id nếu có).
+    pub fn register(&self, id: String) -> tokio_util::sync::CancellationToken {
+        let token = tokio_util::sync::CancellationToken::new();
+        self.0.lock().unwrap().insert(id, token.clone());
+        token
+    }
+    /// Kích hoạt hủy test_id (nếu còn đang chạy).
+    pub fn cancel(&self, id: &str) {
+        if let Some(t) = self.0.lock().unwrap().get(id) {
+            t.cancel();
+        }
+    }
+    /// Gỡ token khi test kết thúc.
+    pub fn remove(&self, id: &str) {
+        self.0.lock().unwrap().remove(id);
+    }
+}
+
 pub struct AppState {
     pub storage: Storage,
     pub registry: Registry,
     pub pubsub: PubSubTasks,
     pub kafka_stops: KafkaStops,
+    pub test_cancels: TestCancels,
 }

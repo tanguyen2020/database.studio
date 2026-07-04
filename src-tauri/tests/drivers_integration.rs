@@ -1537,3 +1537,84 @@ mod schema_registry_http {
         eprintln!("CHK SR schema OK — test end");
     }
 }
+
+// ---------------------------------------------------------------------------
+// T10 — Connection Test/Cancel: bounded timeout + real abort (dùng PG container)
+// ---------------------------------------------------------------------------
+#[tokio::test]
+async fn connection_test_bounded_and_cancellable() {
+    use database_studio_lib::commands::connections::{connect_timeout, run_test_bounded};
+    use database_studio_lib::connections::profile::{ConnectionProfile, Environment, SqliteMode, SshConfig};
+    use database_studio_lib::drivers::types::SystemType;
+    use tokio_util::sync::CancellationToken;
+
+    fn pg_profile(host: &str, port: u16) -> ConnectionProfile {
+        ConnectionProfile {
+            id: "t".into(),
+            name: "t".into(),
+            system: SystemType::Postgres,
+            host: host.into(),
+            port,
+            database: "testdb".into(),
+            user: "postgres".into(),
+            password_enc: String::new(),
+            group: String::new(),
+            env: Environment::Development,
+            ssh: SshConfig::default(),
+            ssl: false,
+            ssl_ca: String::new(),
+            ssl_cert: String::new(),
+            ssl_key: String::new(),
+            sqlite_path: String::new(),
+            sqlite_mode: SqliteMode::ReadWrite,
+            mssql_auth: String::new(),
+            schema_registry_url: String::new(),
+            cassandra_dc: String::new(),
+            cassandra_consistency: String::new(),
+        }
+    }
+
+    let (_c, port) = start_pg().await;
+
+    // (a) live PG → ok + latency (retry vì container mới bật cần vài giây)
+    let live = pg_profile("localhost", port);
+    let ok = {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        loop {
+            let r = run_test_bounded(&live, PASS, "", connect_timeout(), CancellationToken::new()).await;
+            if r.ok {
+                break r;
+            }
+            assert!(Instant::now() < deadline, "PG test không ok: {:?}", r.error);
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+    };
+    assert!(ok.latency_ms.is_some(), "live test phải có latency");
+    eprintln!("CHK (a) live PG test OK");
+
+    // (b) closed port → ✗ có message rõ, trả NHANH (< timeout, không treo)
+    let started = Instant::now();
+    let refused = run_test_bounded(&pg_profile("127.0.0.1", 1), PASS, "", connect_timeout(), CancellationToken::new()).await;
+    assert!(!refused.ok, "closed port phải fail");
+    assert!(refused.error.is_some(), "phải có error message");
+    assert!(started.elapsed() < connect_timeout(), "closed port phải trả nhanh, got {:?}", started.elapsed());
+    eprintln!("CHK (b) closed port → error bounded OK ({:?})", refused.error);
+
+    // (c) cancel Test tới host không tới được → abort < 1s (không chờ timeout)
+    let token = CancellationToken::new();
+    let t2 = token.clone();
+    let unreachable = pg_profile("10.255.255.1", 9); // blackhole: drop SYN → connect treo
+    let handle = tokio::spawn(async move {
+        run_test_bounded(&unreachable, PASS, "", Duration::from_secs(30), t2).await
+    });
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let cstart = Instant::now();
+    token.cancel();
+    let r = tokio::time::timeout(Duration::from_secs(2), handle)
+        .await
+        .expect("test future phải kết thúc ngay sau cancel")
+        .unwrap();
+    assert!(cstart.elapsed() < Duration::from_secs(1), "cancel phải abort < 1s, mất {:?}", cstart.elapsed());
+    assert!(!r.ok, "test bị hủy → not ok");
+    eprintln!("CHK (c) cancel unreachable aborted in {:?} — test end", cstart.elapsed());
+}

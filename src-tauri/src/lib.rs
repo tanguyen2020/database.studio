@@ -27,6 +27,7 @@ pub fn run() {
                 registry: Registry::default(),
                 pubsub: Default::default(),
                 kafka_stops: Default::default(),
+                test_cancels: Default::default(),
             });
             Ok(())
         })
@@ -41,6 +42,7 @@ pub fn run() {
             commands::connections::reconnect,
             commands::connections::quick_connect,
             commands::connections::test_connection,
+            commands::connections::cancel_test,
             commands::connections::ping_connection,
             // query
             commands::query::exec_statement,

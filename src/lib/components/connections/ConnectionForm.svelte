@@ -78,6 +78,11 @@
   )
 
   function close() {
+    // Đóng/Cancel khi đang Test → hủy THẬT lần test ở backend (không để treo).
+    if (testId) {
+      void connections.cancelTest(testId)
+      testId = null
+    }
     ui.formProfile = null
     ui.formQuick = false
   }
@@ -138,16 +143,21 @@
     }
   }
 
+  // id của lần Test đang chạy — để Cancel/đóng dialog hủy THẬT ở backend (T10).
+  let testId = $state<string | null>(null)
   async function runTest() {
     if (!draft || testing) return
     testing = true
     testResult = null
+    const id = crypto.randomUUID()
+    testId = id
     try {
-      testResult = await connections.test(buildDraftPayload())
+      testResult = await connections.test(buildDraftPayload(), id)
     } catch (e) {
       testResult = { ok: false, error: String(e) }
     } finally {
       testing = false
+      testId = null
     }
   }
 

@@ -44,8 +44,11 @@ export const reconnect = (id: string) => invoke<number>('reconnect', { id })
 export const quickConnect = (draft: ProfileDraft) =>
   invoke<ProfilePublic>('quick_connect', { draft })
 
-export const testConnection = (draft: ProfileDraft) =>
-  invoke<TestResult>('test_connection', { draft })
+export const testConnection = (draft: ProfileDraft, testId?: string) =>
+  invoke<TestResult>('test_connection', { draft, testId })
+
+/** Hủy THẬT một lần Test đang chạy ở backend (T10). */
+export const cancelTest = (testId: string) => invoke<void>('cancel_test', { testId })
 
 export const pingConnection = (id: string) => invoke<boolean>('ping_connection', { id })
 

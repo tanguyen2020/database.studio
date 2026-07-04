@@ -168,8 +168,12 @@ class ConnectionsStore {
   }
 
   /** Real handshake test — returns latency/version or the specific error. */
-  async test(draft: ProfileDraft) {
-    return ipc.testConnection(draft)
+  async test(draft: ProfileDraft, testId?: string) {
+    return ipc.testConnection(draft, testId)
+  }
+
+  async cancelTest(testId: string) {
+    return ipc.cancelTest(testId)
   }
 
   makeBlankProfile(system: SystemType): ProfilePublic {

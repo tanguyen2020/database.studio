@@ -225,6 +225,8 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
       return ok(true)
     case 'test_connection':
       return ok({ ok: true, latency_ms: 12, server_version: 'demo' })
+    case 'cancel_test':
+      return ok(null)
     case 'save_connection':
       return ok((args?.draft as { profile: unknown })?.profile)
     case 'quick_connect': {
