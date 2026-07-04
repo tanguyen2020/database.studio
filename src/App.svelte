@@ -25,6 +25,8 @@
   import KafkaProducer from '$lib/components/workspace/KafkaProducer.svelte'
   import SchemaRegistryWorkspace from '$lib/components/workspace/SchemaRegistryWorkspace.svelte'
   import CassandraRing from '$lib/components/workspace/CassandraRing.svelte'
+  import CommandPalette from '$lib/components/CommandPalette.svelte'
+  import { palette } from '$lib/stores/palette.svelte'
   import HistoryTab from '$lib/components/workspace/HistoryTab.svelte'
   import SavedQueriesTab from '$lib/components/workspace/SavedQueriesTab.svelte'
   import { connections } from '$lib/stores/connections.svelte'
@@ -52,7 +54,10 @@
     if (!ctrl) return
     const key = e.key.toLowerCase()
 
-    if (key === 'h') {
+    if (key === 'p' && !e.shiftKey) {
+      e.preventDefault()
+      palette.toggle()
+    } else if (key === 'h') {
       e.preventDefault()
       tabs.openUtilityTab('history', 'Query History')
     } else if (key === 't' && !e.shiftKey) {
@@ -222,4 +227,5 @@
 <DeleteConnectionDialog />
 <EditConnectedDialog />
 <SaveBeforeCloseDialog />
+<CommandPalette />
 <Toasts />
