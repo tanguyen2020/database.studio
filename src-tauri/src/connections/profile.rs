@@ -89,6 +89,12 @@ pub struct ConnectionProfile {
     /// Kafka only: Confluent Schema Registry base URL (empty = no registry).
     #[serde(default)]
     pub schema_registry_url: String,
+    /// Cassandra only: local datacenter for the load-balancing policy.
+    #[serde(default)]
+    pub cassandra_dc: String,
+    /// Cassandra only: default consistency level (LOCAL_QUORUM if empty).
+    #[serde(default)]
+    pub cassandra_consistency: String,
 }
 
 impl ConnectionProfile {

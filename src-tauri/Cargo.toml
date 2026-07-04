@@ -75,6 +75,13 @@ bytes = "1"
 # SASL_SSL/SCRAM là hạn chế đã ghi nhận. cmake-build + tokio runtime.
 rdkafka = { version = "0.38", default-features = false, features = ["cmake-build", "tokio"] }
 
+# Cassandra (Phase 4b) — scylla-rust-driver: async gốc, prepared statements,
+# paging state, load-balancing policy. TLS qua rustls-023 (đồng bộ với repo,
+# tránh openssl/nasm như rdkafka). chrono-04 để map timestamp/date sang JSON.
+scylla = { version = "1.1", default-features = false, features = ["rustls-023", "chrono-04"] }
+# rustls dùng ring (không aws-lc → khỏi cần C compiler) để dựng ClientConfig cho Cassandra TLS.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+
 # Misc
 uuid = { version = "1", features = ["v4"] }
 thiserror = "2"

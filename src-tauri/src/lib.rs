@@ -100,6 +100,12 @@ pub fn run() {
             commands::kafka::kafka_sr_subjects,
             commands::kafka::kafka_sr_versions,
             commands::kafka::kafka_sr_schema,
+            // cassandra (Phase 4b)
+            commands::cassandra::cql_exec,
+            commands::cassandra::cassandra_keyspaces,
+            commands::cassandra::cassandra_tree,
+            commands::cassandra::cassandra_ring,
+            commands::cassandra::cassandra_table_ddl,
             // schema
             commands::schema::list_schemas,
             commands::schema::list_tables,

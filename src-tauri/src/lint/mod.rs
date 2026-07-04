@@ -308,15 +308,110 @@ fn rule_pack_lints(system: &str, sql: &str) -> Vec<LintDiagnostic> {
     out
 }
 
+/// CQL rule pack (Phase 4b) — KHÔNG ép qua parser SQL. CQL không phải SQL:
+/// chặn JOIN/subquery/UNION/OFFSET (error), cảnh báo ALLOW FILTERING (anti-
+/// pattern), LWT (Paxos) và BATCH (không phải để tăng tốc). WHERE ngoài key
+/// → không parse được schema ở tầng 1; driver báo lỗi ở tầng 2 (map_exec_err).
+fn cql_lints(sql: &str) -> Vec<LintDiagnostic> {
+    let mut out = Vec::new();
+    let push_all = |out: &mut Vec<LintDiagnostic>,
+                    pattern: &str,
+                    severity: LintSeverity,
+                    rule: &str,
+                    message: &str,
+                    quickfix: Option<&str>| {
+        if let Ok(re) = Regex::new(pattern) {
+            for m in re.find_iter(sql) {
+                out.push(diag(sql, m.start(), m.len(), severity.clone(), rule, message, quickfix));
+            }
+        }
+    };
+
+    push_all(
+        &mut out,
+        r"(?i)\b(INNER\s+|LEFT\s+|RIGHT\s+|FULL\s+|CROSS\s+)?(OUTER\s+)?JOIN\b",
+        LintSeverity::Error,
+        "cql.no_join",
+        "CQL không hỗ trợ JOIN — mô hình wide-column phi chuẩn hoá (đọc theo partition key)",
+        None,
+    );
+    push_all(
+        &mut out,
+        r"(?i)\bUNION\b",
+        LintSeverity::Error,
+        "cql.no_union",
+        "CQL không hỗ trợ UNION",
+        None,
+    );
+    push_all(
+        &mut out,
+        r"(?i)\bOFFSET\b",
+        LintSeverity::Error,
+        "cql.no_offset",
+        "CQL không có OFFSET — phân trang bằng paging state (LIMIT + token trang kế)",
+        None,
+    );
+    push_all(
+        &mut out,
+        r"(?i)\(\s*SELECT\b",
+        LintSeverity::Error,
+        "cql.no_subquery",
+        "CQL không hỗ trợ subquery",
+        None,
+    );
+    push_all(
+        &mut out,
+        r"(?i)\bALLOW\s+FILTERING\b",
+        LintSeverity::Warning,
+        "cql.allow_filtering",
+        "ALLOW FILTERING quét toàn cluster (anti-pattern) — chỉ dùng khi thật sự cần",
+        None,
+    );
+    push_all(
+        &mut out,
+        r"(?i)\bIF\s+NOT\s+EXISTS\b|\bIF\s+EXISTS\b",
+        LintSeverity::Info,
+        "cql.lwt_cost",
+        "Lightweight transaction (Paxos) — chi phí cao, tránh dùng ở hot path",
+        None,
+    );
+    push_all(
+        &mut out,
+        r"(?i)\bBEGIN\s+(LOGGED\s+|UNLOGGED\s+)?BATCH\b",
+        LintSeverity::Info,
+        "cql.batch_not_faster",
+        "BATCH chỉ đảm bảo atomicity trong 1 partition — KHÔNG dùng để tăng tốc",
+        None,
+    );
+    // danger chung
+    push_all(
+        &mut out,
+        r"(?i)\bTRUNCATE\b",
+        LintSeverity::Warning,
+        "danger.truncate",
+        "TRUNCATE xóa toàn bộ dữ liệu bảng — cần xác nhận khi chạy",
+        None,
+    );
+    push_all(
+        &mut out,
+        r"(?i)\bDROP\s+(KEYSPACE|TABLE|MATERIALIZED\s+VIEW|TYPE|INDEX|FUNCTION|AGGREGATE)\b",
+        LintSeverity::Warning,
+        "danger.drop",
+        "DROP là thao tác không hoàn tác — cần xác nhận khi chạy",
+        None,
+    );
+    out
+}
+
 /// Entry point — chạy trên TOÀN BỘ nội dung editor (vị trí đã là toàn document).
 pub fn lint(system: &str, sql: &str) -> Vec<LintDiagnostic> {
     // Redis/Kafka/NATS: không parse SQL (addendum §1.2 dòng cuối)
     if matches!(system, "redis" | "kafka" | "nats") {
         return Vec::new();
     }
-    // Cassandra: rule pack CQL riêng ở phase Cassandra — chưa lint ở đây
+    // Cassandra: rule pack CQL riêng — KHÔNG ép qua parser SQL.
     if system == "cassandra" {
-        return Vec::new();
+        return cql_lints(sql);
     }
     let (mut out, ast) = syntax_lints(system, sql);
     if let Some(ast) = &ast {
@@ -406,7 +501,33 @@ mod tests {
     fn non_sql_systems_silent() {
         assert!(lint("redis", "GET key").is_empty());
         assert!(lint("kafka", "whatever").is_empty());
-        assert!(lint("cassandra", "SELECT * FROM t").is_empty());
+        // CQL hợp lệ (SELECT theo partition key) → im lặng
+        assert!(lint("cassandra", "SELECT * FROM students_by_id WHERE student_id = 1").is_empty());
+    }
+
+    #[test]
+    fn cql_rejects_join_union_offset_subquery() {
+        assert!(rules("cassandra", "SELECT * FROM a JOIN b ON a.id=b.id").contains(&"cql.no_join".into()));
+        assert!(rules("cassandra", "SELECT * FROM a INNER JOIN b ON x").contains(&"cql.no_join".into()));
+        assert!(rules("cassandra", "SELECT * FROM a UNION SELECT * FROM b").contains(&"cql.no_union".into()));
+        assert!(rules("cassandra", "SELECT * FROM t LIMIT 10 OFFSET 5").contains(&"cql.no_offset".into()));
+        assert!(rules("cassandra", "SELECT * FROM t WHERE id IN (SELECT id FROM u)")
+            .contains(&"cql.no_subquery".into()));
+        // JOIN là Error, không phải Warning
+        let d = lint("cassandra", "SELECT * FROM a JOIN b ON x");
+        assert_eq!(d.iter().find(|x| x.rule == "cql.no_join").unwrap().severity, LintSeverity::Error);
+    }
+
+    #[test]
+    fn cql_warns_allow_filtering_lwt_batch() {
+        assert!(rules("cassandra", "SELECT * FROM t WHERE name='x' ALLOW FILTERING")
+            .contains(&"cql.allow_filtering".into()));
+        assert!(rules("cassandra", "INSERT INTO t (a) VALUES (1) IF NOT EXISTS")
+            .contains(&"cql.lwt_cost".into()));
+        assert!(rules("cassandra", "BEGIN BATCH INSERT INTO t (a) VALUES (1) APPLY BATCH")
+            .contains(&"cql.batch_not_faster".into()));
+        assert!(rules("cassandra", "BEGIN UNLOGGED BATCH INSERT INTO t (a) VALUES (1) APPLY BATCH")
+            .contains(&"cql.batch_not_faster".into()));
     }
 
     #[test]

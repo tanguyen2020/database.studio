@@ -343,6 +343,9 @@ mod tests {
             sqlite_path: String::new(),
             sqlite_mode: SqliteMode::ReadWrite,
             mssql_auth: String::new(),
+            schema_registry_url: String::new(),
+            cassandra_dc: String::new(),
+            cassandra_consistency: String::new(),
         }
     }
 

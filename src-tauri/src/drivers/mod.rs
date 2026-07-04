@@ -1,5 +1,6 @@
 //! Driver layer: one adapter per system, unified behind `LiveConnection`.
 
+pub mod cassandra;
 pub mod clickhouse;
 pub mod grid;
 pub mod kafka;
@@ -17,6 +18,7 @@ use crate::connections::profile::{ConnectionProfile, SqliteMode};
 use crate::drivers::types::*;
 use crate::error::QueryError;
 
+use cassandra::{CassandraConnParams, CassandraDriver};
 use clickhouse::{ChConnParams, ChDriver};
 use kafka::{KafkaConnParams, KafkaDriver};
 use mssql::{MssqlConnParams, MssqlDriver};
@@ -43,6 +45,7 @@ pub enum LiveConnection {
     Redis(RedisDriver),
     Nats(NatsDriver),
     Kafka(KafkaDriver),
+    Cassandra(CassandraDriver),
 }
 
 fn pg_params(p: &ConnectionProfile, ep: &Endpoint, password: &str) -> PgConnParams {
@@ -173,6 +176,36 @@ fn kafka_not_sql() -> QueryError {
     )
 }
 
+fn cassandra_params(p: &ConnectionProfile, ep: &Endpoint, password: &str) -> CassandraConnParams {
+    // Host field có thể là danh sách contact points phân tách bằng dấu phẩy
+    // (prototype dùng 1 field Host). Mỗi điểm gắn port của profile nếu thiếu.
+    let contact_points: Vec<String> = ep
+        .host
+        .split(',')
+        .map(|h| h.trim())
+        .filter(|h| !h.is_empty())
+        .map(|h| if h.contains(':') { h.to_string() } else { format!("{}:{}", h, ep.port) })
+        .collect();
+    CassandraConnParams {
+        contact_points: if contact_points.is_empty() {
+            vec![format!("{}:{}", ep.host, ep.port)]
+        } else {
+            contact_points
+        },
+        user: p.user.clone(),
+        password: password.to_string(),
+        datacenter: p.cassandra_dc.clone(),
+        consistency: if p.cassandra_consistency.is_empty() {
+            "LOCAL_QUORUM".to_string()
+        } else {
+            p.cassandra_consistency.clone()
+        },
+        keyspace: p.database.clone(),
+        ssl: p.ssl,
+        ssl_ca: p.ssl_ca.clone(),
+    }
+}
+
 impl LiveConnection {
     pub async fn connect(
         profile: &ConnectionProfile,
@@ -207,6 +240,9 @@ impl LiveConnection {
             SystemType::Kafka => Ok(Self::Kafka(
                 KafkaDriver::connect(&kafka_params(profile, endpoint, password)).await?,
             )),
+            SystemType::Cassandra => Ok(Self::Cassandra(
+                CassandraDriver::connect(&cassandra_params(profile, endpoint, password)).await?,
+            )),
             other => Err(QueryError::new(
                 other.as_str(),
                 format!("Hệ {} chưa được hỗ trợ", other.as_str()),
@@ -234,6 +270,9 @@ impl LiveConnection {
             SystemType::Redis => RedisDriver::test(&redis_params(profile, endpoint, password)).await,
             SystemType::Nats => NatsDriver::test(&nats_params(profile, endpoint, password)).await,
             SystemType::Kafka => KafkaDriver::test(&kafka_params(profile, endpoint, password)).await,
+            SystemType::Cassandra => {
+                CassandraDriver::test(&cassandra_params(profile, endpoint, password)).await
+            }
             other => TestResult {
                 ok: false,
                 latency_ms: None,
@@ -259,6 +298,9 @@ impl LiveConnection {
             Self::Redis(_) => Box::pin(async { Err(redis_not_sql()) }),
             Self::Nats(_) => Box::pin(async { Err(nats_not_sql()) }),
             Self::Kafka(_) => Box::pin(async { Err(kafka_not_sql()) }),
+            // CQL editor: first page only via generic exec (paging + warnings
+            // qua command cql_exec chuyên biệt).
+            Self::Cassandra(d) => Box::pin(async move { d.exec_cql(sql, None, None).await.map(|o| o.outcome) }),
         }
     }
 
@@ -272,6 +314,7 @@ impl LiveConnection {
             Self::Redis(d) => d.ping().await,
             Self::Nats(d) => d.ping().await,
             Self::Kafka(d) => d.ping().await,
+            Self::Cassandra(d) => d.ping().await,
         }
     }
 
@@ -295,6 +338,13 @@ impl LiveConnection {
             Self::Redis(_) => Err(redis_not_sql()),
             Self::Nats(_) => Err(nats_not_sql()),
             Self::Kafka(_) => Err(kafka_not_sql()),
+            // CQL không dùng positional param của filter builder ở đây; editor
+            // tự viết literal, path tham số hóa (nếu có) đi qua prepared statement.
+            Self::Cassandra(_) => Err(QueryError::new(
+                "cassandra",
+                "Filter builder chưa hỗ trợ Cassandra — dùng CQL editor với WHERE theo key",
+                "cassandra param select not supported",
+            )),
         }
     }
 
@@ -317,6 +367,13 @@ impl LiveConnection {
             Self::Redis(_) => Err(redis_not_sql()),
             Self::Nats(_) => Err(nats_not_sql()),
             Self::Kafka(_) => Err(kafka_not_sql()),
+            // Editable grid dùng UPDATE/DELETE theo full PK; Cassandra làm qua
+            // CQL editor (INSERT/UPDATE ... IF, không transaction OLTP).
+            Self::Cassandra(_) => Err(QueryError::new(
+                "cassandra",
+                "Editable grid chưa hỗ trợ Cassandra — dùng CQL UPDATE/DELETE theo primary key",
+                "editable grid not applicable to cassandra",
+            )),
         }
     }
 
@@ -332,6 +389,8 @@ impl LiveConnection {
             Self::Redis(_) => Ok(Vec::new()),
             Self::Nats(_) => Ok(Vec::new()),
             Self::Kafka(_) => Ok(Vec::new()),
+            // Cassandra: cây keyspace lấy qua command cassandra_tree chuyên biệt.
+            Self::Cassandra(_) => Ok(Vec::new()),
         }
     }
 
@@ -345,6 +404,7 @@ impl LiveConnection {
             Self::Redis(_) => Ok(Vec::new()),
             Self::Nats(_) => Ok(Vec::new()),
             Self::Kafka(_) => Ok(Vec::new()),
+            Self::Cassandra(_) => Ok(Vec::new()),
         }
     }
 
@@ -358,6 +418,7 @@ impl LiveConnection {
             Self::Redis(_) => Ok(Vec::new()),
             Self::Nats(_) => Ok(Vec::new()),
             Self::Kafka(_) => Ok(Vec::new()),
+            Self::Cassandra(_) => Ok(Vec::new()),
         }
     }
 
@@ -371,6 +432,7 @@ impl LiveConnection {
             Self::Redis(_) => Ok(Vec::new()),
             Self::Nats(_) => Ok(Vec::new()),
             Self::Kafka(_) => Ok(Vec::new()),
+            Self::Cassandra(_) => Ok(Vec::new()),
         }
     }
 
@@ -385,6 +447,7 @@ impl LiveConnection {
             Self::Redis(_) => Ok(Vec::new()),
             Self::Nats(_) => Ok(Vec::new()),
             Self::Kafka(_) => Ok(Vec::new()),
+            Self::Cassandra(_) => Ok(Vec::new()),
         }
     }
 
@@ -398,6 +461,7 @@ impl LiveConnection {
             Self::Redis(_) => Ok(Vec::new()),
             Self::Nats(_) => Ok(Vec::new()),
             Self::Kafka(_) => Ok(Vec::new()),
+            Self::Cassandra(_) => Ok(Vec::new()),
         }
     }
 
@@ -411,6 +475,7 @@ impl LiveConnection {
             Self::Redis(_) => Ok(Vec::new()),
             Self::Nats(_) => Ok(Vec::new()),
             Self::Kafka(_) => Ok(Vec::new()),
+            Self::Cassandra(_) => Ok(Vec::new()),
         }
     }
 
@@ -448,6 +513,9 @@ mod tests {
             sqlite_path: String::new(),
             sqlite_mode: SqliteMode::ReadWrite,
             mssql_auth: String::new(),
+            schema_registry_url: String::new(),
+            cassandra_dc: String::new(),
+            cassandra_consistency: String::new(),
         }
     }
 
