@@ -54,6 +54,9 @@ base64 = "0.22"
 # SQL lint tầng 1 (parse-only, không chạy DB) — QUERY_EDITOR_ERROR_HANDLING_ADDENDUM §1.1
 sqlparser = "0.53"
 
+# MSSQL SHOWPLAN_XML parse (read-only, pure-Rust) — Query Plan T16
+roxmltree = "0.20"
+
 # ClickHouse qua HTTP 8123 + FORMAT JSON (addendum CH §9 — HTTP; dùng reqwest
 # thay crate `clickhouse` vì result set động không hợp API typed-row của crate đó)
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }

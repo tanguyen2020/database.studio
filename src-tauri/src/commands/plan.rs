@@ -28,6 +28,12 @@ pub async fn explain_plan(
         return Ok(QueryPlan::not_applicable(&system));
     }
 
+    // MSSQL: SHOWPLAN_XML phải là statement duy nhất của batch → bật, chạy query
+    // (KHÔNG thực thi — chỉ sinh plan), rồi tắt (best-effort, luôn tắt).
+    if system == "mssql" {
+        return explain_mssql(state.inner(), &conn_id, &sql).await;
+    }
+
     let explain_sql = build_explain(&system, &sql, actual);
     let outcome = state
         .registry
@@ -41,6 +47,37 @@ pub async fn explain_plan(
     };
 
     parse_for_system(&system, actual, &rows).map_err(AppError::Driver)
+}
+
+/// MSSQL estimated plan qua `SET SHOWPLAN_XML ON`. Bật → chạy query (server trả
+/// XML plan, không thực thi) → LUÔN tắt lại (kể cả khi query lỗi).
+async fn explain_mssql(
+    state: &AppState,
+    conn_id: &str,
+    sql: &str,
+) -> Result<QueryPlan, AppError> {
+    let sql = sql.trim().trim_end_matches(';').to_string();
+    state
+        .registry
+        .exec_statement(conn_id, "SET SHOWPLAN_XML ON".into())
+        .await?
+        .map_err(|e| AppError::Driver(e.message))?;
+    let res = state.registry.exec_statement(conn_id, sql).await;
+    // best-effort tắt lại — không để connection kẹt ở chế độ SHOWPLAN.
+    let _ = state.registry.exec_statement(conn_id, "SET SHOWPLAN_XML OFF".into()).await;
+
+    let outcome = res?.map_err(|e| AppError::Driver(e.message))?;
+    let rows = match outcome {
+        StatementOutcome::Rows { result } => result.rows,
+        _ => return Err(AppError::Driver("SHOWPLAN_XML không trả kế hoạch".into())),
+    };
+    let xml = rows
+        .first()
+        .and_then(|r| r.as_object())
+        .and_then(|o| o.values().next())
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| AppError::Driver("SHOWPLAN_XML rỗng".into()))?;
+    plan::parse_mssql_xml(xml).map_err(AppError::Driver)
 }
 
 /// Câu EXPLAIN native theo hệ.

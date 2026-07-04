@@ -347,6 +347,56 @@ async fn mssql_roundtrip_and_line_error() {
     assert!(err.position.is_some(), "MSSQL line phải map sang position");
 }
 
+/// Phase 5 · T16 — MSSQL estimated plan qua `SET SHOWPLAN_XML ON`. Seed table,
+/// bật SHOWPLAN → query trả XML plan (không thực thi) → parse → node tham chiếu
+/// đúng bảng. Tắt SHOWPLAN sau cùng.
+#[tokio::test]
+async fn mssql_showplan_xml_estimated_plan() {
+    use database_studio_lib::drivers::plan::{self, PlanNode};
+
+    let c = GenericImage::new("mcr.microsoft.com/mssql/server", "2022-latest")
+        .with_exposed_port(1433.tcp())
+        .with_env_var("ACCEPT_EULA", "Y")
+        .with_env_var("MSSQL_SA_PASSWORD", MSSQL_PASS)
+        .start()
+        .await
+        .expect("start mssql container");
+    let port = c.get_host_port_ipv4(1433).await.unwrap();
+    let params = MssqlConnParams {
+        host: "localhost".into(),
+        port,
+        database: "".into(),
+        user: "sa".into(),
+        password: MSSQL_PASS.into(),
+        ssl: false,
+        ssl_ca: String::new(),
+        auth: "sql".into(),
+    };
+    let mut drv = retry("mssql", || MssqlDriver::connect(&params)).await;
+
+    drv.exec("CREATE TABLE it_plan (id int PRIMARY KEY, v nvarchar(50))").await.unwrap();
+    drv.exec("INSERT INTO it_plan VALUES (1,N'a'),(2,N'b'),(3,N'c')").await.unwrap();
+
+    // Cùng 1 connection nên SET giữ trạng thái qua các exec kế tiếp.
+    drv.exec("SET SHOWPLAN_XML ON").await.unwrap();
+    let out = drv.exec("SELECT * FROM it_plan WHERE id = 2").await.unwrap();
+    let _ = drv.exec("SET SHOWPLAN_XML OFF").await;
+
+    let StatementOutcome::Rows { result } = out else { panic!("SHOWPLAN phải trả rows") };
+    let cell = result.rows[0].as_object().unwrap().values().next().unwrap();
+    let xml = cell.as_str().expect("XML string").to_string();
+    assert!(xml.contains("ShowPlanXML"), "phải là SHOWPLAN_XML");
+
+    let p = plan::parse_mssql_xml(&xml).expect("parse SHOWPLAN_XML");
+    let root = p.root.expect("có root");
+    fn refs_table(n: &PlanNode) -> bool {
+        n.extra.get("Relation Name").and_then(|v| v.as_str()).map(|s| s.contains("it_plan")).unwrap_or(false)
+            || n.children.iter().any(refs_table)
+    }
+    assert!(refs_table(&root), "plan phải tham chiếu it_plan. raw:\n{xml}");
+    eprintln!("CHK MSSQL SHOWPLAN_XML OK");
+}
+
 // ---------------------------------------------------------------------------
 // ClickHouse — HTTP 8123, kiểu dữ liệu cột + total ước lượng + lỗi có code
 // (Phase 2 basics — CLICKHOUSE_SPEC_ADDENDUM)

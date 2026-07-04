@@ -88,7 +88,7 @@ pub fn normalize_op(native: &str) -> String {
         "IndexOnlyScan"
     } else if n.contains("bitmap") {
         "BitmapScan"
-    } else if n.contains("index scan") || n.contains("index range") || (n.contains("search") && n.contains("index")) {
+    } else if n.contains("index scan") || n.contains("index range") || n.contains("seek") || (n.contains("search") && n.contains("index")) {
         "IndexScan"
     } else if n.contains("nested loop") {
         "NestedLoop"
@@ -354,7 +354,65 @@ pub fn parse_clickhouse(text: &str) -> QueryPlan {
 }
 
 // ---------------------------------------------------------------------------
-// Fallback text (MSSQL/ClickHouse trước khi có parser chuyên biệt): 1 node raw.
+// MSSQL — SET SHOWPLAN_XML ON → <ShowPlanXML> … nested <RelOp PhysicalOp=…>.
+// ---------------------------------------------------------------------------
+
+/// RelOp cha gần nhất của `n` (bỏ chính nó) — để xác định cây RelOp lồng nhau.
+fn mssql_parent_relop(n: roxmltree::Node) -> Option<roxmltree::NodeId> {
+    n.ancestors().skip(1).find(|a| a.tag_name().name() == "RelOp").map(|a| a.id())
+}
+
+/// Parse SHOWPLAN_XML: mỗi `<RelOp>` là 1 node; con là các `<RelOp>` lồng bên
+/// trong (không có RelOp trung gian). PhysicalOp → operation chuẩn hóa.
+pub fn parse_mssql_xml(xml: &str) -> Result<QueryPlan, String> {
+    let doc = roxmltree::Document::parse(xml).map_err(|e| format!("SHOWPLAN_XML lỗi: {e}"))?;
+    let root_relop = doc
+        .descendants()
+        .find(|n| n.tag_name().name() == "RelOp")
+        .ok_or("không thấy RelOp trong SHOWPLAN_XML")?;
+    let mut warnings = Vec::new();
+    let root = build_mssql_node(root_relop, &mut warnings);
+    let total_cost = root.estimated_cost;
+    Ok(QueryPlan {
+        system: "mssql".into(),
+        mode: "estimated".into(),
+        summary: PlanSummary { total_cost, total_time_ms: None, warnings },
+        root: Some(root),
+        raw: xml.to_string(),
+    })
+}
+
+fn build_mssql_node(relop: roxmltree::Node, warnings: &mut Vec<String>) -> PlanNode {
+    let phys = relop.attribute("PhysicalOp").unwrap_or("Unknown");
+    let logical = relop.attribute("LogicalOp").unwrap_or("");
+    let mut node = PlanNode::leaf(&normalize_op(phys), phys);
+    node.estimated_rows = relop.attribute("EstimateRows").and_then(|s| s.parse().ok());
+    node.estimated_cost = relop.attribute("EstimatedTotalSubtreeCost").and_then(|s| s.parse().ok());
+    if !logical.is_empty() {
+        node.extra.insert("LogicalOp".into(), Value::String(logical.into()));
+    }
+    // Tên bảng: <Object Table="[db].[schema].[t]"> thuộc chính RelOp này.
+    if let Some(obj) = relop
+        .descendants()
+        .find(|n| n.tag_name().name() == "Object" && mssql_parent_relop(*n) == Some(relop.id()))
+    {
+        if let Some(t) = obj.attribute("Table") {
+            node.extra.insert("Relation Name".into(), Value::String(t.replace(['[', ']'], "")));
+        }
+    }
+    // Con = RelOp lồng trực tiếp (RelOp cha gần nhất là relop này).
+    for child in relop
+        .descendants()
+        .filter(|n| n.tag_name().name() == "RelOp" && mssql_parent_relop(*n) == Some(relop.id()))
+    {
+        node.children.push(build_mssql_node(child, warnings));
+    }
+    mark_hotspot(&mut node, warnings);
+    node
+}
+
+// ---------------------------------------------------------------------------
+// Fallback text (ClickHouse/khác trước khi có parser chuyên biệt): 1 node raw.
 // ---------------------------------------------------------------------------
 
 pub fn from_raw_text(system: &str, raw: &str) -> QueryPlan {
@@ -485,6 +543,37 @@ mod tests {
     #[test]
     fn not_applicable_for_messaging() {
         assert_eq!(QueryPlan::not_applicable("redis").mode, "not_applicable");
+    }
+
+    #[test]
+    fn mssql_showplan_xml_tree() {
+        // SHOWPLAN_XML dùng default namespace → parser phải match theo local name.
+        let xml = r#"<?xml version="1.0"?>
+<ShowPlanXML xmlns="http://schemas.microsoft.com/sqlserver/2004/07/showplan">
+  <BatchSequence><Batch><Statements><StmtSimple>
+    <QueryPlan>
+      <RelOp PhysicalOp="Nested Loops" LogicalOp="Inner Join" EstimateRows="100" EstimatedTotalSubtreeCost="0.55">
+        <NestedLoops>
+          <RelOp PhysicalOp="Table Scan" LogicalOp="Table Scan" EstimateRows="50000" EstimatedTotalSubtreeCost="0.4">
+            <TableScan><Object Table="[db].[dbo].[orders]"/></TableScan>
+          </RelOp>
+          <RelOp PhysicalOp="Clustered Index Seek" LogicalOp="Clustered Index Seek" EstimateRows="1" EstimatedTotalSubtreeCost="0.1">
+            <IndexScan><Object Table="[db].[dbo].[users]"/></IndexScan>
+          </RelOp>
+        </NestedLoops>
+      </RelOp>
+    </QueryPlan>
+  </StmtSimple></Statements></Batch></BatchSequence>
+</ShowPlanXML>"#;
+        let plan = parse_mssql_xml(xml).unwrap();
+        let root = plan.root.unwrap();
+        assert_eq!(root.operation, "NestedLoop");
+        assert_eq!(root.children.len(), 2, "2 RelOp con lồng trong NestedLoops");
+        assert_eq!(root.children[0].operation, "SeqScan"); // Table Scan
+        assert_eq!(root.children[0].extra.get("Relation Name").and_then(|v| v.as_str()), Some("db.dbo.orders"));
+        assert!(root.children[0].is_hotspot, "Table Scan 50k rows → hotspot");
+        assert_eq!(root.children[1].operation, "IndexScan"); // Clustered Index Seek
+        assert_eq!(plan.summary.total_cost, Some(0.55));
     }
 
     #[test]

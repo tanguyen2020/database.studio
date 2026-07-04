@@ -120,6 +120,18 @@ impl MssqlDriver {
             Ok(StatementOutcome::Rows {
                 result: QueryResultSet { cols: cols_meta, rows: out_rows, total },
             })
+        } else if sql.trim_start().get(..4).map(|s| s.eq_ignore_ascii_case("set ")).unwrap_or(false) {
+            // Session options (SET SHOWPLAN_XML/NOCOUNT/…) phải chạy như raw batch
+            // để giữ trạng thái trên connection. `execute()` dùng sp_executesql →
+            // SET nằm trong scope riêng, KHÔNG persist sang statement kế tiếp.
+            self.client
+                .simple_query(sql)
+                .await
+                .map_err(|e| map_error(&e))?
+                .into_results()
+                .await
+                .map_err(|e| map_error(&e))?;
+            Ok(StatementOutcome::Ok)
         } else {
             let res = self.client.execute(sql, &[]).await.map_err(|e| map_error(&e))?;
             if util::is_dml(sql) {
