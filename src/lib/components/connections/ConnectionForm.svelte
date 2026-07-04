@@ -46,8 +46,11 @@
   const isMssql = $derived(draft?.system === 'mssql')
   const isRedis = $derived(draft?.system === 'redis')
   const isNats = $derived(draft?.system === 'nats')
-  const hostLabel = 'Host' // Kafka/NATS (phase sau): 'Bootstrap servers'/'Servers'
-  const hostPlaceholder = $derived(isSqlite ? '/data/local.db' : 'localhost')
+  const isKafka = $derived(draft?.system === 'kafka')
+  const hostLabel = $derived(isKafka ? 'Bootstrap servers' : 'Host')
+  const hostPlaceholder = $derived(
+    isSqlite ? '/data/local.db' : isKafka ? 'broker1:9092,broker2:9092' : 'localhost',
+  )
   const dbPlaceholder = $derived(draft?.system === 'postgres' ? 'postgres' : '')
   // port từ dòng 5791-5796: auth flags MSSQL
   const authWindows = $derived(isMssql && draft?.mssql_auth === 'windows')
@@ -266,8 +269,8 @@
               </div>
             {/if}
 
-            <!-- host + port — port dòng 2196-2201 (SQLite: Host = file path, double-click mở picker) -->
-            <div style="grid-column:1/3;display:grid;grid-template-columns:2fr 1fr;gap:var(--px-14)">
+            <!-- host + port — port dòng 2196-2201 (SQLite: Host = file path; Kafka: bootstrap full-width) -->
+            <div style="grid-column:1/3;display:grid;grid-template-columns:{isKafka ? '1fr' : '2fr 1fr'};gap:var(--px-14)">
               <div>
                 <div class="cm-label">{hostLabel}</div>
                 {#if isSqlite}
@@ -283,18 +286,20 @@
                   <input class="cm-input mono" bind:value={draft.host} placeholder={hostPlaceholder} />
                 {/if}
               </div>
-              <div>
-                <div class="cm-label">Port</div>
-                {#if isSqlite}
-                  <input class="cm-input mono" value="" disabled />
-                {:else}
-                  <input class="cm-input mono" type="number" bind:value={draft.port} />
-                {/if}
-              </div>
+              {#if !isKafka}
+                <div>
+                  <div class="cm-label">Port</div>
+                  {#if isSqlite}
+                    <input class="cm-input mono" value="" disabled />
+                  {:else}
+                    <input class="cm-input mono" type="number" bind:value={draft.port} />
+                  {/if}
+                </div>
+              {/if}
             </div>
 
-            <!-- database — port dòng 2205-2207 (Redis: DB index 0–15; NATS: ẩn) -->
-            <div style={isNats ? 'display:none' : ''}>
+            <!-- database — port dòng 2205-2207 (Redis: DB index 0–15; NATS/Kafka: ẩn) -->
+            <div style={isNats || isKafka ? 'display:none' : ''}>
               {#if isRedis}
                 <div class="cm-label">DB Index</div>
                 <select class="cm-input" bind:value={draft.database}>
@@ -307,6 +312,19 @@
                 <input class="cm-input mono" bind:value={draft.database} placeholder={dbPlaceholder} />
               {/if}
             </div>
+
+            {#if isKafka}
+              <!-- Kafka SASL mechanism (tái dùng field mssql_auth làm auth mode) -->
+              <div style="grid-column:1/3">
+                <div class="cm-label">Authentication (SASL)</div>
+                <select class="cm-input" bind:value={draft.mssql_auth}>
+                  <option value="">None (PLAINTEXT)</option>
+                  <option value="PLAIN">SASL/PLAIN</option>
+                  <option value="SCRAM-SHA-256">SASL/SCRAM-SHA-256</option>
+                  <option value="SCRAM-SHA-512">SASL/SCRAM-SHA-512</option>
+                </select>
+              </div>
+            {/if}
 
             {#if isMssql}
               <!-- port dòng 2208-2211 (Azure AD → phase sau, giữ 2 lựa chọn phase 1) -->

@@ -70,6 +70,11 @@ redis = { version = "0.27", default-features = false, features = [
 async-nats = { version = "0.38", default-features = false, features = ["ring"] }
 bytes = "1"
 
+# Kafka (Phase 4) — rdkafka bọc librdkafka. Build từ source qua CMake (VS ships cmake).
+# KHÔNG bật ssl (Windows thiếu nasm/perl để build OpenSSL) → PLAINTEXT + SASL/PLAIN;
+# SASL_SSL/SCRAM là hạn chế đã ghi nhận. cmake-build + tokio runtime.
+rdkafka = { version = "0.36", default-features = false, features = ["cmake-build", "tokio"] }
+
 # Misc
 uuid = { version = "1", features = ["v4"] }
 thiserror = "2"
@@ -82,6 +87,8 @@ dirs = "5"
 [dev-dependencies]
 # Integration test: container tự bật/tắt cho từng hệ (không phụ thuộc DB cài sẵn)
 testcontainers = "0.23"
+# Kafka container (tự xử lý advertised.listeners) cho integration test Phase 4
+testcontainers-modules = { version = "0.11", features = ["kafka"] }
 
 [profile.dev]
 incremental = true

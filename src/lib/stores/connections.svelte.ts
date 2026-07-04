@@ -190,7 +190,8 @@ class ConnectionsStore {
       ssl_key: '',
       sqlite_path: '',
       sqlite_mode: 'read-write',
-      mssql_auth: 'sql',
+      // mssql_auth tái dùng làm "auth mode": mssql='sql', kafka=SASL mechanism ('' none)
+      mssql_auth: system === 'mssql' ? 'sql' : '',
       has_password: false,
       connected: false,
     }

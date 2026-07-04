@@ -2,6 +2,7 @@
 
 pub mod clickhouse;
 pub mod grid;
+pub mod kafka;
 pub mod mssql;
 pub mod mysql;
 pub mod nats;
@@ -16,6 +17,7 @@ use crate::drivers::types::*;
 use crate::error::QueryError;
 
 use clickhouse::{ChConnParams, ChDriver};
+use kafka::{KafkaConnParams, KafkaDriver};
 use mssql::{MssqlConnParams, MssqlDriver};
 use mysql::{MySqlConnParams, MySqlDriver};
 use nats::{NatsConnParams, NatsDriver};
@@ -39,6 +41,7 @@ pub enum LiveConnection {
     Sqlite(SqliteDriver),
     Redis(RedisDriver),
     Nats(NatsDriver),
+    Kafka(KafkaDriver),
 }
 
 fn pg_params(p: &ConnectionProfile, ep: &Endpoint, password: &str) -> PgConnParams {
@@ -140,6 +143,35 @@ fn nats_not_sql() -> QueryError {
     )
 }
 
+fn kafka_params(p: &ConnectionProfile, ep: &Endpoint, password: &str) -> KafkaConnParams {
+    // bootstrap: giữ nguyên nếu đã có ':'/',' (list host:port); nếu không, ghép host:port.
+    let bootstrap = if ep.host.contains(':') || ep.host.contains(',') {
+        ep.host.clone()
+    } else {
+        format!("{}:{}", ep.host, ep.port)
+    };
+    // mssql_auth tái dùng làm "auth mode": với Kafka là SASL mechanism.
+    let sasl_mechanism = match p.mssql_auth.as_str() {
+        m @ ("PLAIN" | "SCRAM-SHA-256" | "SCRAM-SHA-512") => m.to_string(),
+        _ => String::new(),
+    };
+    KafkaConnParams {
+        bootstrap,
+        sasl_mechanism,
+        user: p.user.clone(),
+        password: password.to_string(),
+        ssl: p.ssl,
+    }
+}
+
+fn kafka_not_sql() -> QueryError {
+    QueryError::new(
+        "kafka",
+        "Kafka là streaming — dùng Topic Browser / Consumer / Producer, không phải SQL",
+        "sql operation not applicable to kafka",
+    )
+}
+
 impl LiveConnection {
     pub async fn connect(
         profile: &ConnectionProfile,
@@ -171,6 +203,9 @@ impl LiveConnection {
             SystemType::Nats => Ok(Self::Nats(
                 NatsDriver::connect(&nats_params(profile, endpoint, password)).await?,
             )),
+            SystemType::Kafka => Ok(Self::Kafka(
+                KafkaDriver::connect(&kafka_params(profile, endpoint, password)).await?,
+            )),
             other => Err(QueryError::new(
                 other.as_str(),
                 format!("Hệ {} chưa được hỗ trợ", other.as_str()),
@@ -197,6 +232,7 @@ impl LiveConnection {
             SystemType::Sqlite => SqliteDriver::test(&sqlite_params(profile)).await,
             SystemType::Redis => RedisDriver::test(&redis_params(profile, endpoint, password)).await,
             SystemType::Nats => NatsDriver::test(&nats_params(profile, endpoint, password)).await,
+            SystemType::Kafka => KafkaDriver::test(&kafka_params(profile, endpoint, password)).await,
             other => TestResult {
                 ok: false,
                 latency_ms: None,
@@ -221,6 +257,7 @@ impl LiveConnection {
             Self::Clickhouse(d) => Box::pin(d.exec(sql)),
             Self::Redis(_) => Box::pin(async { Err(redis_not_sql()) }),
             Self::Nats(_) => Box::pin(async { Err(nats_not_sql()) }),
+            Self::Kafka(_) => Box::pin(async { Err(kafka_not_sql()) }),
         }
     }
 
@@ -233,6 +270,7 @@ impl LiveConnection {
             Self::Clickhouse(d) => d.ping().await,
             Self::Redis(d) => d.ping().await,
             Self::Nats(d) => d.ping().await,
+            Self::Kafka(d) => d.ping().await,
         }
     }
 
@@ -255,6 +293,7 @@ impl LiveConnection {
             )),
             Self::Redis(_) => Err(redis_not_sql()),
             Self::Nats(_) => Err(nats_not_sql()),
+            Self::Kafka(_) => Err(kafka_not_sql()),
         }
     }
 
@@ -276,6 +315,7 @@ impl LiveConnection {
             )),
             Self::Redis(_) => Err(redis_not_sql()),
             Self::Nats(_) => Err(nats_not_sql()),
+            Self::Kafka(_) => Err(kafka_not_sql()),
         }
     }
 
@@ -290,6 +330,7 @@ impl LiveConnection {
             Self::Clickhouse(d) => d.schemas().await,
             Self::Redis(_) => Ok(Vec::new()),
             Self::Nats(_) => Ok(Vec::new()),
+            Self::Kafka(_) => Ok(Vec::new()),
         }
     }
 
@@ -302,6 +343,7 @@ impl LiveConnection {
             Self::Clickhouse(d) => d.tables(schema).await,
             Self::Redis(_) => Ok(Vec::new()),
             Self::Nats(_) => Ok(Vec::new()),
+            Self::Kafka(_) => Ok(Vec::new()),
         }
     }
 
@@ -314,6 +356,7 @@ impl LiveConnection {
             Self::Clickhouse(d) => d.columns(schema, table).await,
             Self::Redis(_) => Ok(Vec::new()),
             Self::Nats(_) => Ok(Vec::new()),
+            Self::Kafka(_) => Ok(Vec::new()),
         }
     }
 
@@ -326,6 +369,7 @@ impl LiveConnection {
             Self::Clickhouse(_) => Ok(Vec::new()), // data-skipping index → Phase 5 Index Scanner
             Self::Redis(_) => Ok(Vec::new()),
             Self::Nats(_) => Ok(Vec::new()),
+            Self::Kafka(_) => Ok(Vec::new()),
         }
     }
 
@@ -339,6 +383,7 @@ impl LiveConnection {
             Self::Clickhouse(_) => Ok(Vec::new()),
             Self::Redis(_) => Ok(Vec::new()),
             Self::Nats(_) => Ok(Vec::new()),
+            Self::Kafka(_) => Ok(Vec::new()),
         }
     }
 
@@ -351,6 +396,7 @@ impl LiveConnection {
             Self::Clickhouse(_) => Ok(Vec::new()), // UDF → Phase 5
             Self::Redis(_) => Ok(Vec::new()),
             Self::Nats(_) => Ok(Vec::new()),
+            Self::Kafka(_) => Ok(Vec::new()),
         }
     }
 
@@ -363,6 +409,7 @@ impl LiveConnection {
             Self::Clickhouse(_) => Ok(Vec::new()),
             Self::Redis(_) => Ok(Vec::new()),
             Self::Nats(_) => Ok(Vec::new()),
+            Self::Kafka(_) => Ok(Vec::new()),
         }
     }
 

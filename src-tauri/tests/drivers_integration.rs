@@ -1041,3 +1041,34 @@ async fn nats_jetstream_streams_consumers_peek() {
     assert_eq!(msg.subject, "orders.new");
     assert_eq!(msg.payload, "hello");
 }
+
+// ---------------------------------------------------------------------------
+// Kafka (Phase 4 · T1) — connect + metadata trên container thật
+// (testcontainers-modules tự xử lý advertised.listeners)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn kafka_connect_and_metadata() {
+    use database_studio_lib::drivers::kafka::{KafkaConnParams, KafkaDriver};
+    use testcontainers_modules::kafka::{Kafka, KAFKA_PORT};
+
+    let node = Kafka::default().start().await.expect("start kafka container");
+    let port = node.get_host_port_ipv4(KAFKA_PORT).await.unwrap();
+    let params = KafkaConnParams {
+        bootstrap: format!("127.0.0.1:{port}"),
+        sasl_mechanism: String::new(),
+        user: String::new(),
+        password: String::new(),
+        ssl: false,
+    };
+
+    let mut drv = retry("kafka", || KafkaDriver::connect(&params)).await;
+    assert!(drv.ping().await, "ping (fetch_metadata) phải OK");
+    let t = KafkaDriver::test(&params).await;
+    assert!(t.ok, "test connection phải OK");
+    assert!(
+        t.server_version.as_deref().unwrap_or("").contains("broker"),
+        "server_version phải có broker count, nhận: {:?}",
+        t.server_version
+    );
+}
