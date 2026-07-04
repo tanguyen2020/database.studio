@@ -1706,3 +1706,83 @@ async fn query_cancel_aborts_and_connection_recovers() {
     }
     eprintln!("CHK follow-up query OK — test end");
 }
+
+/// Phase 5 · T13 — Import wizard batched-INSERT path at scale. Mirrors the
+/// wizard's approach (chunked multi-row INSERT via exec) by importing 100k rows
+/// into a real PG table, then querying back the count (seed → verify, not
+/// hard-coded). Also proves the Postgres skip-conflict clause (`ON CONFLICT DO
+/// NOTHING`) adds no duplicate row.
+#[tokio::test]
+async fn pg_import_100k_rows_batched_and_count() {
+    let (_c, port) = start_pg().await;
+    let params = PgConnParams {
+        host: "localhost".into(),
+        port,
+        database: "testdb".into(),
+        user: "postgres".into(),
+        password: PASS.into(),
+        ssl: false,
+        ssl_ca: String::new(),
+        ssl_cert: String::new(),
+        ssl_key: String::new(),
+    };
+    let mut drv = retry("postgres", || PgDriver::connect(&params)).await;
+
+    drv.exec("CREATE TABLE it_import (id int PRIMARY KEY, name text)")
+        .await
+        .unwrap();
+
+    const TOTAL: usize = 100_000;
+    const BATCH: usize = 5_000;
+    let mut inserted: usize = 0;
+    for start in (1..=TOTAL).step_by(BATCH) {
+        let end = (start + BATCH - 1).min(TOTAL);
+        let mut sql = String::with_capacity(BATCH * 24);
+        sql.push_str("INSERT INTO it_import (id, name) VALUES ");
+        for i in start..=end {
+            if i != start {
+                sql.push(',');
+            }
+            // giá trị suy ra từ id → query ngược verify được, không hard-code
+            sql.push_str(&format!("({i}, 'row_{i}')"));
+        }
+        let out = drv.exec(&sql).await.unwrap();
+        match out {
+            StatementOutcome::Affected { affected } => inserted += affected as usize,
+            other => panic!("batch INSERT phải trả Affected, got {other:?}"),
+        }
+    }
+    assert_eq!(inserted, TOTAL, "tổng affected phải = 100k");
+
+    // đếm ngược từ DB thật
+    let out = drv.exec("SELECT count(*) AS n FROM it_import").await.unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    assert_eq!(result.rows[0]["n"], serde_json::json!(100_000));
+
+    // spot-check 1 dòng round-trip đúng (giá trị suy ra, không hard-code sẵn)
+    let probe: usize = 73_137;
+    let out = drv
+        .exec(&format!("SELECT name FROM it_import WHERE id = {probe}"))
+        .await
+        .unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    assert_eq!(result.rows[0]["name"], serde_json::json!(format!("row_{probe}")));
+
+    // ON CONFLICT DO NOTHING (skip mode PG) → 0 affected, count không đổi
+    let out = drv
+        .exec("INSERT INTO it_import (id, name) VALUES (1, 'dup') ON CONFLICT DO NOTHING")
+        .await
+        .unwrap();
+    assert!(
+        matches!(out, StatementOutcome::Affected { affected: 0 }),
+        "duplicate PK với ON CONFLICT DO NOTHING phải affected=0"
+    );
+    let out = drv.exec("SELECT count(*) AS n FROM it_import").await.unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    assert_eq!(
+        result.rows[0]["n"],
+        serde_json::json!(100_000),
+        "skip-conflict không được thêm dòng"
+    );
+    eprintln!("CHK import 100k + count + skip-conflict OK");
+}

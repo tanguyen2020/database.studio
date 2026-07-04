@@ -24,3 +24,44 @@ test('CSV import wizard: file → preview → target → mapping', async ({ page
 
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
+
+test('CSV import full flow: file → mapping → Options → batched import (T13)', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(String(e)))
+  await blockRemoteFonts(page)
+  await page.goto(APP_URL)
+  await page.waitForSelector('#app > *', { timeout: 15_000 })
+  await page.waitForTimeout(300)
+
+  await page.getByRole('button', { name: /Postgres/ }).first().click()
+  await page.waitForTimeout(500)
+  await page.getByTitle('Import data from file').first().click()
+  await page.waitForTimeout(200)
+
+  // step 1: upload CSV whose headers match demo students columns (id, first_name)
+  const dialog = page.getByRole('dialog')
+  await dialog.locator('input[type=file]').setInputFiles({
+    name: 'students.csv',
+    mimeType: 'text/csv',
+    buffer: Buffer.from('id,first_name\n1,An\n2,Binh\n3,Chi'),
+  })
+  await page.waitForTimeout(200)
+  await expect(page.getByText(/Preview \(3 rows\)/).first()).toBeVisible()
+  await dialog.locator('select').last().selectOption('students')
+  await page.getByText('Next', { exact: true }).first().click()
+
+  // step 2: mapping auto-filled → Next
+  await expect(page.getByText(/Map columns/).first()).toBeVisible()
+  await page.getByText('Next', { exact: true }).first().click()
+
+  // step 3: Options step — new controls
+  await expect(page.getByText('Options', { exact: true }).first()).toBeVisible()
+  await expect(page.getByText(/Batch size/).first()).toBeVisible()
+  await expect(page.getByText('On conflict').first()).toBeVisible()
+
+  // run batched import → progress + success result
+  await page.getByText(/^Import 3 rows$/).first().click()
+  await expect(page.getByText(/rows inserted/).first()).toBeVisible({ timeout: 8000 })
+
+  expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
+})
