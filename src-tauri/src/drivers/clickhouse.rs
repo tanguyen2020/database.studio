@@ -225,6 +225,7 @@ impl ChDriver {
                         .and_then(|s| s.parse::<i64>().ok())
                         .or_else(|| r["total_rows"].as_i64()),
                     locked: schema == "system", // database system là read-only
+                    engine: Some(engine.to_string()),
                 }
             })
             .collect())
@@ -258,5 +259,187 @@ impl ChDriver {
                 }
             })
             .collect())
+    }
+
+    /// Metadata bảng ClickHouse cho engine badge + TTL viewer (Phase 5 · T7c):
+    /// engine, engine_full, create_table_query, partition/sorting key, TTL rules.
+    pub async fn table_meta(&self, schema: &str, table: &str) -> Result<ChTableMeta, QueryError> {
+        let (body, _) = self
+            .raw_query(
+                "SELECT engine, engine_full, partition_key, sorting_key, create_table_query \
+                 FROM system.tables WHERE database = {db:String} AND name = {t:String}",
+                &[("db", schema), ("t", table)],
+            )
+            .await?;
+        let parsed: ChJsonBody = serde_json::from_str(&body)
+            .map_err(|e| QueryError::new(SYSTEM, e.to_string(), body.clone()))?;
+        let r = parsed
+            .data
+            .first()
+            .ok_or_else(|| QueryError::new(SYSTEM, format!("Bảng {schema}.{table} không tồn tại"), "not found"))?;
+        let create_sql = r["create_table_query"].as_str().unwrap_or("").to_string();
+        let engine_full = r["engine_full"].as_str().unwrap_or("").to_string();
+        Ok(ChTableMeta {
+            engine: r["engine"].as_str().unwrap_or("").to_string(),
+            partition_key: r["partition_key"].as_str().unwrap_or("").to_string(),
+            sorting_key: r["sorting_key"].as_str().unwrap_or("").to_string(),
+            ttl_rules: parse_ttl(&create_sql),
+            engine_full,
+            create_sql,
+        })
+    }
+}
+
+/// Table metadata (ClickHouse-specific) cho explorer + TTL viewer.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ChTableMeta {
+    pub engine: String,
+    pub engine_full: String,
+    pub partition_key: String,
+    pub sorting_key: String,
+    pub create_sql: String,
+    pub ttl_rules: Vec<TtlRule>,
+}
+
+/// Một quy tắc TTL đã parse: biểu thức + hành động + mô tả tự nhiên.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct TtlRule {
+    pub expr: String,
+    /// DELETE | MOVE | GROUP BY | RECOMPRESS
+    pub action: String,
+    pub human: String,
+}
+
+/// Parse mệnh đề `TTL ...` từ `CREATE TABLE ... TTL <rules> [SETTINGS ...]`.
+/// Thuần (không I/O) → unit-test được. Trả [] nếu bảng không có TTL.
+pub fn parse_ttl(create_sql: &str) -> Vec<TtlRule> {
+    // Tìm từ khoá TTL đứng riêng (không phải trong tên cột). Lấy đoạn sau ' TTL '
+    // tới ' SETTINGS ' / ' AS ' / hết chuỗi.
+    let upper = create_sql.to_uppercase();
+    let Some(ttl_pos) = find_kw(&upper, " TTL ") else {
+        return Vec::new();
+    };
+    let after = &create_sql[ttl_pos + 5..];
+    let after_upper = &upper[ttl_pos + 5..];
+    // cắt tại SETTINGS / COMMENT / cuối
+    let end = [" SETTINGS ", " COMMENT "]
+        .iter()
+        .filter_map(|kw| find_kw(after_upper, kw))
+        .min()
+        .unwrap_or(after.len());
+    let clause = after[..end].trim();
+
+    // Tách các rule theo dấu phẩy ở cấp ngoặc 0.
+    split_top_level(clause)
+        .into_iter()
+        .filter(|s| !s.trim().is_empty())
+        .map(|seg| {
+            let seg = seg.trim();
+            let seg_up = seg.to_uppercase();
+            let (action, expr) = if let Some(p) = seg_up.find(" TO DISK ") {
+                ("MOVE".to_string(), seg[..p].trim().to_string())
+            } else if let Some(p) = seg_up.find(" TO VOLUME ") {
+                ("MOVE".to_string(), seg[..p].trim().to_string())
+            } else if let Some(p) = seg_up.find(" GROUP BY ") {
+                ("GROUP BY".to_string(), seg[..p].trim().to_string())
+            } else if let Some(p) = seg_up.find(" RECOMPRESS ") {
+                ("RECOMPRESS".to_string(), seg[..p].trim().to_string())
+            } else if let Some(p) = seg_up.rfind(" DELETE") {
+                ("DELETE".to_string(), seg[..p].trim().to_string())
+            } else {
+                // không có hành động → mặc định DELETE (ClickHouse default)
+                ("DELETE".to_string(), seg.to_string())
+            };
+            let human = match action.as_str() {
+                "DELETE" => format!("Xóa dữ liệu khi: {expr}"),
+                "MOVE" => format!("Chuyển part sang disk/volume khi: {expr} ({})", extract_tail(seg)),
+                "GROUP BY" => format!("Rollup (GROUP BY) khi: {expr}"),
+                "RECOMPRESS" => format!("Nén lại khi: {expr}"),
+                _ => expr.clone(),
+            };
+            TtlRule { expr, action, human }
+        })
+        .collect()
+}
+
+/// Tìm keyword bao bởi khoảng trắng (đã uppercase input + kw).
+fn find_kw(haystack_upper: &str, kw_upper: &str) -> Option<usize> {
+    haystack_upper.find(kw_upper)
+}
+
+/// Phần đuôi sau TO DISK/VOLUME (để mô tả đích di chuyển).
+fn extract_tail(seg: &str) -> String {
+    let up = seg.to_uppercase();
+    for kw in [" TO DISK ", " TO VOLUME "] {
+        if let Some(p) = up.find(kw) {
+            return format!("{}{}", kw.trim(), &seg[p + kw.len()..]).trim().to_string();
+        }
+    }
+    String::new()
+}
+
+/// Tách chuỗi theo dấu phẩy ở cấp ngoặc ngoài cùng (bỏ qua phẩy trong `(...)`).
+fn split_top_level(s: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut depth = 0i32;
+    let mut cur = String::new();
+    for ch in s.chars() {
+        match ch {
+            '(' => {
+                depth += 1;
+                cur.push(ch);
+            }
+            ')' => {
+                depth -= 1;
+                cur.push(ch);
+            }
+            ',' if depth == 0 => {
+                out.push(std::mem::take(&mut cur));
+            }
+            _ => cur.push(ch),
+        }
+    }
+    if !cur.trim().is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_ttl_delete_and_move() {
+        let sql = "CREATE TABLE db.events (ts DateTime, x Int32) ENGINE = MergeTree \
+                   PARTITION BY toYYYYMM(ts) ORDER BY ts \
+                   TTL ts + INTERVAL 30 DAY DELETE, ts + INTERVAL 7 DAY TO DISK 'cold' \
+                   SETTINGS index_granularity = 8192";
+        let rules = parse_ttl(sql);
+        assert_eq!(rules.len(), 2, "{rules:?}");
+        assert_eq!(rules[0].action, "DELETE");
+        assert!(rules[0].expr.contains("INTERVAL 30 DAY"));
+        assert_eq!(rules[1].action, "MOVE");
+        assert!(rules[1].expr.contains("INTERVAL 7 DAY"));
+    }
+
+    #[test]
+    fn parse_ttl_none() {
+        let sql = "CREATE TABLE db.t (a Int32) ENGINE = MergeTree ORDER BY a SETTINGS x=1";
+        assert!(parse_ttl(sql).is_empty());
+    }
+
+    #[test]
+    fn parse_ttl_implicit_delete() {
+        let sql = "CREATE TABLE db.t (ts DateTime) ENGINE = MergeTree ORDER BY ts TTL ts + INTERVAL 90 DAY";
+        let rules = parse_ttl(sql);
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].action, "DELETE");
+    }
+
+    #[test]
+    fn split_top_level_ignores_nested_commas() {
+        let v = split_top_level("a + INTERVAL 1 DAY, toDate(x, 'UTC') DELETE");
+        assert_eq!(v.len(), 2);
     }
 }

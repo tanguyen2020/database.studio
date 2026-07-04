@@ -222,6 +222,7 @@ impl PgDriver {
                 kind: r.get(1),
                 row_estimate: r.try_get::<i64, _>(2).ok(),
                 locked: false,
+                engine: None,
             })
             .collect())
     }

@@ -266,6 +266,7 @@ impl SqliteDriver {
                     kind: if kind == "view" { "view".into() } else { "table".into() },
                     row_estimate: None,
                     locked,
+                    engine: None,
                 });
             }
             // sqlite_master itself is browsable (locked/read-only).
@@ -275,6 +276,7 @@ impl SqliteDriver {
                 kind: "system".into(),
                 row_estimate: None,
                 locked: true,
+                engine: None,
             });
             Ok(out)
         })

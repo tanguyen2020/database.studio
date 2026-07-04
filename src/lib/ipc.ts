@@ -442,6 +442,25 @@ export const cassandraRing = (connId: string) => invoke<RingNode[]>('cassandra_r
 export const cassandraTableDdl = (connId: string, keyspace: string, table: string) =>
   invoke<string>('cassandra_table_ddl', { connId, keyspace, table })
 
+// ---- ClickHouse advanced (Phase 5 · T7c) -----------------------------------
+
+export interface TtlRule {
+  expr: string
+  action: string // DELETE | MOVE | GROUP BY | RECOMPRESS
+  human: string
+}
+export interface ChTableMeta {
+  engine: string
+  engine_full: string
+  partition_key: string
+  sorting_key: string
+  create_sql: string
+  ttl_rules: TtlRule[]
+}
+
+export const chTableMeta = (connId: string, schema: string, table: string) =>
+  invoke<ChTableMeta>('ch_table_meta', { connId, schema, table })
+
 // ---- schema (Object Explorer) ----------------------------------------------
 
 export const listSchemas = (connId: string) => invoke<SchemaInfo[]>('list_schemas', { connId })

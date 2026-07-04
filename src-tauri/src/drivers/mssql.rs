@@ -247,6 +247,7 @@ impl MssqlDriver {
                 kind: r.get::<&str, _>(1).unwrap_or("table").to_string(),
                 row_estimate: r.get::<i64, _>(2),
                 locked: false,
+                engine: None,
             })
             .collect())
     }

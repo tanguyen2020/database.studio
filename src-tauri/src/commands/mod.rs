@@ -1,4 +1,5 @@
 pub mod cassandra;
+pub mod clickhouse;
 pub mod connections;
 pub mod files;
 pub mod grid;

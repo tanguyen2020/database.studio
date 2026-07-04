@@ -26,6 +26,7 @@
   import SchemaRegistryWorkspace from '$lib/components/workspace/SchemaRegistryWorkspace.svelte'
   import CassandraRing from '$lib/components/workspace/CassandraRing.svelte'
   import CommandPalette from '$lib/components/CommandPalette.svelte'
+  import ClickHouseTtlDialog from '$lib/components/ClickHouseTtlDialog.svelte'
   import { palette } from '$lib/stores/palette.svelte'
   import HistoryTab from '$lib/components/workspace/HistoryTab.svelte'
   import SavedQueriesTab from '$lib/components/workspace/SavedQueriesTab.svelte'
@@ -228,4 +229,5 @@
 <EditConnectedDialog />
 <SaveBeforeCloseDialog />
 <CommandPalette />
+<ClickHouseTtlDialog />
 <Toasts />

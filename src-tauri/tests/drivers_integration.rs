@@ -342,6 +342,26 @@ async fn clickhouse_roundtrip_types_and_errors() {
     assert!(note.nullable, "Nullable(...) → nullable=true");
     let n = cols.iter().find(|c| c.name == "n").unwrap();
     assert!(n.is_pk, "ORDER BY key → is_in_primary_key");
+
+    // Phase 5 T7c: engine badge trong TableInfo
+    assert_eq!(t.engine.as_deref(), Some("MergeTree"), "engine badge phải là MergeTree");
+
+    // Phase 5 T7c: table_meta + parse TTL (DELETE + MOVE) từ CREATE thật
+    drv.exec(
+        "CREATE TABLE it_ttl (d Date, x UInt32) ENGINE = MergeTree ORDER BY x \
+         TTL d + INTERVAL 90 DAY DELETE, d + INTERVAL 30 DAY TO VOLUME 'default'",
+    )
+    .await
+    .unwrap();
+    let meta = drv.table_meta("default", "it_ttl").await.unwrap();
+    assert_eq!(meta.engine, "MergeTree");
+    assert!(meta.create_sql.contains("TTL"), "create_sql phải chứa TTL: {}", meta.create_sql);
+    assert!(meta.ttl_rules.len() >= 2, "phải parse >=2 TTL rule, got {:?}", meta.ttl_rules);
+    assert!(meta.ttl_rules.iter().any(|r| r.action == "DELETE"), "{:?}", meta.ttl_rules);
+    assert!(meta.ttl_rules.iter().any(|r| r.action == "MOVE"), "{:?}", meta.ttl_rules);
+    // bảng không TTL → rỗng
+    let meta2 = drv.table_meta("default", "it_events").await.unwrap();
+    assert!(meta2.ttl_rules.is_empty(), "it_events không có TTL: {:?}", meta2.ttl_rules);
 }
 
 // ---------------------------------------------------------------------------

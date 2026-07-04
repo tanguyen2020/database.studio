@@ -157,6 +157,9 @@ pub struct TableInfo {
     pub row_estimate: Option<i64>,
     /// SQLite internal tables (sqlite_master, sqlite_sequence) are locked.
     pub locked: bool,
+    /// ClickHouse engine (MergeTree, ReplacingMergeTree, …) for the explorer badge.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub engine: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

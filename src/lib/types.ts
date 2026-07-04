@@ -127,6 +127,8 @@ export interface TableInfo {
   kind: 'table' | 'view' | 'system'
   row_estimate?: number
   locked: boolean
+  /** ClickHouse engine (for explorer badge) */
+  engine?: string
 }
 
 export interface ColumnInfo {

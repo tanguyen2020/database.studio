@@ -237,10 +237,10 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
       return ok([{ name: 'public', is_default: true }])
     case 'list_tables':
       return ok([
-        { name: 'students', kind: 'table', row_estimate: 3842, locked: false },
-        { name: 'courses', kind: 'table', row_estimate: 214, locked: false },
-        { name: 'enrollments', kind: 'table', row_estimate: 12480, locked: false },
-        { name: 'vw_active_students', kind: 'view', row_estimate: null, locked: false },
+        { name: 'students', kind: 'table', row_estimate: 3842, locked: false, engine: 'MergeTree' },
+        { name: 'courses', kind: 'table', row_estimate: 214, locked: false, engine: 'ReplacingMergeTree' },
+        { name: 'enrollments', kind: 'table', row_estimate: 12480, locked: false, engine: 'MergeTree' },
+        { name: 'vw_active_students', kind: 'view', row_estimate: null, locked: false, engine: 'MaterializedView' },
       ])
     case 'list_columns':
       return ok([
@@ -580,6 +580,20 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
       return ok(
         'CREATE TABLE campus_ks.grades_by_student (\n  student_id uuid,\n  term_course text,\n  grade text,\n  points decimal,\n  PRIMARY KEY ((student_id), term_course)\n)\nWITH CLUSTERING ORDER BY (term_course ASC);',
       )
+    case 'ch_table_meta': {
+      const tbl = (args?.table as string) ?? 'lms_events'
+      return ok({
+        engine: 'MergeTree',
+        engine_full: 'MergeTree PARTITION BY toYYYYMM(event_date) ORDER BY (event_type, student_id) TTL event_date + toIntervalDay(90) SETTINGS index_granularity = 8192',
+        partition_key: 'toYYYYMM(event_date)',
+        sorting_key: 'event_type, student_id',
+        create_sql: `CREATE TABLE analytics.${tbl} (event_date Date, event_type LowCardinality(String)) ENGINE = MergeTree PARTITION BY toYYYYMM(event_date) ORDER BY (event_type, student_id) TTL event_date + toIntervalDay(90) DELETE, event_date + toIntervalDay(30) TO VOLUME 'cold' SETTINGS index_granularity = 8192`,
+        ttl_rules: [
+          { expr: 'event_date + toIntervalDay(90)', action: 'DELETE', human: 'Xóa dữ liệu khi: event_date + toIntervalDay(90)' },
+          { expr: 'event_date + toIntervalDay(30)', action: 'MOVE', human: "Chuyển part sang disk/volume khi: event_date + toIntervalDay(30) (TO VOLUME 'cold')" },
+        ],
+      })
+    }
     default:
       return Promise.reject(new Error(`demo: chưa mock command "${cmd}"`))
   }

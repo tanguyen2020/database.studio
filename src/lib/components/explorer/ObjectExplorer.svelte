@@ -13,6 +13,7 @@
   import { connections } from '$lib/stores/connections.svelte'
   import { explorer } from '$lib/stores/explorer.svelte'
   import { tabs } from '$lib/stores/tabs.svelte'
+  import { chTtl } from '$lib/stores/chttl.svelte'
   import { toasts } from '$lib/stores/toast.svelte'
   import { quoteIdent, selectStarSql } from '$lib/sql/dialect'
   import { genCreate, genDelete, genDrop, genInsert, genRename, genSelect, genTruncate, genUpdate } from '$lib/sql/ddl'
@@ -433,6 +434,9 @@
                   <ContextMenu.Item onclick={() => genSqlTab('update', schema.name, t.name)}>Generate SQL · UPDATE</ContextMenu.Item>
                   <ContextMenu.Item onclick={() => genSqlTab('delete', schema.name, t.name)}>Generate SQL · DELETE</ContextMenu.Item>
                   <ContextMenu.Item onclick={() => genSqlTab('ddl', schema.name, t.name)}>View DDL</ContextMenu.Item>
+                  {#if isClickhouse}
+                    <ContextMenu.Item onclick={() => chTtl.show(selected!.id, schema.name, t.name)}>TTL Policy…</ContextMenu.Item>
+                  {/if}
                   <ContextMenu.Separator />
                   <ContextMenu.Item onclick={() => copyName(t.name)}>Copy Name</ContextMenu.Item>
                   <ContextMenu.Item
@@ -471,7 +475,7 @@
                   glyph: '▦',
                   color: C.table,
                   name: t.name,
-                  meta: t.row_estimate != null && t.row_estimate > 0 ? `${t.row_estimate.toLocaleString()} rows` : '',
+                  meta: isClickhouse && t.engine ? t.engine : t.row_estimate != null && t.row_estimate > 0 ? `${t.row_estimate.toLocaleString()} rows` : '',
                   expandable: true,
                   locked: t.locked,
                   onClick: () => expandTable(schema.name, t.name),
