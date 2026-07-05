@@ -56,7 +56,8 @@ test('foreign database node has a context menu', async ({ page }) => {
   // database nodes in the tree. Right-click one → context menu.
   await page.getByRole('treeitem', { name: /analytics database/ }).first().click({ button: 'right' })
   await page.waitForTimeout(200)
-  await expect(page.getByText(/New Query \(in analytics\)/).first()).toBeVisible()
+  await expect(page.getByText('New Query', { exact: true }).first()).toBeVisible()
+  await expect(page.getByText('Copy Name', { exact: true }).first()).toBeVisible()
 
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
