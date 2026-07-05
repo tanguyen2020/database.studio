@@ -96,7 +96,7 @@ Status legend: **Implemented** (wired end-to-end, evidence) · **Partial** (pres
 | Grid + ClickHouse → async mutation | Implemented | `grid.rs ch_mutation_sql`; `ch_generate_mutations` | Apply → "Generate mutation" |
 | JSON cell modal | Implemented (Differs) | `ResultGrid.svelte` | prototype expands inline |
 | Chart view + Builder + PNG/SVG export | Implemented [T12] | `ResultChart.svelte` | real PNG/SVG (serialize SVG + resolve CSS vars) |
-| Pagination controls | Partial | `TableViewerTab.svelte` | table viewer paginates; standalone query-result pagination not surfaced |
+| Pagination controls | Implemented | `TableViewerTab.svelte` (server-side); `ResultGrid.svelte` + `grid/paging.ts` (client-side query-result pager) | pager: row range + page-size + prev/next; indices stay absolute so edits/selection work |
 
 ---
 

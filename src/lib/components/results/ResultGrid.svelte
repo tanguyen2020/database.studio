@@ -15,6 +15,8 @@
     observeElementRect,
     type VirtualItem,
   } from '@tanstack/virtual-core'
+  import { untrack } from 'svelte'
+  import { pageWindow } from '$lib/grid/paging'
   import { save as saveFileDialog } from '@tauri-apps/plugin-dialog'
   import { invoke } from '@tauri-apps/api/core'
   import { toasts } from '$lib/stores/toast.svelte'
@@ -246,9 +248,28 @@
 
   const rowCount = $derived(data.rows.length)
 
+  // ---- pagination (AUDIT item 1) — client-side window over the fetched rows.
+  // Row indices stay ABSOLUTE (ri = pageOffset + vi.index) so edits/selection
+  // keep working. Table Viewer paginates server-side; this covers query results.
+  const PAGE_SIZES = [100, 200, 500, 1000]
+  let pageSize = $state(200)
+  let page = $state(0)
+  const win = $derived(pageWindow(rowCount, pageSize, page))
+  const paged = $derived(win.paged)
+  const pageCount = $derived(win.pageCount)
+  const pageOffset = $derived(win.offset)
+  const pageRowCount = $derived(win.count)
+  const onLastPage = $derived(win.last)
+  // Reset to page 0 whenever a new result set arrives or the page size changes.
+  $effect(() => {
+    void data
+    void pageSize
+    untrack(() => (page = 0))
+  })
+
   $effect(() => {
     if (!scrollEl) return
-    const count = rowCount
+    const count = pageRowCount
     const virtualizer = new Virtualizer<HTMLDivElement, HTMLDivElement>({
       count,
       getScrollElement: () => scrollEl,
@@ -523,30 +544,31 @@
         <tr style="height: {virtualItems[0].start}px;"><td colspan={columns.length}></td></tr>
       {/if}
       {#each virtualItems as vi (vi.key)}
-        {@const row = data.rows[vi.index]}
-        {@const isRowSelected = selectedRows.has(vi.index)}
-        {@const isDeleted = deletedRows.has(vi.index)}
+        {@const ri = pageOffset + vi.index}
+        {@const row = data.rows[ri]}
+        {@const isRowSelected = selectedRows.has(ri)}
+        {@const isDeleted = deletedRows.has(ri)}
         <!-- row — dòng 434: zebra + selected inset bar; deleted → đỏ gạch ngang -->
         <tr
           class="grid-row"
-          onclick={(e) => clickRowNumber(e, vi.index)}
-          style="height:{ROW_H}px;cursor:pointer;background:{isDeleted ? 'var(--rgba-224-108-117-_14)' : isRowSelected ? 'var(--rgba-91-124-255-_16)' : vi.index % 2 === 1 ? 'var(--grid-zebra)' : 'transparent'};box-shadow:inset var(--px-2) 0 0 {isRowSelected ? 'var(--primary)' : 'transparent'};{isDeleted ? 'text-decoration:line-through;opacity:.65;' : ''}"
+          onclick={(e) => clickRowNumber(e, ri)}
+          style="height:{ROW_H}px;cursor:pointer;background:{isDeleted ? 'var(--rgba-224-108-117-_14)' : isRowSelected ? 'var(--rgba-91-124-255-_16)' : ri % 2 === 1 ? 'var(--grid-zebra)' : 'transparent'};box-shadow:inset var(--px-2) 0 0 {isRowSelected ? 'var(--primary)' : 'transparent'};{isDeleted ? 'text-decoration:line-through;opacity:.65;' : ''}"
         >
           {#each columns as col (col)}
-            {@const edited = edits.has(cellKey(vi.index, col))}
-            {@const rawVal = edited ? edits.get(cellKey(vi.index, col)) : row?.[col]}
+            {@const edited = edits.has(cellKey(ri, col))}
+            {@const rawVal = edited ? edits.get(cellKey(ri, col)) : row?.[col]}
             {@const cell = display(rawVal, col)}
-            {@const isCellSelected = selectedCell?.row === vi.index && selectedCell?.col === col}
-            {@const isEditing = editingCell?.row === vi.index && editingCell?.col === col && editingCell?.insert == null}
+            {@const isCellSelected = selectedCell?.row === ri && selectedCell?.col === col}
+            {@const isEditing = editingCell?.row === ri && editingCell?.col === col && editingCell?.insert == null}
             <!-- cell — dòng 436-446: padding 5px 12px, NULL badge; edit → highlight vàng -->
             <td
               style="border-bottom:var(--px-1) solid var(--border);border-right:var(--px-1) solid var(--border);padding:0;white-space:nowrap;max-width:var(--px-420);overflow:hidden;text-overflow:ellipsis;{edited ? `background:var(--rgba-240-160-32-_18);` : ''}{isCellSelected ? 'box-shadow:inset 0 0 0 var(--px-1) var(--primary);' : ''}"
-              onclick={(e) => { e.stopPropagation(); clickCell(vi.index, col) }}
-              oncontextmenu={(e) => openCtx(e, vi.index, col)}
+              onclick={(e) => { e.stopPropagation(); clickCell(ri, col) }}
+              oncontextmenu={(e) => openCtx(e, ri, col)}
               ondblclick={(e) => {
                 e.stopPropagation()
-                if (editable) startEdit(vi.index, col)
-                else { clickCell(vi.index, col); void copySelection() }
+                if (editable) startEdit(ri, col)
+                else { clickCell(ri, col); void copySelection() }
               }}
               title={cell.isNull ? undefined : cell.text}
             >
@@ -590,8 +612,8 @@
           {/each}
         </tr>
       {/each}
-      {#if editable}
-        <!-- inserted rows (pending) — nền xanh lá nhạt -->
+      {#if editable && onLastPage}
+        <!-- inserted rows (pending) — nền xanh lá nhạt (chỉ hiện ở trang cuối) -->
         {#each insertedRows as ins, insIdx (insIdx)}
           <tr style="height:{ROW_H}px;background:var(--rgba-39-174-96-_14)">
             {#each columns as col (col)}
@@ -635,6 +657,30 @@
     <div style="padding:var(--px-12);font-size:var(--px-12);color:var(--muted)">0 rows</div>
   {/if}
 </div>
+{#if !editable && rowCount > 0}
+  <!-- pager (AUDIT item 1): client-side paging over the fetched query result -->
+  <div style="flex:none;display:flex;align-items:center;gap:var(--px-10);padding:var(--px-4) var(--px-12);border-top:var(--px-1) solid var(--border);background:var(--header);font-size:var(--px-11);color:var(--text2)">
+    <span class="mono">Rows {(pageOffset + 1).toLocaleString()}–{(pageOffset + pageRowCount).toLocaleString()} of {rowCount.toLocaleString()}</span>
+    <label style="margin-left:auto;display:flex;align-items:center;gap:var(--px-5)">Page size
+      <select bind:value={pageSize} class="mono" style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-4);padding:0 var(--px-4);color:var(--text);font-size:var(--px-11)">
+        {#each PAGE_SIZES as s (s)}<option value={s}>{s}</option>{/each}
+      </select>
+    </label>
+    {#if paged}
+      {#snippet pbtn(label: string, to: number, disabled: boolean)}
+        <span role="button" tabindex="0" aria-disabled={disabled}
+          onclick={() => !disabled && (page = to)}
+          onkeydown={(e) => e.key === 'Enter' && !disabled && (page = to)}
+          style="cursor:{disabled ? 'default' : 'pointer'};opacity:{disabled ? 0.35 : 1};padding:0 var(--px-5);user-select:none">{label}</span>
+      {/snippet}
+      {@render pbtn('⏮', 0, page === 0)}
+      {@render pbtn('◀', page - 1, page === 0)}
+      <span class="mono">Page {page + 1} / {pageCount}</span>
+      {@render pbtn('▶', page + 1, page >= pageCount - 1)}
+      {@render pbtn('⏭', pageCount - 1, page >= pageCount - 1)}
+    {/if}
+  </div>
+{/if}
 </div>
 
 <!-- right-click copy menu -->
