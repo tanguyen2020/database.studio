@@ -80,6 +80,49 @@ test('foreign database node has a context menu', async ({ page }) => {
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
 
+// User request — Views/Procedures/Functions/Triggers folders each expose a
+// "Create <type>…" context menu.
+test('object folders offer Create <type>', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(String(e)))
+  await blockRemoteFonts(page)
+  await page.goto(APP_URL)
+  await page.waitForSelector('#app > *', { timeout: 15_000 })
+  await page.waitForTimeout(300)
+  await page.getByRole('button', { name: /Postgres/ }).first().click()
+  await page.waitForTimeout(500)
+  await page.getByText('public', { exact: true }).first().click() // expand schema → folders appear
+  await page.waitForTimeout(400)
+
+  await page.getByText('Stored Procedures', { exact: true }).first().click({ button: 'right' })
+  await page.waitForTimeout(200)
+  await expect(page.getByText('Create Procedure…', { exact: true }).first()).toBeVisible()
+
+  expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
+})
+
+// User request — Design Table shows the connection + database it targets.
+test('table designer header shows connection and database', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(String(e)))
+  await blockRemoteFonts(page)
+  await page.goto(APP_URL)
+  await page.waitForSelector('#app > *', { timeout: 15_000 })
+  await page.waitForTimeout(300)
+  await page.getByRole('button', { name: /Postgres/ }).first().click()
+  await page.waitForTimeout(500)
+  await page.getByText('public', { exact: true }).first().click({ button: 'right' }) // schema menu
+  await page.waitForTimeout(200)
+  await page.getByText('New Table…', { exact: true }).first().click()
+  await page.waitForTimeout(400)
+
+  // header shows the connection name (demo 'Postgres') and the schema
+  await expect(page.getByRole('tab', { name: /new_table/ }).first()).toBeVisible()
+  await expect(page.getByText('Postgres', { exact: true }).first()).toBeVisible()
+
+  expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
+})
+
 // AUDIT-5 item 2 — Result Grid has a "No." gutter column (row numbers).
 test('result grid shows a No. gutter column', async ({ page }) => {
   const errors: string[] = []

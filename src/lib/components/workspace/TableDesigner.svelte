@@ -18,6 +18,7 @@
 
   const st = $derived(tab.state as { schema?: string; table?: string })
   const profile = $derived(connections.byId(tab.connectionId))
+  const dbName = $derived(connections.databaseOf(tab.connectionId))
   const system = $derived(tab.systemType)
   const accent = $derived(systemMeta(system).accent)
   const types = $derived(designerTypes(system))
@@ -92,6 +93,11 @@
   <!-- header -->
   <div style="flex:none;display:flex;align-items:center;gap:var(--px-12);padding:var(--px-9) var(--px-14);border-bottom:var(--px-1) solid var(--border);background:var(--surface)">
     <span style="width:var(--px-3);height:var(--px-20);border-radius:var(--px-2);background:{accent}"></span>
+    <!-- which connection + database this table will be created in -->
+    <div style="display:flex;flex-direction:column;line-height:1.15">
+      <span style="font-size:var(--px-12_5);font-weight:600;color:var(--text)">{profile?.name ?? '—'}</span>
+      <span class="mono" style="font-size:var(--px-10);color:var(--muted)">{dbName ? `${dbName}${schema ? ` · ${schema}` : ''}` : schema || 'database'}</span>
+    </div>
     <span style="font-size:var(--px-12);color:var(--muted)">Table</span>
     <input bind:value={name} class="mono" style="font-size:var(--px-13_5);font-weight:600;background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-7);padding:var(--px-5) var(--px-11);color:var(--text);outline:none;width:var(--px-220)" />
     <div style="display:flex;background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-7);overflow:hidden;margin-left:var(--px-6)">

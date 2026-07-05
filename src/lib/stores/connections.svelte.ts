@@ -21,7 +21,25 @@ class ConnectionsStore {
   }
 
   byId(id: string | null | undefined): ProfilePublic | null {
-    return this.profiles.find((p) => p.id === id) ?? null
+    if (!id) return null
+    const direct = this.profiles.find((p) => p.id === id)
+    if (direct) return direct
+    // Internal per-database sub-connections (`{baseId}::{db}`, from attach_database)
+    // are not stored as their own profiles — resolve them to the base connection so
+    // tabs opened on another database (Table Designer, ER, Index Manager…) keep a
+    // valid profile/system instead of falling back to "orphan".
+    const sep = id.indexOf('::')
+    if (sep > 0) return this.profiles.find((p) => p.id === id.slice(0, sep)) ?? null
+    return null
+  }
+
+  /** The database a (possibly sub-)connection id points at: the part after `::`
+   *  for an attached sub-connection, else the base profile's own database. */
+  databaseOf(id: string | null | undefined): string {
+    if (!id) return ''
+    const sep = id.indexOf('::')
+    if (sep > 0) return id.slice(sep + 2)
+    return this.byId(id)?.database ?? ''
   }
 
   /** Add an already-connected (server-side) ephemeral profile to the list,

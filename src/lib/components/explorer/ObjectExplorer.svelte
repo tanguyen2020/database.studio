@@ -29,6 +29,7 @@
   import { quoteIdent, selectStarSql } from '$lib/sql/dialect'
   import { genCreate, genDelete, genDrop, genForeignKey, genInsert, genRename, genSelect, genTruncate, genUpdate } from '$lib/sql/ddl'
   import { generateScript, type DbObject, type ScriptMode } from '$lib/sql/scripts'
+  import { createTemplate, type CreateKind } from '$lib/sql/create-templates'
   import { buildExportSelect } from '$lib/export/query'
   import { toSqlInsert } from '$lib/export/rows'
   import type { ColumnInfo, RoutineInfo, TableInfo } from '$lib/types'
@@ -295,6 +296,13 @@
     }
     const script = generateScript([obj], mode)
     stmtTab(`${table} · scripts`, `-- ${table} (${mode})\n\n${script}`, database)
+  }
+
+  // "Create <type>…" folder action — open a ready-to-edit CREATE skeleton in a SQL
+  // tab, bound to the given database (foreign-db subtree passes db.name).
+  function createObject(kind: CreateKind, schema: string, database?: string) {
+    if (!selected) return
+    stmtTab(`Create ${kind}`, createTemplate(selected.system, kind, schema), database)
   }
 
   // T18 — Show Definition: lấy text định nghĩa THẬT từ server (view/trigger/proc/func).
@@ -651,6 +659,13 @@
           {@const scalarFns = fns.filter((r) => r.kind !== 'table_function')}
 
           <!-- Tables folder (glyph ▤ màu folder — dòng 3963) -->
+          {#snippet tablesFolderMenu()}
+            <ContextMenu.Content class="w-48">
+              <ContextMenu.Item onclick={() => selected && tabs.openTableDesigner(selected.id, schema.name, '')}>New Table…</ContextMenu.Item>
+              <ContextMenu.Item onclick={() => selected && importWizard.show(selected.id, schema.name)}>Import Data…</ContextMenu.Item>
+              <ContextMenu.Item onclick={() => selected && explorer.refresh(selected.id, { kind: 'schema', schema: schema.name })}>Refresh</ContextMenu.Item>
+            </ContextMenu.Content>
+          {/snippet}
           {@render row({
             key: `f:${schema.name}:tables`,
             depth: base + 1,
@@ -661,7 +676,7 @@
             head: true,
             expandable: true,
             onClick: () => toggle(`f:${schema.name}:tables`),
-          })}
+          }, tablesFolderMenu)}
           {#if searching || expanded.has(`f:${schema.name}:tables`)}
             {#each tables as t (t.name)}
               {@const tbOpen = expanded.has(`t:${schema.name}.${t.name}`)}
@@ -835,6 +850,12 @@
           {/if}
 
           <!-- Views -->
+          {#snippet viewsFolderMenu()}
+            <ContextMenu.Content class="w-48">
+              <ContextMenu.Item onclick={() => createObject('view', schema.name)}>Create View…</ContextMenu.Item>
+              <ContextMenu.Item onclick={() => selected && explorer.refresh(selected.id, { kind: 'schema', schema: schema.name })}>Refresh</ContextMenu.Item>
+            </ContextMenu.Content>
+          {/snippet}
           {@render row({
             key: `f:${schema.name}:views`,
             depth: base + 1,
@@ -845,7 +866,7 @@
             head: true,
             expandable: true,
             onClick: () => toggle(`f:${schema.name}:views`),
-          })}
+          }, isClickhouse ? undefined : viewsFolderMenu)}
           {#if searching || expanded.has(`f:${schema.name}:views`)}
             {#each views as v (v.name)}
               {@const vOpen = expanded.has(`t:${schema.name}.${v.name}`)}
@@ -921,6 +942,12 @@
 
           {#if showRoutines}
             <!-- Stored Procedures -->
+            {#snippet procsFolderMenu()}
+              <ContextMenu.Content class="w-48">
+                <ContextMenu.Item onclick={() => createObject('procedure', schema.name)}>Create Procedure…</ContextMenu.Item>
+                <ContextMenu.Item onclick={() => selected && explorer.refresh(selected.id, { kind: 'schema', schema: schema.name })}>Refresh</ContextMenu.Item>
+              </ContextMenu.Content>
+            {/snippet}
             {@render row({
               key: `f:${schema.name}:procs`,
               depth: base + 1,
@@ -931,7 +958,7 @@
               head: true,
               expandable: true,
               onClick: () => toggle(`f:${schema.name}:procs`),
-            })}
+            }, procsFolderMenu)}
             {#if searching || expanded.has(`f:${schema.name}:procs`)}
               {#each procs as r (r.name)}
                 {#snippet procMenu()}
@@ -956,6 +983,12 @@
 
             {#if isMssql}
               <!-- MSSQL: tách TVF / Scalar -->
+              {#snippet createFnFolderMenu()}
+                <ContextMenu.Content class="w-48">
+                  <ContextMenu.Item onclick={() => createObject('function', schema.name)}>Create Function…</ContextMenu.Item>
+                  <ContextMenu.Item onclick={() => selected && explorer.refresh(selected.id, { kind: 'schema', schema: schema.name })}>Refresh</ContextMenu.Item>
+                </ContextMenu.Content>
+              {/snippet}
               {@render row({
                 key: `f:${schema.name}:tvf`,
                 depth: base + 1,
@@ -966,7 +999,7 @@
                 head: true,
                 expandable: true,
                 onClick: () => toggle(`f:${schema.name}:tvf`),
-              })}
+              }, createFnFolderMenu)}
               {#if searching || expanded.has(`f:${schema.name}:tvf`)}
                 {#each tvfs as r (r.name)}
                   {#snippet tvfMenu()}
@@ -992,7 +1025,7 @@
                 head: true,
                 expandable: true,
                 onClick: () => toggle(`f:${schema.name}:scalar`),
-              })}
+              }, createFnFolderMenu)}
               {#if searching || expanded.has(`f:${schema.name}:scalar`)}
                 {#each scalarFns as r (r.name)}
                   {#snippet scalarMenu()}
@@ -1017,6 +1050,12 @@
               {/if}
             {:else}
               <!-- Functions (PG hiển thị return type) -->
+              {#snippet fnsFolderMenu()}
+                <ContextMenu.Content class="w-48">
+                  <ContextMenu.Item onclick={() => createObject('function', schema.name)}>Create Function…</ContextMenu.Item>
+                  <ContextMenu.Item onclick={() => selected && explorer.refresh(selected.id, { kind: 'schema', schema: schema.name })}>Refresh</ContextMenu.Item>
+                </ContextMenu.Content>
+              {/snippet}
               {@render row({
                 key: `f:${schema.name}:fns`,
                 depth: base + 1,
@@ -1027,7 +1066,7 @@
                 head: true,
                 expandable: true,
                 onClick: () => toggle(`f:${schema.name}:fns`),
-              })}
+              }, fnsFolderMenu)}
               {#if searching || expanded.has(`f:${schema.name}:fns`)}
                 {#each fns as r (r.name)}
                   {#snippet fnMenu()}
@@ -1055,6 +1094,12 @@
 
           <!-- Triggers -->
           {#if showTriggers}
+          {#snippet trigsFolderMenu()}
+            <ContextMenu.Content class="w-48">
+              <ContextMenu.Item onclick={() => createObject('trigger', schema.name)}>Create Trigger…</ContextMenu.Item>
+              <ContextMenu.Item onclick={() => selected && explorer.refresh(selected.id, { kind: 'schema', schema: schema.name })}>Refresh</ContextMenu.Item>
+            </ContextMenu.Content>
+          {/snippet}
           {@render row({
             key: `f:${schema.name}:triggers`,
             depth: base + 1,
@@ -1065,7 +1110,7 @@
             head: true,
             expandable: true,
             onClick: () => toggle(`f:${schema.name}:triggers`),
-          })}
+          }, trigsFolderMenu)}
           {#if searching || expanded.has(`f:${schema.name}:triggers`)}
             {#each (sc.triggers ?? []).filter((tg) => matchSearch(tg.name)) as tg (tg.name)}
               {#snippet trigMenu()}
@@ -1090,6 +1135,12 @@
 
           {#if isPg}
             <!-- Sequences (PG only) -->
+            {#snippet seqsFolderMenu()}
+              <ContextMenu.Content class="w-48">
+                <ContextMenu.Item onclick={() => createObject('sequence', schema.name)}>Create Sequence…</ContextMenu.Item>
+                <ContextMenu.Item onclick={() => selected && explorer.refresh(selected.id, { kind: 'schema', schema: schema.name })}>Refresh</ContextMenu.Item>
+              </ContextMenu.Content>
+            {/snippet}
             {@render row({
               key: `f:${schema.name}:seqs`,
               depth: base + 1,
@@ -1100,7 +1151,7 @@
               head: true,
               expandable: true,
               onClick: () => toggle(`f:${schema.name}:seqs`),
-            })}
+            }, seqsFolderMenu)}
             {#if searching || expanded.has(`f:${schema.name}:seqs`)}
               {#each sc.sequences ?? [] as sq (sq.name)}
                 {@render row({ key: `sq:${schema.name}.${sq.name}`, depth: base + 2, glyph: '#', color: C.seq, name: sq.name })}
@@ -1132,7 +1183,26 @@
             {#each fcache.schemas ?? [] as fsch (fsch.name)}
               {@const skey = `${fkey}:s:${fsch.name}`}
               {@const fsc = fcache.bySchema[fsch.name]}
-              {@render row({ key: skey, depth: 1, glyph: '▤', color: C.schema, name: fsch.name, meta: 'schema', head: true, expandable: true, onClick: () => { toggle(skey); if (sub && !fsc?.tables) void explorer.loadSchemaChildren(sub, fsch.name) } })}
+              {#snippet fSchemaMenu()}
+                <ContextMenu.Content class="w-52">
+                  <ContextMenu.Item onclick={() => sub && tabs.openErDiagram(sub, fsch.name)}>View ER Diagram</ContextMenu.Item>
+                  <ContextMenu.Item onclick={() => sub && tabs.openErDiagram(sub, fsch.name, { blank: true })}>New ER Diagram (drag tables in)</ContextMenu.Item>
+                  <ContextMenu.Item onclick={() => sub && tabs.openIndexScanner(sub, fsch.name)}>Scan Indexes</ContextMenu.Item>
+                  <ContextMenu.Item onclick={() => sub && tabs.openTableDesigner(sub, fsch.name, '')}>New Table…</ContextMenu.Item>
+                  <ContextMenu.Item onclick={() => createObject('view', fsch.name, db.name)}>Create View…</ContextMenu.Item>
+                  {#if showRoutines}
+                    <ContextMenu.Item onclick={() => createObject('procedure', fsch.name, db.name)}>Create Procedure…</ContextMenu.Item>
+                    <ContextMenu.Item onclick={() => createObject('function', fsch.name, db.name)}>Create Function…</ContextMenu.Item>
+                  {/if}
+                  {#if showTriggers}
+                    <ContextMenu.Item onclick={() => createObject('trigger', fsch.name, db.name)}>Create Trigger…</ContextMenu.Item>
+                  {/if}
+                  <ContextMenu.Item onclick={() => sub && scriptsWizard.show(sub, fsch.name)}>Generate Scripts…</ContextMenu.Item>
+                  <ContextMenu.Separator />
+                  <ContextMenu.Item onclick={() => sub && explorer.refresh(sub, { kind: 'schema', schema: fsch.name })}>Refresh</ContextMenu.Item>
+                </ContextMenu.Content>
+              {/snippet}
+              {@render row({ key: skey, depth: 1, glyph: '▤', color: C.schema, name: fsch.name, meta: 'schema', head: true, expandable: true, onClick: () => { toggle(skey); if (sub && !fsc?.tables) void explorer.loadSchemaChildren(sub, fsch.name) } }, fSchemaMenu)}
               {#if expanded.has(skey) && fsc}
                 {@const fTables = fsc.tables?.filter((t) => t.kind !== 'view') ?? []}
                 {@const fViews = fsc.tables?.filter((t) => t.kind === 'view') ?? []}
@@ -1140,7 +1210,26 @@
                 {@const fFns = fsc.routines?.filter((r) => r.kind !== 'procedure') ?? []}
                 {#each [['t', 'Tables', '▤', fTables], ['v', 'Views', '◫', fViews], ['p', 'Procedures', '⚙', fProcs], ['fn', 'Functions', 'ƒ', fFns], ['tg', 'Triggers', '⚡', fsc.triggers ?? []], ...(isPg ? [['sq', 'Sequences', '#', fsc.sequences ?? []]] : [])] as [fk, label, glyph, items] (fk)}
                   {@const folderKey = `${skey}:${fk}`}
-                  {@render row({ key: folderKey, depth: 2, glyph: glyph as string, color: C.folder, name: label as string, meta: String((items as unknown[]).length), head: true, expandable: true, onClick: () => toggle(folderKey) })}
+                  {#snippet fFolderMenu()}
+                    <ContextMenu.Content class="w-48">
+                      {#if fk === 't'}
+                        <ContextMenu.Item onclick={() => sub && tabs.openTableDesigner(sub, fsch.name, '')}>New Table…</ContextMenu.Item>
+                        <ContextMenu.Item onclick={() => sub && importWizard.show(sub, fsch.name)}>Import Data…</ContextMenu.Item>
+                      {:else if fk === 'v'}
+                        <ContextMenu.Item onclick={() => createObject('view', fsch.name, db.name)}>Create View…</ContextMenu.Item>
+                      {:else if fk === 'p'}
+                        <ContextMenu.Item onclick={() => createObject('procedure', fsch.name, db.name)}>Create Procedure…</ContextMenu.Item>
+                      {:else if fk === 'fn'}
+                        <ContextMenu.Item onclick={() => createObject('function', fsch.name, db.name)}>Create Function…</ContextMenu.Item>
+                      {:else if fk === 'tg'}
+                        <ContextMenu.Item onclick={() => createObject('trigger', fsch.name, db.name)}>Create Trigger…</ContextMenu.Item>
+                      {:else if fk === 'sq'}
+                        <ContextMenu.Item onclick={() => createObject('sequence', fsch.name, db.name)}>Create Sequence…</ContextMenu.Item>
+                      {/if}
+                      <ContextMenu.Item onclick={() => sub && explorer.refresh(sub, { kind: 'schema', schema: fsch.name })}>Refresh</ContextMenu.Item>
+                    </ContextMenu.Content>
+                  {/snippet}
+                  {@render row({ key: folderKey, depth: 2, glyph: glyph as string, color: C.folder, name: label as string, meta: String((items as unknown[]).length), head: true, expandable: true, onClick: () => toggle(folderKey) }, fFolderMenu)}
                   {#if expanded.has(folderKey)}
                     {#each items as it (('name' in (it as object) ? (it as { name: string }).name : String(it)))}
                       {@const nm = (it as { name: string }).name}
