@@ -25,6 +25,7 @@
   let format = $state<ImportFormat>('csv')
   let fileBuf = $state<ArrayBuffer | null>(null)
   let fileName = $state('')
+  let fileInputEl = $state<HTMLInputElement | null>(null)
   let headers = $state<string[]>([])
   let rows = $state<string[][]>([])
   let delimiter = $state(',')
@@ -188,9 +189,32 @@
             <label style="display:flex;align-items:center;gap:var(--px-5);cursor:pointer"><input type="radio" name="fmt" value="csv" checked={format === 'csv'} onchange={() => { format = 'csv'; parseFile() }} /> CSV</label>
             <label style="display:flex;align-items:center;gap:var(--px-5);cursor:pointer"><input type="radio" name="fmt" value="json" checked={format === 'json'} onchange={() => { format = 'json'; parseFile() }} /> JSON</label>
           </div>
-          <label style="font-size:var(--px-12);color:var(--text2)">{format === 'json' ? 'JSON' : 'CSV'} file
-            <input type="file" accept={format === 'json' ? '.json,application/json' : '.csv,text/csv'} onchange={onFile} style="display:block;margin-top:var(--px-6)" />
-          </label>
+          <div style="font-size:var(--px-12);color:var(--text2)">
+            {format === 'json' ? 'JSON' : 'CSV'} file
+            <div style="display:flex;align-items:center;gap:var(--px-8);margin-top:var(--px-6)">
+              <input
+                bind:this={fileInputEl}
+                type="file"
+                accept={format === 'json' ? '.json,application/json' : '.csv,text/csv'}
+                onchange={onFile}
+                style="display:none"
+              />
+              <button
+                type="button"
+                onclick={() => fileInputEl?.click()}
+                style="flex:none;font-size:var(--px-12);font-weight:600;background:var(--panel);border:var(--px-1) solid var(--border2);border-radius:var(--px-6);padding:var(--px-5) var(--px-12);color:var(--text);cursor:pointer"
+              >Choose file…</button>
+              <input
+                type="text"
+                readonly
+                value={fileName}
+                placeholder="No file selected"
+                title={fileName}
+                class="mono"
+                style="flex:1;min-width:0;font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-10);color:{fileName ? 'var(--text)' : 'var(--muted)'};outline:none;text-overflow:ellipsis"
+              />
+            </div>
+          </div>
           <div style="display:flex;gap:var(--px-16);flex-wrap:wrap;align-items:center">
             {#if format === 'csv'}
               <label style="font-size:var(--px-12);color:var(--text2)">Delimiter

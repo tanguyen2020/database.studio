@@ -46,6 +46,8 @@ test('CSV import full flow: file → mapping → Options → batched import (T13
     buffer: Buffer.from('id,first_name\n1,An\n2,Binh\n3,Chi'),
   })
   await page.waitForTimeout(200)
+  // the chosen file name shows in the read-only text field next to the button
+  await expect(dialog.locator('input[readonly]').first()).toHaveValue('students.csv')
   await expect(page.getByText(/Preview \(3 rows\)/).first()).toBeVisible()
   await dialog.locator('select').last().selectOption('students')
   await page.getByText('Next', { exact: true }).first().click()
