@@ -204,6 +204,19 @@
     if (formatted !== doc) editor.setDoc(formatted)
   }
 
+  // T21 — shortcut Ctrl+Shift+F từ App.svelte phát tín hiệu qua ui.formatTick;
+  // chỉ tab đang active mới format (tránh format editor nền khi split).
+  $effect(() => {
+    void ui.formatTick
+    if (ui.formatTick > 0 && tabs.active?.id === tab.id) untrack(() => doFormat())
+  })
+
+  // T21 — transaction controls: chạy BEGIN/COMMIT/ROLLBACK trên cùng connection.
+  function txn(kw: 'BEGIN' | 'COMMIT' | 'ROLLBACK') {
+    if (!tab.connectionId) return
+    void results.run(tab.id, tab.connectionId, [{ sql: kw, from: 0, to: kw.length, startLine: 1, startCol: 1 }])
+  }
+
   // Explain (Ctrl+Shift+E) — Phase 5: mở Query Plan Visualizer (cây chuẩn hóa).
   function doExplain() {
     if (!editor || !tab.connectionId) return
@@ -380,6 +393,13 @@
     </div>
     <div class="wk-tbtn" onclick={doSplit} onkeydown={(e) => e.key === 'Enter' && doSplit()} role="button" tabindex="0" title="Split editor (Split Right)">
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="1.5"></rect><line x1="12" y1="4" x2="12" y2="20"></line></svg>Split</div>
+    {#if tab.systemType !== 'clickhouse'}
+      <!-- T21 — transaction controls (ClickHouse không hỗ trợ transaction OLTP) -->
+      <span style="width:var(--px-1);height:var(--px-16);background:var(--border);margin:0 var(--px-4);align-self:center"></span>
+      <div class="wk-tbtn" onclick={() => txn('BEGIN')} onkeydown={(e) => e.key === 'Enter' && txn('BEGIN')} role="button" tabindex="0" title="BEGIN transaction">BEGIN</div>
+      <div class="wk-tbtn" onclick={() => txn('COMMIT')} onkeydown={(e) => e.key === 'Enter' && txn('COMMIT')} role="button" tabindex="0" title="COMMIT transaction">COMMIT</div>
+      <div class="wk-tbtn" onclick={() => txn('ROLLBACK')} onkeydown={(e) => e.key === 'Enter' && txn('ROLLBACK')} role="button" tabindex="0" title="ROLLBACK transaction">ROLLBACK</div>
+    {/if}
     <div style="margin-left:auto">
       {#if exec && !exec.running}
         <span class="mono" style="font-size:var(--px-11);color:var(--muted)">{exec.totalMs} ms</span>
@@ -419,7 +439,7 @@
   <!-- results -->
   <div style="min-height:0;flex:1;display:flex;flex-direction:column">
     {#if exec}
-      <ResultPanel {exec} connId={tab.connectionId} accent={systemMeta(tab.systemType).accent} onJump={jump} />
+      <ResultPanel {exec} connId={tab.connectionId} active={tabs.active?.id === tab.id} accent={systemMeta(tab.systemType).accent} onJump={jump} />
     {:else}
       <div style="flex:1;display:flex;align-items:center;justify-content:center;font-size:var(--px-12);color:var(--muted)">
         Chạy query (F5) để xem kết quả · Ctrl+Enter chạy statement tại cursor

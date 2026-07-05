@@ -4,7 +4,7 @@
   import { settings } from '$lib/stores/settings.svelte'
   import { ui } from '$lib/stores/ui.svelte'
 
-  const sections = ['Appearance', 'Editor', 'Query', 'Data', 'Kafka', 'Shortcuts'] as const
+  const sections = ['Appearance', 'Editor', 'Query', 'Data', 'Kafka', 'Connections', 'Shortcuts'] as const
   let active = $state<(typeof sections)[number]>('Appearance')
 
   const s = $derived(settings.value)
@@ -74,6 +74,12 @@
           {:else if active === 'Kafka'}
             <label class="set-row">Max messages buffer <input type="number" min="50" max="10000" bind:value={s.kafkaMaxMessages} onchange={save} class="set-inp" /></label>
             <label class="set-row">Render throttle (ms) <input type="number" min="0" max="2000" bind:value={s.kafkaThrottleMs} onchange={save} class="set-inp" /></label>
+          {:else if active === 'Connections'}
+            <label class="set-row">Pool max size <input type="number" min="1" max="64" bind:value={s.poolMaxSize} onchange={save} class="set-inp" /></label>
+            <label class="set-row">Idle timeout (s) <input type="number" min="1" max="86400" bind:value={s.poolIdleSecs} onchange={save} class="set-inp" /></label>
+            <label class="set-row">Acquire timeout (s) <input type="number" min="1" max="300" bind:value={s.poolAcquireSecs} onchange={save} class="set-inp" /></label>
+            <label class="set-row">Connect retry attempts <input type="number" min="1" max="10" bind:value={s.connectRetryAttempts} onchange={save} class="set-inp" /></label>
+            <label class="set-row">Retry backoff base (ms) <input type="number" min="10" max="60000" bind:value={s.connectRetryBackoffMs} onchange={save} class="set-inp" /></label>
           {:else}
             <table style="border-collapse:collapse;font-size:var(--px-12);width:100%">
               <tbody>

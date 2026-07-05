@@ -43,6 +43,7 @@
   import { connections } from '$lib/stores/connections.svelte'
   import { tabs } from '$lib/stores/tabs.svelte'
   import { ui } from '$lib/stores/ui.svelte'
+  import { findShortcut } from '$lib/keys/shortcuts'
 
   let ready = $state(false)
 
@@ -64,6 +65,34 @@
   function onKeydown(e: KeyboardEvent) {
     const ctrl = e.ctrlKey || e.metaKey
     if (!ctrl) return
+
+    // T21 — bind các shortcut còn thiếu (map thuần ở $lib/keys/shortcuts).
+    const sc = findShortcut(e)
+    if (sc) {
+      e.preventDefault()
+      switch (sc.id) {
+        case 'format':
+          ui.requestFormat()
+          break
+        case 'copy-json':
+          ui.requestCopyJson()
+          break
+        case 'result-grid':
+          ui.requestResultView('grid')
+          break
+        case 'result-json':
+          ui.requestResultView('json')
+          break
+        case 'result-single':
+          ui.requestResultView('single')
+          break
+        case 'find-in-explorer':
+          ui.requestExplorerFind()
+          break
+      }
+      return
+    }
+
     const key = e.key.toLowerCase()
 
     if (key === 'p' && !e.shiftKey) {

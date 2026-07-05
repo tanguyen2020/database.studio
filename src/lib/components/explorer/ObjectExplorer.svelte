@@ -17,6 +17,7 @@
   import { importWizard } from '$lib/stores/import.svelte'
   import { exportWizard } from '$lib/stores/export.svelte'
   import { scriptsWizard } from '$lib/stores/scripts.svelte'
+  import { ui } from '$lib/stores/ui.svelte'
   import * as chops from '$lib/sql/chops'
   import { toasts } from '$lib/stores/toast.svelte'
   import { quoteIdent, selectStarSql } from '$lib/sql/dialect'
@@ -46,6 +47,11 @@
     const s = search.trim().toLowerCase()
     return !s || name.toLowerCase().includes(s)
   }
+  // T21 — shortcut Ctrl+F từ App.svelte phát tín hiệu qua ui.explorerFindTick.
+  $effect(() => {
+    void ui.explorerFindTick
+    if (ui.explorerFindTick > 0) untrack(() => { searchEl?.focus(); searchEl?.select() })
+  })
   // T18 — Object Properties panel: suy ra type/schema/name từ key node đang chọn.
   const selProps = $derived.by(() => {
     const k = treeSel

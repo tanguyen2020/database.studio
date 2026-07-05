@@ -34,6 +34,26 @@ class UiStore {
   rightPanelWidth = $state(264)
   sizesLoaded = $state(false)
 
+  // T21 — signal ticks cho shortcut cần context editor/result/explorer.
+  formatTick = $state(0)
+  explorerFindTick = $state(0)
+  resultView = $state<'grid' | 'json' | 'single'>('grid')
+  resultViewTick = $state(0)
+  copyJsonTick = $state(0)
+  requestFormat() {
+    this.formatTick++
+  }
+  requestExplorerFind() {
+    this.explorerFindTick++
+  }
+  requestResultView(mode: 'grid' | 'json' | 'single') {
+    this.resultView = mode
+    this.resultViewTick++
+  }
+  requestCopyJson() {
+    this.copyJsonTick++
+  }
+
   setConnGroupMode(mode: 'type' | 'folder') {
     this.connGroupMode = mode
     void ipc.setAppState('conn_group_mode', mode)

@@ -22,6 +22,12 @@ export interface AppSettings {
   // Kafka
   kafkaMaxMessages: number
   kafkaThrottleMs: number
+  // Connections — pool + retry/backoff (T21)
+  poolMaxSize: number
+  poolIdleSecs: number
+  poolAcquireSecs: number
+  connectRetryAttempts: number
+  connectRetryBackoffMs: number
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -39,6 +45,11 @@ export const DEFAULT_SETTINGS: AppSettings = {
   nullText: 'NULL',
   kafkaMaxMessages: 500,
   kafkaThrottleMs: 100,
+  poolMaxSize: 5,
+  poolIdleSecs: 300,
+  poolAcquireSecs: 10,
+  connectRetryAttempts: 3,
+  connectRetryBackoffMs: 200,
 }
 
 /** Hợp nhất giá trị đã lưu lên defaults, chỉ nhận key hợp lệ + đúng kiểu. Thuần. */

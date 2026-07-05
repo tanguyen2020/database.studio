@@ -24,7 +24,9 @@
     closeBrackets,
     closeBracketsKeymap,
     completionKeymap,
+    type CompletionSource,
   } from '@codemirror/autocomplete'
+  import { functionSignatures } from '$lib/sql/functions'
   import { highlightSelectionMatches, searchKeymap } from '@codemirror/search'
   import { linter, setDiagnostics, type Diagnostic } from '@codemirror/lint'
   import { sql, PostgreSQL, MySQL, MSSQL, SQLite, StandardSQL } from '@codemirror/lang-sql'
@@ -68,8 +70,25 @@
   let view: EditorView | null = null
   const langCompartment = new Compartment()
 
+  // T21 — function-signature completion (bổ sung cạnh keyword/schema của lang-sql).
+  function fnSource(sys: string): CompletionSource {
+    const options = functionSignatures(sys).map((f) => ({
+      label: f.name,
+      type: 'function',
+      detail: f.signature,
+      info: f.detail,
+    }))
+    return (ctx) => {
+      const word = ctx.matchBefore(/\w+/)
+      if (!word || (word.from === word.to && !ctx.explicit)) return null
+      return { from: word.from, options }
+    }
+  }
+
   function langExt(sys: string) {
-    return sql({ dialect: dialectFor(sys), schema, defaultSchema })
+    const base = sql({ dialect: dialectFor(sys), schema, defaultSchema })
+    // merge function completions vào language data (không thay keyword/schema source)
+    return [base, base.language.data.of({ autocomplete: fnSource(sys) })]
   }
 
   function dialectFor(sys: string) {

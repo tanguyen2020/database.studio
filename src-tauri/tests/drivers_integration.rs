@@ -2097,6 +2097,90 @@ async fn pg_er_add_relationship_creates_fk() {
     eprintln!("CHK ER add-relationship → FK introspected OK");
 }
 
+/// Phase 5 · T21 — concurrent tabs dùng CHUNG connection của profile qua registry
+/// mà không cạn kiệt/deadlock; và transaction ROLLBACK huỷ insert đã seed.
+#[tokio::test]
+async fn pg_registry_concurrent_and_rollback() {
+    use std::sync::Arc;
+    use database_studio_lib::connections::profile::{ConnectionProfile, Environment, SqliteMode, SshConfig};
+    use database_studio_lib::connections::registry::Registry;
+    use database_studio_lib::drivers::types::SystemType;
+
+    let (_c, port) = start_pg().await;
+    let profile = ConnectionProfile {
+        id: "pgpool".into(),
+        name: "t".into(),
+        system: SystemType::Postgres,
+        host: "localhost".into(),
+        port,
+        database: "testdb".into(),
+        user: "postgres".into(),
+        password_enc: String::new(),
+        group: String::new(),
+        env: Environment::Development,
+        ssh: SshConfig::default(),
+        ssl: false,
+        ssl_ca: String::new(),
+        ssl_cert: String::new(),
+        ssl_key: String::new(),
+        sqlite_path: String::new(),
+        sqlite_mode: SqliteMode::ReadWrite,
+        mssql_auth: String::new(),
+        schema_registry_url: String::new(),
+        cassandra_dc: String::new(),
+        cassandra_consistency: String::new(),
+    };
+
+    let reg = Arc::new(Registry::default());
+    {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        loop {
+            match reg.connect(profile.clone(), PASS.into(), String::new()).await {
+                Ok(_) => break,
+                Err(e) => {
+                    assert!(Instant::now() < deadline, "connect PG: {e:?}");
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                }
+            }
+        }
+    }
+
+    // Concurrency: 16 "tabs" chạy đồng thời qua registry, tất cả phải OK.
+    let mut handles = Vec::new();
+    for i in 0..16u32 {
+        let reg = reg.clone();
+        handles.push(tokio::spawn(async move {
+            reg.exec_statement("pgpool", format!("SELECT {i} AS n"))
+                .await
+                .expect("no infra error")
+                .expect("no query error")
+        }));
+    }
+    let mut ok = 0;
+    for (i, h) in handles.into_iter().enumerate() {
+        let out = h.await.unwrap();
+        let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+        assert_eq!(result.rows[0]["n"], serde_json::json!(i as i64));
+        ok += 1;
+    }
+    assert_eq!(ok, 16, "cả 16 truy vấn đồng thời phải thành công (không cạn kiệt)");
+    eprintln!("CHK 16 concurrent queries via registry OK");
+
+    // Transaction: BEGIN → INSERT → ROLLBACK → count = 0.
+    let run = |sql: &'static str| {
+        let reg = reg.clone();
+        async move { reg.exec_statement("pgpool", sql.into()).await.expect("infra").expect("query") }
+    };
+    run("CREATE TABLE tx_demo (id int)").await;
+    run("BEGIN").await;
+    run("INSERT INTO tx_demo VALUES (1), (2)").await;
+    run("ROLLBACK").await;
+    let out = run("SELECT count(*) AS n FROM tx_demo").await;
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    assert_eq!(result.rows[0]["n"], serde_json::json!(0), "ROLLBACK phải huỷ insert");
+    eprintln!("CHK transaction ROLLBACK discards insert OK");
+}
+
 // --- T15 helpers: introspect a schema into a canonical, comparable signature ---
 async fn gs_rows(drv: &mut PgDriver, sql: &str) -> Vec<serde_json::Value> {
     match drv.exec(sql).await.unwrap() {

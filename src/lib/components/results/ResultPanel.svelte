@@ -13,6 +13,9 @@
   import { mapErrorToDocument } from '$lib/sql/errors'
   import { toCsv, toJson, toSqlInsert, toExcelHtml, download } from '$lib/export/rows'
   import { exportWizard } from '$lib/stores/export.svelte'
+  import { ui } from '$lib/stores/ui.svelte'
+  import { toasts } from '$lib/stores/toast.svelte'
+  import { untrack } from 'svelte'
 
   type ViewMode = 'grid' | 'json' | 'single' | 'chart'
 
@@ -24,10 +27,27 @@
     editTarget?: EditTarget
     /** connection id — để Export wizard (custom) biết hệ khi cần */
     connId?: string | null
+    /** tab đang active — để nhận shortcut result-view/copy (T21) */
+    active?: boolean
     onJump?: (line: number, col: number) => void
   }
 
-  let { exec, accent = 'var(--primary)', editTarget, connId, onJump }: Props = $props()
+  let { exec, accent = 'var(--primary)', editTarget, connId, active = false, onJump }: Props = $props()
+
+  // T21 — shortcuts Ctrl+Alt+G/J/R (đổi view) + Ctrl+Shift+C (copy JSON) qua ui.
+  $effect(() => {
+    void ui.resultViewTick
+    if (active && ui.resultViewTick > 0) untrack(() => (viewMode = ui.resultView))
+  })
+  $effect(() => {
+    void ui.copyJsonTick
+    if (active && ui.copyJsonTick > 0) untrack(() => copyResultJson())
+  })
+  function copyResultJson() {
+    const r = activeResult?.kind === 'rows' ? activeResult.result : undefined
+    if (!r) return
+    void navigator.clipboard.writeText(toJson(r.rows as Record<string, unknown>[])).then(() => toasts.success('Đã copy result (JSON)'))
+  }
 
   let grid = $state<ResultGrid | null>(null)
   let rawError = $state<string | null>(null)
