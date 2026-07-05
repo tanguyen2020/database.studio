@@ -10,6 +10,9 @@
   import { toasts } from '$lib/stores/toast.svelte'
   import { toMermaid, toSvg, tableSize, type ErTable } from '$lib/er/mermaid'
   import ErTableNode from './er/ErTableNode.svelte'
+  import { connections } from '$lib/stores/connections.svelte'
+  import { tabs } from '$lib/stores/tabs.svelte'
+  import { genForeignKey } from '$lib/sql/ddl'
   import type { TabState } from '$lib/types'
 
   interface Props {
@@ -28,7 +31,46 @@
   let error = $state<string | null>(null)
   let positions = $state<Record<string, { x: number; y: number }>>({})
 
-  const summary = $derived(`${tables.length} tables · ${fks.length} relationships`)
+  // T20 — create-relationship + Save-to-DB + in-tab Ctrl+F
+  const system = $derived(connections.byId(tab.connectionId)?.system ?? 'postgres')
+  let pendingFks = $state<ipc.ForeignKey[]>([])
+  let relOpen = $state(false)
+  let relFromTable = $state('')
+  let relFromCol = $state('')
+  let relToTable = $state('')
+  let relToCol = $state('')
+  let search = $state('')
+  let searchEl = $state<HTMLInputElement | null>(null)
+  const fromCols = $derived(tables.find((t) => t.name === relFromTable)?.columns.map((c) => c.name) ?? [])
+  const toCols = $derived(tables.find((t) => t.name === relToTable)?.columns.map((c) => c.name) ?? [])
+
+  const summary = $derived(`${tables.length} tables · ${fks.length + pendingFks.length} relationships`)
+
+  function addRelationship() {
+    if (!relFromTable || !relFromCol || !relToTable || !relToCol) {
+      toasts.error('Chọn đủ from/to table + cột')
+      return
+    }
+    pendingFks = [
+      ...pendingFks,
+      { name: `fk_${relFromTable}_${relFromCol}`, from_table: relFromTable, from_column: relFromCol, to_table: relToTable, to_column: relToCol },
+    ]
+    relOpen = false
+    relFromCol = ''
+    relToCol = ''
+    layout()
+  }
+
+  function saveToDb() {
+    if (!pendingFks.length || !tab.connectionId) return
+    const sql = pendingFks.map((fk) => genForeignKey(system, schema, fk)).join('\n')
+    tabs.openSqlTab({ connectionId: tab.connectionId, title: `Add Relationships · ${schema}`, query: `-- Review kỹ trước khi chạy\n${sql}` })
+  }
+
+  function applySearch() {
+    const s = search.trim().toLowerCase()
+    nodes = nodes.map((n) => ({ ...n, style: !s || n.id.toLowerCase().includes(s) ? '' : 'opacity:0.25' }))
+  }
 
   async function load() {
     if (!tab.connectionId) return
@@ -75,16 +117,19 @@
       return { id: t.name, type: 'table', position: p, data: { table: t, showAll } }
     })
     positions = pos
-    edges = fks
-      .filter((fk) => pos[fk.to_table] && pos[fk.from_table])
-      .map((fk, i) => ({
-        id: `fk-${i}`,
-        source: fk.to_table,
-        target: fk.from_table,
-        label: fk.from_column,
-        animated: false,
-        style: 'stroke: var(--primary)',
-      }))
+    const edgeFor = (fk: ipc.ForeignKey, i: number, pending: boolean): Edge => ({
+      id: pending ? `pfk-${i}` : `fk-${i}`,
+      source: fk.to_table,
+      target: fk.from_table,
+      // cardinality: phía con (từ) là N, phía cha (đến) là 1
+      label: `${fk.from_column} · N:1`,
+      animated: pending,
+      style: pending ? 'stroke: #27AE60; stroke-dasharray: 5 4' : 'stroke: var(--primary)',
+    })
+    edges = [
+      ...fks.filter((fk) => pos[fk.to_table] && pos[fk.from_table]).map((fk, i) => edgeFor(fk, i, false)),
+      ...pendingFks.filter((fk) => pos[fk.to_table] && pos[fk.from_table]).map((fk, i) => edgeFor(fk, i, true)),
+    ]
   }
 
   // re-render node data khi toggle showAll (giữ vị trí)
@@ -128,11 +173,32 @@
   }
 </script>
 
+<svelte:window
+  onkeydown={(e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
+      e.preventDefault()
+      searchEl?.focus()
+      searchEl?.select()
+    }
+  }}
+/>
 <div style="flex:1;display:flex;flex-direction:column;min-height:0">
-  <div style="flex:none;display:flex;align-items:center;gap:var(--px-10);padding:var(--px-9) var(--px-14);border-bottom:var(--px-1) solid var(--border);background:var(--surface)">
+  <div style="flex:none;display:flex;align-items:center;gap:var(--px-10);padding:var(--px-9) var(--px-14);border-bottom:var(--px-1) solid var(--border);background:var(--surface);flex-wrap:wrap">
     <span style="font-size:var(--px-12);color:var(--text2);font-weight:600">{schema || 'schema'}</span>
     <span style="font-size:var(--px-11_5);color:var(--muted)">{summary}</span>
+    <input
+      bind:this={searchEl}
+      bind:value={search}
+      oninput={applySearch}
+      placeholder="Tìm bảng (Ctrl+F)…"
+      aria-label="Find table"
+      style="width:var(--px-150);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-3) var(--px-8);color:var(--text);font-size:var(--px-11)"
+    />
     <div style="margin-left:auto;display:flex;gap:var(--px-7)">
+      <span onclick={() => (relOpen = !relOpen)} onkeydown={(e) => e.key === 'Enter' && (relOpen = !relOpen)} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">+ Relationship</span>
+      {#if pendingFks.length}
+        <span onclick={saveToDb} onkeydown={(e) => e.key === 'Enter' && saveToDb()} role="button" tabindex="0" style="font-size:var(--px-11_5);background:#27AE60;color:var(--hex-fff);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer;font-weight:600">Save to DB ({pendingFks.length})</span>
+      {/if}
       <span onclick={() => { showAll = !showAll; applyShowAll() }} onkeydown={(e) => e.key === 'Enter' && (showAll = !showAll, applyShowAll())} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">{showAll ? 'PK+FK only' : 'Show all columns'}</span>
       <span onclick={layout} onkeydown={(e) => e.key === 'Enter' && layout()} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">Auto-layout</span>
       <span onclick={downloadPng} onkeydown={(e) => e.key === 'Enter' && downloadPng()} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">PNG</span>
@@ -140,6 +206,33 @@
       <span onclick={copyMermaid} onkeydown={(e) => e.key === 'Enter' && copyMermaid()} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-6);padding:var(--px-4) var(--px-12);cursor:pointer;font-weight:600">Mermaid</span>
     </div>
   </div>
+  {#if relOpen}
+    <div style="flex:none;display:flex;align-items:flex-end;gap:var(--px-10);padding:var(--px-8) var(--px-14);border-bottom:var(--px-1) solid var(--border);background:var(--panel);flex-wrap:wrap">
+      <span style="font-size:var(--px-11);color:var(--muted)">New FK: (child)</span>
+      <label style="font-size:var(--px-10);color:var(--text2);display:flex;flex-direction:column;gap:var(--px-2)">from table
+        <select bind:value={relFromTable} style="background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-5);padding:var(--px-3) var(--px-6);color:var(--text);font-size:var(--px-11)">
+          <option value="">—</option>{#each tables as t (t.name)}<option value={t.name}>{t.name}</option>{/each}
+        </select>
+      </label>
+      <label style="font-size:var(--px-10);color:var(--text2);display:flex;flex-direction:column;gap:var(--px-2)">column
+        <select bind:value={relFromCol} style="background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-5);padding:var(--px-3) var(--px-6);color:var(--text);font-size:var(--px-11)">
+          <option value="">—</option>{#each fromCols as c (c)}<option value={c}>{c}</option>{/each}
+        </select>
+      </label>
+      <span style="font-size:var(--px-12);color:var(--muted)">→ (parent)</span>
+      <label style="font-size:var(--px-10);color:var(--text2);display:flex;flex-direction:column;gap:var(--px-2)">to table
+        <select bind:value={relToTable} style="background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-5);padding:var(--px-3) var(--px-6);color:var(--text);font-size:var(--px-11)">
+          <option value="">—</option>{#each tables as t (t.name)}<option value={t.name}>{t.name}</option>{/each}
+        </select>
+      </label>
+      <label style="font-size:var(--px-10);color:var(--text2);display:flex;flex-direction:column;gap:var(--px-2)">column
+        <select bind:value={relToCol} style="background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-5);padding:var(--px-3) var(--px-6);color:var(--text);font-size:var(--px-11)">
+          <option value="">—</option>{#each toCols as c (c)}<option value={c}>{c}</option>{/each}
+        </select>
+      </label>
+      <span onclick={addRelationship} onkeydown={(e) => e.key === 'Enter' && addRelationship()} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-6);padding:var(--px-5) var(--px-12);cursor:pointer;font-weight:600">Add</span>
+    </div>
+  {/if}
   <div style="flex:1;position:relative;min-height:0">
     {#if error}
       <div style="padding:var(--px-16);color:var(--error);font-size:var(--px-12)">{error}</div>

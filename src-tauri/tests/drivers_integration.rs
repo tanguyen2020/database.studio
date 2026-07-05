@@ -2052,6 +2052,51 @@ async fn pg_schema_compare_proc_and_column_then_migrate() {
     eprintln!("CHK PG schema compare proc+column → migrate converge OK");
 }
 
+/// Phase 5 · T20 — ER create-relationship "Save to DB": áp câu ALTER ADD FK (đúng
+/// shape genForeignKey sinh ra) lên cặp bảng seeded → introspect thấy FK thật.
+#[tokio::test]
+async fn pg_er_add_relationship_creates_fk() {
+    let (_c, port) = start_pg().await;
+    let params = PgConnParams {
+        host: "localhost".into(),
+        port,
+        database: "testdb".into(),
+        user: "postgres".into(),
+        password: PASS.into(),
+        ssl: false,
+        ssl_ca: String::new(),
+        ssl_cert: String::new(),
+        ssl_key: String::new(),
+    };
+    let mut drv = retry("postgres", || PgDriver::connect(&params)).await;
+
+    drv.exec("CREATE TABLE er_parent (id int PRIMARY KEY)").await.unwrap();
+    drv.exec("CREATE TABLE er_child (id int PRIMARY KEY, parent_id int)").await.unwrap();
+
+    // trước: chưa có FK
+    let before = drv.foreign_keys("public").await.unwrap();
+    assert!(!before.iter().any(|f| f.from_table == "er_child"), "chưa có FK ban đầu");
+
+    // "Save to DB" — câu ALTER ADD CONSTRAINT FK (giống genForeignKey('postgres',...)).
+    drv.exec(
+        "ALTER TABLE \"public\".\"er_child\" ADD CONSTRAINT \"fk_er_child_parent_id\" \
+         FOREIGN KEY (\"parent_id\") REFERENCES \"public\".\"er_parent\" (\"id\");",
+    )
+    .await
+    .unwrap();
+
+    // sau: introspect thấy FK từ er_child.parent_id → er_parent.id
+    let after = drv.foreign_keys("public").await.unwrap();
+    let fk = after
+        .iter()
+        .find(|f| f.from_table == "er_child")
+        .expect("FK vừa tạo phải xuất hiện trong introspection");
+    assert_eq!(fk.from_column, "parent_id");
+    assert_eq!(fk.to_table, "er_parent");
+    assert_eq!(fk.to_column, "id");
+    eprintln!("CHK ER add-relationship → FK introspected OK");
+}
+
 // --- T15 helpers: introspect a schema into a canonical, comparable signature ---
 async fn gs_rows(drv: &mut PgDriver, sql: &str) -> Vec<serde_json::Value> {
     match drv.exec(sql).await.unwrap() {

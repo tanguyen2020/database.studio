@@ -25,5 +25,21 @@ test('ER diagram: nodes + edges + Mermaid/export toolbar', async ({ page }) => {
   await expect(page.getByText('students').first()).toBeVisible()
   await expect(page.getByText('enrollments').first()).toBeVisible()
 
+  // T20 — create relationship + Save to DB
+  await page.getByText('+ Relationship').first().click()
+  await page.waitForTimeout(200)
+  const selects = page.locator('select')
+  await selects.nth(0).selectOption('enrollments')
+  await selects.nth(1).selectOption('id')
+  await selects.nth(2).selectOption('students')
+  await selects.nth(3).selectOption('id')
+  await page.getByRole('button', { name: 'Add', exact: true }).first().click()
+  await page.waitForTimeout(200)
+  await expect(page.getByText(/Save to DB/).first()).toBeVisible()
+  await page.getByText(/Save to DB/).first().click()
+  await page.waitForTimeout(300)
+  await expect(page.getByRole('tab', { name: /Add Relationships/ }).first()).toBeVisible()
+  await expect(page.locator('.cm-content').first()).toContainText('ADD CONSTRAINT')
+
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
