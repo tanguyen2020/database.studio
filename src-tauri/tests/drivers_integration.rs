@@ -545,6 +545,11 @@ async fn quick_connect_ephemeral_id_is_queryable_via_registry() {
     }
 
     assert!(registry.is_connected("quick-itest"), "ephemeral id phải sống trong registry");
+    // system_of resolves the engine from the LIVE connection even when the id is
+    // not in storage (sub-connections / quick-connects) — used by object_definition
+    // (Show Definition / Alter) so it doesn't fail with an empty-system driver error.
+    assert_eq!(registry.system_of("quick-itest").as_deref(), Some("postgres"));
+    assert_eq!(registry.system_of("nope"), None);
     let outcome = registry
         .exec_statement("quick-itest", "SELECT 1 AS n".into())
         .await

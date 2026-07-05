@@ -1303,6 +1303,9 @@
                           {/if}
                           {#if fk === 'v' || fk === 'p' || fk === 'fn' || fk === 'tg'}
                             {@const okind = fk === 'v' ? 'view' : fk === 'p' ? 'procedure' : fk === 'tg' ? 'trigger' : 'function'}
+                            {#if fk === 'p' || fk === 'fn'}
+                              <ContextMenu.Item onclick={() => sub && execRoutineWizard.show(sub, fsch.name, it as RoutineInfo)}>Execute…</ContextMenu.Item>
+                            {/if}
                             <ContextMenu.Item onclick={() => sub && showDefinition(okind, fsch.name, nm, sub)}>Show Definition</ContextMenu.Item>
                             <ContextMenu.Item onclick={() => sub && alterObject(okind, fsch.name, nm, sub)}>Alter…</ContextMenu.Item>
                             {#if fk === 'p' || fk === 'fn'}

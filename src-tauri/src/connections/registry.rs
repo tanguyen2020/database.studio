@@ -55,6 +55,16 @@ impl Registry {
         self.entries.lock().unwrap().keys().cloned().collect()
     }
 
+    /// System (engine) of a live connection — works for sub-connections
+    /// (`{base}::{db}`) and ephemeral/quick connects that aren't in storage.
+    pub fn system_of(&self, id: &str) -> Option<String> {
+        self.entries
+            .lock()
+            .unwrap()
+            .get(id)
+            .map(|e| e.profile.system.as_str().to_string())
+    }
+
     /// Profile + plaintext password of a live connection (for "open database" on
     /// ephemeral connections that aren't in storage). SSH password isn't retained.
     pub fn live_credentials(&self, id: &str) -> Result<(ConnectionProfile, String), AppError> {

@@ -179,10 +179,13 @@ pub async fn object_definition(
     kind: String,
     name: String,
 ) -> Result<String, AppError> {
+    // Resolve the engine from the LIVE connection first — this handles attached
+    // per-database sub-connections (`{base}::{db}`) and quick-connects that aren't
+    // in storage (otherwise system would be empty → "not supported" driver error).
     let system = state
-        .storage
-        .get_connection(&conn_id)
-        .map(|p| p.system.as_str().to_string())
+        .registry
+        .system_of(&conn_id)
+        .or_else(|| state.storage.get_connection(&conn_id).ok().map(|p| p.system.as_str().to_string()))
         .unwrap_or_default();
     let q = definition_query(&system, &kind, &schema, &name)
         .ok_or_else(|| AppError::Driver(format!("Show Definition is not supported for {system}")))?;
