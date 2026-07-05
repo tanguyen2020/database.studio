@@ -25,7 +25,11 @@
   let done = $state(0)
   let result = $state<string | null>(null)
 
-  const dlgOpen = $derived(testDataWizard.open)
+  // effect-mirror the store open flag (reliable cross-component tracking; see T31 note)
+  let dlgOpen = $state(false)
+  $effect(() => {
+    dlgOpen = testDataWizard.open
+  })
   const system = $derived(connections.byId(testDataWizard.connId)?.system ?? 'postgres')
   const fkOf = $derived(new Map(fks.filter((f) => f.from_table === testDataWizard.table).map((f) => [f.from_column, f])))
 

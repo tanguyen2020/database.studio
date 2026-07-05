@@ -21,7 +21,7 @@ Status legend: **Implemented** (wired end-to-end, evidence) · **Partial** (pres
 | SSL/TLS (CA / client cert+key) | Implemented | `postgres.rs`; `ConnectionForm.svelte` | Kafka SSL non-functional (librdkafka no-SSL) |
 | Cassandra fields (DC, consistency) | Implemented | `ConnectionForm.svelte` | |
 | SQLite mode (RW/RO/In-Memory) | Implemented | `ConnectionForm.svelte` | |
-| MSSQL auth (SQL / Windows) | Partial | `ConnectionForm.svelte` | Azure AD / Azure AD MFA (dc:2208-2211) still **Missing** |
+| MSSQL auth (SQL / Windows / Azure AD) | Implemented [T31] | `connections/aad.rs`; `mssql.rs`; `ConnectionForm.svelte` | SQL + Windows + **Azure AD Service Principal** (client-credentials token via reqwest → tiberius `aad_token`; user = clientId@tenant, secret never logged). Interactive/device-code + Password (ROPC) still follow-up |
 | **Test connection button** | **Implemented** [T10] | `connections/registry.rs run_test_bounded`; `commands/connections.rs cancel_test` | bounded `connect_timeout()`=10s all systems + cancellable; button relabeled "Test connection" [A2] |
 | **Cancel button (dialog)** | **Implemented** [T10] | `ConnectionForm.svelte` uuid testId + cancel-on-close; `cancel_test` | really aborts the in-flight backend Test |
 | Save / edit-while-connected dialog | Implemented | `EditConnectedDialog.svelte`; `connections.rs` | Save button relabeled "Connect" [A2] |
@@ -194,19 +194,21 @@ Status legend: **Implemented** (wired end-to-end, evidence) · **Partial** (pres
 
 | Status | Count (approx.) |
 |---|---|
-| Implemented | ~92 |
-| Partial | ~11 |
-| Missing | ~9 |
+| Implemented | ~104 |
+| Partial | ~4 |
+| Missing | ~4 |
 | Broken (stub/no-op) | 0 |
-| Plan-only / Deferred | 3 (streaming I/O; Kafka ACL; NATS NKey-JWT) |
+| Deferred | 2 (Kafka ACL; NATS NKey-JWT — need external broker/JWT setup) |
 
-**Genuine remaining gaps (highest-impact first):**
-1. **Streaming I/O** for large export / Generate Scripts (still buffers RAM) — plan A5.
-2. ~~Generate Test Data~~ — done [T26].
-3. ~~Copy Table to… (cross-connection copy)~~ — done [T25].
-4. **Result Grid Group By popover** (dc:352-385) — Chart view covers aggregation only.
+**Remaining after the T24–T31 batch (all follow-up, lower-impact):**
+1. **Streaming I/O**: export done [T24, PG]; streaming for MySQL/MSSQL/SQLite/CH + Generate Scripts still buffer RAM.
+2. ~~Generate Test Data~~ — done [T26]. (Follow-up: multi-table topological insert.)
+3. ~~Copy Table to…~~ — done [T25].
+4. ~~Result Grid Group By popover~~ — done [T27].
 5. ~~Proc/Func Execute + Rename~~ — done [T28].
-6. **MSSQL Azure AD / MFA** auth modes (SQL/Windows done).
+6. MSSQL Azure AD — **Service Principal done [T31]**; Interactive/device-code + Password (ROPC) remain follow-up.
 7. ~~Index/FK manager dedicated tabs~~ — done [T29].
 8. ~~ClickHouse MV / Dictionary create menus~~ — done [T30].
+9. Small: Row Count & Stats, Trigger Enable/Disable, MSSQL CREATE-DDL via simple_query.
+10. Deferred: Kafka ACL, NATS NKey/JWT (config surface only — need external setup).
 9. **Kafka ACL** + **NATS NKey/JWT** — deferred (need broker authorizer / JWT operator outside the default containers).

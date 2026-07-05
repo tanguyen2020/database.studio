@@ -8,9 +8,11 @@
   import { tabs } from '$lib/stores/tabs.svelte'
   import { buildCall } from '$lib/sql/routines'
 
-  // $derived open flag — a bare {#if store.open} on a class $state singleton can
-  // fail to establish tracking in Svelte 5 (see T28 handoff note).
-  const dlgOpen = $derived(execRoutineWizard.open && !!execRoutineWizard.routine)
+  // effect-mirror the store open flag (reliable cross-component tracking; see T31 note)
+  let dlgOpen = $state(false)
+  $effect(() => {
+    dlgOpen = execRoutineWizard.open
+  })
   const system = $derived(connections.byId(execRoutineWizard.connId)?.system ?? 'postgres')
   // IN / INOUT params need a value; pure OUT params are omitted from the call.
   const inParams = $derived(

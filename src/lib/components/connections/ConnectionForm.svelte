@@ -367,13 +367,19 @@
             {/if}
 
             {#if isMssql}
-              <!-- port dòng 2208-2211 (Azure AD → phase sau, giữ 2 lựa chọn phase 1) -->
+              <!-- port dòng 2208-2211 + Azure AD Service Principal (T31) -->
               <div style="grid-column:1/3">
                 <div class="cm-label">Authentication</div>
                 <select class="cm-input" bind:value={draft.mssql_auth}>
                   <option value="sql">SQL Server Authentication</option>
                   <option value="windows">Windows Authentication</option>
+                  <option value="aad-sp">Azure AD (Service Principal)</option>
                 </select>
+                {#if draft.mssql_auth === 'aad-sp'}
+                  <div class="cm-label" style="margin-top:var(--px-6);color:var(--muted);font-weight:400">
+                    User = <span class="mono">clientId@tenantId</span>, Password = client secret. A token is fetched from Azure AD (login.microsoftonline.com) at connect.
+                  </div>
+                {/if}
               </div>
             {/if}
 
