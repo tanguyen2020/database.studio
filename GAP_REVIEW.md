@@ -42,7 +42,7 @@ Status legend: **Implemented** (wired end-to-end, evidence) · **Partial** (pres
 | Expand View → columns | Implemented [T18] | `ObjectExplorer.svelte` | |
 | Proc/Func/Trigger context menus | Partial [T18] | `ObjectExplorer.svelte` | Show Definition + Drop done; **Execute / Rename / Enable** still Missing (dc:3416-3440) |
 | Table context menu (Open/New Query/Copy/DDL/Truncate/Drop) | Implemented | `ObjectExplorer.svelte` | + Generate Scripts 3-mode submenu [A3] |
-| Table context extras: Edit Data, **Generate Test Data**, **Copy Table to…**, Compare/Migrate, Dump, Row Count & Stats | Partial | grep | Compare/Migrate via connection menu; **Generate Test Data + Copy Table to… still Missing** (dc:3362-3405) |
+| Table context extras: Edit Data, **Generate Test Data**, **Copy Table to…**, Compare/Migrate, Dump, Row Count & Stats | Partial | `CopyTableDialog.svelte`; `copy/types.ts` | **Copy to… ✅ [T25]** (dialect-aware DDL translation + dry-run preview + paged copy + progress/cancel + dest verify); Edit Data = table viewer; Dump = backup; Compare/Migrate via menu; **Generate Test Data (T26) + Row Count & Stats still Missing** |
 | "Set as Filter" (column menu) | Implemented [T12] | `ObjectExplorer.svelte` → Table Viewer seeded filter | |
 | Design Table (context) | Implemented | `openTableDesigner` | |
 | Dictionaries node (ClickHouse §3) | Implemented | `clickhouse.rs dictionaries()`; `ch_dictionaries` | |
@@ -203,7 +203,7 @@ Status legend: **Implemented** (wired end-to-end, evidence) · **Partial** (pres
 **Genuine remaining gaps (highest-impact first):**
 1. **Streaming I/O** for large export / Generate Scripts (still buffers RAM) — plan A5.
 2. **Generate Test Data** (dc:1808-1844) — no code.
-3. **Copy Table to…** (cross-connection copy) — no code.
+3. ~~Copy Table to… (cross-connection copy)~~ — done [T25].
 4. **Result Grid Group By popover** (dc:352-385) — Chart view covers aggregation only.
 5. **Proc/Func Execute + Rename** context actions (Show Definition/Drop done in T18).
 6. **MSSQL Azure AD / MFA** auth modes (SQL/Windows done).

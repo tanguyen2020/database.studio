@@ -16,6 +16,7 @@
   import { chTtl } from '$lib/stores/chttl.svelte'
   import { importWizard } from '$lib/stores/import.svelte'
   import { exportWizard } from '$lib/stores/export.svelte'
+  import { copyWizard } from '$lib/stores/copy.svelte'
   import { scriptsWizard } from '$lib/stores/scripts.svelte'
   import { backupWizard } from '$lib/stores/backup.svelte'
   import { ui } from '$lib/stores/ui.svelte'
@@ -609,6 +610,7 @@
                 <ContextMenu.Content class="w-52">
                   <ContextMenu.Item onclick={() => openData(schema.name, t)}>Open Data</ContextMenu.Item>
                   <ContextMenu.Item onclick={() => selected && exportWizard.showTable(selected.id, schema.name, t.name)}>Export Data…</ContextMenu.Item>
+                  <ContextMenu.Item onclick={() => selected && copyWizard.show(selected.id, schema.name, t.name)}>Copy to…</ContextMenu.Item>
                   <ContextMenu.Item onclick={() => newQuery(schema.name, t.name)}>New Query</ContextMenu.Item>
                   <ContextMenu.Separator />
                   <ContextMenu.Item onclick={() => selected && tabs.openTableDesigner(selected.id, schema.name, t.name)}>Design Table</ContextMenu.Item>

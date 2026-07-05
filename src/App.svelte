@@ -37,6 +37,7 @@
   import ExportDialog from '$lib/components/ExportDialog.svelte'
   import GenerateScriptsDialog from '$lib/components/GenerateScriptsDialog.svelte'
   import BackupDialog from '$lib/components/BackupDialog.svelte'
+  import CopyTableDialog from '$lib/components/CopyTableDialog.svelte'
   import Settings from '$lib/components/Settings.svelte'
   import { palette } from '$lib/stores/palette.svelte'
   import { settings } from '$lib/stores/settings.svelte'
@@ -313,5 +314,6 @@
 <ExportDialog />
 <GenerateScriptsDialog />
 <BackupDialog />
+<CopyTableDialog />
 <Settings />
 <Toasts />

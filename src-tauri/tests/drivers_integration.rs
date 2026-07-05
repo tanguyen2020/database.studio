@@ -788,6 +788,32 @@ async fn sqlite_file_modes_and_errors() {
     assert!(err.message.contains("no such table"));
 }
 
+/// T25 — the PG→SQLite copy mapper (copy/types.ts) emits SQLite types
+/// INTEGER/TEXT/REAL/NUMERIC/BLOB. Verify a real SQLite engine accepts that DDL
+/// and data round-trips — i.e. the translated CREATE TABLE + INSERT actually run.
+#[tokio::test]
+async fn sqlite_accepts_copy_mapped_types() {
+    let drv = SqliteDriver::connect(&SqliteConnParams { path: String::new(), mode: SqliteMode::InMemory })
+        .await
+        .unwrap();
+    drv.exec(
+        "CREATE TABLE copied (\"id\" INTEGER NOT NULL PRIMARY KEY, \"name\" TEXT, \"amount\" REAL, \"score\" NUMERIC, \"created\" TEXT, \"raw\" BLOB)",
+    )
+    .await
+    .unwrap();
+    let ins = drv
+        .exec("INSERT INTO copied (\"id\",\"name\",\"amount\",\"score\",\"created\",\"raw\") VALUES (1,'An',1.5,3.9,'2024-01-01T00:00:00',NULL),(2,'Binh',2.0,NULL,'2025-02-02T00:00:00',NULL)")
+        .await
+        .unwrap();
+    assert!(matches!(ins, StatementOutcome::Affected { affected: 2 }));
+    let out = drv.exec("SELECT count(*) AS n FROM copied").await.unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    assert_eq!(result.rows[0]["n"], serde_json::json!(2), "both rows copied");
+    let s = drv.exec("SELECT name FROM copied WHERE id = 1").await.unwrap();
+    let StatementOutcome::Rows { result } = s else { panic!("expected rows") };
+    assert_eq!(result.rows[0]["name"], serde_json::json!("An"), "sample value round-trips");
+}
+
 #[tokio::test]
 async fn sqlite_editable_grid_apply_and_rollback() {
     use database_studio_lib::drivers::grid::{Col, GridChange};
