@@ -259,7 +259,7 @@ test('explorer database filter narrows database nodes', async ({ page }) => {
   await page.waitForTimeout(500)
 
   // demo databases: app (current), analytics, postgres
-  const filter = page.getByPlaceholder('Filter databases & objects…')
+  const filter = page.getByPlaceholder('Filter databases…')
   await expect(filter).toBeVisible()
   await filter.fill('analytics')
   await page.waitForTimeout(300)
@@ -273,9 +273,8 @@ test('explorer database filter narrows database nodes', async ({ page }) => {
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
 
-// User request — the same filter also finds objects inside Tables/Views/Procedures/
-// Functions/Triggers/Sequences (auto-expands to reveal matches).
-test('explorer filter finds objects inside folders', async ({ page }) => {
+// User request (item 1) — each object folder has its own filter box.
+test('per-folder filter narrows objects inside Tables', async ({ page }) => {
   const errors: string[] = []
   page.on('pageerror', (e) => errors.push(String(e)))
   await blockRemoteFonts(page)
@@ -284,12 +283,17 @@ test('explorer filter finds objects inside folders', async ({ page }) => {
   await page.waitForTimeout(300)
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(500)
-
-  await page.getByPlaceholder('Filter databases & objects…').fill('students')
-  await page.waitForTimeout(400)
-  // the current DB stays (its schema contains a match) and the table is revealed
+  await page.getByText('public', { exact: true }).first().dblclick()
+  await page.waitForTimeout(300)
+  await page.getByText('Tables', { exact: true }).first().dblclick()
+  await page.waitForTimeout(300)
+  // both students and courses visible before filtering
   await expect(page.getByRole('treeitem', { name: /students/ }).first()).toBeVisible()
-  // a non-matching table is hidden
-  await expect(page.getByRole('treeitem', { name: /^▦?\s*courses/ })).toHaveCount(0)
+  await expect(page.getByRole('treeitem', { name: /courses/ }).first()).toBeVisible()
+  // the Tables folder's own filter box narrows to matching tables
+  await page.getByPlaceholder('Filter…').first().fill('students')
+  await page.waitForTimeout(300)
+  await expect(page.getByRole('treeitem', { name: /students/ }).first()).toBeVisible()
+  await expect(page.getByRole('treeitem', { name: /courses/ })).toHaveCount(0)
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })

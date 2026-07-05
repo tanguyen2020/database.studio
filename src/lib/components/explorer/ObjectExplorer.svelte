@@ -59,48 +59,31 @@
 
   let expanded = $state<Set<string>>(new Set())
   let treeSel = $state<string | null>(null)
-  // One filter that finds by name across databases AND objects (Tables/Views/
-  // Procedures/Functions/Triggers/Sequences). Empty = show everything.
+  // Top filter — DATABASE names only (item 1). Object filtering is per-folder.
   let dbFilter = $state('')
   const dbFiltering = $derived(!!dbFilter.trim())
-  function matchName(name: string): boolean {
+  function matchDb(name: string): boolean {
     const q = dbFilter.trim().toLowerCase()
     return !q || name.toLowerCase().includes(q)
   }
-  const matchSearch = matchName // object items (folders)
-  const matchDb = matchName // database/schema nodes
-  const searching = $derived(dbFiltering)
+  function matchSearch(_name: string): boolean {
+    return true // top filter no longer filters objects
+  }
+  const searching = false
 
-  // While filtering, load every schema's children so object matches surface
-  // without manual expansion (folders auto-open via `searching || expanded`).
-  $effect(() => {
-    const s = selected
-    if (dbFiltering && s?.connected) {
-      untrack(() => {
-        for (const sch of cache?.schemas ?? []) void explorer.loadSchemaChildren(s.id, sch.name)
-      })
-    }
-  })
+  // Per-folder object filter: each Tables/Views/Procedures/Functions/Triggers/
+  // Sequences folder has its own search box, keyed by the folder's tree key.
+  const folderFilters = $state<Record<string, string>>({})
+  function folderMatch(key: string, name: string): boolean {
+    const q = (folderFilters[key] ?? '').trim().toLowerCase()
+    return !q || name.toLowerCase().includes(q)
+  }
 
   const curDbName = $derived(cache?.databases?.find((d) => d.current)?.name ?? selected?.database ?? '')
-  /** True if a schema's loaded objects contain a filter match (so its node stays
-   *  visible even when the schema/db name itself doesn't match). */
-  function schemaHasMatch(schemaName: string): boolean {
-    const sc = cache?.bySchema[schemaName]
-    if (!sc) return false
-    return (
-      (sc.tables ?? []).some((t) => matchName(t.name)) ||
-      (sc.routines ?? []).some((r) => matchName(r.name)) ||
-      (sc.triggers ?? []).some((t) => matchName(t.name)) ||
-      (sc.sequences ?? []).some((s) => matchName(s.name))
-    )
-  }
-  // Schemas to render while filtering: keep a schema if its name matches OR it
-  // contains a matching object. (MySQL/MariaDB schemas ARE databases.)
   const visibleSchemas = $derived.by(() => {
     const all = cache?.schemas ?? []
     if (!dbFiltering) return all
-    return all.filter((s) => matchDb(s.name) || schemaHasMatch(s.name))
+    return all.filter((s) => matchDb(s.name))
   })
   // T18 — Object Properties panel: suy ra type/schema/name từ key node đang chọn.
   const selProps = $derived.by(() => {
@@ -525,6 +508,20 @@
   {/if}
 {/snippet}
 
+<!-- per-folder object filter (item 1) — small search box under a folder header -->
+{#snippet folderFilter(key: string, depth: number)}
+  <div style="display:flex;align-items:center;padding:var(--px-2) var(--px-6) var(--px-3);padding-left:calc(var(--px-6) + {depth} * var(--px-15))">
+    <input
+      value={folderFilters[key] ?? ''}
+      oninput={(e) => (folderFilters[key] = e.currentTarget.value)}
+      onclick={(e) => e.stopPropagation()}
+      placeholder="Filter…"
+      aria-label="Filter items"
+      style="width:100%;background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-5);padding:var(--px-2) var(--px-7);color:var(--text);font-size:var(--px-11);outline:none"
+    />
+  </div>
+{/snippet}
+
 <!-- explorer — dòng 136 -->
 <div
   style="flex:1;display:flex;flex-direction:column;min-height:0"
@@ -554,8 +551,8 @@
       <span style="position:absolute;left:var(--px-16);top:50%;transform:translateY(-60%);color:var(--muted);font-size:var(--px-11);pointer-events:none">⌕</span>
       <input
         bind:value={dbFilter}
-        placeholder="Filter databases & objects…"
-        aria-label="Filter databases and objects"
+        placeholder="Filter databases…"
+        aria-label="Filter databases"
         spellcheck="false"
         style="width:100%;background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-22);color:var(--text);font-size:var(--px-11_5);outline:none"
       />
@@ -684,7 +681,7 @@
             <ContextMenu.Item variant="destructive" onclick={() => selected && stmtTab(`Drop database ${curDb?.name ?? selected.database}`, genDropDatabase(selected.system, curDb?.name ?? selected.database ?? ''))}>Drop Database…</ContextMenu.Item>
           </ContextMenu.Content>
         {/snippet}
-        {#if !dbFiltering || matchDb(curDbName) || visibleSchemas.length > 0}
+        {#if !dbFiltering || matchDb(curDbName)}
           {@render row({ key: 'curdb', depth: 0, glyph: '', svg: DB_FOLDER_SVG, color: 'var(--primary)', name: curDb?.name ?? selected.database ?? 'database', meta: 'current', head: true }, curDbMenu)}
         {/if}
       {/if}
@@ -740,12 +737,19 @@
         }, schemaMenu)}
 
         {#if sOpen && sc}
-          {@const tables = sc.tables?.filter((t) => t.kind !== 'view' && matchSearch(t.name)) ?? []}
-          {@const views = sc.tables?.filter((t) => t.kind === 'view' && matchSearch(t.name)) ?? []}
-          {@const procs = sc.routines?.filter((r) => r.kind === 'procedure' && matchSearch(r.name)) ?? []}
-          {@const fns = sc.routines?.filter((r) => r.kind !== 'procedure' && matchSearch(r.name)) ?? []}
-          {@const tvfs = fns.filter((r) => r.kind === 'table_function')}
-          {@const scalarFns = fns.filter((r) => r.kind !== 'table_function')}
+          {@const tKey = `f:${schema.name}:tables`}
+          {@const vKey = `f:${schema.name}:views`}
+          {@const pKey = `f:${schema.name}:procs`}
+          {@const fnKey = `f:${schema.name}:fns`}
+          {@const tvfKey = `f:${schema.name}:tvf`}
+          {@const scalarKey = `f:${schema.name}:scalar`}
+          {@const tables = (sc.tables?.filter((t) => t.kind !== 'view') ?? []).filter((t) => folderMatch(tKey, t.name))}
+          {@const views = (sc.tables?.filter((t) => t.kind === 'view') ?? []).filter((t) => folderMatch(vKey, t.name))}
+          {@const procs = (sc.routines?.filter((r) => r.kind === 'procedure') ?? []).filter((r) => folderMatch(pKey, r.name))}
+          {@const allFns = sc.routines?.filter((r) => r.kind !== 'procedure') ?? []}
+          {@const fns = allFns.filter((r) => folderMatch(fnKey, r.name))}
+          {@const tvfs = allFns.filter((r) => r.kind === 'table_function' && folderMatch(tvfKey, r.name))}
+          {@const scalarFns = allFns.filter((r) => r.kind !== 'table_function' && folderMatch(scalarKey, r.name))}
 
           <!-- Tables folder (glyph ▤ màu folder — dòng 3963) -->
           {#snippet tablesFolderMenu()}
@@ -767,6 +771,7 @@
             onClick: () => toggle(`f:${schema.name}:tables`),
           }, tablesFolderMenu)}
           {#if searching || expanded.has(`f:${schema.name}:tables`)}
+            {@render folderFilter(tKey, base + 1)}
             {#each tables as t (t.name)}
               {@const tbOpen = expanded.has(`t:${schema.name}.${t.name}`)}
               {@const detail = sc.tableDetails[t.name]}
@@ -958,6 +963,7 @@
             onClick: () => toggle(`f:${schema.name}:views`),
           }, isClickhouse ? undefined : viewsFolderMenu)}
           {#if searching || expanded.has(`f:${schema.name}:views`)}
+            {@render folderFilter(vKey, base + 1)}
             {#each views as v (v.name)}
               {@const vOpen = expanded.has(`t:${schema.name}.${v.name}`)}
               {@const vDetail = sc.tableDetails[v.name]}
@@ -1051,6 +1057,7 @@
               onClick: () => toggle(`f:${schema.name}:procs`),
             }, procsFolderMenu)}
             {#if searching || expanded.has(`f:${schema.name}:procs`)}
+              {@render folderFilter(pKey, base + 1)}
               {#each procs as r (r.name)}
                 {#snippet procMenu()}
                   <ContextMenu.Content class="w-44">
@@ -1093,6 +1100,7 @@
                 onClick: () => toggle(`f:${schema.name}:tvf`),
               }, createFnFolderMenu)}
               {#if searching || expanded.has(`f:${schema.name}:tvf`)}
+                {@render folderFilter(tvfKey, base + 1)}
                 {#each tvfs as r (r.name)}
                   {#snippet tvfMenu()}
                     <ContextMenu.Content class="w-44">
@@ -1120,6 +1128,7 @@
                 onClick: () => toggle(`f:${schema.name}:scalar`),
               }, createFnFolderMenu)}
               {#if searching || expanded.has(`f:${schema.name}:scalar`)}
+                {@render folderFilter(scalarKey, base + 1)}
                 {#each scalarFns as r (r.name)}
                   {#snippet scalarMenu()}
                     <ContextMenu.Content class="w-44">
@@ -1162,6 +1171,7 @@
                 onClick: () => toggle(`f:${schema.name}:fns`),
               }, fnsFolderMenu)}
               {#if searching || expanded.has(`f:${schema.name}:fns`)}
+                {@render folderFilter(fnKey, base + 1)}
                 {#each fns as r (r.name)}
                   {#snippet fnMenu()}
                     <ContextMenu.Content class="w-44">
@@ -1207,7 +1217,8 @@
             onClick: () => toggle(`f:${schema.name}:triggers`),
           }, trigsFolderMenu)}
           {#if searching || expanded.has(`f:${schema.name}:triggers`)}
-            {#each (sc.triggers ?? []).filter((tg) => matchSearch(tg.name)) as tg (tg.name)}
+            {@render folderFilter(`f:${schema.name}:triggers`, base + 1)}
+            {#each (sc.triggers ?? []).filter((tg) => folderMatch(`f:${schema.name}:triggers`, tg.name)) as tg (tg.name)}
               {#snippet trigMenu()}
                 <ContextMenu.Content class="w-44">
                   <ContextMenu.Item onclick={() => showDefinition('trigger', schema.name, tg.name)}>Show Definition</ContextMenu.Item>
@@ -1249,7 +1260,8 @@
               onClick: () => toggle(`f:${schema.name}:seqs`),
             }, seqsFolderMenu)}
             {#if searching || expanded.has(`f:${schema.name}:seqs`)}
-              {#each sc.sequences ?? [] as sq (sq.name)}
+              {@render folderFilter(`f:${schema.name}:seqs`, base + 1)}
+              {#each (sc.sequences ?? []).filter((sq) => folderMatch(`f:${schema.name}:seqs`, sq.name)) as sq (sq.name)}
                 {#snippet seqMenu()}
                   <ContextMenu.Content class="w-44">
                     <ContextMenu.Item onclick={() => alterSequence(schema.name, sq.name)}>Alter…</ContextMenu.Item>
