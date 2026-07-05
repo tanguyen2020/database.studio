@@ -39,6 +39,7 @@
   import BackupDialog from '$lib/components/BackupDialog.svelte'
   import CopyTableDialog from '$lib/components/CopyTableDialog.svelte'
   import GenerateTestDataDialog from '$lib/components/GenerateTestDataDialog.svelte'
+  import ExecuteRoutineDialog from '$lib/components/ExecuteRoutineDialog.svelte'
   import Settings from '$lib/components/Settings.svelte'
   import { palette } from '$lib/stores/palette.svelte'
   import { settings } from '$lib/stores/settings.svelte'
@@ -317,5 +318,6 @@
 <BackupDialog />
 <CopyTableDialog />
 <GenerateTestDataDialog />
+<ExecuteRoutineDialog />
 <Settings />
 <Toasts />
