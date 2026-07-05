@@ -119,6 +119,11 @@ pub async fn disconnect(state: State<'_, AppState>, id: String) -> Result<(), Ap
     // dừng luôn subscription pub/sub Redis + consumer Kafka (nếu có) trước khi ngắt
     state.pubsub.abort(&id);
     state.kafka_stops.stop(&id);
+    // Sweep any internal per-database sub-connections opened via attach_database.
+    let prefix = format!("{id}::");
+    for sub in state.registry.connected_ids().into_iter().filter(|c| c.starts_with(&prefix)) {
+        let _ = state.registry.disconnect(&sub).await;
+    }
     state.registry.disconnect(&id).await
 }
 
@@ -155,46 +160,75 @@ pub async fn quick_connect(
     Ok(ProfilePublic::from_profile(profile, true, Some(latency)))
 }
 
+/// Resolve host/credentials for a connection: from storage for saved profiles,
+/// else from the live registry (ephemeral / already-attached). SSH password
+/// isn't retained in the registry → empty there (fine for plain TCP).
+fn resolve_credentials(
+    state: &AppState,
+    conn_id: &str,
+) -> Result<(ConnectionProfile, String, String), AppError> {
+    match state.storage.get_connection(conn_id) {
+        Ok(p) => {
+            let pw = crypto::decrypt(&p.password_enc)?;
+            let sshpw = crypto::decrypt(&p.ssh.password_enc)?;
+            Ok((p, pw, sshpw))
+        }
+        Err(_) => {
+            let (p, pw) = state.registry.live_credentials(conn_id)?;
+            Ok((p, pw, String::new()))
+        }
+    }
+}
+
 /// Open another database on the *same* server as its own ephemeral connection.
-/// Postgres binds one database per connection, so browsing a different database
-/// means a fresh connection. Reuses the source connection's host/credentials
-/// (resolved from storage for saved connections, else the live registry entry)
-/// so the frontend never needs the password.
+/// (Kept for direct "open as new connection" flows.) See `attach_database` for
+/// the Explorer's per-database tree, which does NOT surface a sidebar entry.
 #[tauri::command]
 pub async fn open_database(
     state: State<'_, AppState>,
     conn_id: String,
     database: String,
 ) -> Result<ProfilePublic, AppError> {
-    let (mut profile, password, ssh_password) = match state.storage.get_connection(&conn_id) {
-        Ok(p) => {
-            let pw = crypto::decrypt(&p.password_enc)?;
-            let sshpw = crypto::decrypt(&p.ssh.password_enc)?;
-            (p, pw, sshpw)
-        }
-        // Ephemeral / already-opened database: pull the profile + password from
-        // the live registry (SSH password isn't retained → empty, fine for TCP).
-        Err(_) => {
-            let (p, pw) = state.registry.live_credentials(&conn_id)?;
-            (p, pw, String::new())
-        }
-    };
+    let (mut profile, password, ssh_password) = resolve_credentials(&state, &conn_id)?;
     use crate::drivers::types::SystemType;
     if !matches!(profile.system, SystemType::Postgres | SystemType::Mssql) {
         return Err(AppError::Driver(
             "Opening another database is only supported for PostgreSQL and SQL Server".into(),
         ));
     }
-    // Keep the base name stable across hops (strip a prior " · db" suffix).
     let base_name = profile.name.split(" · ").next().unwrap_or(&profile.name).to_string();
     profile.id = format!("quick-{}", Uuid::new_v4());
     profile.database = database.clone();
     profile.name = format!("{base_name} · {database}");
-    let latency = state
-        .registry
-        .connect(profile.clone(), password, ssh_password)
-        .await?;
+    let latency = state.registry.connect(profile.clone(), password, ssh_password).await?;
     Ok(ProfilePublic::from_profile(profile, true, Some(latency)))
+}
+
+/// Attach an *internal* live connection to another database on the same server
+/// and return its sub-connection id (`{conn_id}::{db}`) — NOT surfaced in the
+/// sidebar. Idempotent (reuses an already-open sub-connection). For the
+/// connection's own current database it returns `conn_id` unchanged (no sub-conn).
+/// The Explorer introspects each database subtree by passing this id to the
+/// existing `list_*` commands unchanged.
+#[tauri::command]
+pub async fn attach_database(
+    state: State<'_, AppState>,
+    conn_id: String,
+    database: String,
+) -> Result<String, AppError> {
+    let (mut profile, password, ssh_password) = resolve_credentials(&state, &conn_id)?;
+    // Same DB as the source connection → no sub-connection needed.
+    if profile.database == database {
+        return Ok(conn_id);
+    }
+    let sub_id = format!("{conn_id}::{database}");
+    if state.registry.is_connected(&sub_id) {
+        return Ok(sub_id);
+    }
+    profile.id = sub_id.clone();
+    profile.database = database;
+    state.registry.connect(profile, password, ssh_password).await?;
+    Ok(sub_id)
 }
 
 /// Timeout kết nối mặc định cho Test (T10). Mọi Test phải trả kết quả rõ ràng

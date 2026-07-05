@@ -246,6 +246,12 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
       const base = DEMO_PROFILES[0]
       return ok({ ...base, id: `quick-demo-db-${db}`, name: `${base.name} · ${db}`, database: db, connected: true, latency_ms: 7, has_password: false })
     }
+    case 'attach_database': {
+      const db = String(args?.database ?? 'db')
+      const cid = String(args?.connId ?? '')
+      // current database ('app' in the demo list) → same connection; else sub-id
+      return ok(db === 'app' ? cid : `${cid}::${db}`)
+    }
     case 'list_schemas':
       return ok([{ name: 'public', is_default: true }])
     case 'list_tables':

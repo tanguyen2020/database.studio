@@ -42,6 +42,7 @@ pub fn run() {
             commands::connections::reconnect,
             commands::connections::quick_connect,
             commands::connections::open_database,
+            commands::connections::attach_database,
             commands::connections::test_connection,
             commands::connections::cancel_test,
             commands::connections::ping_connection,

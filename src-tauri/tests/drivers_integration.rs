@@ -183,6 +183,41 @@ async fn pg_list_databases_marks_current() {
     assert_eq!(dbs.iter().filter(|d| d.current).count(), 1, "exactly one current db");
 }
 
+/// AUDIT-4 item 2 — per-database Explorer relies on opening a connection to
+/// another database on the same server (what `attach_database` does with an
+/// internal sub-connection id). Verify a connection bound to database B sees B's
+/// catalog, not A's — i.e. cross-database browsing needs a separate connection.
+#[tokio::test]
+async fn pg_connection_to_other_database_sees_its_own_catalog() {
+    let (_c, port) = start_pg().await;
+    let mk = |db: &str| PgConnParams {
+        host: "localhost".into(),
+        port,
+        database: db.into(),
+        user: "postgres".into(),
+        password: PASS.into(),
+        ssl: false,
+        ssl_ca: String::new(),
+        ssl_cert: String::new(),
+        ssl_key: String::new(),
+    };
+    // Seed: table only in testdb, and a second database with its own table.
+    let pa = mk("testdb");
+    let mut a = retry("postgres", || PgDriver::connect(&pa)).await;
+    a.exec("CREATE TABLE only_in_a (id int)").await.unwrap();
+    a.exec("CREATE DATABASE it_other").await.unwrap();
+
+    let mut b = PgDriver::connect(&mk("it_other")).await.expect("connect to it_other");
+    b.exec("CREATE TABLE only_in_b (id int)").await.unwrap();
+
+    let a_tables = a.tables("public").await.unwrap();
+    let b_tables = b.tables("public").await.unwrap();
+    assert!(a_tables.iter().any(|t| t.name == "only_in_a"), "A sees its own table");
+    assert!(!a_tables.iter().any(|t| t.name == "only_in_b"), "A does NOT see B's table");
+    assert!(b_tables.iter().any(|t| t.name == "only_in_b"), "B sees its own table");
+    assert!(!b_tables.iter().any(|t| t.name == "only_in_a"), "B does NOT see A's table");
+}
+
 /// Item 5 — a `timestamp`/`timestamptz`/`date` value of ±infinity or beyond
 /// chrono's range must NOT panic (sqlx's decoder does `NaiveDateTime + Duration`
 /// which panics; under `panic = "abort"` that kills the app). We decode raw bytes

@@ -576,6 +576,12 @@ export const listDatabases = (connId: string) => invoke<DatabaseInfo[]>('list_da
 export const openDatabase = (connId: string, database: string) =>
   invoke<ProfilePublic>('open_database', { connId, database })
 
+/** Attach an internal sub-connection to another database (not shown in the
+ *  sidebar) and return its id, for per-database introspection in the Explorer.
+ *  Returns `connId` unchanged for the connection's own current database. */
+export const attachDatabase = (connId: string, database: string) =>
+  invoke<string>('attach_database', { connId, database })
+
 export const listSchemas = (connId: string) => invoke<SchemaInfo[]>('list_schemas', { connId })
 
 export const listTables = (connId: string, schema: string) =>
