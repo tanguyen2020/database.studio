@@ -42,6 +42,9 @@
   // ClickHouse (clickhouseTree): Databases → Tables/Views — không có
   // Procs/Triggers/Sequences; Dictionaries/Functions/engine badge → Phase 5
   const isClickhouse = $derived(selected?.system === 'clickhouse')
+  // MySQL/MariaDB expose each database as a schema node (SCHEMATA) — show it with
+  // the DataGrip-style database folder icon, not the plain schema glyph.
+  const schemaIsDatabase = $derived(selected?.system === 'mysql' || selected?.system === 'mariadb')
   const showRoutines = $derived(!isSqlite && !isClickhouse)
   const showTriggers = $derived(!isClickhouse)
   // AUDIT-4 item 2 — PG/MSSQL bind one DB per connection; the tree nests schemas
@@ -611,10 +614,11 @@
         {@render row({
           key: `s:${schema.name}`,
           depth: base,
-          glyph: '▤',
-          color: C.schema,
+          glyph: schemaIsDatabase ? '' : '▤',
+          svg: schemaIsDatabase ? DB_FOLDER_SVG : undefined,
+          color: schemaIsDatabase ? C.folder : C.schema,
           name: schema.name,
-          meta: explorer.isLoading(selected.id, `schema:${schema.name}`) ? '…' : 'schema',
+          meta: explorer.isLoading(selected.id, `schema:${schema.name}`) ? '…' : schemaIsDatabase ? 'database' : 'schema',
           head: true,
           expandable: true,
           onClick: () => expandSchema(schema.name),
