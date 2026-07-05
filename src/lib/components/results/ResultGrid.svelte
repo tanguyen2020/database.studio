@@ -18,8 +18,9 @@
   import { save as saveFileDialog } from '@tauri-apps/plugin-dialog'
   import { invoke } from '@tauri-apps/api/core'
   import { toasts } from '$lib/stores/toast.svelte'
-  import { applyGridChanges, previewGridChanges, chGenerateMutations, type GridChange } from '$lib/ipc'
+  import { applyGridChanges, previewGridChanges, chGenerateMutations, cancelQuery, type GridChange } from '$lib/ipc'
   import { tabs } from '$lib/stores/tabs.svelte'
+  import { formatClipboard, type ClipFormat } from '$lib/export/clipboard'
   import type { QueryResultSet } from '$lib/types'
 
   /** Bật editable grid khi mở từ Table Data Viewer (biết schema/table/pk). */
@@ -172,6 +173,7 @@
     }
   }
 
+  // Execute — commit pending edits/inserts/deletes to the DB in one transaction.
   async function apply() {
     if (!editTarget) return
     applying = true
@@ -184,6 +186,16 @@
       toasts.error(String(e), editTarget.system)
     } finally {
       applying = false
+    }
+  }
+
+  // Cancel — abort the in-flight Execute on the backend (registry cancel, T11).
+  async function cancelApply() {
+    if (!editTarget || !applying) return
+    try {
+      await cancelQuery(editTarget.connId)
+    } catch (e) {
+      toasts.error(String(e), editTarget.system)
     }
   }
 
@@ -396,10 +408,39 @@
     void copyText(data.rows.map((r) => tsvEscape(rawText(r[col]))).join('\n'), `Copied column "${col}"`)
   }
 
-  function copyAllCsv() {
-    const header = columns.map(csvEscape).join(',')
-    const body = data.rows.map((row) => columns.map((c) => csvEscape(rawText(row[c]))).join(',')).join('\n')
-    void copyText(`${header}\n${body}`, `Copied ${data.rows.length.toLocaleString()} rows as CSV`)
+  // ---- "Copy as ▸" — multi-record extract in 6 formats (AUDIT-3 item 5) ----
+  // (raw text uses copyCell/copyRow/copyColumn/copySelection above)
+  // Rows to copy: the highlighted rows if any, else the row of the selected cell,
+  // else the whole result set. Columns = all grid columns.
+  function selectionRows(): Record<string, unknown>[] {
+    if (selectedRows.size > 0) {
+      return [...selectedRows]
+        .sort((a, b) => a - b)
+        .map((i) => data.rows[i])
+        .filter((r): r is Record<string, unknown> => r != null)
+    }
+    if (selectedCell && data.rows[selectedCell.row]) return [data.rows[selectedCell.row]]
+    return data.rows
+  }
+
+  const FORMAT_LABEL: Record<ClipFormat, string> = {
+    tsv: 'Tab-separated',
+    csv: 'CSV',
+    json: 'JSON',
+    'sql-insert': 'SQL INSERT',
+    'sql-update': 'SQL UPDATE',
+    markdown: 'Markdown',
+  }
+
+  function copyAs(fmt: ClipFormat) {
+    const rows = selectionRows()
+    const text = formatClipboard(fmt, {
+      headers: columns,
+      rows,
+      table: editTarget?.table,
+      keyColumns: editTarget?.pkCols,
+    })
+    void copyText(text, `Copied ${rows.length.toLocaleString()} row(s) as ${FORMAT_LABEL[fmt]}`)
   }
 </script>
 
@@ -427,14 +468,29 @@
           >Generate mutation</span>
         {:else}
           <span class="eg-btn" onclick={openPreview} onkeydown={(e) => e.key === 'Enter' && openPreview()} role="button" tabindex="0">Preview diff</span>
-          <span class="eg-btn" onclick={discard} onkeydown={(e) => e.key === 'Enter' && discard()} role="button" tabindex="0">Discard</span>
-          <span
-            onclick={apply}
-            onkeydown={(e) => e.key === 'Enter' && apply()}
-            role="button"
-            tabindex="0"
-            style="font-size:var(--px-11_5);font-weight:600;background:var(--primary);color:var(--hex-fff);border-radius:var(--px-6);padding:var(--px-4) var(--px-12);cursor:pointer"
-          >{applying ? 'Applying…' : 'Apply'}</span>
+          <!-- Reset — revert grid edits/inserts/deletes to the original values -->
+          <span class="eg-btn" onclick={discard} onkeydown={(e) => e.key === 'Enter' && discard()} role="button" tabindex="0" title="Revert all pending changes">Reset</span>
+          {#if applying}
+            <!-- Cancel — abort the running Execute -->
+            <span
+              onclick={cancelApply}
+              onkeydown={(e) => e.key === 'Enter' && cancelApply()}
+              role="button"
+              tabindex="0"
+              title="Cancel the running command"
+              style="font-size:var(--px-11_5);font-weight:600;background:var(--error);color:var(--hex-fff);border-radius:var(--px-6);padding:var(--px-4) var(--px-12);cursor:pointer"
+            >Cancel</span>
+          {:else}
+            <!-- Execute — write pending changes to the DB -->
+            <span
+              onclick={apply}
+              onkeydown={(e) => e.key === 'Enter' && apply()}
+              role="button"
+              tabindex="0"
+              title="Write pending changes to the database"
+              style="font-size:var(--px-11_5);font-weight:600;background:var(--primary);color:var(--hex-fff);border-radius:var(--px-6);padding:var(--px-4) var(--px-12);cursor:pointer"
+            >Execute</span>
+          {/if}
         {/if}
       </div>
     {/if}
@@ -584,19 +640,31 @@
 <!-- right-click copy menu -->
 {#if ctxMenu}
   {@const m = ctxMenu}
+  {@const selN = selectedRows.size || (selectedCell ? 1 : data.rows.length)}
   <div role="presentation" style="position:fixed;inset:0;z-index:60" onclick={() => (ctxMenu = null)} oncontextmenu={(e) => { e.preventDefault(); ctxMenu = null }}></div>
-  <div class="mono" style="position:fixed;left:{Math.min(m.x, window.innerWidth - 190)}px;top:{Math.min(m.y, window.innerHeight - 170)}px;z-index:61;min-width:var(--px-170);background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-8);box-shadow:0 var(--px-12) var(--px-30) rgba(0,0,0,.5);padding:var(--px-4) 0;font-size:var(--px-12)">
-    {#each [['Copy cell', () => copyCell(m.row, m.col)], ['Copy row', () => copyRowTsv(m.row)], ['Copy column', () => copyColumn(m.col)], ['Copy selection', () => { ctxMenu = null; void copySelection() }], ['Copy all as CSV', copyAllCsv]] as [label, act] (label)}
+  <div class="mono" style="position:fixed;left:{Math.min(m.x, window.innerWidth - 220)}px;top:{Math.min(m.y, window.innerHeight - 330)}px;z-index:61;min-width:var(--px-200);background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-8);box-shadow:0 var(--px-12) var(--px-30) var(--rgba-0-0-0-_5);padding:var(--px-4) 0;font-size:var(--px-12)">
+    {#snippet item(label: string, act: () => void)}
       <div
         role="button"
         tabindex="0"
-        onclick={act as () => void}
-        onkeydown={(e) => e.key === 'Enter' && (act as () => void)()}
+        onclick={act}
+        onkeydown={(e) => e.key === 'Enter' && act()}
         style="padding:var(--px-6) var(--px-14);cursor:pointer;color:var(--text);white-space:nowrap"
         onmouseenter={(e) => (e.currentTarget.style.background = 'var(--hover)')}
         onmouseleave={(e) => (e.currentTarget.style.background = 'transparent')}
       >{label}</div>
-    {/each}
+    {/snippet}
+    {@render item('Copy cell', () => copyCell(m.row, m.col))}
+    {@render item('Copy row', () => copyRowTsv(m.row))}
+    {@render item('Copy column', () => copyColumn(m.col))}
+    <div style="height:var(--px-1);background:var(--border);margin:var(--px-4) 0"></div>
+    <div style="padding:var(--px-3) var(--px-14);font-size:var(--px-9_5);text-transform:uppercase;letter-spacing:.06em;color:var(--muted)">Copy {selN} row(s) as</div>
+    {@render item('Tab-separated', () => copyAs('tsv'))}
+    {@render item('CSV', () => copyAs('csv'))}
+    {@render item('JSON', () => copyAs('json'))}
+    {@render item('SQL INSERT', () => copyAs('sql-insert'))}
+    {@render item('SQL UPDATE', () => copyAs('sql-update'))}
+    {@render item('Markdown table', () => copyAs('markdown'))}
   </div>
 {/if}
 

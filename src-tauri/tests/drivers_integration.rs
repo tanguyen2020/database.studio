@@ -436,6 +436,39 @@ async fn mssql_roundtrip_and_line_error() {
     assert!(err.position.is_some(), "MSSQL line phải map sang position");
 }
 
+/// AUDIT-3 item 4 — MSSQL Explorer must list every (user) database. `databases()`
+/// returns the server catalog excluding the system DBs (master/tempdb/model/msdb).
+#[tokio::test]
+async fn mssql_list_databases_excludes_system() {
+    let c = GenericImage::new("mcr.microsoft.com/mssql/server", "2022-latest")
+        .with_exposed_port(1433.tcp())
+        .with_env_var("ACCEPT_EULA", "Y")
+        .with_env_var("MSSQL_SA_PASSWORD", MSSQL_PASS)
+        .start()
+        .await
+        .expect("start mssql container");
+    let port = c.get_host_port_ipv4(1433).await.unwrap();
+    let params = MssqlConnParams {
+        host: "localhost".into(),
+        port,
+        database: "".into(),
+        user: "sa".into(),
+        password: MSSQL_PASS.into(),
+        ssl: false,
+        ssl_ca: String::new(),
+        auth: "sql".into(),
+    };
+    let mut drv = retry("mssql", || MssqlDriver::connect(&params)).await;
+
+    drv.exec("CREATE DATABASE it_extra").await.unwrap();
+    let dbs = drv.databases().await.unwrap();
+    assert!(dbs.iter().any(|d| d.name == "it_extra"), "user database is listed");
+    assert!(
+        !dbs.iter().any(|d| matches!(d.name.as_str(), "master" | "tempdb" | "model" | "msdb")),
+        "system databases are excluded",
+    );
+}
+
 /// Phase 5 · T16 — MSSQL estimated plan qua `SET SHOWPLAN_XML ON`. Seed table,
 /// bật SHOWPLAN → query trả XML plan (không thực thi) → parse → node tham chiếu
 /// đúng bảng. Tắt SHOWPLAN sau cùng.

@@ -82,8 +82,9 @@
     if (s?.connected) {
       untrack(() => {
         void explorer.loadSchemas(s.id)
-        // Postgres: list every database on the server (browse/switch).
-        if (s.system === 'postgres') void explorer.loadDatabases(s.id)
+        // Postgres/MSSQL: one DB per connection → list every database so the user
+        // can open another. (MySQL/MariaDB already expose all DBs as schemas.)
+        if (s.system === 'postgres' || s.system === 'mssql') void explorer.loadDatabases(s.id)
       })
     }
   })
@@ -338,6 +339,8 @@
     head?: boolean
     expandable?: boolean
     locked?: boolean
+    /** if set, the row is draggable and carries this payload for the ER canvas */
+    dragData?: string
     onClick?: () => void
     onDblClick?: () => void
   }
@@ -358,6 +361,8 @@
       aria-selected={sel}
       aria-expanded={p.expandable ? expanded.has(p.key) : undefined}
       tabindex="0"
+      draggable={p.dragData != null}
+      ondragstart={(e) => p.dragData && e.dataTransfer?.setData('application/x-ds-er-table', p.dragData)}
       title={p.name}
       style="display:flex;align-items:center;gap:var(--px-5);padding:var(--px-3) var(--px-6);border-radius:var(--px-5);cursor:pointer;white-space:nowrap;padding-left:calc(var(--px-6) + {p.depth} * var(--px-15));background:{sel ? 'var(--rgba-91-124-255-_16)' : 'transparent'};box-shadow:inset var(--px-2) 0 0 {sel ? 'var(--primary)' : 'transparent'}"
     >
@@ -517,7 +522,7 @@
         <div style="padding:var(--px-16) var(--px-12);text-align:center;font-size:var(--px-12);color:var(--muted)">Loading keyspace…</div>
       {/if}
     {:else}
-      {#if selected.system === 'postgres' && (cache?.databases?.length ?? 0) > 0}
+      {#if (selected.system === 'postgres' || selected.system === 'mssql') && (cache?.databases?.length ?? 0) > 0}
         <!-- Postgres: every database on the server. Current one is marked; -->
         <!-- clicking another opens it as its own connection. -->
         {@render row({ key: 'databases', depth: 0, glyph: '🗄', color: C.folder, name: 'Databases', meta: String(cache?.databases?.length ?? 0), head: true, expandable: true, onClick: () => (dbSectionOpen = !dbSectionOpen) })}
@@ -554,6 +559,7 @@
         {#snippet schemaMenu()}
           <ContextMenu.Content class="w-52">
             <ContextMenu.Item onclick={() => selected && tabs.openErDiagram(selected.id, schema.name)}>View ER Diagram</ContextMenu.Item>
+            <ContextMenu.Item onclick={() => selected && tabs.openErDiagram(selected.id, schema.name, { blank: true })}>New ER Diagram (drag tables in)</ContextMenu.Item>
             <ContextMenu.Item onclick={() => selected && tabs.openIndexScanner(selected.id, schema.name)}>Scan Indexes</ContextMenu.Item>
             <ContextMenu.Item onclick={() => selected && tabs.openTableDesigner(selected.id, schema.name, '')}>New Table…</ContextMenu.Item>
             <ContextMenu.Item onclick={() => selected && scriptsWizard.show(selected.id, schema.name)}>Generate Scripts…</ContextMenu.Item>
@@ -677,6 +683,7 @@
                   meta: isClickhouse && t.engine ? t.engine : t.row_estimate != null && t.row_estimate > 0 ? `${t.row_estimate.toLocaleString()} rows` : '',
                   expandable: true,
                   locked: t.locked,
+                  dragData: JSON.stringify({ schema: schema.name, table: t.name }),
                   onClick: () => expandTable(schema.name, t.name),
                   onDblClick: () => openData(schema.name, t),
                 },

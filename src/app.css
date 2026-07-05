@@ -37,6 +37,29 @@
   --input: var(--border2);
   --ring: var(--primary);
   --radius: var(--px-8);
+
+  /* SQL editor syntax palette (AUDIT-3 item 2). NOT part of the prototype chrome
+   * (the prototype fakes the editor), so these are editor-only literals tuned for
+   * a LIGHT background — One Light-ish, high contrast + easy on the eyes. Dark
+   * overrides below reuse the prototype's existing One Dark hex tokens. */
+  --syntax-keyword: #a626a4;
+  --syntax-string: #50a14f;
+  --syntax-number: #b76b01;
+  --syntax-comment: #a0a1a7;
+  --syntax-function: #4078f2;
+  --syntax-type: #c18401;
+  --syntax-operator: #0184bc;
+}
+
+.dark {
+  /* SQL editor syntax palette — One Dark, via existing prototype hex tokens. */
+  --syntax-keyword: var(--hex-c678dd);
+  --syntax-string: var(--hex-98c379);
+  --syntax-number: var(--hex-d19a66);
+  --syntax-comment: var(--hex-7f8a9e);
+  --syntax-function: var(--hex-61afef);
+  --syntax-type: var(--hex-e5c07b);
+  --syntax-operator: var(--hex-56b6c2);
 }
 
 /* ---------------------------------------------------------------------------

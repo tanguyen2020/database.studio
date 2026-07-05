@@ -9,6 +9,7 @@
   import * as ipc from '$lib/ipc'
   import { toasts } from '$lib/stores/toast.svelte'
   import { toMermaid, toSvg, tableSize, type ErTable } from '$lib/er/mermaid'
+  import { addTable, flowPosition, visibleTables, type Viewport } from '$lib/er/diagram'
   import ErTableNode from './er/ErTableNode.svelte'
   import { connections } from '$lib/stores/connections.svelte'
   import { tabs } from '$lib/stores/tabs.svelte'
@@ -30,6 +31,14 @@
   let showAll = $state(true)
   let error = $state<string | null>(null)
   let positions = $state<Record<string, { x: number; y: number }>>({})
+
+  // AUDIT-3 item 1 — drag & drop tables from the sidebar. `included` (in tab.state)
+  // is undefined for the default "all tables" view, or an explicit subset for a
+  // diagram the user builds by dragging. `viewport` is bound so drop points map
+  // to canvas coordinates.
+  const included = $derived((tab.state as { included?: string[] }).included)
+  let viewport = $state<Viewport>({ x: 0, y: 0, zoom: 1 })
+  let paneEl = $state<HTMLDivElement | null>(null)
 
   // T20 — create-relationship + Save-to-DB + in-tab Ctrl+F
   const system = $derived(connections.byId(tab.connectionId)?.system ?? 'postgres')
@@ -95,22 +104,23 @@
   }
 
   function layout() {
+    const shown = visibleTables(tables, included)
     const g = new Dagre.graphlib.Graph()
     g.setGraph({ rankdir: 'LR', nodesep: 50, ranksep: 90 })
     g.setDefaultEdgeLabel(() => ({}))
-    for (const t of tables) {
+    for (const t of shown) {
       const s = tableSize(t)
       g.setNode(t.name, { width: s.w, height: s.h })
     }
     for (const fk of fks) {
-      if (tables.some((t) => t.name === fk.to_table) && tables.some((t) => t.name === fk.from_table)) {
+      if (shown.some((t) => t.name === fk.to_table) && shown.some((t) => t.name === fk.from_table)) {
         g.setEdge(fk.to_table, fk.from_table)
       }
     }
     Dagre.layout(g)
     const saved = (tab.state as { positions?: Record<string, { x: number; y: number }> }).positions ?? {}
     const pos: Record<string, { x: number; y: number }> = {}
-    nodes = tables.map((t) => {
+    nodes = shown.map((t) => {
       const n = g.node(t.name)
       const s = tableSize(t)
       // Ưu tiên vị trí đã lưu (persist qua tab.state); nếu chưa có → dùng dagre.
@@ -152,6 +162,29 @@
   function autoLayout() {
     tab.state = { ...(tab.state as object), positions: {} }
     layout()
+  }
+
+  // Drop a table dragged from the Object Explorer onto the canvas (AUDIT-3 item 1).
+  function onDrop(e: DragEvent) {
+    e.preventDefault()
+    const raw = e.dataTransfer?.getData('application/x-ds-er-table')
+    if (!raw || !paneEl) return
+    let payload: { schema?: string; table?: string }
+    try {
+      payload = JSON.parse(raw)
+    } catch {
+      return
+    }
+    const name = payload.table
+    if (!name || (payload.schema && payload.schema !== schema)) return
+    if (!tables.some((t) => t.name === name)) return // not a table of this schema
+    const rect = paneEl.getBoundingClientRect()
+    const p = flowPosition(e.clientX, e.clientY, rect, viewport)
+    const saved = { ...((tab.state as { positions?: Record<string, { x: number; y: number }> }).positions ?? {}) }
+    saved[name] = p
+    tab.state = { ...(tab.state as object), included: addTable(included, name), positions: saved }
+    layout()
+    tabs.schedulePersist()
   }
 
   $effect(() => {
@@ -250,15 +283,27 @@
       <span onclick={addRelationship} onkeydown={(e) => e.key === 'Enter' && addRelationship()} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-6);padding:var(--px-5) var(--px-12);cursor:pointer;font-weight:600">Add</span>
     </div>
   {/if}
-  <div style="flex:1;position:relative;min-height:0">
+  <!-- drop target: tables dragged from the Object Explorer land here (item 1) -->
+  <div
+    bind:this={paneEl}
+    role="application"
+    style="flex:1;position:relative;min-height:0"
+    ondragover={(e) => { e.preventDefault(); if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy' }}
+    ondrop={onDrop}
+  >
     {#if error}
       <div style="padding:var(--px-16);color:var(--error);font-size:var(--px-12)">{error}</div>
     {:else}
-      <SvelteFlow bind:nodes bind:edges {nodeTypes} fitView onnodedragstop={saveLayout}>
+      <SvelteFlow bind:nodes bind:edges bind:viewport {nodeTypes} fitView onnodedragstop={saveLayout}>
         <Background />
         <Controls />
         <MiniMap />
       </SvelteFlow>
+      {#if nodes.length === 0}
+        <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none;color:var(--muted);font-size:var(--px-12_5);text-align:center">
+          Drag tables from the Explorer here to build the diagram
+        </div>
+      {/if}
     {/if}
   </div>
 </div>

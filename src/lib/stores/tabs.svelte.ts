@@ -356,16 +356,21 @@ class TabsStore {
   }
 
   /** Mở tab ER Diagram cho một schema (singleton per conn+schema). */
-  openErDiagram(connectionId: string, schema: string): TabState {
-    const existing = this.tabs.find(
-      (t) =>
-        t.contentType === 'er-diagram' &&
-        t.connectionId === connectionId &&
-        (t.state as { schema?: string }).schema === schema,
-    )
-    if (existing) {
-      this.activeTabId = existing.id
-      return existing
+  openErDiagram(connectionId: string, schema: string, opts?: { blank?: boolean }): TabState {
+    // A blank diagram starts with no tables (included: []) so the user can drag
+    // them in from the Explorer; the default shows every table (included: undefined).
+    if (!opts?.blank) {
+      const existing = this.tabs.find(
+        (t) =>
+          t.contentType === 'er-diagram' &&
+          t.connectionId === connectionId &&
+          (t.state as { schema?: string; included?: string[] }).schema === schema &&
+          (t.state as { included?: string[] }).included === undefined,
+      )
+      if (existing) {
+        this.activeTabId = existing.id
+        return existing
+      }
     }
     const profile = connections.byId(connectionId)
     const tab: TabState = {
@@ -374,10 +379,10 @@ class TabsStore {
       connectionName: profile?.name ?? '',
       systemType: (profile?.system as SystemType) ?? 'orphan',
       contentType: 'er-diagram',
-      title: `ER · ${schema}`,
+      title: opts?.blank ? `ER (new) · ${schema}` : `ER · ${schema}`,
       isPinned: false,
       isDirty: false,
-      state: { schema },
+      state: opts?.blank ? { schema, included: [] } : { schema },
     }
     this.tabs.push(tab)
     this.activeTabId = tab.id

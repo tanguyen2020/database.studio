@@ -29,7 +29,7 @@ export function toSqlInsert(table: string, headers: string[], rows: Record<strin
     .join('\n')
 }
 
-function sqlLiteral(v: unknown): string {
+export function sqlLiteral(v: unknown): string {
   if (v == null) return 'NULL'
   if (typeof v === 'number') return String(v)
   if (typeof v === 'boolean') return v ? 'TRUE' : 'FALSE'

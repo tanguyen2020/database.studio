@@ -17,8 +17,9 @@
     foldKeymap,
     indentOnInput,
     syntaxHighlighting,
-    defaultHighlightStyle,
+    HighlightStyle,
   } from '@codemirror/language'
+  import { tags as t } from '@lezer/highlight'
   import {
     autocompletion,
     closeBrackets,
@@ -107,6 +108,19 @@
     }
   }
 
+  // Theme-aware SQL syntax palette (AUDIT-3 item 2). Colors resolve from CSS
+  // vars (--syntax-*) so light/dark each get a high-contrast, low-strain palette.
+  const syntaxHl = HighlightStyle.define([
+    { tag: [t.keyword, t.operatorKeyword, t.modifier], color: 'var(--syntax-keyword)', fontWeight: '600' },
+    { tag: [t.string, t.special(t.string), t.regexp], color: 'var(--syntax-string)' },
+    { tag: [t.number, t.bool, t.null], color: 'var(--syntax-number)' },
+    { tag: [t.lineComment, t.blockComment, t.comment], color: 'var(--syntax-comment)', fontStyle: 'italic' },
+    { tag: [t.function(t.variableName), t.function(t.propertyName)], color: 'var(--syntax-function)' },
+    { tag: [t.typeName, t.className, t.namespace], color: 'var(--syntax-type)' },
+    { tag: [t.operator, t.punctuation, t.separator, t.paren, t.bracket], color: 'var(--syntax-operator)' },
+    { tag: [t.variableName, t.propertyName, t.name], color: 'var(--text)' },
+  ])
+
   const editorTheme = EditorView.theme({
     '&': {
       height: '100%',
@@ -152,7 +166,7 @@
         bracketMatching(),
         closeBrackets(),
         highlightSelectionMatches(),
-        syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+        syntaxHighlighting(syntaxHl, { fallback: true }),
         langCompartment.of(langExt(system)),
         // autocomplete: keywords dialect + table/column từ schema cache (lang-sql)
         autocompletion(),

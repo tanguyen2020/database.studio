@@ -397,11 +397,13 @@ impl LiveConnection {
         }
     }
 
-    /// Databases on the server. Only Postgres implements this today (one DB per
-    /// connection → the Explorer lists them so the user can open another).
+    /// Databases on the server. Postgres/MSSQL bind one DB per connection, so the
+    /// Explorer lists them all and opens another as its own connection. MySQL/
+    /// MariaDB expose every database as a schema already, so they return none here.
     pub async fn databases(&mut self) -> Result<Vec<DatabaseInfo>, QueryError> {
         match self {
             Self::Postgres(d) => d.databases().await,
+            Self::Mssql(d) => d.databases().await,
             _ => Ok(Vec::new()),
         }
     }

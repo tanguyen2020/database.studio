@@ -179,9 +179,10 @@ pub async fn open_database(
             (p, pw, String::new())
         }
     };
-    if profile.system != crate::drivers::types::SystemType::Postgres {
+    use crate::drivers::types::SystemType;
+    if !matches!(profile.system, SystemType::Postgres | SystemType::Mssql) {
         return Err(AppError::Driver(
-            "Opening another database is only supported for PostgreSQL".into(),
+            "Opening another database is only supported for PostgreSQL and SQL Server".into(),
         ));
     }
     // Keep the base name stable across hops (strip a prior " · db" suffix).

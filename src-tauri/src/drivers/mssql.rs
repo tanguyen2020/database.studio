@@ -230,6 +230,29 @@ impl MssqlDriver {
             .collect())
     }
 
+    /// All databases on the server (MSSQL can cross-query, but the Explorer opens
+    /// each as its own connection like Postgres). Excludes the system databases.
+    pub async fn databases(&mut self) -> Result<Vec<DatabaseInfo>, QueryError> {
+        let stream = self
+            .client
+            .simple_query(
+                "SELECT name, CASE WHEN name = DB_NAME() THEN 1 ELSE 0 END
+                 FROM sys.databases
+                 WHERE database_id > 4 AND state = 0
+                 ORDER BY name",
+            )
+            .await
+            .map_err(|e| map_error(&e))?;
+        let rows = stream.into_first_result().await.map_err(|e| map_error(&e))?;
+        Ok(rows
+            .iter()
+            .map(|r| DatabaseInfo {
+                name: r.get::<&str, _>(0).unwrap_or_default().to_string(),
+                current: r.get::<i32, _>(1).unwrap_or(0) == 1,
+            })
+            .collect())
+    }
+
     pub async fn tables(&mut self, schema: &str) -> Result<Vec<TableInfo>, QueryError> {
         let rows = self
             .client
