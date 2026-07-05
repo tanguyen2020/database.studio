@@ -259,7 +259,7 @@ test('explorer database filter narrows database nodes', async ({ page }) => {
   await page.waitForTimeout(500)
 
   // demo databases: app (current), analytics, postgres
-  const filter = page.getByPlaceholder('Filter databases…')
+  const filter = page.getByPlaceholder('Filter databases & objects…')
   await expect(filter).toBeVisible()
   await filter.fill('analytics')
   await page.waitForTimeout(300)
@@ -270,5 +270,26 @@ test('explorer database filter narrows database nodes', async ({ page }) => {
   await filter.fill('')
   await page.waitForTimeout(200)
   await expect(page.getByRole('treeitem', { name: /app current/ }).first()).toBeVisible() // back
+  expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
+})
+
+// User request — the same filter also finds objects inside Tables/Views/Procedures/
+// Functions/Triggers/Sequences (auto-expands to reveal matches).
+test('explorer filter finds objects inside folders', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(String(e)))
+  await blockRemoteFonts(page)
+  await page.goto(APP_URL)
+  await page.waitForSelector('#app > *', { timeout: 15_000 })
+  await page.waitForTimeout(300)
+  await page.getByRole('button', { name: /Postgres/ }).first().click()
+  await page.waitForTimeout(500)
+
+  await page.getByPlaceholder('Filter databases & objects…').fill('students')
+  await page.waitForTimeout(400)
+  // the current DB stays (its schema contains a match) and the table is revealed
+  await expect(page.getByRole('treeitem', { name: /students/ }).first()).toBeVisible()
+  // a non-matching table is hidden
+  await expect(page.getByRole('treeitem', { name: /^▦?\s*courses/ })).toHaveCount(0)
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })

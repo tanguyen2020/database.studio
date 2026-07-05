@@ -59,31 +59,48 @@
 
   let expanded = $state<Set<string>>(new Set())
   let treeSel = $state<string | null>(null)
-  // Tree filter removed (user request) — `matchSearch` always matches and
-  // `searching` is always false so the `{#if searching || expanded…}` guards
-  // fall back to expand-on-click behavior.
-  function matchSearch(_name: string): boolean {
-    return true
-  }
-  const searching = false
-
-  // Database name filter — narrows the database nodes (current + foreign, and
-  // MySQL/MariaDB schemas which ARE databases). Empty = show all.
+  // One filter that finds by name across databases AND objects (Tables/Views/
+  // Procedures/Functions/Triggers/Sequences). Empty = show everything.
   let dbFilter = $state('')
   const dbFiltering = $derived(!!dbFilter.trim())
-  function matchDb(name: string): boolean {
+  function matchName(name: string): boolean {
     const q = dbFilter.trim().toLowerCase()
     return !q || name.toLowerCase().includes(q)
   }
+  const matchSearch = matchName // object items (folders)
+  const matchDb = matchName // database/schema nodes
+  const searching = $derived(dbFiltering)
+
+  // While filtering, load every schema's children so object matches surface
+  // without manual expansion (folders auto-open via `searching || expanded`).
+  $effect(() => {
+    const s = selected
+    if (dbFiltering && s?.connected) {
+      untrack(() => {
+        for (const sch of cache?.schemas ?? []) void explorer.loadSchemaChildren(s.id, sch.name)
+      })
+    }
+  })
+
   const curDbName = $derived(cache?.databases?.find((d) => d.current)?.name ?? selected?.database ?? '')
-  // Schemas to render: MySQL/MariaDB schemas ARE databases → filter by name; for
-  // PG/MSSQL the schemas belong to the current DB → hide them unless the current
-  // DB matches the filter.
+  /** True if a schema's loaded objects contain a filter match (so its node stays
+   *  visible even when the schema/db name itself doesn't match). */
+  function schemaHasMatch(schemaName: string): boolean {
+    const sc = cache?.bySchema[schemaName]
+    if (!sc) return false
+    return (
+      (sc.tables ?? []).some((t) => matchName(t.name)) ||
+      (sc.routines ?? []).some((r) => matchName(r.name)) ||
+      (sc.triggers ?? []).some((t) => matchName(t.name)) ||
+      (sc.sequences ?? []).some((s) => matchName(s.name))
+    )
+  }
+  // Schemas to render while filtering: keep a schema if its name matches OR it
+  // contains a matching object. (MySQL/MariaDB schemas ARE databases.)
   const visibleSchemas = $derived.by(() => {
     const all = cache?.schemas ?? []
     if (!dbFiltering) return all
-    if (schemaIsDatabase) return all.filter((s) => matchDb(s.name))
-    return matchDb(curDbName) ? all : []
+    return all.filter((s) => matchDb(s.name) || schemaHasMatch(s.name))
   })
   // T18 — Object Properties panel: suy ra type/schema/name từ key node đang chọn.
   const selProps = $derived.by(() => {
@@ -531,14 +548,14 @@
     >⟳</span>
   </div>
 
-  <!-- database name filter — narrows the database nodes (relational only) -->
-  {#if selected?.connected && (pgMssqlMultiDb || schemaIsDatabase)}
+  <!-- filter — finds databases and objects by name (schema-tree systems) -->
+  {#if selected?.connected && ['postgres', 'mysql', 'mariadb', 'mssql', 'sqlite', 'clickhouse'].includes(selected.system)}
     <div style="flex:none;padding:0 var(--px-8) var(--px-6);position:relative">
       <span style="position:absolute;left:var(--px-16);top:50%;transform:translateY(-60%);color:var(--muted);font-size:var(--px-11);pointer-events:none">⌕</span>
       <input
         bind:value={dbFilter}
-        placeholder="Filter databases…"
-        aria-label="Filter databases"
+        placeholder="Filter databases & objects…"
+        aria-label="Filter databases and objects"
         spellcheck="false"
         style="width:100%;background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-22);color:var(--text);font-size:var(--px-11_5);outline:none"
       />
@@ -667,7 +684,7 @@
             <ContextMenu.Item variant="destructive" onclick={() => selected && stmtTab(`Drop database ${curDb?.name ?? selected.database}`, genDropDatabase(selected.system, curDb?.name ?? selected.database ?? ''))}>Drop Database…</ContextMenu.Item>
           </ContextMenu.Content>
         {/snippet}
-        {#if !dbFiltering || matchDb(curDbName)}
+        {#if !dbFiltering || matchDb(curDbName) || visibleSchemas.length > 0}
           {@render row({ key: 'curdb', depth: 0, glyph: '', svg: DB_FOLDER_SVG, color: 'var(--primary)', name: curDb?.name ?? selected.database ?? 'database', meta: 'current', head: true }, curDbMenu)}
         {/if}
       {/if}
