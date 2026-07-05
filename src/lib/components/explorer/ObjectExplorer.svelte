@@ -26,7 +26,7 @@
   import * as chops from '$lib/sql/chops'
   import { toasts } from '$lib/stores/toast.svelte'
   import { quoteIdent, selectStarSql } from '$lib/sql/dialect'
-  import { genCreate, genDelete, genDrop, genForeignKey, genInsert, genRename, genSelect, genTruncate, genUpdate } from '$lib/sql/ddl'
+  import { genCreate, genDelete, genDrop, genForeignKey, genInsert, genRename, genRenameDatabase, genSelect, genTruncate, genUpdate } from '$lib/sql/ddl'
   import { generateScript, type DbObject, type ScriptMode } from '$lib/sql/scripts'
   import { createTemplate, type CreateKind } from '$lib/sql/create-templates'
   import { buildExportSelect } from '$lib/export/query'
@@ -574,6 +574,7 @@
             <ContextMenu.Item onclick={() => selected && backupWizard.show(selected.id, selected.system)}>Backup & Restore…</ContextMenu.Item>
             <ContextMenu.Item onclick={() => selected && tabs.openSchemaCompare(selected.id)}>Compare Schemas…</ContextMenu.Item>
             <ContextMenu.Separator />
+            <ContextMenu.Item onclick={() => selected && stmtTab(`Rename database ${curDb?.name ?? selected.database}`, genRenameDatabase(selected.system, curDb?.name ?? selected.database ?? ''))}>Rename…</ContextMenu.Item>
             <ContextMenu.Item onclick={() => copyName(curDb?.name ?? selected.database ?? '')}>Copy Name</ContextMenu.Item>
             <ContextMenu.Item onclick={() => selected && explorer.refresh(selected.id, { kind: 'connection' })}>Refresh</ContextMenu.Item>
           </ContextMenu.Content>
@@ -608,6 +609,9 @@
             {/if}
             <ContextMenu.Item onclick={() => selected && scriptsWizard.show(selected.id, schema.name)}>Generate Scripts…</ContextMenu.Item>
             <ContextMenu.Separator />
+            {#if schemaIsDatabase}
+              <ContextMenu.Item onclick={() => selected && stmtTab(`Rename database ${schema.name}`, genRenameDatabase(selected.system, schema.name))}>Rename…</ContextMenu.Item>
+            {/if}
             <ContextMenu.Item onclick={() => selected && explorer.refresh(selected.id, { kind: 'schema', schema: schema.name })}>Refresh</ContextMenu.Item>
           </ContextMenu.Content>
         {/snippet}
@@ -1148,6 +1152,8 @@
               <ContextMenu.Item onclick={() => newQuery('', undefined, db.name)}>New Query</ContextMenu.Item>
               <ContextMenu.Item onclick={() => toggleForeignDb(db.name)}>{expanded.has(fkey) ? 'Collapse' : 'Expand'}</ContextMenu.Item>
               <ContextMenu.Separator />
+              <!-- rename runs on the base connection (not attached to db.name), which PG requires -->
+              <ContextMenu.Item onclick={() => selected && stmtTab(`Rename database ${db.name}`, genRenameDatabase(selected.system, db.name))}>Rename…</ContextMenu.Item>
               <ContextMenu.Item onclick={() => copyName(db.name)}>Copy Name</ContextMenu.Item>
               <ContextMenu.Item onclick={() => sub && explorer.refresh(sub, { kind: 'connection' })}>Refresh</ContextMenu.Item>
             </ContextMenu.Content>
@@ -1221,6 +1227,7 @@
                             <ContextMenu.Separator />
                             <ContextMenu.Item onclick={() => sub && tabs.openTableDesigner(sub, fsch.name, nm)}>Design Table</ContextMenu.Item>
                             <ContextMenu.Item onclick={() => sub && tabs.openIndexManager(sub, fsch.name, nm)}>Manage Indexes & FKs…</ContextMenu.Item>
+                            <ContextMenu.Item onclick={() => selected && stmtTab(`Rename ${nm}`, genRename(selected.system, fsch.name, nm), db.name)}>Rename…</ContextMenu.Item>
                             <ContextMenu.Separator />
                             <ContextMenu.Item onclick={() => genSqlTab('select', fsch.name, nm, sub, db.name)}>Generate SQL · SELECT</ContextMenu.Item>
                             <ContextMenu.Item onclick={() => genSqlTab('insert', fsch.name, nm, sub, db.name)}>Generate SQL · INSERT</ContextMenu.Item>

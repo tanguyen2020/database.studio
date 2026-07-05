@@ -2,7 +2,7 @@
 // dialect, MSSQL dùng TOP, ClickHouse UPDATE/DELETE là ALTER TABLE … mutation.
 
 import { describe, expect, it } from 'vitest'
-import { genCreate, genDelete, genDrop, genForeignKey, genInsert, genRename, genSelect, genTruncate, genUpdate } from './ddl'
+import { genCreate, genDelete, genDrop, genForeignKey, genInsert, genRename, genRenameDatabase, genSelect, genTruncate, genUpdate } from './ddl'
 import type { ColumnInfo } from '$lib/types'
 
 function col(name: string, data_type: string, opts: Partial<ColumnInfo> = {}): ColumnInfo {
@@ -94,6 +94,23 @@ describe('genRename / genTruncate / genDrop', () => {
   it('truncate + drop IF EXISTS', () => {
     expect(genTruncate('mysql', 'app', 'users')).toBe('TRUNCATE TABLE `app`.`users`;')
     expect(genDrop('mysql', 'app', 'users')).toBe('DROP TABLE IF EXISTS `app`.`users`;')
+  })
+})
+
+describe('genRenameDatabase', () => {
+  it('postgres ALTER DATABASE … RENAME TO', () => {
+    expect(genRenameDatabase('postgres', 'app')).toBe('ALTER DATABASE "app" RENAME TO "app_new";')
+  })
+  it('mssql ALTER DATABASE … MODIFY NAME', () => {
+    expect(genRenameDatabase('mssql', 'app')).toBe('ALTER DATABASE [app] MODIFY NAME = [app_new];')
+  })
+  it('clickhouse RENAME DATABASE', () => {
+    expect(genRenameDatabase('clickhouse', 'app')).toBe('RENAME DATABASE `app` TO `app_new`;')
+  })
+  it('mysql/mariadb + sqlite return an explanatory comment (no DDL)', () => {
+    expect(genRenameDatabase('mysql', 'app')).toMatch(/^-- MySQL\/MariaDB cannot rename/)
+    expect(genRenameDatabase('mariadb', 'app')).toMatch(/^-- MySQL\/MariaDB cannot rename/)
+    expect(genRenameDatabase('sqlite', 'app')).toMatch(/^-- SQLite databases are files/)
   })
 })
 

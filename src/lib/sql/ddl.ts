@@ -84,6 +84,32 @@ export function genRename(system: string, schema: string, table: string): string
   return `ALTER TABLE ${t} RENAME TO ${quoteIdent(system, table + '_new')};`
 }
 
+/**
+ * Rename a database/schema. Emits a ready-to-edit statement (new name defaults to
+ * `<old>_new`). MySQL/MariaDB have no RENAME DATABASE and SQLite is a file — those
+ * return an explanatory comment instead of DDL.
+ */
+export function genRenameDatabase(system: string, database: string): string {
+  const from = quoteIdent(system, database)
+  const to = quoteIdent(system, database + '_new')
+  switch (system) {
+    case 'postgres':
+      // Must be run while not connected TO that database (connect to another first).
+      return `ALTER DATABASE ${from} RENAME TO ${to};`
+    case 'mssql':
+      return `ALTER DATABASE ${from} MODIFY NAME = ${to};`
+    case 'clickhouse':
+      return `RENAME DATABASE ${from} TO ${to};`
+    case 'mysql':
+    case 'mariadb':
+      return `-- MySQL/MariaDB cannot rename a database directly.\n-- Create ${to}, move each table (RENAME TABLE ${from}.t TO ${to}.t), then DROP DATABASE ${from}.`
+    case 'sqlite':
+      return `-- SQLite databases are files — rename the .sqlite file on disk instead.`
+    default:
+      return `-- Renaming a database is not supported for ${system}.`
+  }
+}
+
 export function genTruncate(system: string, schema: string, table: string): string {
   return `TRUNCATE TABLE ${target(system, schema, table)};`
 }

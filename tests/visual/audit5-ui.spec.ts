@@ -58,6 +58,7 @@ test('foreign database node has a context menu', async ({ page }) => {
   await page.waitForTimeout(200)
   await expect(page.getByText('New Query', { exact: true }).first()).toBeVisible()
   await expect(page.getByText('Copy Name', { exact: true }).first()).toBeVisible()
+  await expect(page.getByText('Rename…', { exact: true }).first()).toBeVisible()
 
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
@@ -101,6 +102,27 @@ test('table designer header shows connection and database', async ({ page }) => 
   // header shows the connection name (demo 'Postgres') and the schema
   await expect(page.getByRole('tab', { name: /new_table/ }).first()).toBeVisible()
   await expect(page.getByText('Postgres', { exact: true }).first()).toBeVisible()
+
+  expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
+})
+
+// User request — Rename in the context menu for database and table names.
+test('rename database from the current-db header context menu', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(String(e)))
+  await blockRemoteFonts(page)
+  await page.goto(APP_URL)
+  await page.waitForSelector('#app > *', { timeout: 15_000 })
+  await page.waitForTimeout(300)
+  await page.getByRole('button', { name: /Postgres/ }).first().click()
+  await page.waitForTimeout(500)
+
+  await page.getByRole('treeitem', { name: /app current/ }).first().click({ button: 'right' })
+  await page.waitForTimeout(200)
+  await page.getByText('Rename…', { exact: true }).first().click()
+  await page.waitForTimeout(300)
+  // opens a SQL tab with the ALTER DATABASE … RENAME statement to review
+  await expect(page.locator('.cm-content').first()).toContainText('ALTER DATABASE')
 
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
