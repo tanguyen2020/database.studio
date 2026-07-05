@@ -276,6 +276,36 @@ class TabsStore {
   }
 
   /** Mở tab Index Scanner cho một schema (singleton per conn+schema). */
+  openIndexManager(connectionId: string, schema: string, table: string): TabState {
+    const existing = this.tabs.find(
+      (t) =>
+        t.contentType === 'index-manager' &&
+        t.connectionId === connectionId &&
+        (t.state as { schema?: string; table?: string }).schema === schema &&
+        (t.state as { table?: string }).table === table,
+    )
+    if (existing) {
+      this.activeTabId = existing.id
+      return existing
+    }
+    const profile = connections.byId(connectionId)
+    const tab: TabState = {
+      id: uuid(),
+      connectionId,
+      connectionName: profile?.name ?? '',
+      systemType: (profile?.system as SystemType) ?? 'orphan',
+      contentType: 'index-manager',
+      title: `Indexes · ${table}`,
+      isPinned: false,
+      isDirty: false,
+      state: { schema, table },
+    }
+    this.tabs.push(tab)
+    this.activeTabId = tab.id
+    this.schedulePersist()
+    return tab
+  }
+
   openIndexScanner(connectionId: string, schema: string): TabState {
     const existing = this.tabs.find(
       (t) =>

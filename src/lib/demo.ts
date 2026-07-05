@@ -341,7 +341,12 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
         { name: 'fk_enrollments_course', from_table: 'enrollments', from_column: 'course_id', to_table: 'courses', to_column: 'id' },
       ])
     case 'list_indexes':
+      return ok([
+        { name: 'students_pkey', method: 'btree', columns: ['id'], unique: true, primary: true },
+        { name: 'idx_students_gpa', method: 'btree', columns: ['gpa'], unique: false, primary: false },
+      ])
     case 'list_constraints':
+      return ok([{ name: 'students_pkey', kind: 'PRIMARY KEY', definition: 'PRIMARY KEY (id)' }])
     case 'list_routines':
       return ok([
         { schema: 'public', name: 'add_one', kind: 'function', params: [{ name: 'x', data_type: 'int4' }], return_type: 'int4' },

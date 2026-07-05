@@ -105,7 +105,7 @@ Status legend: **Implemented** (wired end-to-end, evidence) · **Partial** (pres
 | Feature | Status | Evidence | Notes |
 |---|---|---|---|
 | Table Designer (columns grid + Scripts DDL + Save) | Implemented | `TableDesigner.svelte` | |
-| Index manager tab / FK manager tab | Missing | `TableDesigner.svelte` | dedicated managers still absent |
+| Index manager tab / FK manager tab | Implemented [T29] | `IndexManager.svelte`; `sql/indexes.ts` | per-table tab: list indexes+FKs, create/drop index + add/drop FK via form with live DDL preview, missing-index (T17) suggestions, engine-aware; refreshes tree node |
 | Column reorder / unique / auto-increment / IDENTITY | Partial | `TableDesigner.svelte` | PK/nullable/default/type only |
 | DDL Viewer (single object) | Implemented (Differs) | `sql/ddl.ts` | client-generated CREATE |
 | **Generate Scripts whole schema/DB** (structure/data/both, dependency order) | Implemented [T15] | `sql/scripts.ts`; `GenerateScriptsDialog.svelte` | topo order, FK ALTERs last; 3-mode on table ctx menu [A3-audit] |
@@ -207,6 +207,6 @@ Status legend: **Implemented** (wired end-to-end, evidence) · **Partial** (pres
 4. **Result Grid Group By popover** (dc:352-385) — Chart view covers aggregation only.
 5. ~~Proc/Func Execute + Rename~~ — done [T28].
 6. **MSSQL Azure AD / MFA** auth modes (SQL/Windows done).
-7. **Index/FK manager** dedicated tabs (TableDesigner covers columns).
+7. ~~Index/FK manager dedicated tabs~~ — done [T29].
 8. **ClickHouse MV / Dictionary create** menus.
 9. **Kafka ACL** + **NATS NKey/JWT** — deferred (need broker authorizer / JWT operator outside the default containers).
