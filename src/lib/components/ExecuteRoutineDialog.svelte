@@ -8,6 +8,9 @@
   import { tabs } from '$lib/stores/tabs.svelte'
   import { buildCall } from '$lib/sql/routines'
 
+  // $derived open flag — a bare {#if store.open} on a class $state singleton can
+  // fail to establish tracking in Svelte 5 (see T28 handoff note).
+  const dlgOpen = $derived(execRoutineWizard.open && !!execRoutineWizard.routine)
   const system = $derived(connections.byId(execRoutineWizard.connId)?.system ?? 'postgres')
   // IN / INOUT params need a value; pure OUT params are omitted from the call.
   const inParams = $derived(
@@ -42,7 +45,7 @@
   }
 </script>
 
-{#if execRoutineWizard.open && execRoutineWizard.routine}
+{#if dlgOpen && execRoutineWizard.routine}
   {@const r = execRoutineWizard.routine}
   <div onclick={() => execRoutineWizard.close()} onkeydown={() => {}} role="presentation" style="position:fixed;inset:0;background:var(--rgba-0-0-0-_5);display:flex;align-items:center;justify-content:center;z-index:56">
     <div onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.key === 'Escape' && execRoutineWizard.close()} role="dialog" aria-modal="true" tabindex="-1" style="width:var(--px-460);max-width:94vw;background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-14);box-shadow:0 var(--px-30) var(--px-70) var(--rgba-0-0-0-_55);overflow:hidden;display:flex;flex-direction:column">

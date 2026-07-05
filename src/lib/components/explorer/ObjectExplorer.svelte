@@ -630,6 +630,7 @@
                   <ContextMenu.Item onclick={() => newQuery(schema.name, t.name)}>New Query</ContextMenu.Item>
                   <ContextMenu.Separator />
                   <ContextMenu.Item onclick={() => selected && tabs.openTableDesigner(selected.id, schema.name, t.name)}>Design Table</ContextMenu.Item>
+                  <ContextMenu.Item onclick={() => selected && tabs.openIndexManager(selected.id, schema.name, t.name)}>Manage Indexes & FKs…</ContextMenu.Item>
                   <ContextMenu.Item
                     onclick={() => stmtTab(`Rename ${t.name}`, genRename(selected!.system, schema.name, t.name))}
                   >

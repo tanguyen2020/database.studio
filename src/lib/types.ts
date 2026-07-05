@@ -204,6 +204,7 @@ export type TabContentType =
   | 'er-diagram'
   | 'schema-compare'
   | 'index-scanner'
+  | 'index-manager'
   | 'admin'
 
 export interface TabState {

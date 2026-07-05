@@ -571,6 +571,83 @@ async fn mysql_roundtrip() {
     mysql_like_roundtrip(("mysql", "8"), "MYSQL", "mysql").await;
 }
 
+/// T29 — Index/FK Manager DDL runs on MySQL: create/drop index (DROP INDEX … ON)
+/// + add/drop FK (DROP FOREIGN KEY), exactly as genCreate/DropIndex/ForeignKey emit.
+#[tokio::test]
+async fn mysql_index_fk_crud() {
+    let c = GenericImage::new("mysql", "8")
+        .with_exposed_port(3306.tcp())
+        .with_env_var("MYSQL_ROOT_PASSWORD", PASS)
+        .with_env_var("MYSQL_DATABASE", "testdb")
+        .start()
+        .await
+        .expect("start mysql container");
+    let port = c.get_host_port_ipv4(3306).await.unwrap();
+    let params = MySqlConnParams {
+        host: "localhost".into(),
+        port,
+        database: "testdb".into(),
+        user: "root".into(),
+        password: PASS.into(),
+        ssl: false,
+        ssl_ca: String::new(),
+        ssl_cert: String::new(),
+        ssl_key: String::new(),
+    };
+    let mut drv = retry("mysql", || MySqlDriver::connect(&params, "mysql")).await;
+    drv.exec("CREATE TABLE im_parent (id int PRIMARY KEY)").await.unwrap();
+    drv.exec("CREATE TABLE im_child (id int PRIMARY KEY, pid int, email varchar(100))").await.unwrap();
+
+    async fn n(drv: &mut MySqlDriver, sql: &str) -> i64 {
+        let StatementOutcome::Rows { result } = drv.exec(sql).await.unwrap() else { panic!("rows") };
+        result.rows[0]["n"].as_i64().unwrap()
+    }
+
+    drv.exec("CREATE INDEX `ix_im_child_email` ON `testdb`.`im_child` (`email`);").await.unwrap();
+    assert!(n(&mut drv, "SELECT count(*) AS n FROM information_schema.statistics WHERE index_name='ix_im_child_email' AND table_name='im_child'").await >= 1, "index created");
+    drv.exec("ALTER TABLE `testdb`.`im_child` ADD CONSTRAINT `fk_im_child_parent` FOREIGN KEY (`pid`) REFERENCES `testdb`.`im_parent` (`id`);").await.unwrap();
+    assert_eq!(n(&mut drv, "SELECT count(*) AS n FROM information_schema.table_constraints WHERE constraint_name='fk_im_child_parent' AND constraint_type='FOREIGN KEY'").await, 1, "FK added");
+    drv.exec("ALTER TABLE `testdb`.`im_child` DROP FOREIGN KEY `fk_im_child_parent`;").await.unwrap();
+    assert_eq!(n(&mut drv, "SELECT count(*) AS n FROM information_schema.table_constraints WHERE constraint_name='fk_im_child_parent' AND constraint_type='FOREIGN KEY'").await, 0, "FK dropped");
+    drv.exec("DROP INDEX `ix_im_child_email` ON `testdb`.`im_child`;").await.unwrap();
+    assert_eq!(n(&mut drv, "SELECT count(*) AS n FROM information_schema.statistics WHERE index_name='ix_im_child_email' AND table_name='im_child'").await, 0, "index dropped");
+}
+
+/// T29 — Index/FK Manager DDL runs on PostgreSQL: create/drop index + add/drop FK,
+/// exactly as genCreateIndex/genDropIndex/genAddForeignKey/genDropForeignKey emit.
+#[tokio::test]
+async fn pg_index_fk_crud() {
+    let (_c, port) = start_pg().await;
+    let params = PgConnParams {
+        host: "localhost".into(),
+        port,
+        database: "testdb".into(),
+        user: "postgres".into(),
+        password: PASS.into(),
+        ssl: false,
+        ssl_ca: String::new(),
+        ssl_cert: String::new(),
+        ssl_key: String::new(),
+    };
+    let mut drv = retry("postgres", || PgDriver::connect(&params)).await;
+    drv.exec("CREATE TABLE im_parent (id int PRIMARY KEY)").await.unwrap();
+    drv.exec("CREATE TABLE im_child (id int PRIMARY KEY, pid int, email text)").await.unwrap();
+
+    async fn n(drv: &mut PgDriver, sql: &str) -> i64 {
+        let StatementOutcome::Rows { result } = drv.exec(sql).await.unwrap() else { panic!("rows") };
+        result.rows[0]["n"].as_i64().unwrap()
+    }
+
+    drv.exec("CREATE INDEX \"ix_im_child_email\" ON \"public\".\"im_child\" (\"email\");").await.unwrap();
+    assert_eq!(n(&mut drv, "SELECT count(*) AS n FROM pg_indexes WHERE indexname = 'ix_im_child_email'").await, 1, "index created");
+    drv.exec("ALTER TABLE \"public\".\"im_child\" ADD CONSTRAINT \"fk_im_child_parent\" FOREIGN KEY (\"pid\") REFERENCES \"public\".\"im_parent\" (\"id\");").await.unwrap();
+    assert_eq!(n(&mut drv, "SELECT count(*) AS n FROM information_schema.table_constraints WHERE constraint_name='fk_im_child_parent' AND constraint_type='FOREIGN KEY'").await, 1, "FK added");
+    drv.exec("ALTER TABLE \"public\".\"im_child\" DROP CONSTRAINT \"fk_im_child_parent\";").await.unwrap();
+    assert_eq!(n(&mut drv, "SELECT count(*) AS n FROM information_schema.table_constraints WHERE constraint_name='fk_im_child_parent' AND constraint_type='FOREIGN KEY'").await, 0, "FK dropped");
+    drv.exec("DROP INDEX IF EXISTS \"public\".\"ix_im_child_email\";").await.unwrap();
+    assert_eq!(n(&mut drv, "SELECT count(*) AS n FROM pg_indexes WHERE indexname = 'ix_im_child_email'").await, 0, "index dropped");
+}
+
 #[tokio::test]
 async fn mariadb_roundtrip() {
     mysql_like_roundtrip(("mariadb", "11"), "MARIADB", "mariadb").await;

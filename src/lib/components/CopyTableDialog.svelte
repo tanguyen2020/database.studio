@@ -25,6 +25,7 @@
   let copied = $state(0)
   let result = $state<string | null>(null)
 
+  const dlgOpen = $derived(copyWizard.open) // see T28 note: bare {#if store.open} can miss tracking
   const srcSystem = $derived(connections.byId(copyWizard.srcConnId)?.system ?? 'postgres')
   const destSystem = $derived(connections.byId(destConnId)?.system ?? 'postgres')
   const destTargets = $derived(connections.profiles.filter((p) => p.connected && REL.includes(p.system)))
@@ -114,7 +115,7 @@
   }
 </script>
 
-{#if copyWizard.open}
+{#if dlgOpen}
   <div onclick={() => !running && copyWizard.close()} onkeydown={() => {}} role="presentation" style="position:fixed;inset:0;background:var(--rgba-0-0-0-_5);display:flex;align-items:center;justify-content:center;z-index:56">
     <div onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.key === 'Escape' && !running && copyWizard.close()} role="dialog" aria-modal="true" tabindex="-1" style="width:var(--px-640);max-width:95vw;max-height:90vh;background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-14);box-shadow:0 var(--px-30) var(--px-70) var(--rgba-0-0-0-_55);overflow:hidden;display:flex;flex-direction:column">
       <div style="flex:none;display:flex;align-items:center;gap:var(--px-10);padding:var(--px-15) var(--px-18);border-bottom:var(--px-1) solid var(--border)">

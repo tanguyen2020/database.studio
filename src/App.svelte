@@ -30,6 +30,7 @@
   import ErDiagram from '$lib/components/workspace/ErDiagram.svelte'
   import SchemaCompare from '$lib/components/workspace/SchemaCompare.svelte'
   import IndexScanner from '$lib/components/workspace/IndexScanner.svelte'
+  import IndexManager from '$lib/components/workspace/IndexManager.svelte'
   import AdminView from '$lib/components/workspace/AdminView.svelte'
   import CommandPalette from '$lib/components/CommandPalette.svelte'
   import ClickHouseTtlDialog from '$lib/components/ClickHouseTtlDialog.svelte'
@@ -228,6 +229,8 @@
             <SchemaCompare tab={t} />
           {:else if t.contentType === 'index-scanner'}
             <IndexScanner tab={t} />
+          {:else if t.contentType === 'index-manager'}
+            <IndexManager tab={t} />
           {:else if t.contentType === 'admin'}
             <AdminView tab={t} />
           {:else}
