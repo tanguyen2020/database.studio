@@ -612,7 +612,7 @@
             <ContextMenu.Item onclick={() => selected && scriptsWizard.show(selected.id, cache?.schemas?.[0]?.name ?? '')}>Generate Scripts…</ContextMenu.Item>
             <ContextMenu.Item onclick={() => selected && backupWizard.show(selected.id, selected.system)}>Backup & Restore…</ContextMenu.Item>
             <ContextMenu.Item onclick={() => selected && tabs.openSchemaCompare(selected.id)}>Compare Schemas…</ContextMenu.Item>
-            <ContextMenu.Item onclick={() => selected && tabs.openSchemaCompare(selected.id, { tgtConnId: selected.id })}>Compare Databases (same connection)…</ContextMenu.Item>
+            <ContextMenu.Item onclick={() => selected && tabs.openSchemaCompare(selected.id, { tgtConnId: selected.id })}>Compare Databases…</ContextMenu.Item>
             <ContextMenu.Separator />
             <ContextMenu.Item onclick={() => selected && stmtTab(`Rename database ${curDb?.name ?? selected.database}`, genRenameDatabase(selected.system, curDb?.name ?? selected.database ?? ''))}>Rename…</ContextMenu.Item>
             <ContextMenu.Item onclick={() => copyName(curDb?.name ?? selected.database ?? '')}>Copy Name</ContextMenu.Item>
@@ -655,7 +655,7 @@
             <ContextMenu.Item onclick={() => selected && scriptsWizard.show(selected.id, schema.name)}>Generate Scripts…</ContextMenu.Item>
             <ContextMenu.Separator />
             {#if schemaIsDatabase}
-              <ContextMenu.Item onclick={() => selected && tabs.openSchemaCompare(selected.id, { tgtConnId: selected.id, srcDb: schema.name })}>Compare Databases (same connection)…</ContextMenu.Item>
+              <ContextMenu.Item onclick={() => selected && tabs.openSchemaCompare(selected.id, { tgtConnId: selected.id, srcDb: schema.name })}>Compare Databases…</ContextMenu.Item>
               <ContextMenu.Item onclick={() => selected && stmtTab(`Rename database ${schema.name}`, genRenameDatabase(selected.system, schema.name))}>Rename…</ContextMenu.Item>
               <ContextMenu.Item variant="destructive" onclick={() => selected && stmtTab(`Drop database ${schema.name}`, genDropDatabase(selected.system, schema.name))}>Drop Database…</ContextMenu.Item>
             {/if}
@@ -1214,7 +1214,7 @@
               <ContextMenu.Item onclick={() => newQuery('', undefined, db.name)}>New Query</ContextMenu.Item>
               <ContextMenu.Item onclick={() => toggleForeignDb(db.name)}>{expanded.has(fkey) ? 'Collapse' : 'Expand'}</ContextMenu.Item>
               <ContextMenu.Separator />
-              <ContextMenu.Item onclick={() => selected && tabs.openSchemaCompare(selected.id, { tgtConnId: selected.id, srcDb: db.name })}>Compare Databases (same connection)…</ContextMenu.Item>
+              <ContextMenu.Item onclick={() => selected && tabs.openSchemaCompare(selected.id, { tgtConnId: selected.id, srcDb: db.name })}>Compare Databases…</ContextMenu.Item>
               <!-- rename/drop run on the base connection (not attached to db.name), which PG requires -->
               <ContextMenu.Item onclick={() => selected && stmtTab(`Rename database ${db.name}`, genRenameDatabase(selected.system, db.name))}>Rename…</ContextMenu.Item>
               <ContextMenu.Item onclick={() => copyName(db.name)}>Copy Name</ContextMenu.Item>
