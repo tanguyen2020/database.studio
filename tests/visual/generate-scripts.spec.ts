@@ -23,6 +23,12 @@ test('Generate Scripts (structure) → SQL tab with CREATE TABLE + FK ALTER', as
   await expect(dialog.getByText('Data only')).toBeVisible()
   await expect(dialog.getByText(/Objects \(/)).toBeVisible()
 
+  // item 3 — grouped by object type (Tables/Views/Stored Procedures/Functions/…)
+  await expect(dialog.getByText(/Tables \(/)).toBeVisible()
+  await expect(dialog.getByText(/Views \(/)).toBeVisible()
+  await expect(dialog.getByText(/Stored Procedures \(/)).toBeVisible()
+  await expect(dialog.getByText(/Functions \(/)).toBeVisible()
+
   await dialog.getByRole('button', { name: /Generate/ }).click()
   await page.waitForTimeout(600)
 
