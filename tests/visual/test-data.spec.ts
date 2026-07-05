@@ -18,8 +18,7 @@ test('generate test data: preview + run', async ({ page }) => {
   await page.waitForTimeout(200)
   await page.getByText('Tables', { exact: true }).first().click()
   await page.waitForTimeout(200)
-  await page.getByText('students', { exact: true }).first().click({ button: 'right' })
-  await page.waitForTimeout(150)
+  await page.getByText('students').first().click({ button: 'right' })
   await page.getByText('Generate Test Data…').first().click()
   await page.waitForTimeout(300)
 

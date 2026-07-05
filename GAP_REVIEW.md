@@ -40,7 +40,7 @@ Status legend: **Implemented** (wired end-to-end, evidence) · **Partial** (pres
 | Tree per system | Implemented | `ObjectExplorer.svelte`; `explorer.svelte.ts` | |
 | Expand table → columns (PK/FK) / indexes / constraints | Implemented [T7b] | `ObjectExplorer.svelte` | indexes/constraints shown as children |
 | Expand View → columns | Implemented [T18] | `ObjectExplorer.svelte` | |
-| Proc/Func/Trigger context menus | Partial [T18] | `ObjectExplorer.svelte` | Show Definition + Drop done; **Execute / Rename / Enable** still Missing (dc:3416-3440) |
+| Proc/Func/Trigger context menus | Implemented [T18,T28] | `ObjectExplorer.svelte`; `sql/routines.ts`; `ExecuteRoutineDialog.svelte` | Show Definition + Drop [T18]; **Execute** (param dialog → CALL/SELECT in SQL tab) + **Rename** (PG ALTER…RENAME / MSSQL sp_rename) [T28]. Trigger Enable/Disable still Missing |
 | Table context menu (Open/New Query/Copy/DDL/Truncate/Drop) | Implemented | `ObjectExplorer.svelte` | + Generate Scripts 3-mode submenu [A3] |
 | Table context extras: Edit Data, **Generate Test Data**, **Copy Table to…**, Compare/Migrate, Dump, Row Count & Stats | Partial | `CopyTableDialog.svelte`; `GenerateTestDataDialog.svelte` | **Copy to… ✅ [T25]**, **Generate Test Data ✅ [T26]**; Edit Data = table viewer; Dump = backup; Compare/Migrate via menu; **Row Count & Stats still Missing** |
 | "Set as Filter" (column menu) | Implemented [T12] | `ObjectExplorer.svelte` → Table Viewer seeded filter | |
@@ -205,7 +205,7 @@ Status legend: **Implemented** (wired end-to-end, evidence) · **Partial** (pres
 2. ~~Generate Test Data~~ — done [T26].
 3. ~~Copy Table to… (cross-connection copy)~~ — done [T25].
 4. **Result Grid Group By popover** (dc:352-385) — Chart view covers aggregation only.
-5. **Proc/Func Execute + Rename** context actions (Show Definition/Drop done in T18).
+5. ~~Proc/Func Execute + Rename~~ — done [T28].
 6. **MSSQL Azure AD / MFA** auth modes (SQL/Windows done).
 7. **Index/FK manager** dedicated tabs (TableDesigner covers columns).
 8. **ClickHouse MV / Dictionary create** menus.

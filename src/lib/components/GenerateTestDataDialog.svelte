@@ -25,6 +25,7 @@
   let done = $state(0)
   let result = $state<string | null>(null)
 
+  const dlgOpen = $derived(testDataWizard.open)
   const system = $derived(connections.byId(testDataWizard.connId)?.system ?? 'postgres')
   const fkOf = $derived(new Map(fks.filter((f) => f.from_table === testDataWizard.table).map((f) => [f.from_column, f])))
 
@@ -123,7 +124,7 @@
   }
 </script>
 
-{#if testDataWizard.open}
+{#if dlgOpen}
   <div onclick={() => !running && testDataWizard.close()} onkeydown={() => {}} role="presentation" style="position:fixed;inset:0;background:var(--rgba-0-0-0-_5);display:flex;align-items:center;justify-content:center;z-index:56">
     <div onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.key === 'Escape' && !running && testDataWizard.close()} role="dialog" aria-modal="true" tabindex="-1" style="width:var(--px-640);max-width:95vw;max-height:90vh;background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-14);box-shadow:0 var(--px-30) var(--px-70) var(--rgba-0-0-0-_55);overflow:hidden;display:flex;flex-direction:column">
       <div style="flex:none;display:flex;align-items:center;gap:var(--px-10);padding:var(--px-15) var(--px-18);border-bottom:var(--px-1) solid var(--border)">

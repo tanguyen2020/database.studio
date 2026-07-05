@@ -183,6 +183,65 @@ async fn pg_list_databases_marks_current() {
     assert_eq!(dbs.iter().filter(|d| d.current).count(), 1, "exactly one current db");
 }
 
+/// T28 — Rename a function on PostgreSQL (ALTER FUNCTION … RENAME, as emitted by
+/// genRenameRoutine). The new name is callable; the old one is gone.
+#[tokio::test]
+async fn pg_rename_function() {
+    let (_c, port) = start_pg().await;
+    let params = PgConnParams {
+        host: "localhost".into(),
+        port,
+        database: "testdb".into(),
+        user: "postgres".into(),
+        password: PASS.into(),
+        ssl: false,
+        ssl_ca: String::new(),
+        ssl_cert: String::new(),
+        ssl_key: String::new(),
+    };
+    let mut drv = retry("postgres", || PgDriver::connect(&params)).await;
+    drv.exec("CREATE FUNCTION t_add(integer) RETURNS integer AS $$ SELECT $1 + 1 $$ LANGUAGE sql").await.unwrap();
+    drv.exec("ALTER FUNCTION \"public\".\"t_add\"(integer) RENAME TO \"t_plus\";").await.unwrap();
+    let out = drv.exec("SELECT \"public\".\"t_plus\"(41) AS n").await.unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    assert_eq!(result.rows[0]["n"], serde_json::json!(42), "renamed function is callable");
+    drv.exec("SELECT t_add(1)").await.expect_err("old function name is gone");
+}
+
+/// T28 — Rename a stored procedure on SQL Server (EXEC sp_rename, as emitted by
+/// genRenameRoutine). The object is renamed in the catalog.
+#[tokio::test]
+async fn mssql_rename_procedure() {
+    let c = GenericImage::new("mcr.microsoft.com/mssql/server", "2022-latest")
+        .with_exposed_port(1433.tcp())
+        .with_env_var("ACCEPT_EULA", "Y")
+        .with_env_var("MSSQL_SA_PASSWORD", MSSQL_PASS)
+        .start()
+        .await
+        .expect("start mssql container");
+    let port = c.get_host_port_ipv4(1433).await.unwrap();
+    let params = MssqlConnParams {
+        host: "localhost".into(),
+        port,
+        database: "".into(),
+        user: "sa".into(),
+        password: MSSQL_PASS.into(),
+        ssl: false,
+        ssl_ca: String::new(),
+        auth: "sql".into(),
+    };
+    let mut drv = retry("mssql", || MssqlDriver::connect(&params)).await;
+    // CREATE PROCEDURE must be first in its batch → run via dynamic SQL here.
+    drv.exec("EXEC('CREATE PROCEDURE dbo.t_p AS SELECT 1 AS n')").await.unwrap();
+    drv.exec("EXEC sp_rename 'dbo.t_p', 't_q';").await.unwrap();
+    let out = drv.exec("SELECT count(*) AS n FROM sys.objects WHERE name = 't_q' AND type = 'P'").await.unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    assert_eq!(result.rows[0]["n"], serde_json::json!(1), "procedure renamed in catalog");
+    let gone = drv.exec("SELECT count(*) AS n FROM sys.objects WHERE name = 't_p'").await.unwrap();
+    let StatementOutcome::Rows { result } = gone else { panic!("expected rows") };
+    assert_eq!(result.rows[0]["n"], serde_json::json!(0), "old name gone");
+}
+
 /// T26 — Generate Test Data output contract (id=sequence, parent_id from the
 /// parent-key pool, email unique) must satisfy FK + UNIQUE on a real engine.
 /// The pure generator (testdata/generate.ts) produces exactly this shape.

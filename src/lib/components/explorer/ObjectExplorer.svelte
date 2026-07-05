@@ -18,6 +18,8 @@
   import { exportWizard } from '$lib/stores/export.svelte'
   import { copyWizard } from '$lib/stores/copy.svelte'
   import { testDataWizard } from '$lib/stores/testdata.svelte'
+  import { execRoutineWizard } from '$lib/stores/execroutine.svelte'
+  import { genRenameRoutine } from '$lib/sql/routines'
   import { scriptsWizard } from '$lib/stores/scripts.svelte'
   import { backupWizard } from '$lib/stores/backup.svelte'
   import { ui } from '$lib/stores/ui.svelte'
@@ -299,6 +301,18 @@
       sql = `-- PG có thể cần chữ ký tham số: DROP ${kw} ${qual}(...)\nDROP ${kw} IF EXISTS ${qual};`
     }
     stmtTab(`Drop ${name}`, sql)
+  }
+
+  // T28 — Execute proc/func (dialog by signature) + Rename (dialect-aware).
+  function execRoutine(schemaName: string, r: RoutineInfo) {
+    if (selected) execRoutineWizard.show(selected.id, schemaName, r)
+  }
+  function renameRoutine(schemaName: string, r: RoutineInfo) {
+    if (!selected) return
+    const newName = window.prompt(`Rename ${r.name} to:`, r.name)
+    if (!newName || newName === r.name) return
+    const sql = genRenameRoutine(selected.system, schemaName, r.kind, r.name, newName, r.params.map((p) => p.data_type))
+    stmtTab(`Rename ${r.name}`, sql)
   }
 
   function routineLabel(r: RoutineInfo): string {
@@ -875,7 +889,9 @@
               {#each procs as r (r.name)}
                 {#snippet procMenu()}
                   <ContextMenu.Content class="w-44">
+                    <ContextMenu.Item onclick={() => execRoutine(schema.name, r)}>Execute…</ContextMenu.Item>
                     <ContextMenu.Item onclick={() => showDefinition('procedure', schema.name, r.name)}>Show Definition</ContextMenu.Item>
+                    <ContextMenu.Item onclick={() => renameRoutine(schema.name, r)}>Rename…</ContextMenu.Item>
                     <ContextMenu.Item onclick={() => copyName(r.name)}>Copy Name</ContextMenu.Item>
                     <ContextMenu.Separator />
                     <ContextMenu.Item variant="destructive" onclick={() => dropObject('procedure', schema.name, r.name)}>Drop</ContextMenu.Item>
@@ -908,7 +924,9 @@
                 {#each tvfs as r (r.name)}
                   {#snippet tvfMenu()}
                     <ContextMenu.Content class="w-44">
+                      <ContextMenu.Item onclick={() => execRoutine(schema.name, r)}>Execute…</ContextMenu.Item>
                       <ContextMenu.Item onclick={() => showDefinition('function', schema.name, r.name)}>Show Definition</ContextMenu.Item>
+                      <ContextMenu.Item onclick={() => renameRoutine(schema.name, r)}>Rename…</ContextMenu.Item>
                       <ContextMenu.Item onclick={() => copyName(r.name)}>Copy Name</ContextMenu.Item>
                       <ContextMenu.Separator />
                       <ContextMenu.Item variant="destructive" onclick={() => dropObject('function', schema.name, r.name)}>Drop</ContextMenu.Item>
@@ -932,7 +950,9 @@
                 {#each scalarFns as r (r.name)}
                   {#snippet scalarMenu()}
                     <ContextMenu.Content class="w-44">
+                      <ContextMenu.Item onclick={() => execRoutine(schema.name, r)}>Execute…</ContextMenu.Item>
                       <ContextMenu.Item onclick={() => showDefinition('function', schema.name, r.name)}>Show Definition</ContextMenu.Item>
+                      <ContextMenu.Item onclick={() => renameRoutine(schema.name, r)}>Rename…</ContextMenu.Item>
                       <ContextMenu.Item onclick={() => copyName(r.name)}>Copy Name</ContextMenu.Item>
                       <ContextMenu.Separator />
                       <ContextMenu.Item variant="destructive" onclick={() => dropObject('function', schema.name, r.name)}>Drop</ContextMenu.Item>
@@ -965,7 +985,9 @@
                 {#each fns as r (r.name)}
                   {#snippet fnMenu()}
                     <ContextMenu.Content class="w-44">
+                      <ContextMenu.Item onclick={() => execRoutine(schema.name, r)}>Execute…</ContextMenu.Item>
                       <ContextMenu.Item onclick={() => showDefinition('function', schema.name, r.name)}>Show Definition</ContextMenu.Item>
+                      <ContextMenu.Item onclick={() => renameRoutine(schema.name, r)}>Rename…</ContextMenu.Item>
                       <ContextMenu.Item onclick={() => copyName(r.name)}>Copy Name</ContextMenu.Item>
                       <ContextMenu.Separator />
                       <ContextMenu.Item variant="destructive" onclick={() => dropObject('function', schema.name, r.name)}>Drop</ContextMenu.Item>
