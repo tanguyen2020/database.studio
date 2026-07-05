@@ -4,7 +4,7 @@
   // export PNG/SVG/Mermaid. Toolbar port dòng 1257-1276.
   import '@xyflow/svelte/dist/style.css'
   import { untrack } from 'svelte'
-  import { SvelteFlow, Background, Controls, MiniMap, type Node, type Edge } from '@xyflow/svelte'
+  import { SvelteFlow, Background, Controls, MiniMap, MarkerType, type Node, type Edge } from '@xyflow/svelte'
   import Dagre from '@dagrejs/dagre'
   import * as ipc from '$lib/ipc'
   import { toasts } from '$lib/stores/toast.svelte'
@@ -129,13 +129,14 @@
       return { id: t.name, type: 'table', position: p, data: { table: t, showAll } }
     })
     positions = pos
+    // Arrow points from the child (FK side, N) to the referenced parent (1).
     const edgeFor = (fk: ipc.ForeignKey, i: number, pending: boolean): Edge => ({
       id: pending ? `pfk-${i}` : `fk-${i}`,
-      source: fk.to_table,
-      target: fk.from_table,
-      // cardinality: phía con (từ) là N, phía cha (đến) là 1
+      source: fk.from_table,
+      target: fk.to_table,
       label: `${fk.from_column} · N:1`,
       animated: pending,
+      markerEnd: { type: MarkerType.ArrowClosed, width: 20, height: 20, color: pending ? 'var(--success)' : 'var(--primary)' },
       style: pending ? 'stroke: #27AE60; stroke-dasharray: 5 4' : 'stroke: var(--primary)',
     })
     edges = [
