@@ -246,3 +246,29 @@ test('connection New Database dialog: Cancel closes it', async ({ page }) => {
   await expect(page.getByRole('dialog', { name: 'New Database' })).toHaveCount(0)
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
+
+// User request — Explorer filter to find databases by name.
+test('explorer database filter narrows database nodes', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(String(e)))
+  await blockRemoteFonts(page)
+  await page.goto(APP_URL)
+  await page.waitForSelector('#app > *', { timeout: 15_000 })
+  await page.waitForTimeout(300)
+  await page.getByRole('button', { name: /Postgres/ }).first().click()
+  await page.waitForTimeout(500)
+
+  // demo databases: app (current), analytics, postgres
+  const filter = page.getByPlaceholder('Filter databases…')
+  await expect(filter).toBeVisible()
+  await filter.fill('analytics')
+  await page.waitForTimeout(300)
+  await expect(page.getByRole('treeitem', { name: /analytics database/ }).first()).toBeVisible()
+  await expect(page.getByRole('treeitem', { name: /app current/ })).toHaveCount(0) // filtered out
+  await expect(page.getByRole('treeitem', { name: /postgres database/ })).toHaveCount(0)
+
+  await filter.fill('')
+  await page.waitForTimeout(200)
+  await expect(page.getByRole('treeitem', { name: /app current/ }).first()).toBeVisible() // back
+  expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
+})

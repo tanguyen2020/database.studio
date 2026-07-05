@@ -66,6 +66,25 @@
     return true
   }
   const searching = false
+
+  // Database name filter — narrows the database nodes (current + foreign, and
+  // MySQL/MariaDB schemas which ARE databases). Empty = show all.
+  let dbFilter = $state('')
+  const dbFiltering = $derived(!!dbFilter.trim())
+  function matchDb(name: string): boolean {
+    const q = dbFilter.trim().toLowerCase()
+    return !q || name.toLowerCase().includes(q)
+  }
+  const curDbName = $derived(cache?.databases?.find((d) => d.current)?.name ?? selected?.database ?? '')
+  // Schemas to render: MySQL/MariaDB schemas ARE databases → filter by name; for
+  // PG/MSSQL the schemas belong to the current DB → hide them unless the current
+  // DB matches the filter.
+  const visibleSchemas = $derived.by(() => {
+    const all = cache?.schemas ?? []
+    if (!dbFiltering) return all
+    if (schemaIsDatabase) return all.filter((s) => matchDb(s.name))
+    return matchDb(curDbName) ? all : []
+  })
   // T18 — Object Properties panel: suy ra type/schema/name từ key node đang chọn.
   const selProps = $derived.by(() => {
     const k = treeSel
@@ -512,6 +531,22 @@
     >⟳</span>
   </div>
 
+  <!-- database name filter — narrows the database nodes (relational only) -->
+  {#if selected?.connected && (pgMssqlMultiDb || schemaIsDatabase)}
+    <div style="flex:none;padding:0 var(--px-8) var(--px-6);position:relative">
+      <span style="position:absolute;left:var(--px-16);top:50%;transform:translateY(-60%);color:var(--muted);font-size:var(--px-11);pointer-events:none">⌕</span>
+      <input
+        bind:value={dbFilter}
+        placeholder="Filter databases…"
+        aria-label="Filter databases"
+        spellcheck="false"
+        style="width:100%;background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-22);color:var(--text);font-size:var(--px-11_5);outline:none"
+      />
+      {#if dbFiltering}
+        <span onclick={() => (dbFilter = '')} onkeydown={(e) => e.key === 'Enter' && (dbFilter = '')} role="button" tabindex="0" title="Clear" style="position:absolute;right:var(--px-14);top:50%;transform:translateY(-60%);color:var(--muted);font-size:var(--px-13);cursor:pointer">×</span>
+      {/if}
+    </div>
+  {/if}
 
   <!-- tree — dòng 143-152 -->
   <div style="flex:1;overflow:auto;padding:0 var(--px-6) var(--px-10)">
@@ -632,7 +667,9 @@
             <ContextMenu.Item variant="destructive" onclick={() => selected && stmtTab(`Drop database ${curDb?.name ?? selected.database}`, genDropDatabase(selected.system, curDb?.name ?? selected.database ?? ''))}>Drop Database…</ContextMenu.Item>
           </ContextMenu.Content>
         {/snippet}
-        {@render row({ key: 'curdb', depth: 0, glyph: '', svg: DB_FOLDER_SVG, color: 'var(--primary)', name: curDb?.name ?? selected.database ?? 'database', meta: 'current', head: true }, curDbMenu)}
+        {#if !dbFiltering || matchDb(curDbName)}
+          {@render row({ key: 'curdb', depth: 0, glyph: '', svg: DB_FOLDER_SVG, color: 'var(--primary)', name: curDb?.name ?? selected.database ?? 'database', meta: 'current', head: true }, curDbMenu)}
+        {/if}
       {/if}
 
       {#if isSqlite}
@@ -647,7 +684,7 @@
         })}
       {/if}
 
-      {#each cache?.schemas ?? [] as schema (schema.name)}
+      {#each visibleSchemas as schema (schema.name)}
         {@const sOpen = searching || expanded.has(`s:${schema.name}`)}
         {@const sc = cache?.bySchema[schema.name]}
         {#snippet schemaMenu()}
@@ -1215,7 +1252,7 @@
         <!-- other databases on the server — browsed via internal sub-connection -->
         <!-- (attach_database); expand to see their full object tree. No duplicate -->
         <!-- sidebar connection. -->
-        {#each (cache?.databases ?? []).filter((d) => !d.current) as db (db.name)}
+        {#each (cache?.databases ?? []).filter((d) => !d.current && matchDb(d.name)) as db (db.name)}
           {@const fkey = `fdb:${db.name}`}
           {@const sub = dbSubId[db.name]}
           {@const fcache = sub ? explorer.cache[sub] : undefined}
