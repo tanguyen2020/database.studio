@@ -57,7 +57,7 @@
             tabindex="0"
             class="picker-card"
             style="display:flex;flex-direction:column;align-items:center;gap:var(--px-9);padding:var(--px-18) var(--px-10);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-10);cursor:{meta.available ? 'pointer' : 'not-allowed'};opacity:{meta.available ? 1 : 0.45}"
-            title={meta.available ? meta.label : `${meta.label} — phase sau`}
+            title={meta.available ? meta.label : `${meta.label} — coming soon`}
           >
             <span style="display:flex;align-items:center;justify-content:center;height:var(--px-34)"><SystemIcon system={key} size={30} /></span>
             <span style="font-size:var(--px-12_5);font-weight:600">{meta.label}</span>

@@ -94,11 +94,11 @@
   }
 
   async function testConn(p: ProfilePublic) {
-    toasts.show(`Đang test "${p.name}"...`, { system: p.system })
+    toasts.show(`Testing "${p.name}"…`, { system: p.system })
     const res = await connections.test({ profile: p, password: null, ssh_password: null })
     if (res.ok) {
       toasts.success(
-        `${p.name}: kết nối OK · ${res.latency_ms} ms${res.server_version ? ` · ${res.server_version}` : ''}`,
+        `${p.name}: connected · ${res.latency_ms} ms${res.server_version ? ` · ${res.server_version}` : ''}`,
         p.system,
       )
     } else {
@@ -125,7 +125,7 @@
 
   async function copyConnString(p: ProfilePublic) {
     await navigator.clipboard.writeText(connString(p))
-    toasts.success('Đã copy connection string (không kèm password)', p.system)
+    toasts.success('Copied connection string (without password)', p.system)
   }
 
   function toggleFilter() {
@@ -145,7 +145,7 @@
 
   function exportConnections() {
     if (connections.profiles.filter((p) => !p.ephemeral).length === 0) {
-      toasts.show('Chưa có connection để export')
+      toasts.show('No connections to export')
       return
     }
     const blob = new Blob([connections.exportPayload()], { type: 'application/json' })
@@ -155,7 +155,7 @@
     a.download = 'database-studio-connections.json'
     a.click()
     URL.revokeObjectURL(url)
-    toasts.success('Đã export connections (không kèm password)')
+    toasts.success('Exported connections (without passwords)')
   }
 
   async function onImportFile(e: Event) {
@@ -166,11 +166,11 @@
     try {
       const parsed = JSON.parse(await file.text())
       const list = Array.isArray(parsed) ? parsed : parsed?.profiles
-      if (!Array.isArray(list)) throw new Error('Cấu trúc JSON không hợp lệ')
+      if (!Array.isArray(list)) throw new Error('Invalid JSON structure')
       const n = await connections.importProfiles(list)
-      toasts.success(`Đã import ${n} connection`)
+      toasts.success(`Imported ${n} connection(s)`)
     } catch (err) {
-      toasts.error(`Import thất bại: ${err}`)
+      toasts.error(`Import failed: ${err}`)
     }
   }
 
@@ -207,7 +207,7 @@
       >
         <ConnectionIndicator system={p.system} />
         {#if connections.connecting.has(p.id)}
-          <span style="width:var(--px-7);height:var(--px-7);border-radius:50%;flex:none;background:var(--warn)" title="Đang kết nối…"></span>
+          <span style="width:var(--px-7);height:var(--px-7);border-radius:50%;flex:none;background:var(--warn)" title="Connecting…"></span>
         {:else}
           <span style="width:var(--px-7);height:var(--px-7);border-radius:50%;flex:none;background:{p.connected ? systemMeta(p.system).accent : 'var(--sys-orphan-accent)'}" title={p.connected ? `Connected · ${p.latency_ms ?? '–'} ms` : 'Disconnected'}></span>
         {/if}
@@ -364,9 +364,9 @@
 
         {#if connections.loaded && groups.length === 0}
           <div style="padding:var(--px-12) var(--px-12);font-size:var(--px-12);color:var(--muted);text-align:center">
-            {connections.filter ? 'Không có connection khớp filter' : 'Chưa có connection nào.'}
+            {connections.filter ? 'No connections match the filter' : 'No connections yet.'}
             {#if !connections.filter}
-              <div onclick={() => (ui.pickerOpen = true)} onkeydown={(e) => e.key === 'Enter' && (ui.pickerOpen = true)} role="button" tabindex="0" style="margin-top:var(--px-8);color:var(--primary);cursor:pointer">+ Tạo connection đầu tiên</div>
+              <div onclick={() => (ui.pickerOpen = true)} onkeydown={(e) => e.key === 'Enter' && (ui.pickerOpen = true)} role="button" tabindex="0" style="margin-top:var(--px-8);color:var(--primary);cursor:pointer">+ Add first connection</div>
             {/if}
           </div>
         {/if}

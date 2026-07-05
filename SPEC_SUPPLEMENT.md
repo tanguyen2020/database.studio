@@ -207,3 +207,9 @@ Plan chuyển sang stream:
   4. Generate Scripts / whole-schema: dùng chung command file-stream. Backup giữ nguyên (đã ổn).
   5. Test: integration export ≥100k dòng ra file → đếm dòng file == row count mà không nạp cả set vào RAM.
 Ước lượng: ~1–2 task (backend stream command + serializer + test; frontend save-dialog + progress). Rủi ro: chạm đường exec/serialize hiện có — cần giữ nguyên contract cho export nhỏ.
+
+**A6 — New-connection form bị "chết nút" + bỏ Group + English (Fixed).**
+Root cause: `ConnectionForm` `$effect` dựng `draft` rồi ĐỌC `draft.port` và GHI `draft.port = defaultPort` NGAY trong effect ghi `draft` → tự-invalidate → `effect_update_depth_exceeded` → Svelte ngắt reactivity → TẤT CẢ nút (Back/×/Test/Cancel/Save/toggle) chết. Fix: dựng object cục bộ `d`, set default port trên `d`, gán `draft = d` MỘT lần (không đọc `draft` trong effect). (Cùng loại bug với T12 results.run + AdminView.)
++ Bỏ field **Group** khỏi popup (Environment span cả 2 cột).
++ Chuyển toàn bộ text tiếng Việt của khu Connections sang English (ConnectionForm/ConnectionList/SystemPicker/Delete/EditConnected: toast + label + empty-state + tooltip).
+Visual `connection-form.spec` (nút chạy, không còn Group, Cancel đóng form). Gates: check 0/0, vitest 179, playwright 35.

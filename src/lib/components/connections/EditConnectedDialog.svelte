@@ -19,7 +19,7 @@
     try {
       const saved = await connections.save(req.draft)
       if (saved) {
-        toasts.success(`Đã lưu "${saved.name}" — config mới áp dụng ở lần kết nối tiếp theo`, saved.system)
+        toasts.success(`Saved "${saved.name}" — new config applies on next connect`, saved.system)
         close()
       }
     } finally {
@@ -37,7 +37,7 @@
       // Tabs giữ nguyên nội dung editor; reconnect thất bại → banner "Disconnected · Reconnect"
       const ok = await connections.reconnect(saved.id)
       if (ok) {
-        toasts.success(`"${saved.name}" đã reconnect với config mới`, saved.system)
+        toasts.success(`"${saved.name}" reconnected with the new config`, saved.system)
       }
     } finally {
       busy = false

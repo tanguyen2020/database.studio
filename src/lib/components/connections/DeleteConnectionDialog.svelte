@@ -17,7 +17,7 @@
     if (!target) return
     const name = target.name
     await connections.remove(target.id)
-    toasts.success(`Đã xóa "${name}"`)
+    toasts.success(`Deleted "${name}"`)
     close()
   }
 
@@ -33,7 +33,7 @@
     const name = target.name
     await connections.remove(id)
     tabs.orphanByConnection(id)
-    toasts.success(`Đã xóa "${name}" — ${affectedTabs.length} tab chuyển sang orphaned`)
+    toasts.success(`Deleted "${name}" — ${affectedTabs.length} tab(s) now orphaned`)
     close()
   }
 </script>
@@ -65,7 +65,7 @@
           {#each affectedTabs as t (t.id)}
             <div class="mono" style="font-size:var(--px-12);padding:var(--px-5) var(--px-9);color:var(--text2)">· {t.title}</div>
           {:else}
-            <div class="mono" style="font-size:var(--px-12);padding:var(--px-5) var(--px-9);color:var(--muted)">(không có tab nào)</div>
+            <div class="mono" style="font-size:var(--px-12);padding:var(--px-5) var(--px-9);color:var(--muted)">(no tabs)</div>
           {/each}
         </div>
       </div>

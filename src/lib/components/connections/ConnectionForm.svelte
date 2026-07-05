@@ -28,8 +28,12 @@
 
   $effect(() => {
     if (profile) {
-      draft = JSON.parse(JSON.stringify(profile))
-      if (draft && draft.port === 0 && meta.defaultPort) draft.port = meta.defaultPort
+      // Dựng object cục bộ + set default port TRƯỚC rồi mới gán 1 lần vào `draft`.
+      // (Đọc `draft.port` bên trong effect ghi `draft` → tự-vòng-lặp
+      //  effect_update_depth_exceeded → chết mọi tương tác của form.)
+      const d = JSON.parse(JSON.stringify(profile)) as ProfilePublic
+      if (d.port === 0 && meta.defaultPort) d.port = meta.defaultPort
+      draft = d
       password = ''
       passwordTouched = false
       sshPassword = ''
@@ -173,7 +177,7 @@
   async function save() {
     if (!draft) return
     if (!draft.name.trim()) {
-      toasts.error('Connection cần có tên')
+      toasts.error('Connection needs a name')
       return
     }
     const payload = buildDraftPayload()
@@ -193,7 +197,7 @@
     try {
       const saved = await connections.save(payload)
       if (saved) {
-        toasts.success(`Đã lưu "${saved.name}"`, saved.system)
+        toasts.success(`Saved "${saved.name}"`, saved.system)
         close()
       }
     } finally {
@@ -257,7 +261,7 @@
               <div class="cm-label">Connection name</div>
               <input class="cm-input" bind:value={draft.name} />
             </div>
-            <div>
+            <div style="grid-column:1/3">
               <div class="cm-label">Environment</div>
               <select class="cm-input" bind:value={draft.env}>
                 <option value="production">Production</option>
@@ -265,10 +269,6 @@
                 <option value="development">Development</option>
                 <option value="local">Local</option>
               </select>
-            </div>
-            <div>
-              <div class="cm-label">Group</div>
-              <input class="cm-input" bind:value={draft.group} placeholder="Production" />
             </div>
 
             {#if isSqlite}
@@ -295,7 +295,7 @@
                     class="cm-input mono"
                     bind:value={draft.sqlite_path}
                     placeholder={hostPlaceholder}
-                    title="Double-click để chọn file"
+                    title="Double-click to browse"
                     disabled={draft.sqlite_mode === 'in-memory'}
                     ondblclick={browseSqliteFile}
                   />
@@ -342,7 +342,7 @@
                 </select>
               </div>
               <div style="grid-column:1/3">
-                <div class="cm-label">Schema Registry URL <span style="color:var(--muted);font-weight:400">(tùy chọn)</span></div>
+                <div class="cm-label">Schema Registry URL <span style="color:var(--muted);font-weight:400">(optional)</span></div>
                 <input class="cm-input mono" bind:value={draft.schema_registry_url} placeholder="http://localhost:8081" />
               </div>
             {/if}
@@ -389,7 +389,7 @@
                 <div class="cm-label">
                   Password <span style="color:var(--hex-27ae60)">· AES-256 encrypted</span>
                   {#if !isNew && draft.has_password && !passwordTouched}
-                    <span style="color:var(--muted);font-weight:400">(đã lưu — nhập để đổi)</span>
+                    <span style="color:var(--muted);font-weight:400">(saved — type to change)</span>
                   {/if}
                 </div>
                 <input
@@ -527,7 +527,7 @@
           {#if draft.ssl}
             <!-- TLS certificates — lưu path (không copy file); MSSQL chỉ CA -->
             <div style="margin-top:var(--px-14);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-10);padding:var(--px-14)">
-              <div class="cm-label">TLS Certificates <span style="color:var(--muted);font-weight:400">(tùy chọn — để trống dùng CA hệ thống)</span></div>
+              <div class="cm-label">TLS Certificates <span style="color:var(--muted);font-weight:400">(optional — leave blank for system CA)</span></div>
               <div style="display:grid;gap:var(--px-10);margin-top:var(--px-6)">
                 {#each certFields as cf (cf.field)}
                   <div>
