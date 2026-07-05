@@ -5,6 +5,8 @@ Audit-only. Design sources read in full: `Database Studio.dc.html` (6053 lines, 
 Status legend: **Implemented** (wired end-to-end, evidence) · **Partial** (present but missing part) · **Missing** (no code) · **Broken** (UI present, handler is a no-op/stub or backend link dead) · **Wired-but-unverified** (code path exists but runtime correctness unconfirmed / known runtime doubt).
 
 > Evidence `file:line` uses `dc:N` for `Database Studio.dc.html`. Code paths are repo-relative.
+>
+> **Refreshed 2026-07-05** after T10–T23 + AUDIT-1/2/3. The original audit was a pre-T10 snapshot; the tasks/audits closed most of its gaps. Each row below now carries its current status with the closing task noted (e.g. `[T14]`, `[A3]` = AUDIT-1 item 3, `[A2-3]` = AUDIT-2 item 3, `[A3-5]` = AUDIT-3 item 5). See CLAUDE.md "Tiến độ task" + AUDIT-1/2/3 sections for detail.
 
 ---
 
@@ -13,23 +15,21 @@ Status legend: **Implemented** (wired end-to-end, evidence) · **Partial** (pres
 | Feature | Status | Evidence | Notes |
 |---|---|---|---|
 | New-connection type picker (10 systems) | Implemented | `SystemPicker.svelte`; dc:1580-1598 | |
-| Connection form (host/port/db/user/pass, env, group) | Implemented | `ConnectionForm.svelte:244-396` | |
-| Password AES-256-GCM + OS keychain | Implemented | `storage/crypto.rs`; `connections.rs:75-85` | not plaintext |
-| SSH tunnel (password / private key) | Implemented | `ConnectionForm.svelte:408-541`; `connections/tunnel.rs:47-128` | |
-| SSL/TLS (CA / client cert+key) | Implemented | `postgres.rs:37-53`; `ConnectionForm.svelte:517-541` | Kafka SSL non-functional (librdkafka no-SSL) |
-| Cassandra fields (DC, consistency) | Implemented | `ConnectionForm.svelte:340-357` | |
-| SQLite mode (RW/RO/In-Memory) | Implemented | `ConnectionForm.svelte:264-306` | |
-| MSSQL auth (SQL / Windows) | Partial | `ConnectionForm.svelte:333-341` | dc:2208-2211 also lists Azure AD / Azure AD MFA → Missing |
-| **Test connection button** | **Wired-but-unverified** | `ConnectionForm.svelte:141,553`; `connections.svelte.ts:171`; `commands/connections.rs:159-188` | see §H-1: no connect timeout on PG/MySQL/MSSQL → can hang with no error; only CH bounded (`clickhouse.rs:124`) |
-| **Cancel button (dialog)** | **Wired-but-unverified** | `ConnectionForm.svelte:80-83,567` | closes UI only; does NOT abort in-flight backend Test (Tauri invoke uncancellable, no AbortHandle) — backend keeps connecting |
-| Save / edit-while-connected dialog | Implemented | `ConnectionForm.svelte:163-195`; `EditConnectedDialog.svelte`; `connections.rs:126-133` | |
-| Delete connection (+ orphan-tab handling) | Implemented | `DeleteConnectionDialog.svelte`; `connections.rs` | dc:2068-2086 |
-| Duplicate connection | Implemented | `connections.rs:97-107` | |
-| Import/Export connection profiles (JSON) | Implemented | `ConnectionList.svelte:146-175` | |
-| Quick connect (one-off) | Implemented | `connections.rs:139-156` | |
-| Connection groups (folder) | Implemented | `ConnectionList.svelte:142,327-341`; `grouping.ts` | |
-| Connection row context menu | Partial | `ConnectionList.svelte` | dc:5893-5917 has Backup/Compare/Copy-conn-string/ER — several Missing (see areas below) |
-| Copy connection string | Missing | grep: none | dc:5912 |
+| Connection form (host/port/db/user/pass, env) | Implemented | `ConnectionForm.svelte` | Group field removed [A2] |
+| Password AES-256-GCM + OS keychain | Implemented | `storage/crypto.rs`; `connections.rs` | not plaintext |
+| SSH tunnel (password / private key) | Implemented | `ConnectionForm.svelte`; `connections/tunnel.rs` | |
+| SSL/TLS (CA / client cert+key) | Implemented | `postgres.rs`; `ConnectionForm.svelte` | Kafka SSL non-functional (librdkafka no-SSL) |
+| Cassandra fields (DC, consistency) | Implemented | `ConnectionForm.svelte` | |
+| SQLite mode (RW/RO/In-Memory) | Implemented | `ConnectionForm.svelte` | |
+| MSSQL auth (SQL / Windows) | Partial | `ConnectionForm.svelte` | Azure AD / Azure AD MFA (dc:2208-2211) still **Missing** |
+| **Test connection button** | **Implemented** [T10] | `connections/registry.rs run_test_bounded`; `commands/connections.rs cancel_test` | bounded `connect_timeout()`=10s all systems + cancellable; button relabeled "Test connection" [A2] |
+| **Cancel button (dialog)** | **Implemented** [T10] | `ConnectionForm.svelte` uuid testId + cancel-on-close; `cancel_test` | really aborts the in-flight backend Test |
+| Save / edit-while-connected dialog | Implemented | `EditConnectedDialog.svelte`; `connections.rs` | Save button relabeled "Connect" [A2] |
+| Delete connection (+ orphan-tab handling) | Implemented | `DeleteConnectionDialog.svelte` | |
+| Duplicate / Quick connect / Import-Export JSON / groups | Implemented | `connections.rs`; `ConnectionList.svelte`; `grouping.ts` | |
+| Connection row context menu | Implemented | `ConnectionList.svelte` | + Compare Schemas… [A2-1], Copy Connection String |
+| Copy connection string | Implemented | `ConnectionList.svelte copyConnString` | password never embedded |
+| Row hover / selected styling | Implemented [A1] | `ConnectionList.svelte .conn-row/.selected` | inline-bg trap removed |
 
 ---
 
@@ -37,23 +37,24 @@ Status legend: **Implemented** (wired end-to-end, evidence) · **Partial** (pres
 
 | Feature | Status | Evidence | Notes |
 |---|---|---|---|
-| Tree per system (relational/CH/Cassandra/SQLite/Redis/Kafka/NATS) | Implemented | `ObjectExplorer.svelte`; `explorer.svelte.ts` | |
-| Expand table → columns (PK/FK meta) / indexes / constraints | Partial | `ObjectExplorer.svelte:511-579` | index columns & constraint definition fetched but not shown as children |
-| Expand View → columns | Missing | `ObjectExplorer.svelte:598-617` | view is leaf |
-| Proc/Func/Trigger context menus (Execute/Rename/Drop/Enable) | Missing | `ObjectExplorer.svelte:620-737` | dc:3416-3440 |
-| Table context menu (Open/New Query/Copy/DDL/Truncate/Drop) | Implemented | `ObjectExplorer.svelte:419-465` | |
-| Table context menu extras: Edit Data, Generate Test Data, Copy Table to…, Compare/Migrate…, Dump w/ pg_dump, Row Count & Stats | Missing | grep: none | dc:3362-3405 |
-| "Set as Filter" (column menu) | **Broken** | `ObjectExplorer.svelte:528` → `later('Set as Filter')` | stub toast |
-| Design Table (context) | Implemented | `ObjectExplorer.svelte` → `openTableDesigner` | |
-| **Dictionaries node (ClickHouse §3)** | **Implemented** | `ObjectExplorer.svelte` dicts folder; `clickhouse.rs dictionaries()`; `ch_dictionaries` cmd | closed in commit `1324801`; menu Show Definition/Query/Reload/Copy/Drop via `chops` |
-| Bottom toolbar: New table | Implemented | `ObjectExplorer.svelte` → `openTableDesigner` | |
-| Bottom toolbar: Import data | Implemented | `ObjectExplorer.svelte` → `importWizard.show` | |
-| Bottom toolbar: **Export / dump** | **Broken** | `ObjectExplorer.svelte:819` → `later('Export / dump')` | stub; dc:159 |
-| Bottom toolbar: **Backup database** | **Broken** | `ObjectExplorer.svelte:822` → `later('Backup database')` | stub; dc:160 |
-| Bottom toolbar: **Users & privileges** | **Broken** | `ObjectExplorer.svelte:825` → `later('Users & privileges')` | stub; dc:161 |
-| Expand all / Collapse all | Implemented | `ObjectExplorer.svelte:634-636` | |
-| Explorer tree text search (Ctrl+F) + object pinning | Missing | grep: none | dc:4693 filter exists in prototype |
-| Right-side Object Properties panel (DDL/stats/indexes/sample) | Missing | grep: none | dc:1512-1524,4828-4868 |
+| Tree per system | Implemented | `ObjectExplorer.svelte`; `explorer.svelte.ts` | |
+| Expand table → columns (PK/FK) / indexes / constraints | Implemented [T7b] | `ObjectExplorer.svelte` | indexes/constraints shown as children |
+| Expand View → columns | Implemented [T18] | `ObjectExplorer.svelte` | |
+| Proc/Func/Trigger context menus | Partial [T18] | `ObjectExplorer.svelte` | Show Definition + Drop done; **Execute / Rename / Enable** still Missing (dc:3416-3440) |
+| Table context menu (Open/New Query/Copy/DDL/Truncate/Drop) | Implemented | `ObjectExplorer.svelte` | + Generate Scripts 3-mode submenu [A3] |
+| Table context extras: Edit Data, **Generate Test Data**, **Copy Table to…**, Compare/Migrate, Dump, Row Count & Stats | Partial | grep | Compare/Migrate via connection menu; **Generate Test Data + Copy Table to… still Missing** (dc:3362-3405) |
+| "Set as Filter" (column menu) | Implemented [T12] | `ObjectExplorer.svelte` → Table Viewer seeded filter | |
+| Design Table (context) | Implemented | `openTableDesigner` | |
+| Dictionaries node (ClickHouse §3) | Implemented | `clickhouse.rs dictionaries()`; `ch_dictionaries` | |
+| **All databases in tree** (relational) | Implemented [A2-3, A3-4] | `ObjectExplorer.svelte` Databases section; `PgDriver::databases()`; `MssqlDriver::databases()` | MySQL/MariaDB = SCHEMATA (all DBs as schema nodes); PG/MSSQL = Databases section + `open_database` |
+| ER drag source (draggable table rows) | Implemented [A3-1] | `ObjectExplorer.svelte draggable` | dataTransfer `application/x-ds-er-table` |
+| Bottom toolbar: New table / Import data | Implemented | `openTableDesigner`; `importWizard.show` | |
+| Bottom toolbar: Export / dump | Implemented [T15] | `ObjectExplorer.svelte` → Generate Scripts / dump | |
+| Bottom toolbar: Backup database | Implemented [T22] | `BackupDialog.svelte`; `commands/backup.rs` | |
+| Bottom toolbar: Users & privileges / Session Monitor | Implemented [T23] | `AdminView.svelte`; `commands/admin.rs` | |
+| Expand all / Collapse all | Implemented | `ObjectExplorer.svelte` | |
+| Explorer tree text search (Ctrl+F) | Implemented [T18] | `ObjectExplorer.svelte` filter + Ctrl+F | object **pinning** still Missing |
+| Right-side Object Properties panel | Implemented | `PropertiesPanel.svelte` | shell + empty state; hidden on startup + edge-handle toggle [A3-4]; rich DDL/stats content still Partial |
 
 ---
 
@@ -61,19 +62,21 @@ Status legend: **Implemented** (wired end-to-end, evidence) · **Partial** (pres
 
 | Feature | Status | Evidence | Notes |
 |---|---|---|---|
-| Run (F5) / run-at-cursor (Ctrl+Enter), selection-aware | Implemented | `SqlWorkspace.svelte:102-134`; `SqlEditor.svelte:149-161` | |
-| Cancel query (Ctrl+F5 / Esc) | Wired-but-unverified | `SqlEditor.svelte:163-196`; `results.svelte.ts:217`; `registry.rs:154-208` | abort=poison+reconnect; latency/real-abort unconfirmed (see §H-2) |
-| Format SQL (Ctrl+Shift+F) | Implemented | `SqlWorkspace.svelte:162-167`; `sql/format.ts` | shortcut Ctrl+Shift+F not bound in editor keymap (button only) |
-| Explain (Ctrl+Shift+E) → Query Plan tab | Implemented | `SqlWorkspace.svelte:170-176`; `PlanVisualizer.svelte` | exceeds prototype static plan; per-system gaps in §G |
-| **Convert dialect** button | **Broken** | `SqlWorkspace.svelte:340` → `toasts.show('Convert dialect — Phase 2')` | dc:1630-1678 full converter in prototype |
-| **Split editor** toolbar button | **Broken** | `SqlWorkspace.svelte:343` → toast stub | BUT split view works via tab context menu (`tabs.splitDir`) |
-| Ring button (Cassandra) | Implemented | `SqlWorkspace.svelte:335-337` → `openCassandraRing` | |
-| Postgres Extensions / MSSQL Agent Jobs / Query Store / AG buttons | Missing | grep: none | dc:275-282,961-1078 |
-| Autocomplete (table/column/keyword) | Partial | `SqlWorkspace.svelte:61-74`; `SqlEditor.svelte:71-89` | no function signatures |
-| SQL lint tier-1 + schema-aware | Implemented | `lint/mod.rs`; `sql/lint-client.ts` | |
-| Query error surface (position/line, view raw) | Implemented | `postgres.rs:666-697`; `ResultPanel.svelte:57-69` | |
-| SQLite PRAGMA panel | Implemented | `SqliteFileHeader.svelte`; `sqlite.rs:581-692` | |
-| SQLite "Export .sql" button | **Broken** | `SqliteFileHeader.svelte:114` → toast stub | |
+| Run (F5) / run-at-cursor / selection-aware | Implemented | `SqlWorkspace.svelte`; `SqlEditor.svelte` | |
+| Cancel query (Ctrl+F5 / Esc) | Implemented [T11] | `results.svelte.ts`; `registry.rs` | integration: pg_sleep→cancel + connection recovers |
+| Format SQL (Ctrl+Shift+F) | Implemented [T21] | `SqlWorkspace.svelte`; `sql/format.ts` | shortcut bound via `keys/shortcuts.ts` |
+| Explain (Ctrl+Shift+E) → Query Plan tab | Implemented | `PlanVisualizer.svelte` | |
+| Convert dialect button | Implemented [T12] | `SqlWorkspace.svelte` | format + note (not full cross-dialect translation) |
+| Split editor toolbar button | Implemented [T12] | `SqlWorkspace.svelte moveToSplit` | |
+| Ring button (Cassandra) | Implemented | `openCassandraRing` | |
+| PG Extensions / MSSQL Agent/Query Store/AG | Implemented [T23,T23+] | `AdminView.svelte` | opened via Admin view tab, not editor toolbar |
+| Autocomplete (table/column/keyword/function) | Implemented [T21] | `sql/functions.ts`; `SqlEditor.svelte` | function signatures merged |
+| SQL lint tier-1 + schema-aware | Implemented | `lint/mod.rs`; `sql/lint-client.ts` | English messages [A2-7] |
+| Query error surface (position/line, raw) | Implemented | `postgres.rs`; `ResultPanel.svelte` | English hints [A2-7] |
+| SQLite PRAGMA panel + "Export .sql" | Implemented [T15] | `SqliteFileHeader.svelte`; `sqlite.rs` | |
+| Transaction buttons (BEGIN/COMMIT/ROLLBACK) | Removed [A2-6] | `SqlWorkspace.svelte` | removed per user request |
+| Syntax palette (light/dark contrast) | Implemented [A3-2] | `SqlEditor.svelte HighlightStyle`; `app.css --syntax-*` | theme-aware |
+| Timestamp `NaiveDateTime + Duration` panic | Fixed [A2-5] | `postgres.rs decode_pg_timestamp/date` | ±infinity / out-of-range → sentinel string, no panic |
 
 ---
 
@@ -81,18 +84,19 @@ Status legend: **Implemented** (wired end-to-end, evidence) · **Partial** (pres
 
 | Feature | Status | Evidence | Notes |
 |---|---|---|---|
-| Multi-statement sub-tabs + Messages | Implemented | `ResultPanel.svelte:83-98`; `results.svelte.ts:90-208` | |
-| View modes Grid / JSON / Single Row / Chart | Implemented | `ResultPanel.svelte:118-133` | |
-| View-mode shortcuts Ctrl+Alt+G/J/R | Missing | grep: none | dc / phase-6 |
-| Export result ▾ (CSV/JSON/SQL/Excel) | Implemented | `ResultPanel.svelte:35-45`; `export/rows.ts` | |
-| **Group By** popover (aggregations) | Missing | grep: none | dc:352-385 |
-| Copy cell/row/selection | Implemented | `ResultGrid.svelte:296-319` | Ctrl+Shift+C not bound |
-| Editable grid (edit/insert/delete + Preview + Apply) | Implemented | `ResultGrid.svelte:174-187,354-388` | PG/SQLite integration-tested |
-| Preview-diff dialog | Implemented | `ResultGrid.svelte:514-548`; `grid.rs:150-195` | |
-| **Grid + ClickHouse → async mutation** | **Implemented** | `grid.rs ch_mutation_sql`; `commands/grid.rs ch_generate_mutations`; `ResultGrid.svelte` CH branch | closed in `1324801`; CH Apply→"Generate mutation" (ALTER TABLE UPDATE/DELETE) |
-| JSON cell modal | Implemented (Differs) | `ResultGrid.svelte:450-459` | prototype expands inline (dc:453) |
-| Chart view + Chart Builder | Partial | `ResultChart.svelte` | **PNG/SVG export = Broken stub** (`ResultChart.svelte:151-152`) |
-| Pagination controls (result grid) | Partial | `TableViewerTab.svelte:246-259` | table viewer paginates; standalone query-result pagination not surfaced (dc:571-586) |
+| Multi-statement sub-tabs + Messages | Implemented | `ResultPanel.svelte`; `results.svelte.ts` | |
+| View modes Grid / JSON / Single Row / Chart | Implemented | `ResultPanel.svelte` | |
+| View-mode shortcuts Ctrl+Alt+G/J/R | Implemented [T21] | `keys/shortcuts.ts` | |
+| Export result ▾ (CSV/JSON/SQL/Excel) + Custom wizard | Implemented [T14] | `ResultPanel.svelte`; `ExportDialog.svelte` | WHERE / limit / column subset |
+| **Group By popover (aggregations)** | **Missing** | grep: none | dc:352-385 — Chart view has group+agg but no grid popover |
+| Copy cell/row/column/selection | Implemented [A2-2] | `ResultGrid.svelte` | Ctrl+Shift+C bound [T21] |
+| **Copy as ▸ (TSV/CSV/JSON/SQL INSERT/SQL UPDATE/Markdown)** | Implemented [A3-5] | `export/clipboard.ts`; `ResultGrid.svelte` | multi-record; unit-tested (12) + e2e |
+| Editable grid (edit/insert/delete) + Execute/Cancel/Reset | Implemented [A3-3] | `ResultGrid.svelte` | Execute=apply, Reset=revert, Cancel=abort running (registry cancel) |
+| Preview-diff dialog | Implemented | `ResultGrid.svelte`; `grid.rs` | |
+| Grid + ClickHouse → async mutation | Implemented | `grid.rs ch_mutation_sql`; `ch_generate_mutations` | Apply → "Generate mutation" |
+| JSON cell modal | Implemented (Differs) | `ResultGrid.svelte` | prototype expands inline |
+| Chart view + Builder + PNG/SVG export | Implemented [T12] | `ResultChart.svelte` | real PNG/SVG (serialize SVG + resolve CSS vars) |
+| Pagination controls | Partial | `TableViewerTab.svelte` | table viewer paginates; standalone query-result pagination not surfaced |
 
 ---
 
@@ -101,11 +105,11 @@ Status legend: **Implemented** (wired end-to-end, evidence) · **Partial** (pres
 | Feature | Status | Evidence | Notes |
 |---|---|---|---|
 | Table Designer (columns grid + Scripts DDL + Save) | Implemented | `TableDesigner.svelte` | |
-| Index manager tab / FK manager tab | Missing | `TableDesigner.svelte:29` | dc has Table/Scripts only too, but phase-5 spec requires managers |
-| Column reorder / unique / auto-increment / IDENTITY | Partial | `TableDesigner.svelte:66-71` | PK/nullable only |
-| DDL Viewer (single object, client-generated CREATE) | Implemented (Differs) | `ObjectExplorer.svelte:129-140`; `sql/ddl.ts` | omits indexes/constraints; not server DDL |
-| **Generate Scripts for whole schema/DB** (structure-only / data-only / both; multi-object; dependency order) | **Missing** | grep: none | dc:2138-2164 (Generate Scripts view), dc:3312-3328 |
-| Generate Test Data | Missing | grep: none | dc:1808-1844 |
+| Index manager tab / FK manager tab | Missing | `TableDesigner.svelte` | dedicated managers still absent |
+| Column reorder / unique / auto-increment / IDENTITY | Partial | `TableDesigner.svelte` | PK/nullable/default/type only |
+| DDL Viewer (single object) | Implemented (Differs) | `sql/ddl.ts` | client-generated CREATE |
+| **Generate Scripts whole schema/DB** (structure/data/both, dependency order) | Implemented [T15] | `sql/scripts.ts`; `GenerateScriptsDialog.svelte` | topo order, FK ALTERs last; 3-mode on table ctx menu [A3-audit] |
+| **Generate Test Data** | **Missing** | grep: none | dc:1808-1844 |
 
 ---
 
@@ -113,11 +117,12 @@ Status legend: **Implemented** (wired end-to-end, evidence) · **Partial** (pres
 
 | Feature | Status | Evidence | Notes |
 |---|---|---|---|
-| **Import CSV wizard** | **Partial** | `ImportDialog.svelte`; `import.svelte.ts`; `parseCsv` (`export/rows.ts`) | 3 steps (File+preview / Mapping / Execute). Missing dc 5-step: dedicated **Options step** (on-conflict INSERT/IGNORE/REPLACE/UPDATE, batch size, encoding, skip-header) + **progress bar** (dc:1975-2039); JSON import not supported |
-| **Export query result** (CSV/JSON/SQL/Excel) | **Implemented** | `ResultPanel.svelte`; `export/rows.ts` | dc Export Wizard richer (WHERE, row limit, column checkboxes) → those Missing |
-| **Export table data wizard** (format/WHERE/columns/filename) | **Missing** | grep: none | dc:1763-1806 |
-| Backup & Restore (view + create-backup modal + history + restore confirm) | Missing | grep: none (only `later` stub) | dc:1113-1162,1680-1761 |
-| Dump with pg_dump / mysqldump | Missing | grep: none | dc:3400 |
+| Import wizard (CSV + JSON, Options, progress) | Implemented [T13] | `ImportDialog.svelte`; `import/plan.ts` | 5-step: format/encoding/header/Options(on-conflict+batch)/progress; per-dialect conflict SQL |
+| Export query result (CSV/JSON/SQL/Excel) | Implemented [T14] | `ExportDialog.svelte`; `export/query.ts` | |
+| Export table data wizard (format/WHERE/columns/filename) | Implemented [T14] | `ExportDialog.svelte` | paged streaming via LIMIT/OFFSET |
+| Backup & Restore (tool status + history + restore confirm) | Implemented [T22] | `BackupDialog.svelte`; `commands/backup.rs` | SQLite in-process; else pg_dump/mysqldump/clickhouse-client |
+| Dump with pg_dump / mysqldump | Implemented [T22] | `drivers/backup.rs external_backup_cmd` | password via env |
+| **Streaming large export/generate to file** | **Plan-only [A5]** | — | still buffers in RAM (sqlx fetch_all + Blob); plan: `export_to_file` + BufWriter + Channel progress |
 
 ---
 
@@ -126,25 +131,26 @@ Status legend: **Implemented** (wired end-to-end, evidence) · **Partial** (pres
 | Feature | Status | Evidence | Notes |
 |---|---|---|---|
 | Query Plan Visualizer (normalized tree, hotspot, raw, est/actual) | Implemented | `drivers/plan.rs`; `PlanVisualizer.svelte` | |
-| Plan — PG / MySQL / SQLite parsers | Implemented | `plan.rs:124-241`; integration PG `drivers_integration.rs:133` | |
-| Plan — MariaDB actual (ANALYZE) | Partial | `plan.rs:164` | estimated only |
-| Plan — MSSQL (SHOWPLAN_XML) | **Broken** | `commands/plan.rs:60,106` | sends invalid `EXPLAIN` on MSSQL → no tree |
-| Plan — ClickHouse normalized | Partial | `commands/plan.rs:59,97-105` | raw-text fallback only |
-| Plan — Cassandra TRACING timeline | Missing | `commands/plan.rs:27` | returned as `not_applicable` (wrong) |
-| Index Scanner (per-system + health flags + export) | Implemented | `drivers/index_scan.rs`; `IndexScanner.svelte` | exceeds prototype (no dedicated tool there) |
-| Index — ClickHouse / Cassandra adapters | Missing | `drivers/mod.rs:513-520` | |
-| Index — anti_pattern flag + missing-index suggestions | Missing | `index_scan.rs:24-36` | |
-| Schema Compare (diff + migration SQL + filter + swap) | Implemented | `compare/diff.ts`; `SchemaCompare.svelte` | |
-| Compare — procedures/functions/triggers | Missing | `SchemaCompare.svelte:36-50` | tables+columns only |
-| Compare — side-by-side DDL diff panel (prev/next, highlight) | Missing | `SchemaCompare.svelte:160-173` | dc:1438-1476 |
-| ER Diagram (nodes/edges/dagre + PNG/SVG/Mermaid) | Implemented | `ErDiagram.svelte`; `er/mermaid.ts` | |
-| ER — "+ Relationship" (create FK) + "Save to DB" (ALTER ADD FK) | Missing | grep: none | dc:1266,1270,2617 |
-| ER — cardinality 1/N endpoint markers + in-tab Ctrl+F search | Partial/Missing | `ErDiagram.svelte:78-87` | |
-| ClickHouse engine badge / TTL viewer / partition+mutation ops / SELECT FINAL | Implemented | `clickhouse.rs`; `ClickHouseTtlDialog.svelte`; `sql/chops.ts` | |
-| ClickHouse MV / Dictionary **create** menus | Missing | `ObjectExplorer.svelte:390` | dc:3467-3470 |
-| Cassandra Ring Topology (real system tables) | Implemented | `drivers/cassandra.rs:675-714`; `CassandraRing.svelte` | RF/coordinator not shown |
-| Cassandra CQL editor + lint + paging | Implemented | `lint/mod.rs:315-404`; `drivers/cassandra.rs:254-336` | per-statement consistency toolbar Missing; uses unprepared stmt |
-| Cassandra DDL viewer (native CQL) | Partial | `drivers/cassandra.rs:718-771` | CREATE TABLE only (no keyspace/UDT/UDF/MV/index) |
+| Plan — PG / MySQL / SQLite | Implemented | `plan.rs`; integration | |
+| Plan — MariaDB actual (ANALYZE) | Implemented [T16] | `commands/plan.rs` | `ANALYZE FORMAT=JSON` → r_rows/r_total_time_ms |
+| Plan — MSSQL (SHOWPLAN_XML) | Implemented [T16] | `plan.rs parse_mssql_xml`; `mssql.rs` SET via simple_query | RelOp tree |
+| Plan — ClickHouse normalized | Implemented [T16] | `plan.rs parse_clickhouse` | `EXPLAIN indexes=1` tree |
+| Plan — Cassandra TRACING timeline | Implemented [T16] | `commands/plan.rs explain_cassandra` | statement tracing → timeline |
+| Index Scanner (per-system + health flags + export) | Implemented [T17] | `drivers/index_scan.rs`; `IndexScanner.svelte` | |
+| Index — ClickHouse / Cassandra adapters | Implemented [T17] | `mod.rs scan_indexes` | data_skipping_indices / system_schema.indexes |
+| Index — missing-index suggestions | Implemented [T17] | `suggest_missing_pg`; `MssqlDriver.missing_indexes` | standard flags, no `anti_pattern` field (by design) |
+| Schema Compare (diff + migration SQL + filter + swap) | Implemented [T9] | `compare/diff.ts`; `SchemaCompare.svelte` | |
+| Compare — procedures/functions/triggers | Implemented [T19] | `compare/diff.ts` | normalized DDL text |
+| Compare — side-by-side DDL diff panel (prev/next, highlight) | Implemented [T19] | `SchemaCompare.svelte`; `lineDiff` | |
+| ER Diagram (nodes/edges/dagre + PNG/SVG/Mermaid) | Implemented [T8] | `ErDiagram.svelte`; `er/mermaid.ts` | |
+| ER — "+ Relationship" + "Save to DB" (ALTER ADD FK) | Implemented [T20] | `ErDiagram.svelte`; `genForeignKey` | integration pg_er_add_relationship |
+| ER — cardinality markers + in-tab Ctrl+F + save layout | Implemented [T20, A4] | `ErDiagram.svelte` | N:1 label; positions persist in tab.state |
+| ER — drag tables from Explorer + New (blank) diagram | Implemented [A3-1] | `er/diagram.ts`; `ErDiagram.svelte onDrop` | included-set model; viewport-mapped drop |
+| ClickHouse engine badge / TTL / partition+mutation / SELECT FINAL | Implemented | `clickhouse.rs`; `ClickHouseTtlDialog.svelte`; `sql/chops.ts` | |
+| ClickHouse MV / Dictionary **create** menus | Missing | `ObjectExplorer.svelte` | dc:3467-3470 |
+| Cassandra Ring Topology | Implemented | `cassandra.rs`; `CassandraRing.svelte` | |
+| Cassandra CQL editor + lint + paging | Implemented | `lint/mod.rs`; `cassandra.rs` | per-statement consistency toolbar still Missing |
+| Cassandra DDL viewer (native CQL) | Partial | `cassandra.rs` | CREATE TABLE only |
 
 ---
 
@@ -152,57 +158,55 @@ Status legend: **Implemented** (wired end-to-end, evidence) · **Partial** (pres
 
 | Feature | Status | Evidence | Notes |
 |---|---|---|---|
-| Redis explorer / 6 value editors / TTL / delete / CLI / pub-sub / FLUSHDB | Implemented | `RedisWorkspace.svelte`; `RedisPubSub.svelte`; `drivers/redis.rs` | integration: connect/scan/get/edit/command/del |
-| Redis memory analysis; CLI autocomplete; String JSON auto-format; list pop/set-idx; stream range | Missing/Partial | `RedisWorkspace.svelte` | |
+| Redis explorer / 6 value editors / TTL / delete / CLI / pub-sub / FLUSHDB | Implemented | `RedisWorkspace.svelte`; `drivers/redis.rs` | |
+| Redis memory analysis | Implemented [T23+] | `parse_redis_info`; `AdminView.svelte` | INFO memory (53 metrics) |
+| Redis CLI autocomplete; list pop/set-idx; stream range | Partial | `RedisWorkspace.svelte` | |
 | NATS core pub/sub + request/reply + JetStream + KV + Object | Implemented | `drivers/nats.rs`; `NatsWorkspace.svelte` | |
-| NATS JetStream **management UI** (create/edit/purge/delete stream, create/delete consumer, delete msg) | Partial | `drivers/nats.rs:305-361`; `ipc.ts:218` | backend+IPC present, **UI unwired** |
-| NATS NKey / JWT auth; request timeout config; headers/reply display | Missing/Partial | `drivers/nats.rs:13-34`; `NatsWorkspace.svelte:105` | timeout hardcoded 3000ms |
-| Kafka cluster / topics / consumer / producer / groups / Schema Registry | Implemented | `drivers/kafka.rs`; `KafkaWorkspace.svelte` etc. | |
-| Kafka **ACL** browser | Missing | grep: none | |
-| Kafka **Avro decode** in consumer | Missing | `KafkaConsumer.svelte` | |
-| Kafka producer headers; consumer virtualization/headers; reset-offset preview; timestamp start; copy/export msg | Missing/Partial | `KafkaConsumer.svelte`,`KafkaProducer.svelte` | |
+| NATS JetStream management UI | Implemented | `NatsWorkspace.svelte` | create/edit/purge/delete stream, consumers |
+| **NATS NKey / JWT auth** | **Missing (deferred)** | `drivers/nats.rs` | needs JWT operator/nsc outside container |
+| Kafka cluster / topics / consumer / producer / groups / Schema Registry | Implemented | `drivers/kafka.rs`; `KafkaWorkspace.svelte` | |
+| Kafka Avro decode (Schema Registry) | Implemented | `SchemaRegistryWorkspace.svelte` | |
+| **Kafka ACL browser** | **Missing (deferred)** | grep: none | needs broker authorizer |
+| Kafka producer/consumer headers; reset-offset preview; copy/export msg | Partial | `KafkaConsumer.svelte`,`KafkaProducer.svelte` | |
 
 ---
 
-## I. Global / Views present only in prototype
+## I. Global / Views
 
 | Feature | Status | Evidence | Notes |
 |---|---|---|---|
 | Command Palette (Ctrl+P) | Implemented | `CommandPalette.svelte` | |
-| Settings / Preferences (Ctrl+,) | Implemented | `Settings.svelte`; `settings.svelte.ts` | exceeds prototype (which has no Settings dialog) |
-| Error boundary (per-tab crash isolation) | Implemented | `App.svelte:162,198-207` | |
-| Welcome / onboarding | Implemented | `App.svelte:211-220` | |
-| Theme dark/light toggle | Implemented | `ui.svelte.ts:42-46` | |
-| Query History view + search | Implemented | `HistoryTab.svelte`; `commands/query.rs:39-53` | click opens new tab (dc pastes into editor) |
-| Saved Queries / snippets | Implemented | `SavedQueriesTab.svelte`; `snippets.svelte.ts` | |
+| Settings / Preferences (Ctrl+,) incl. pooling/retry | Implemented [T21] | `Settings.svelte`; `connections/pool.rs` | |
+| Error boundary / Welcome / theme toggle | Implemented | `App.svelte`; `ui.svelte.ts` | |
+| Query History view + search | Implemented | `HistoryTab.svelte` | |
+| Saved Queries / snippets | Implemented | `SavedQueriesTab.svelte` | |
 | Tabs (rename/pin/close-others/drag/restore/split) | Implemented | `TabBar.svelte`; `tabs.svelte.ts` | |
-| **Session Monitor** (sessions/locks + Kill) | Missing | grep: none (only `TitleBar.svelte:29` stub) | dc:1188-1255 |
-| **Postgres Extension Manager** | Missing | grep: none | dc:1080-1111 |
-| **MSSQL Agent Jobs** | Missing | grep: none | dc:1045-1078 |
-| **MSSQL Query Store** | Missing | grep: none | dc:961-999 |
-| **MSSQL Availability Groups** | Missing | grep: none | dc:1001-1043 |
-| **SQL Dialect Converter** | Missing | grep: none (SqlWorkspace stub) | dc:1630-1678 |
-| Keyboard: Ctrl+P/S/H/,/T/W/Shift+T/Tab/1-9, F5, Ctrl+Enter, Esc, Ctrl+Shift+E | Implemented | `App.svelte:62-92`; `SqlEditor.svelte:149-196` | |
-| Keyboard: Ctrl+Shift+F, Ctrl+Alt+G/J/R, Ctrl+Shift+C, Ctrl+F | Missing | grep: none | |
+| Session Monitor (sessions/locks + Kill) | Implemented [T23] | `AdminView.svelte`; `commands/admin.rs` | pg_stat_activity/pg_locks + kill_session |
+| PG Extension Manager / MSSQL Agent Jobs / Query Store / AG | Implemented [T23,T23+] | `AdminView.svelte` | system-aware view list |
+| SQL Dialect Converter | Partial [T12] | `SqlWorkspace.svelte` | format + note, not full cross-dialect translation (dc:1630-1678) |
+| Keyboard: Ctrl+P/S/H/,/T/W/Tab/1-9, F5, Ctrl+Enter, Esc, Ctrl+Shift+E | Implemented | `App.svelte`; `SqlEditor.svelte` | |
+| Keyboard: Ctrl+Shift+F, Ctrl+Alt+G/J/R, Ctrl+Shift+C, Ctrl+F | Implemented [T21] | `keys/shortcuts.ts`; `App.svelte` | |
+| i18n — all user-facing text English | Implemented [A2-7,A3] | frontend + Rust backend | comments/tests left as-is |
 
 ---
 
-## H-detail. Test / Cancel deep-dive (known gap #1)
-
-1. **Test button** — path exists (`ConnectionForm.runTest → connections.test → ipc test_connection → commands/connections.rs`). Errors ARE rendered (`ConnectionForm.svelte:548-549`) **when the call returns**. BUT: only ClickHouse sets a connect timeout (`clickhouse.rs:124`, 10s); **PG/MySQL/MSSQL have none** → unreachable host hangs on OS TCP timeout → button stuck "Testing…" with no error surfaced. ⇒ **Wired-but-unverified**, effectively Broken for slow/dead PG hosts.
-2. **Cancel button** — `close()` only nulls `ui.formProfile` (`ConnectionForm.svelte:80-83`). The awaited Tauri `invoke` is **not cancellable**; backend `test_connection` future keeps running (connect/SSH). ⇒ closes UI while backend hangs; **does not abort**.
-3. **PG vs ClickHouse** — divergent: CH bounded ~10s + error; PG/MySQL/MSSQL unbounded. Same divergence applies to the connect path generally.
-
----
-
-## Tally
+## Tally (post T10–T23 + AUDIT-1/2/3)
 
 | Status | Count (approx.) |
 |---|---|
-| Implemented | ~52 |
-| Partial | ~16 |
-| Missing | ~30 |
-| Broken (stub/no-op) | ~9 (Set-as-Filter, Export/dump, Backup DB, Users&privileges, Convert dialect, Split-toolbar-btn, ResultChart PNG/SVG, SQLite Export .sql, MSSQL-plan) |
-| Wired-but-unverified | 2 (connection Test, connection Cancel) + query-cancel |
+| Implemented | ~92 |
+| Partial | ~11 |
+| Missing | ~9 |
+| Broken (stub/no-op) | 0 |
+| Plan-only / Deferred | 3 (streaming I/O; Kafka ACL; NATS NKey-JWT) |
 
-**Highest-impact gaps:** connection Test/Cancel runtime semantics (no timeout / no abort); no Backup&Restore; no whole-schema Generate Scripts; Import wizard missing Options+progress; several Explorer bottom-toolbar & context items are dead stubs; MSSQL/Cassandra Query-Plan adapters broken/missing; no Session Monitor / Extension Manager / Agent Jobs / Query Store / AG; no SQL dialect converter; missing keyboard shortcuts.
+**Genuine remaining gaps (highest-impact first):**
+1. **Streaming I/O** for large export / Generate Scripts (still buffers RAM) — plan A5.
+2. **Generate Test Data** (dc:1808-1844) — no code.
+3. **Copy Table to…** (cross-connection copy) — no code.
+4. **Result Grid Group By popover** (dc:352-385) — Chart view covers aggregation only.
+5. **Proc/Func Execute + Rename** context actions (Show Definition/Drop done in T18).
+6. **MSSQL Azure AD / MFA** auth modes (SQL/Windows done).
+7. **Index/FK manager** dedicated tabs (TableDesigner covers columns).
+8. **ClickHouse MV / Dictionary create** menus.
+9. **Kafka ACL** + **NATS NKey/JWT** — deferred (need broker authorizer / JWT operator outside the default containers).
