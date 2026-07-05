@@ -447,12 +447,39 @@
     }
   }
 
+  // Move the selected cell by (dRow, dCol), clamped to the grid (AUDIT-5 item 2).
+  function moveCell(dRow: number, dCol: number) {
+    if (editingCell) return
+    const cur = selectedCell ?? { row: pageOffset, col: columns[0] }
+    const ci = Math.max(0, Math.min(columns.length - 1, columns.indexOf(cur.col) + dCol))
+    const ri = Math.max(0, Math.min(rowCount - 1, cur.row + dRow))
+    selectedRows = new Set()
+    selectedCell = { row: ri, col: columns[ci] }
+  }
+
   function onKeydown(e: KeyboardEvent) {
     if ((e.ctrlKey || e.metaKey) && e.key === 'c') {
       e.preventDefault()
       void copySelection()
+      return
     }
-    if (e.key === 'Escape') ctxMenu = null
+    if (e.key === 'Escape') {
+      ctxMenu = null
+      return
+    }
+    // Arrow / Tab cell navigation (Tab → next column, Shift+Tab → prev).
+    switch (e.key) {
+      case 'ArrowDown':
+        e.preventDefault(); moveCell(1, 0); break
+      case 'ArrowUp':
+        e.preventDefault(); moveCell(-1, 0); break
+      case 'ArrowLeft':
+        e.preventDefault(); moveCell(0, -1); break
+      case 'ArrowRight':
+        e.preventDefault(); moveCell(0, 1); break
+      case 'Tab':
+        e.preventDefault(); moveCell(0, e.shiftKey ? -1 : 1); break
+    }
   }
 
   // ---- right-click copy menu -----------------------------------------------
@@ -618,6 +645,8 @@
   <table class="mono" style="border-collapse:separate;border-spacing:0;width:100%;font-size:var(--px-12)">
     <thead style="position:sticky;top:0;z-index:10">
       <tr>
+        <!-- No. gutter (AUDIT-5 item 2): row number + click to select (shift/ctrl multi) -->
+        <th style="background:var(--header);border-bottom:var(--px-1) solid var(--border2);border-right:var(--px-1) solid var(--border);padding:var(--px-6) var(--px-8);text-align:right;font-weight:600;color:var(--muted);white-space:nowrap;position:sticky;left:0;z-index:11">#</th>
         {#each data.cols as [name, type] (name)}
           <th style="background:var(--header);border-bottom:var(--px-1) solid var(--border2);border-right:var(--px-1) solid var(--border);padding:var(--px-6) var(--px-12);text-align:left;font-weight:600;color:var(--text2);white-space:nowrap">
             {name}
@@ -628,7 +657,7 @@
     </thead>
     <tbody>
       {#if virtualItems.length > 0}
-        <tr style="height: {virtualItems[0].start}px;"><td colspan={columns.length}></td></tr>
+        <tr style="height: {virtualItems[0].start}px;"><td colspan={columns.length + 1}></td></tr>
       {/if}
       {#each virtualItems as vi (vi.key)}
         {@const ri = pageOffset + vi.index}
@@ -641,6 +670,11 @@
           onclick={(e) => clickRowNumber(e, ri)}
           style="height:{ROW_H}px;cursor:pointer;background:{isDeleted ? 'var(--rgba-224-108-117-_14)' : isRowSelected ? 'var(--rgba-91-124-255-_16)' : ri % 2 === 1 ? 'var(--grid-zebra)' : 'transparent'};box-shadow:inset var(--px-2) 0 0 {isRowSelected ? 'var(--primary)' : 'transparent'};{isDeleted ? 'text-decoration:line-through;opacity:.65;' : ''}"
         >
+          <td
+            onclick={(e) => { e.stopPropagation(); clickRowNumber(e, ri) }}
+            title="Click to select · Shift/Ctrl for multiple"
+            class="mono"
+            style="padding:var(--px-3) var(--px-8);text-align:right;color:var(--muted);border-bottom:var(--px-1) solid var(--border);border-right:var(--px-1) solid var(--border);background:{isRowSelected ? 'var(--rgba-91-124-255-_16)' : 'var(--header)'};position:sticky;left:0;font-size:var(--px-10_5);user-select:none">{ri + 1}</td>
           {#each columns as col (col)}
             {@const edited = edits.has(cellKey(ri, col))}
             {@const rawVal = edited ? edits.get(cellKey(ri, col)) : row?.[col]}
@@ -703,6 +737,7 @@
         <!-- inserted rows (pending) — nền xanh lá nhạt (chỉ hiện ở trang cuối) -->
         {#each insertedRows as ins, insIdx (insIdx)}
           <tr style="height:{ROW_H}px;background:var(--rgba-39-174-96-_14)">
+            <td class="mono" style="padding:var(--px-3) var(--px-8);text-align:right;color:var(--success);border-bottom:var(--px-1) solid var(--border);border-right:var(--px-1) solid var(--border);position:sticky;left:0;font-size:var(--px-10_5)">＋</td>
             {#each columns as col (col)}
               {@const isEditing = editingCell?.insert === insIdx && editingCell?.col === col}
               <td
@@ -735,7 +770,7 @@
       {#if virtualItems.length > 0}
         {@const last = virtualItems[virtualItems.length - 1]}
         <tr style="height: {Math.max(0, totalSize - last.end)}px;">
-          <td colspan={columns.length}></td>
+          <td colspan={columns.length + 1}></td>
         </tr>
       {/if}
     </tbody>

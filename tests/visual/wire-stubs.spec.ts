@@ -2,6 +2,8 @@ import { expect, test } from '@playwright/test'
 import { APP_URL, blockRemoteFonts } from './helpers'
 
 // T12 — các nút trước đây là stub (toast/no-op) nay phải làm việc THẬT.
+// (Convert + Split toolbar buttons removed in AUDIT-5 item 3 — split still works
+// via the tab context menu, covered by split-view.spec.ts.)
 
 async function boot(page: import('@playwright/test').Page) {
   await blockRemoteFonts(page)
@@ -9,38 +11,6 @@ async function boot(page: import('@playwright/test').Page) {
   await page.waitForSelector('#app > *', { timeout: 15_000 })
   await page.waitForTimeout(400)
 }
-
-test('Convert → opens a formatted "Converted" tab (not a dead toast)', async ({ page }) => {
-  const errors: string[] = []
-  page.on('pageerror', (e) => errors.push(String(e)))
-  await boot(page)
-
-  await page.getByRole('button', { name: /Postgres/ }).first().dblclick()
-  await page.waitForTimeout(400)
-  const editor = page.locator('.cm-content').first()
-  await editor.click()
-  await page.keyboard.type('select id,name from users where id=1')
-  await page.getByRole('button', { name: 'Convert' }).first().click()
-  await page.waitForTimeout(300)
-  await expect(page.getByRole('tab', { name: /Converted/ }).first()).toBeVisible()
-  await expect(page.getByText(/Converted \/ normalized for/).first()).toBeVisible()
-  expect(errors).toEqual([])
-})
-
-test('Split toolbar button → 2 editor panes', async ({ page }) => {
-  const errors: string[] = []
-  page.on('pageerror', (e) => errors.push(String(e)))
-  await boot(page)
-
-  await page.getByRole('button', { name: /Postgres/ }).first().dblclick()
-  await page.waitForTimeout(400)
-  const plus = page.getByTitle('New SQL tab (Ctrl+T)')
-  await expect(plus).toHaveCount(1)
-  await page.getByRole('button', { name: 'Split', exact: true }).first().click()
-  await page.waitForTimeout(400)
-  await expect(plus).toHaveCount(2)
-  expect(errors).toEqual([])
-})
 
 test('Set as Filter → opens Table Viewer with the column filter', async ({ page }) => {
   const errors: string[] = []

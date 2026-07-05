@@ -62,6 +62,17 @@
     const s = search.trim().toLowerCase()
     return !s || name.toLowerCase().includes(s)
   }
+  // AUDIT-5 item 7 — while filtering, auto-expand folders and lazy-load each
+  // schema's children so matches are revealed without manual expansion.
+  const searching = $derived(!!search.trim())
+  $effect(() => {
+    const s = selected
+    if (searching && s?.connected) {
+      untrack(() => {
+        for (const sch of cache?.schemas ?? []) void explorer.loadSchemaChildren(s.id, sch.name)
+      })
+    }
+  })
   // T21 — shortcut Ctrl+F từ App.svelte phát tín hiệu qua ui.explorerFindTick.
   $effect(() => {
     void ui.explorerFindTick
@@ -393,7 +404,12 @@
       aria-expanded={p.expandable ? expanded.has(p.key) : undefined}
       tabindex="0"
       draggable={p.dragData != null}
-      ondragstart={(e) => p.dragData && e.dataTransfer?.setData('application/x-ds-er-table', p.dragData)}
+      ondragstart={(e) => {
+        if (!p.dragData || !e.dataTransfer) return
+        e.dataTransfer.effectAllowed = 'copy'
+        e.dataTransfer.setData('application/x-ds-er-table', p.dragData)
+        e.dataTransfer.setData('text/plain', p.dragData) // fallback mime for strict engines
+      }}
       title={p.name}
       style="display:flex;align-items:center;gap:var(--px-5);padding:var(--px-3) var(--px-6);border-radius:var(--px-5);cursor:pointer;white-space:nowrap;padding-left:calc(var(--px-6) + {p.depth} * var(--px-15));background:{sel ? 'var(--rgba-91-124-255-_16)' : 'transparent'};box-shadow:inset var(--px-2) 0 0 {sel ? 'var(--primary)' : 'transparent'}"
     >
@@ -573,7 +589,7 @@
       {/if}
 
       {#each cache?.schemas ?? [] as schema (schema.name)}
-        {@const sOpen = expanded.has(`s:${schema.name}`)}
+        {@const sOpen = searching || expanded.has(`s:${schema.name}`)}
         {@const sc = cache?.bySchema[schema.name]}
         {#snippet schemaMenu()}
           <ContextMenu.Content class="w-52">
@@ -622,13 +638,14 @@
             expandable: true,
             onClick: () => toggle(`f:${schema.name}:tables`),
           })}
-          {#if expanded.has(`f:${schema.name}:tables`)}
+          {#if searching || expanded.has(`f:${schema.name}:tables`)}
             {#each tables as t (t.name)}
               {@const tbOpen = expanded.has(`t:${schema.name}.${t.name}`)}
               {@const detail = sc.tableDetails[t.name]}
               {#snippet tableMenu()}
                 <ContextMenu.Content class="w-52">
                   <ContextMenu.Item onclick={() => openData(schema.name, t)}>Open Data</ContextMenu.Item>
+                  <ContextMenu.Item onclick={() => selected && importWizard.show(selected.id, schema.name)}>Import Data…</ContextMenu.Item>
                   <ContextMenu.Item onclick={() => selected && exportWizard.showTable(selected.id, schema.name, t.name)}>Export Data…</ContextMenu.Item>
                   <ContextMenu.Item onclick={() => selected && copyWizard.show(selected.id, schema.name, t.name)}>Copy to…</ContextMenu.Item>
                   <ContextMenu.Item onclick={() => selected && testDataWizard.show(selected.id, schema.name, t.name)}>Generate Test Data…</ContextMenu.Item>
@@ -805,7 +822,7 @@
             expandable: true,
             onClick: () => toggle(`f:${schema.name}:views`),
           })}
-          {#if expanded.has(`f:${schema.name}:views`)}
+          {#if searching || expanded.has(`f:${schema.name}:views`)}
             {#each views as v (v.name)}
               {@const vOpen = expanded.has(`t:${schema.name}.${v.name}`)}
               {@const vDetail = sc.tableDetails[v.name]}
@@ -891,7 +908,7 @@
               expandable: true,
               onClick: () => toggle(`f:${schema.name}:procs`),
             })}
-            {#if expanded.has(`f:${schema.name}:procs`)}
+            {#if searching || expanded.has(`f:${schema.name}:procs`)}
               {#each procs as r (r.name)}
                 {#snippet procMenu()}
                   <ContextMenu.Content class="w-44">
@@ -926,7 +943,7 @@
                 expandable: true,
                 onClick: () => toggle(`f:${schema.name}:tvf`),
               })}
-              {#if expanded.has(`f:${schema.name}:tvf`)}
+              {#if searching || expanded.has(`f:${schema.name}:tvf`)}
                 {#each tvfs as r (r.name)}
                   {#snippet tvfMenu()}
                     <ContextMenu.Content class="w-44">
@@ -952,7 +969,7 @@
                 expandable: true,
                 onClick: () => toggle(`f:${schema.name}:scalar`),
               })}
-              {#if expanded.has(`f:${schema.name}:scalar`)}
+              {#if searching || expanded.has(`f:${schema.name}:scalar`)}
                 {#each scalarFns as r (r.name)}
                   {#snippet scalarMenu()}
                     <ContextMenu.Content class="w-44">
@@ -987,7 +1004,7 @@
                 expandable: true,
                 onClick: () => toggle(`f:${schema.name}:fns`),
               })}
-              {#if expanded.has(`f:${schema.name}:fns`)}
+              {#if searching || expanded.has(`f:${schema.name}:fns`)}
                 {#each fns as r (r.name)}
                   {#snippet fnMenu()}
                     <ContextMenu.Content class="w-44">
@@ -1025,7 +1042,7 @@
             expandable: true,
             onClick: () => toggle(`f:${schema.name}:triggers`),
           })}
-          {#if expanded.has(`f:${schema.name}:triggers`)}
+          {#if searching || expanded.has(`f:${schema.name}:triggers`)}
             {#each (sc.triggers ?? []).filter((tg) => matchSearch(tg.name)) as tg (tg.name)}
               {#snippet trigMenu()}
                 <ContextMenu.Content class="w-44">
@@ -1060,7 +1077,7 @@
               expandable: true,
               onClick: () => toggle(`f:${schema.name}:seqs`),
             })}
-            {#if expanded.has(`f:${schema.name}:seqs`)}
+            {#if searching || expanded.has(`f:${schema.name}:seqs`)}
               {#each sc.sequences ?? [] as sq (sq.name)}
                 {@render row({ key: `sq:${schema.name}.${sq.name}`, depth: base + 2, glyph: '#', color: C.seq, name: sq.name })}
               {/each}

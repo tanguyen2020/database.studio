@@ -27,12 +27,6 @@
     <span style="font-weight:700;letter-spacing:-.01em">Database Studio</span>
   </div>
   <div style="margin-left:auto;display:flex;align-items:center;gap:var(--px-8)">
-    <div class="tb-btn" onclick={() => tabs.openUtilityTab('saved', 'Saved Queries')} onkeydown={(e) => e.key === 'Enter' && tabs.openUtilityTab('saved', 'Saved Queries')} role="button" tabindex="0" title="Saved Queries (Ctrl+S)">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path></svg><span>Saved</span>
-    </div>
-    <div class="tb-btn" onclick={() => tabs.openUtilityTab('history', 'Query History')} onkeydown={(e) => e.key === 'Enter' && tabs.openUtilityTab('history', 'Query History')} role="button" tabindex="0" title="Query History (Ctrl+H)">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"></path><path d="M3 4v4h4"></path><path d="M12 8v4l3 2"></path></svg><span>History</span>
-    </div>
     <div class="tb-btn" onclick={openSessions} onkeydown={(e) => e.key === 'Enter' && openSessions()} role="button" tabindex="0" title="Session Monitor">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l2 6 4-14 2 8h6"></path></svg><span>Sessions</span>
     </div>

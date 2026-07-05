@@ -19,8 +19,8 @@ test('result grid copy menu: raw + 6 extract formats', async ({ page }) => {
   await page.getByRole('button', { name: 'Run' }).first().click()
   await page.waitForTimeout(500)
 
-  // right-click a data cell → copy menu
-  await page.locator('.grid-row td').first().click({ button: 'right' })
+  // right-click a data cell (skip the No. gutter at :first-child) → copy menu
+  await page.locator('.grid-row td:not(:first-child)').first().click({ button: 'right' })
   await page.waitForTimeout(150)
 
   for (const label of ['Copy cell', 'Copy row', 'Copy column', 'Tab-separated', 'CSV', 'JSON', 'SQL INSERT', 'SQL UPDATE', 'Markdown table']) {

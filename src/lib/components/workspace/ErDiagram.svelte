@@ -167,7 +167,7 @@
   // Drop a table dragged from the Object Explorer onto the canvas (AUDIT-3 item 1).
   function onDrop(e: DragEvent) {
     e.preventDefault()
-    const raw = e.dataTransfer?.getData('application/x-ds-er-table')
+    const raw = e.dataTransfer?.getData('application/x-ds-er-table') || e.dataTransfer?.getData('text/plain')
     if (!raw || !paneEl) return
     let payload: { schema?: string; table?: string }
     try {
@@ -177,7 +177,9 @@
     }
     const name = payload.table
     if (!name || (payload.schema && payload.schema !== schema)) return
-    if (!tables.some((t) => t.name === name)) return // not a table of this schema
+    // Accept even if the table list isn't loaded yet; only reject a name that is
+    // known NOT to belong to this schema.
+    if (tables.length && !tables.some((t) => t.name === name)) return
     const rect = paneEl.getBoundingClientRect()
     const p = flowPosition(e.clientX, e.clientY, rect, viewport)
     const saved = { ...((tab.state as { positions?: Record<string, { x: number; y: number }> }).positions ?? {}) }

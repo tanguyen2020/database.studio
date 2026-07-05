@@ -159,21 +159,6 @@
     if (tab.connectionId) void results.cancel(tab.id, tab.connectionId)
   }
 
-  // Convert (T12, min §10): chuẩn hóa/format SQL cho dialect hiện tại rồi mở
-  // trong tab mới kèm ghi chú (không phải dịch cross-dialect đầy đủ).
-  function doConvert() {
-    if (!editor) return
-    const doc = editor.getDoc().trim()
-    if (!doc) return
-    const formatted = formatSql(tab.systemType, doc)
-    const note = `-- Converted / normalized for ${tab.systemType} (formatting only — review dialect-specific syntax)\n`
-    tabs.openSqlTab({ connectionId: tab.connectionId, title: 'Converted', query: note + formatted })
-  }
-
-  // Split (T12): mở editor sang pane thứ 2 (dùng cơ chế split có sẵn).
-  function doSplit() {
-    tabs.moveToSplit(tab.id, 'v')
-  }
 
   // Đồng hồ "running Ns" + cảnh báo query chạy lâu (> ngưỡng Settings) — T11.
   let nowMs = $state(Date.now())
@@ -382,11 +367,6 @@
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9" stroke-dasharray="3 3"></circle><circle cx="12" cy="3" r="2" fill="currentColor" stroke="none"></circle><circle cx="20" cy="17" r="2" fill="currentColor" stroke="none"></circle><circle cx="4" cy="17" r="2" fill="currentColor" stroke="none"></circle></svg>Ring
       </div>
     {/if}
-    <div class="wk-tbtn" onclick={doConvert} onkeydown={(e) => e.key === 'Enter' && doConvert()} role="button" tabindex="0" title="Convert / normalize SQL (format for current dialect)">
-      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h13l-3-3M20 17H7l3 3"></path></svg>Convert
-    </div>
-    <div class="wk-tbtn" onclick={doSplit} onkeydown={(e) => e.key === 'Enter' && doSplit()} role="button" tabindex="0" title="Split editor (Split Right)">
-      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="1.5"></rect><line x1="12" y1="4" x2="12" y2="20"></line></svg>Split</div>
     <div style="margin-left:auto">
       {#if exec && !exec.running}
         <span class="mono" style="font-size:var(--px-11);color:var(--muted)">{exec.totalMs} ms</span>
