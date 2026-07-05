@@ -27,5 +27,12 @@ test('result grid copy menu: raw + 6 extract formats', async ({ page }) => {
     await expect(page.getByText(label, { exact: true }).first()).toBeVisible()
   }
 
+  // the context menu uses DataGrip's font (bundled JetBrains Mono, via .mono)
+  const fontFamily = await page.evaluate(() => {
+    const el = [...document.querySelectorAll('div')].find((d) => d.textContent?.trim() === 'Copy cell')
+    return el ? getComputedStyle(el).fontFamily : ''
+  })
+  expect(fontFamily).toContain('JetBrains Mono')
+
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
