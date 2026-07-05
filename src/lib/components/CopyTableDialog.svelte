@@ -25,7 +25,11 @@
   let copied = $state(0)
   let result = $state<string | null>(null)
 
-  const dlgOpen = $derived(copyWizard.open) // see T28 note: bare {#if store.open} can miss tracking
+  // effect-mirror the store open flag (reliable cross-component tracking; see T31 note)
+  let dlgOpen = $state(false)
+  $effect(() => {
+    dlgOpen = copyWizard.open
+  })
   const srcSystem = $derived(connections.byId(copyWizard.srcConnId)?.system ?? 'postgres')
   const destSystem = $derived(connections.byId(destConnId)?.system ?? 'postgres')
   const destTargets = $derived(connections.profiles.filter((p) => p.connected && REL.includes(p.system)))

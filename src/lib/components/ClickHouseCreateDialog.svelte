@@ -7,7 +7,13 @@
   import * as ipc from '$lib/ipc'
   import { buildCreateDictionary, buildCreateMaterializedView, type DictColumn, type DictLayout } from '$lib/sql/clickhouse_ddl'
 
-  const dlgOpen = $derived(chCreateWizard.open) // T28 note: derived open flag
+  // Effect-mirror the store's open flag into local $state. A bare {#if store.open}
+  // (and even $derived) can miss cross-component tracking here; an $effect always
+  // subscribes, so this is reliable (see T28/T31 handoff notes).
+  let dlgOpen = $state(false)
+  $effect(() => {
+    dlgOpen = chCreateWizard.open
+  })
 
   // MV fields
   let mvName = $state('')

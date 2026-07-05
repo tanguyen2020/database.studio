@@ -44,6 +44,14 @@ impl MssqlDriver {
                 "Windows Authentication is only available on Windows",
                 "integrated auth unsupported on this OS",
             ));
+        } else if p.auth == "aad-sp" {
+            // Azure AD Service Principal (T31): user = "clientId@tenant",
+            // password = client secret → acquire an access token → aad_token.
+            let (client_id, tenant) = crate::connections::aad::parse_sp_user(&p.user).ok_or_else(|| {
+                QueryError::new("mssql", "Azure AD Service Principal user must be \"clientId@tenant\"", "aad user format")
+            })?;
+            let token = crate::connections::aad::acquire_sp_token(&tenant, &client_id, &p.password).await?;
+            config.authentication(AuthMethod::aad_token(token));
         } else {
             config.authentication(AuthMethod::sql_server(&p.user, &p.password));
         }

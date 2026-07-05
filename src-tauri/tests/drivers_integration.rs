@@ -183,6 +183,35 @@ async fn pg_list_databases_marks_current() {
     assert_eq!(dbs.iter().filter(|d| d.current).count(), 1, "exactly one current db");
 }
 
+/// T31 — Azure AD Service Principal connect to a real Azure SQL Database.
+/// Requires Azure infra + secrets, so it is #[ignore] (run manually):
+///   AZURE_SQL_HOST=<srv>.database.windows.net AZURE_SQL_DB=<db> \
+///   AZURE_CLIENT_ID=<id> AZURE_TENANT=<tenant> AZURE_CLIENT_SECRET=<secret> \
+///   cargo test --test drivers_integration mssql_aad_service_principal -- --ignored --nocapture
+#[tokio::test]
+#[ignore = "needs a real Azure SQL Database + service principal (see doc comment)"]
+async fn mssql_aad_service_principal() {
+    let host = std::env::var("AZURE_SQL_HOST").expect("AZURE_SQL_HOST");
+    let db = std::env::var("AZURE_SQL_DB").unwrap_or_default();
+    let client_id = std::env::var("AZURE_CLIENT_ID").expect("AZURE_CLIENT_ID");
+    let tenant = std::env::var("AZURE_TENANT").expect("AZURE_TENANT");
+    let secret = std::env::var("AZURE_CLIENT_SECRET").expect("AZURE_CLIENT_SECRET");
+    let params = MssqlConnParams {
+        host,
+        port: 1433,
+        database: db,
+        user: format!("{client_id}@{tenant}"), // clientId@tenant convention
+        password: secret,
+        ssl: true,
+        ssl_ca: String::new(),
+        auth: "aad-sp".into(),
+    };
+    let mut drv = MssqlDriver::connect(&params).await.expect("AAD SP connect");
+    let out = drv.exec("SELECT 1 AS n").await.unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    assert_eq!(result.rows[0]["n"], serde_json::json!(1));
+}
+
 /// T28 — Rename a function on PostgreSQL (ALTER FUNCTION … RENAME, as emitted by
 /// genRenameRoutine). The new name is callable; the old one is gone.
 #[tokio::test]
