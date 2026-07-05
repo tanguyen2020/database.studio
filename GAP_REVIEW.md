@@ -147,7 +147,7 @@ Status legend: **Implemented** (wired end-to-end, evidence) · **Partial** (pres
 | ER — cardinality markers + in-tab Ctrl+F + save layout | Implemented [T20, A4] | `ErDiagram.svelte` | N:1 label; positions persist in tab.state |
 | ER — drag tables from Explorer + New (blank) diagram | Implemented [A3-1] | `er/diagram.ts`; `ErDiagram.svelte onDrop` | included-set model; viewport-mapped drop |
 | ClickHouse engine badge / TTL / partition+mutation / SELECT FINAL | Implemented | `clickhouse.rs`; `ClickHouseTtlDialog.svelte`; `sql/chops.ts` | |
-| ClickHouse MV / Dictionary **create** menus | Missing | `ObjectExplorer.svelte` | dc:3467-3470 |
+| ClickHouse MV / Dictionary **create** menus | Implemented [T30] | `sql/clickhouse_ddl.ts`; `ClickHouseCreateDialog.svelte` | schema ctx menu (CH only): Create Materialized View… (TO/ENGINE/POPULATE) + Create Dictionary… (columns/PK/SOURCE/LAYOUT/LIFETIME); guided form + validated live DDL preview; runs + refreshes tree |
 | Cassandra Ring Topology | Implemented | `cassandra.rs`; `CassandraRing.svelte` | |
 | Cassandra CQL editor + lint + paging | Implemented | `lint/mod.rs`; `cassandra.rs` | per-statement consistency toolbar still Missing |
 | Cassandra DDL viewer (native CQL) | Partial | `cassandra.rs` | CREATE TABLE only |
@@ -208,5 +208,5 @@ Status legend: **Implemented** (wired end-to-end, evidence) · **Partial** (pres
 5. ~~Proc/Func Execute + Rename~~ — done [T28].
 6. **MSSQL Azure AD / MFA** auth modes (SQL/Windows done).
 7. ~~Index/FK manager dedicated tabs~~ — done [T29].
-8. **ClickHouse MV / Dictionary create** menus.
+8. ~~ClickHouse MV / Dictionary create menus~~ — done [T30].
 9. **Kafka ACL** + **NATS NKey/JWT** — deferred (need broker authorizer / JWT operator outside the default containers).
