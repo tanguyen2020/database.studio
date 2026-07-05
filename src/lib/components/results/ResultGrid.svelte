@@ -642,7 +642,9 @@
     {/each}
   {:else}
   <!-- table — port dòng 421-452: mono 12px, th sticky header 6px 12px/600/text2 -->
-  <table class="mono" style="border-collapse:separate;border-spacing:0;width:100%;font-size:var(--px-12)">
+  <!-- DataGrip-style data grid: JetBrains Mono (via .mono) + tabular figures so
+       columns of ids/timestamps line up crisply. -->
+  <table class="mono" style="border-collapse:separate;border-spacing:0;width:100%;font-size:var(--px-12);font-variant-numeric:tabular-nums;font-feature-settings:'tnum' 1,'zero' 1">
     <thead style="position:sticky;top:0;z-index:10">
       <tr>
         <!-- No. gutter (AUDIT-5 item 2): row number + click to select (shift/ctrl multi) -->
