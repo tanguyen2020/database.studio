@@ -122,7 +122,7 @@ Status legend: **Implemented** (wired end-to-end, evidence) · **Partial** (pres
 | Export table data wizard (format/WHERE/columns/filename) | Implemented [T14] | `ExportDialog.svelte` | paged streaming via LIMIT/OFFSET |
 | Backup & Restore (tool status + history + restore confirm) | Implemented [T22] | `BackupDialog.svelte`; `commands/backup.rs` | SQLite in-process; else pg_dump/mysqldump/clickhouse-client |
 | Dump with pg_dump / mysqldump | Implemented [T22] | `drivers/backup.rs external_backup_cmd` | password via env |
-| **Streaming large export/generate to file** | **Plan-only [A5]** | — | still buffers in RAM (sqlx fetch_all + Blob); plan: `export_to_file` + BufWriter + Channel progress |
+| **Streaming large export to file** | Implemented [T24] | `postgres.rs stream_export`; `commands/export.rs`; `ExportDialog.svelte` | PG cursor stream → BufWriter, one row at a time (bounded memory, 1M-row integration-tested), Channel progress + cancel; behind `streaming_io` setting, old in-memory path is the fallback. Generate Scripts still buffers (follow-up) |
 
 ---
 

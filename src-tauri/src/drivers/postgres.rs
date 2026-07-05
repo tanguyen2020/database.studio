@@ -541,6 +541,121 @@ async fn fetch_all(
     sqlx::query(sql).fetch_all(conn).await
 }
 
+/// Streaming export target format (T24).
+#[derive(Clone, Copy)]
+pub enum ExportFormat {
+    Csv,
+    Json,
+    Sql,
+}
+
+impl ExportFormat {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "csv" => Some(Self::Csv),
+            "json" => Some(Self::Json),
+            "sql" => Some(Self::Sql),
+            _ => None,
+        }
+    }
+}
+
+fn csv_cell(s: &str) -> String {
+    if s.contains([',', '"', '\n', '\r']) {
+        format!("\"{}\"", s.replace('"', "\"\""))
+    } else {
+        s.to_string()
+    }
+}
+
+fn value_text(v: &Value) -> String {
+    match v {
+        Value::Null => String::new(),
+        Value::String(s) => s.clone(),
+        other => other.to_string(),
+    }
+}
+
+fn sql_literal(v: &Value) -> String {
+    match v {
+        Value::Null => "NULL".into(),
+        Value::Number(n) => n.to_string(),
+        Value::Bool(b) => if *b { "TRUE" } else { "FALSE" }.into(),
+        Value::String(s) => format!("'{}'", s.replace('\'', "''")),
+        other => format!("'{}'", other.to_string().replace('\'', "''")),
+    }
+}
+
+impl PgDriver {
+    /// Stream a query's rows to `out` in `format`, one row at a time (bounded
+    /// memory, independent of result size — T24). Calls `progress(rows_written)`
+    /// every 10k rows and stops early when `cancel` is set. Returns rows written.
+    pub async fn stream_export<W: std::io::Write>(
+        &mut self,
+        sql: &str,
+        format: ExportFormat,
+        table: &str,
+        out: &mut W,
+        mut progress: impl FnMut(u64),
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> Result<u64, QueryError> {
+        use futures::TryStreamExt;
+        use std::sync::atomic::Ordering;
+        let werr = |e: std::io::Error| QueryError::new("postgres", format!("write error: {e}"), e.to_string());
+
+        let mut stream = sqlx::query(sql).fetch(&mut self.conn);
+        let mut cols: Vec<String> = Vec::new();
+        let mut n: u64 = 0;
+        let mut started = false;
+
+        while let Some(row) = stream.try_next().await.map_err(|e| map_error("postgres", &e))? {
+            if cancel.load(Ordering::Relaxed) {
+                break;
+            }
+            if !started {
+                cols = row.columns().iter().map(|c| c.name().to_string()).collect();
+                match format {
+                    ExportFormat::Csv => writeln!(out, "{}", cols.iter().map(|c| csv_cell(c)).collect::<Vec<_>>().join(",")).map_err(werr)?,
+                    ExportFormat::Json => write!(out, "[").map_err(werr)?,
+                    ExportFormat::Sql => {}
+                }
+                started = true;
+            }
+            let vals: Vec<Value> = (0..cols.len()).map(|i| decode_value(&row, i)).collect();
+            match format {
+                ExportFormat::Csv => {
+                    let line = vals.iter().map(|v| csv_cell(&value_text(v))).collect::<Vec<_>>().join(",");
+                    writeln!(out, "{line}").map_err(werr)?;
+                }
+                ExportFormat::Json => {
+                    if n > 0 {
+                        write!(out, ",").map_err(werr)?;
+                    }
+                    let obj: Map<String, Value> = cols.iter().cloned().zip(vals.iter().cloned()).collect();
+                    write!(out, "\n{}", Value::Object(obj)).map_err(werr)?;
+                }
+                ExportFormat::Sql => {
+                    let colnames = cols.iter().map(|c| format!("\"{c}\"")).collect::<Vec<_>>().join(", ");
+                    let vlits = vals.iter().map(sql_literal).collect::<Vec<_>>().join(", ");
+                    writeln!(out, "INSERT INTO \"{table}\" ({colnames}) VALUES ({vlits});").map_err(werr)?;
+                }
+            }
+            n += 1;
+            if n % 10_000 == 0 {
+                progress(n);
+            }
+        }
+        if let ExportFormat::Json = format {
+            if !started {
+                write!(out, "[").map_err(werr)?;
+            }
+            write!(out, "\n]").map_err(werr)?;
+        }
+        progress(n);
+        Ok(n)
+    }
+}
+
 async fn execute(
     conn: &mut PgConnection,
     sql: &str,

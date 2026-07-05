@@ -4,12 +4,15 @@
   // paged SELECT (LIMIT/OFFSET) so large tables don't need one huge query.
   import { untrack } from 'svelte'
   import * as ipc from '$lib/ipc'
+  import { IS_TAURI } from '$lib/demo'
   import { exportWizard } from '$lib/stores/export.svelte'
   import { explorer } from '$lib/stores/explorer.svelte'
   import { connections } from '$lib/stores/connections.svelte'
+  import { settings } from '$lib/stores/settings.svelte'
   import { toasts } from '$lib/stores/toast.svelte'
   import { toCsv, toJson, toSqlInsert, toExcelHtml, download } from '$lib/export/rows'
   import { buildExportSelect, supportsOffset } from '$lib/export/query'
+  import { save as saveFileDialog } from '@tauri-apps/plugin-dialog'
 
   type Fmt = 'csv' | 'json' | 'sql' | 'xls'
   const EXT: Record<Fmt, string> = { csv: 'csv', json: 'json', sql: 'sql', xls: 'xls' }
@@ -29,6 +32,8 @@
   let running = $state(false)
   let fetched = $state(0)
   let result = $state<string | null>(null)
+  let streaming = $state(false)
+  let exportId = $state('')
 
   const system = $derived(connections.byId(exportWizard.connId)?.system ?? 'postgres')
   const isTable = $derived(exportWizard.mode === 'table')
@@ -112,11 +117,48 @@
     return all
   }
 
+  // T24 — stream a table export straight to a file (bounded memory) when the
+  // streaming_io setting is on. PG-only + csv/json/sql; else the in-memory path.
+  const canStream = $derived(
+    isTable && IS_TAURI && system === 'postgres' && format !== 'xls' && settings.value.streamingIo,
+  )
+
+  async function runStreaming(headers: string[]) {
+    const connId = exportWizard.connId!
+    const path = await saveFileDialog({ defaultPath: filename, filters: [{ name: format.toUpperCase(), extensions: [EXT[format]] }] })
+    if (!path) return
+    const cap = limit && limit > 0 ? limit : null
+    const sql = buildExportSelect({ system, schema: exportWizard.schema, table: exportWizard.table, columns: headers, where: whereClause, limit: cap })
+    exportId = `exp-${Date.now()}-${Math.floor(fetched)}-${headers.length}`
+    running = true
+    streaming = true
+    result = null
+    fetched = 0
+    try {
+      const n = await ipc.exportQueryToFile(connId, sql, path, format as 'csv' | 'json' | 'sql', exportWizard.table, exportId, (rows) => (fetched = rows))
+      result = `✓ exported ${n.toLocaleString()} rows → ${path}`
+      toasts.success(result)
+    } catch (e) {
+      result = `✗ ${e}`
+    } finally {
+      running = false
+      streaming = false
+    }
+  }
+
+  async function cancelStreaming() {
+    if (exportId) await ipc.cancelExport(exportId)
+  }
+
   async function runExport() {
     if (!exportWizard.connId) return
     const headers = cols.length ? cols : [...available]
     if (!headers.length) {
       toasts.error('No columns selected')
+      return
+    }
+    if (canStream) {
+      await runStreaming(headers)
       return
     }
     running = true
@@ -190,7 +232,11 @@
       </div>
       <div style="flex:none;display:flex;gap:var(--px-9);padding:var(--px-13) var(--px-18);border-top:var(--px-1) solid var(--border);background:var(--panel)">
         <span onclick={() => !running && exportWizard.close()} onkeydown={(e) => e.key === 'Enter' && !running && exportWizard.close()} role="button" tabindex="0" style="font-size:var(--px-12_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-8);padding:var(--px-8) var(--px-16);cursor:pointer">Close</span>
-        <span onclick={() => !running && runExport()} onkeydown={(e) => e.key === 'Enter' && !running && runExport()} role="button" tabindex="0" style="margin-left:auto;font-size:var(--px-12_5);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-8);padding:var(--px-8) var(--px-18);cursor:{running ? 'not-allowed' : 'pointer'};opacity:{running ? 0.6 : 1};font-weight:600">{running ? 'Exporting…' : 'Export'}</span>
+        {#if streaming}
+          <span onclick={cancelStreaming} onkeydown={(e) => e.key === 'Enter' && cancelStreaming()} role="button" tabindex="0" title="Cancel the running export" style="margin-left:auto;font-size:var(--px-12_5);background:var(--error);color:var(--hex-fff);border-radius:var(--px-8);padding:var(--px-8) var(--px-18);cursor:pointer;font-weight:600">Cancel</span>
+        {:else}
+          <span onclick={() => !running && runExport()} onkeydown={(e) => e.key === 'Enter' && !running && runExport()} role="button" tabindex="0" style="margin-left:auto;font-size:var(--px-12_5);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-8);padding:var(--px-8) var(--px-18);cursor:{running ? 'not-allowed' : 'pointer'};opacity:{running ? 0.6 : 1};font-weight:600">{running ? 'Exporting…' : canStream ? 'Export → file' : 'Export'}</span>
+        {/if}
       </div>
     </div>
   </div>
