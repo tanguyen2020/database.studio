@@ -46,7 +46,7 @@ Status legend: **Implemented** (wired end-to-end, evidence) · **Partial** (pres
 | "Set as Filter" (column menu) | Implemented [T12] | `ObjectExplorer.svelte` → Table Viewer seeded filter | |
 | Design Table (context) | Implemented | `openTableDesigner` | |
 | Dictionaries node (ClickHouse §3) | Implemented | `clickhouse.rs dictionaries()`; `ch_dictionaries` | |
-| **All databases in tree** (relational) | Implemented [A2-3, A3-4] | `ObjectExplorer.svelte` Databases section; `PgDriver::databases()`; `MssqlDriver::databases()` | MySQL/MariaDB = SCHEMATA (all DBs as schema nodes); PG/MSSQL = Databases section + `open_database` |
+| **All databases in tree** (relational, per-database objects) | Implemented [A4-2] | `ObjectExplorer.svelte`; `attach_database`; `PgDriver/MssqlDriver::databases()` | PG/MSSQL: current DB = header (schemas nest under it) + other DBs as expandable nodes browsed via internal sub-connection `{connId}::{db}` (NO duplicate sidebar connection); MySQL/MariaDB = SCHEMATA. Removed the old flat "Databases" section + open-as-connection |
 | ER drag source (draggable table rows) | Implemented [A3-1] | `ObjectExplorer.svelte draggable` | dataTransfer `application/x-ds-er-table` |
 | Bottom toolbar: New table / Import data | Implemented | `openTableDesigner`; `importWizard.show` | |
 | Bottom toolbar: Export / dump | Implemented [T15] | `ObjectExplorer.svelte` → Generate Scripts / dump | |

@@ -39,8 +39,14 @@
   const isClickhouse = $derived(selected?.system === 'clickhouse')
   const showRoutines = $derived(!isSqlite && !isClickhouse)
   const showTriggers = $derived(!isClickhouse)
-  // SQLite lùi 1 cấp vì có file root
-  const base = $derived(isSqlite ? 1 : 0)
+  // AUDIT-4 item 2 — PG/MSSQL bind one DB per connection; the tree nests schemas
+  // under a current-database header, and lists other databases separately.
+  const pgMssqlMultiDb = $derived(
+    (selected?.system === 'postgres' || selected?.system === 'mssql') && (cache?.databases?.length ?? 0) > 0,
+  )
+  // schema tree depth offset: SQLite nests under a file node; PG/MSSQL nest under
+  // the current-database header node (see relational branch).
+  const base = $derived(isSqlite || pgMssqlMultiDb ? 1 : 0)
 
   let expanded = $state<Set<string>>(new Set())
   let treeSel = $state<string | null>(null)
@@ -89,22 +95,30 @@
     }
   })
 
-  // Open another database on the same server as its own connection.
-  let openingDb = $state('')
-  async function openDatabase(dbName: string) {
-    if (!selected || openingDb) return
-    openingDb = dbName
+  // AUDIT-4 item 2 — other databases are browsed through an internal sub-connection
+  // (attach_database → {connId}::{db}), NOT a duplicate sidebar connection.
+  // `dbSubId` caches the resolved sub-connection id per database name.
+  let dbSubId = $state<Record<string, string>>({})
+  let attaching = $state('')
+  async function toggleForeignDb(dbName: string) {
+    const key = `fdb:${dbName}`
+    if (expanded.has(key)) {
+      toggle(key)
+      return
+    }
+    if (!selected || attaching) return
+    attaching = dbName
     try {
-      const p = await ipc.openDatabase(selected.id, dbName)
-      connections.adopt(p)
-      connections.select(p.id)
+      const sub = dbSubId[dbName] ?? (await ipc.attachDatabase(selected.id, dbName))
+      dbSubId = { ...dbSubId, [dbName]: sub }
+      await explorer.loadSchemas(sub)
+      toggle(key)
     } catch (e) {
       toasts.error(String(e))
     } finally {
-      openingDb = ''
+      attaching = ''
     }
   }
-  let dbSectionOpen = $state(true)
 
   // Cassandra (Phase 4b): cây keyspace lấy qua command chuyên biệt (cassandra_tree),
   // không đi qua explorer store quan hệ.
@@ -522,23 +536,11 @@
         <div style="padding:var(--px-16) var(--px-12);text-align:center;font-size:var(--px-12);color:var(--muted)">Loading keyspace…</div>
       {/if}
     {:else}
-      {#if (selected.system === 'postgres' || selected.system === 'mssql') && (cache?.databases?.length ?? 0) > 0}
-        <!-- Postgres: every database on the server. Current one is marked; -->
-        <!-- clicking another opens it as its own connection. -->
-        {@render row({ key: 'databases', depth: 0, glyph: '🗄', color: C.folder, name: 'Databases', meta: String(cache?.databases?.length ?? 0), head: true, expandable: true, onClick: () => (dbSectionOpen = !dbSectionOpen) })}
-        {#if dbSectionOpen}
-          {#each cache?.databases ?? [] as db (db.name)}
-            {@render row({
-              key: `db:${db.name}`,
-              depth: 1,
-              glyph: db.current ? '●' : '◇',
-              color: db.current ? 'var(--primary)' : C.schema,
-              name: db.name,
-              meta: db.current ? 'current' : openingDb === db.name ? 'opening…' : 'open',
-              onClick: () => !db.current && openDatabase(db.name),
-            })}
-          {/each}
-        {/if}
+      {#if pgMssqlMultiDb}
+        <!-- current database header (PG/MSSQL bind one DB per connection); its -->
+        <!-- schemas render below at base=1. Other databases follow the schema loop. -->
+        {@const curDb = cache?.databases?.find((d) => d.current)}
+        {@render row({ key: 'curdb', depth: 0, glyph: '●', color: 'var(--primary)', name: curDb?.name ?? selected.database ?? 'database', meta: 'current', head: true })}
       {/if}
 
       {#if isSqlite}
@@ -1034,6 +1036,49 @@
           {/if}
         {/if}
       {/each}
+
+      {#if pgMssqlMultiDb}
+        <!-- other databases on the server — browsed via internal sub-connection -->
+        <!-- (attach_database); expand to see their full object tree. No duplicate -->
+        <!-- sidebar connection. -->
+        {#each (cache?.databases ?? []).filter((d) => !d.current) as db (db.name)}
+          {@const fkey = `fdb:${db.name}`}
+          {@const sub = dbSubId[db.name]}
+          {@const fcache = sub ? explorer.cache[sub] : undefined}
+          {@render row({ key: fkey, depth: 0, glyph: '◇', color: C.schema, name: db.name, meta: attaching === db.name ? 'attaching…' : 'database', head: true, expandable: true, onClick: () => toggleForeignDb(db.name) })}
+          {#if expanded.has(fkey) && fcache}
+            {#each fcache.schemas ?? [] as fsch (fsch.name)}
+              {@const skey = `${fkey}:s:${fsch.name}`}
+              {@const fsc = fcache.bySchema[fsch.name]}
+              {@render row({ key: skey, depth: 1, glyph: '▤', color: C.schema, name: fsch.name, meta: 'schema', head: true, expandable: true, onClick: () => { toggle(skey); if (sub && !fsc?.tables) void explorer.loadSchemaChildren(sub, fsch.name) } })}
+              {#if expanded.has(skey) && fsc}
+                {@const fTables = fsc.tables?.filter((t) => t.kind !== 'view') ?? []}
+                {@const fViews = fsc.tables?.filter((t) => t.kind === 'view') ?? []}
+                {@const fProcs = fsc.routines?.filter((r) => r.kind === 'procedure') ?? []}
+                {@const fFns = fsc.routines?.filter((r) => r.kind !== 'procedure') ?? []}
+                {#each [['t', 'Tables', '▤', fTables], ['v', 'Views', '◫', fViews], ['p', 'Procedures', '⚙', fProcs], ['fn', 'Functions', 'ƒ', fFns], ['tg', 'Triggers', '⚡', fsc.triggers ?? []], ...(isPg ? [['sq', 'Sequences', '#', fsc.sequences ?? []]] : [])] as [fk, label, glyph, items] (fk)}
+                  {@const folderKey = `${skey}:${fk}`}
+                  {@render row({ key: folderKey, depth: 2, glyph: glyph as string, color: C.folder, name: label as string, meta: String((items as unknown[]).length), head: true, expandable: true, onClick: () => toggle(folderKey) })}
+                  {#if expanded.has(folderKey)}
+                    {#each items as it (('name' in (it as object) ? (it as { name: string }).name : String(it)))}
+                      {@const nm = (it as { name: string }).name}
+                      {@render row({
+                        key: `${folderKey}:${nm}`,
+                        depth: 3,
+                        glyph: glyph as string,
+                        color: fk === 't' ? C.table : fk === 'v' ? C.view : fk === 'tg' ? C.trig : fk === 'sq' ? C.seq : fk === 'p' ? C.proc : C.func,
+                        name: nm,
+                        dragData: fk === 't' ? JSON.stringify({ schema: fsch.name, table: nm }) : undefined,
+                        onDblClick: fk === 't' && sub ? () => tabs.openTableViewer(sub, fsch.name, nm) : undefined,
+                      })}
+                    {/each}
+                  {/if}
+                {/each}
+              {/if}
+            {/each}
+          {/if}
+        {/each}
+      {/if}
     {/if}
   </div>
 
