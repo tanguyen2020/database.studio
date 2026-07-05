@@ -129,7 +129,7 @@ test('Compare Databases entry preselects the same connection', async ({ page }) 
   await page.waitForTimeout(500)
   await page.getByRole('treeitem', { name: /app current/ }).first().click({ button: 'right' })
   await page.waitForTimeout(200)
-  await page.getByText(/Compare Databases \(same connection\)/).first().click()
+  await page.getByText(/Compare Databases…/).first().click()
   await page.waitForTimeout(500)
   await expect(page.getByRole('tab', { name: /Schema Compare/ }).first()).toBeVisible()
   // both connections preset → both database dropdowns appear
