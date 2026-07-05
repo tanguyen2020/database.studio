@@ -111,7 +111,8 @@
     } else if (key === 'h') {
       e.preventDefault()
       tabs.openUtilityTab('history', 'Query History')
-    } else if (key === 't' && !e.shiftKey) {
+    } else if ((key === 't' || key === 'n') && !e.shiftKey) {
+      // Ctrl/Cmd+T or Ctrl/Cmd+N → new Query Editor tab
       e.preventDefault()
       tabs.openSqlTab({})
     } else if (key === 'w') {

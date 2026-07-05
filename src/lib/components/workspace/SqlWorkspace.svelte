@@ -21,7 +21,7 @@
   import { formatSql } from '$lib/sql/format'
   import { mapErrorToDocument } from '$lib/sql/errors'
   import { lintSql, schemaLints, toCmDiagnostics } from '$lib/sql/lint-client'
-  import { splitStatements, statementAtOffset } from '$lib/sql/statements'
+  import { splitStatements, statementAtOffset, offsetToLineCol } from '$lib/sql/statements'
   import type { TabState } from '$lib/types'
   import type { Diagnostic } from '@codemirror/lint'
   import { untrack } from 'svelte'
@@ -166,14 +166,16 @@
     editor.clearErrors()
     const doc = editor.getDoc()
     const range = editor.getSelectionRange()
-    // Selection → run only the statement(s) overlapping it; else run all.
-    // Statements are always split from the full document so error positions
-    // stay document-accurate.
-    const all = splitStatements(doc)
+    // Selection → run EXACTLY the selected text (split into statements, offsets
+    // rebased to the document so error positions stay accurate); else run all.
     const statements =
       range.from === range.to
-        ? all
-        : all.filter((s) => s.to > range.from && s.from < range.to)
+        ? splitStatements(doc)
+        : splitStatements(doc.slice(range.from, range.to)).map((s) => {
+            const from = s.from + range.from
+            const { line, col } = offsetToLineCol(doc, from)
+            return { ...s, from, to: s.to + range.from, startLine: line, startCol: col }
+          })
     if (statements.length === 0) {
       toasts.show('No statement to run')
       return

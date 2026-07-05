@@ -189,9 +189,17 @@
     tabs.openTableViewer(cid, schema, t.name)
   }
 
-  // `database` binds a Query Editor tab to another database on the same server
-  // (foreign-db subtree) — the base connection stays, tab.state.database routes
-  // the run through an attached sub-connection (see SqlWorkspace.resolveRunConn).
+  // The database a Query Editor tab should target for an object in `schema`:
+  // an explicit database (foreign-db subtree) wins; otherwise for MySQL/MariaDB
+  // the schema IS the database (item 3 — open the tab on the selected DB), while
+  // PG/MSSQL objects live in the connection's current database (undefined → default).
+  function dbForSchema(schema: string, database?: string): string | undefined {
+    return database ?? (schemaIsDatabase ? schema : undefined)
+  }
+
+  // `database` binds a Query Editor tab to another database on the same server —
+  // the base connection stays, tab.state.database routes the run through an
+  // attached sub-connection (see SqlWorkspace.resolveRunConn).
   function newQuery(schema: string, table?: string, database?: string) {
     if (!selected) return
     const query = table ? selectStarSql(selected.system, schema, table) : ''
@@ -200,8 +208,9 @@
       title: table ? `${table} · SELECT` : 'Untitled query',
       query,
     })
-    if (database) {
-      tab.state.database = database
+    const db = dbForSchema(schema, database)
+    if (db) {
+      tab.state.database = db
       tabs.schedulePersist()
     }
   }
@@ -229,7 +238,7 @@
     const sys = selected.system
     const gen = { select: genSelect, insert: genInsert, update: genUpdate, delete: genDelete, ddl: genCreate }[kind]
     const suffix = { select: 'SELECT', insert: 'INSERT', update: 'UPDATE', delete: 'DELETE', ddl: 'DDL' }[kind]
-    stmtTab(`${table} · ${suffix}`, gen(sys, schema, table, cols), database)
+    stmtTab(`${table} · ${suffix}`, gen(sys, schema, table, cols), dbForSchema(schema, database))
   }
 
   async function copyDdl(schema: string, table: string, cid = selected?.id) {
@@ -281,14 +290,15 @@
       dataSql,
     }
     const script = generateScript([obj], mode)
-    stmtTab(`${table} · scripts`, `-- ${table} (${mode})\n\n${script}`, database)
+    stmtTab(`${table} · scripts`, `-- ${table} (${mode})\n\n${script}`, dbForSchema(schema, database))
   }
 
   // "Create <type>…" folder action — open a ready-to-edit CREATE skeleton in a SQL
-  // tab, bound to the given database (foreign-db subtree passes db.name).
+  // tab, bound to the target database (foreign-db subtree passes db.name; MySQL
+  // uses the schema-as-database).
   function createObject(kind: CreateKind, schema: string, database?: string) {
     if (!selected) return
-    stmtTab(`Create ${kind}`, createTemplate(selected.system, kind, schema), database)
+    stmtTab(`Create ${kind}`, createTemplate(selected.system, kind, schema), dbForSchema(schema, database))
   }
 
   // T18 — Show Definition: lấy text định nghĩa THẬT từ server (view/trigger/proc/func).
@@ -671,7 +681,7 @@
                   <ContextMenu.Item onclick={() => selected && tabs.openTableDesigner(selected.id, schema.name, t.name)}>Design Table</ContextMenu.Item>
                   <ContextMenu.Item onclick={() => selected && tabs.openIndexManager(selected.id, schema.name, t.name)}>Manage Indexes & FKs…</ContextMenu.Item>
                   <ContextMenu.Item
-                    onclick={() => stmtTab(`Rename ${t.name}`, genRename(selected!.system, schema.name, t.name))}
+                    onclick={() => stmtTab(`Rename ${t.name}`, genRename(selected!.system, schema.name, t.name), dbForSchema(schema.name))}
                   >
                     Rename…
                   </ContextMenu.Item>
@@ -720,13 +730,13 @@
                   {#if !t.locked}
                     <ContextMenu.Item
                       variant="destructive"
-                      onclick={() => stmtTab(`Truncate ${t.name}`, genTruncate(selected!.system, schema.name, t.name))}
+                      onclick={() => stmtTab(`Truncate ${t.name}`, genTruncate(selected!.system, schema.name, t.name), dbForSchema(schema.name))}
                     >
                       Truncate
                     </ContextMenu.Item>
                     <ContextMenu.Item
                       variant="destructive"
-                      onclick={() => stmtTab(`Drop ${t.name}`, genDrop(selected!.system, schema.name, t.name))}
+                      onclick={() => stmtTab(`Drop ${t.name}`, genDrop(selected!.system, schema.name, t.name), dbForSchema(schema.name))}
                     >
                       Drop
                     </ContextMenu.Item>
