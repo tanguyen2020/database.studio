@@ -655,7 +655,7 @@
             <ContextMenu.Item onclick={() => newQuery(schema.name)}>New Query</ContextMenu.Item>
             <ContextMenu.Separator />
             <ContextMenu.Item onclick={() => selected && tabs.openErDiagram(selected.id, schema.name)}>View ER Diagram</ContextMenu.Item>
-            <ContextMenu.Item onclick={() => selected && tabs.openErDiagram(selected.id, schema.name, { blank: true })}>New ER Diagram (drag tables in)</ContextMenu.Item>
+            <ContextMenu.Item onclick={() => selected && tabs.openErDiagram(selected.id, schema.name, { blank: true })}>New ER Diagram</ContextMenu.Item>
             <ContextMenu.Item onclick={() => selected && tabs.openIndexScanner(selected.id, schema.name)}>Scan Indexes</ContextMenu.Item>
             <ContextMenu.Item onclick={() => selected && tabs.openTableDesigner(selected.id, schema.name, '')}>New Table…</ContextMenu.Item>
             {#if isClickhouse}
@@ -1243,7 +1243,7 @@
                   <ContextMenu.Item onclick={() => newQuery(fsch.name, undefined, db.name)}>New Query</ContextMenu.Item>
                   <ContextMenu.Separator />
                   <ContextMenu.Item onclick={() => sub && tabs.openErDiagram(sub, fsch.name)}>View ER Diagram</ContextMenu.Item>
-                  <ContextMenu.Item onclick={() => sub && tabs.openErDiagram(sub, fsch.name, { blank: true })}>New ER Diagram (drag tables in)</ContextMenu.Item>
+                  <ContextMenu.Item onclick={() => sub && tabs.openErDiagram(sub, fsch.name, { blank: true })}>New ER Diagram</ContextMenu.Item>
                   <ContextMenu.Item onclick={() => sub && tabs.openIndexScanner(sub, fsch.name)}>Scan Indexes</ContextMenu.Item>
                   <ContextMenu.Item onclick={() => sub && tabs.openTableDesigner(sub, fsch.name, '')}>New Table…</ContextMenu.Item>
                   <ContextMenu.Item onclick={() => createObject('view', fsch.name, db.name)}>Create View…</ContextMenu.Item>
