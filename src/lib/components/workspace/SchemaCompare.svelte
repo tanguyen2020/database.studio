@@ -35,6 +35,40 @@
   const srcProfile = $derived(connections.byId(srcConn))
   const tgtProfile = $derived(connections.byId(tgtConn))
 
+  // Compare two databases — of different connections OR two databases within the
+  // SAME connection (item 6). Picking a database attaches an internal sub-connection.
+  let srcDb = $state<string | null>(null)
+  let tgtDb = $state<string | null>(null)
+  let srcDbs = $state<string[]>([])
+  let tgtDbs = $state<string[]>([])
+
+  async function loadDbs(connId: string, system: string): Promise<string[]> {
+    try {
+      if (system === 'postgres' || system === 'mssql') return (await ipc.listDatabases(connId)).map((d) => d.name)
+      if (system === 'mysql' || system === 'mariadb' || system === 'clickhouse')
+        return (await ipc.listSchemas(connId)).map((s) => s.name)
+      return []
+    } catch {
+      return []
+    }
+  }
+  $effect(() => {
+    const c = srcConn
+    const sys = srcProfile?.system
+    if (c && sys) untrack(() => void loadDbs(c, sys).then((d) => { srcDbs = d }))
+    else srcDbs = []
+  })
+  $effect(() => {
+    const c = tgtConn
+    const sys = tgtProfile?.system
+    if (c && sys) untrack(() => void loadDbs(c, sys).then((d) => { tgtDbs = d }))
+    else tgtDbs = []
+  })
+  /** Resolve a connection+database pick to the (sub-)connection id to snapshot. */
+  async function resolveId(connId: string, db: string | null): Promise<string> {
+    return db ? await ipc.attachDatabase(connId, db) : connId
+  }
+
   async function snapshot(connId: string): Promise<SchemaSnapshot> {
     const schemas = await ipc.listSchemas(connId)
     const schema = schemas.find((s) => s.is_default)?.name ?? schemas[0]?.name ?? 'public'
@@ -72,9 +106,14 @@
       warn = `Cannot compare across engines: ${srcProfile?.system} vs ${tgtProfile?.system}. Pick two connections of the SAME type.`
       return
     }
+    if (srcConn === tgtConn && (srcDb ?? '') === (tgtDb ?? '')) {
+      warn = 'Source and target are the same database — pick two different databases (or connections).'
+      return
+    }
     loading = true
     try {
-      const [s, t] = await Promise.all([snapshot(srcConn), snapshot(tgtConn)])
+      const [srcId, tgtId] = await Promise.all([resolveId(srcConn, srcDb), resolveId(tgtConn, tgtDb)])
+      const [s, t] = await Promise.all([snapshot(srcId), snapshot(tgtId)])
       diffs = compareSchemas(s, t)
       selected = new Set(diffs.filter((d) => d.status !== 'identical').map((d) => d.name))
     } catch (e) {
@@ -87,6 +126,8 @@
   $effect(() => {
     void srcConn
     void tgtConn
+    void srcDb
+    void tgtDb
     untrack(() => void compare())
   })
 
@@ -102,6 +143,7 @@
 
   function swap() {
     ;[srcConn, tgtConn] = [tgtConn, srcConn]
+    ;[srcDb, tgtDb] = [tgtDb, srcDb]
   }
   function toggleSel(name: string) {
     const next = new Set(selected)
@@ -110,7 +152,9 @@
     selected = next
   }
   function openMigration() {
-    if (tgtConn) tabs.openSqlTab({ connectionId: tgtConn, title: 'Migration', query: migration })
+    if (!tgtConn) return
+    const t = tabs.openSqlTab({ connectionId: tgtConn, title: 'Migration', query: migration })
+    if (tgtDb) { t.state.database = tgtDb; tabs.schedulePersist() } // run against the chosen target DB
   }
 
   // T19 — side-by-side DDL diff panel (routine/trigger) + prev/next điều hướng.
@@ -138,16 +182,28 @@
     <span style="font-size:var(--px-11_5);font-weight:700">Structure</span>
     <span style="font-size:var(--px-10_5);color:var(--muted);border:var(--px-1) solid var(--border);border-radius:var(--px-5);padding:var(--px-2) var(--px-7)">tables · views · columns — data is not compared</span>
     <span style="font-size:var(--px-11);color:var(--muted);font-weight:600">SOURCE</span>
-    <select bind:value={srcConn} style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-7);padding:var(--px-5) var(--px-10);font-size:var(--px-12_5);color:var(--text);outline:none;cursor:pointer">
+    <select bind:value={srcConn} title="Source connection" style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-7);padding:var(--px-5) var(--px-10);font-size:var(--px-12_5);color:var(--text);outline:none;cursor:pointer">
       <option value={null}>—</option>
       {#each options as o (o.id)}<option value={o.id}>{o.name} ({o.system})</option>{/each}
     </select>
+    {#if srcDbs.length}
+      <select bind:value={srcDb} title="Source database" style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-7);padding:var(--px-5) var(--px-10);font-size:var(--px-12);color:var(--text);outline:none;cursor:pointer">
+        <option value={null}>{srcProfile?.database || '(current)'}</option>
+        {#each srcDbs as d (d)}<option value={d}>{d}</option>{/each}
+      </select>
+    {/if}
     <span onclick={swap} onkeydown={(e) => e.key === 'Enter' && swap()} role="button" tabindex="0" title="Swap" style="cursor:pointer;color:var(--text2);font-size:var(--px-15)">⇄</span>
     <span style="font-size:var(--px-11);color:var(--muted);font-weight:600">TARGET</span>
-    <select bind:value={tgtConn} style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-7);padding:var(--px-5) var(--px-10);font-size:var(--px-12_5);color:var(--text);outline:none;cursor:pointer">
+    <select bind:value={tgtConn} title="Target connection" style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-7);padding:var(--px-5) var(--px-10);font-size:var(--px-12_5);color:var(--text);outline:none;cursor:pointer">
       <option value={null}>—</option>
       {#each options as o (o.id)}<option value={o.id}>{o.name} ({o.system})</option>{/each}
     </select>
+    {#if tgtDbs.length}
+      <select bind:value={tgtDb} title="Target database" style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-7);padding:var(--px-5) var(--px-10);font-size:var(--px-12);color:var(--text);outline:none;cursor:pointer">
+        <option value={null}>{tgtProfile?.database || '(current)'}</option>
+        {#each tgtDbs as d (d)}<option value={d}>{d}</option>{/each}
+      </select>
+    {/if}
     <div style="display:flex;background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-7);overflow:hidden;margin-left:var(--px-8)">
       <span onclick={() => (mode = 'diff')} onkeydown={(e) => e.key === 'Enter' && (mode = 'diff')} role="button" tabindex="0" style="padding:var(--px-5) var(--px-13);font-size:var(--px-12);font-weight:600;cursor:pointer;background:{mode === 'diff' ? 'var(--primary)' : 'transparent'};color:{mode === 'diff' ? 'var(--hex-fff)' : 'var(--text2)'}">Diff</span>
       <span onclick={() => (mode = 'sync')} onkeydown={(e) => e.key === 'Enter' && (mode = 'sync')} role="button" tabindex="0" style="padding:var(--px-5) var(--px-13);font-size:var(--px-12);font-weight:600;cursor:pointer;background:{mode === 'sync' ? 'var(--primary)' : 'transparent'};color:{mode === 'sync' ? 'var(--hex-fff)' : 'var(--text2)'};border-left:var(--px-1) solid var(--border)">Sync Script</span>
@@ -223,7 +279,7 @@
         <div style="flex:none;display:flex;align-items:center;gap:var(--px-10);padding:var(--px-12) var(--px-16);border-bottom:var(--px-1) solid var(--border)">
           <span class="mono" style="font-size:var(--px-8);font-weight:700;color:var(--muted);border:var(--px-1) solid var(--border2);border-radius:var(--px-3);padding:var(--px-1) var(--px-4)">{selDiff.kind}</span>
           <span class="mono" style="font-size:var(--px-14);font-weight:700">{selDiff.name}</span>
-          <span style="font-size:var(--px-10);font-weight:700;color:var(--hex-fff);background:{statusMeta[selDiff.status].color};border-radius:var(--px-4);padding:var(--px-1) var(--px-7)">{statusMeta[selDiff.status].label}</span>
+          <span style="font-size:var(--px-10);font-weight:700;color:var(--hex-fff);background:{statusMeta[selDiff.status].color};border-radius:var(--px-4);padding:var(--px-1) var(--px-7)">{statusMeta[selDiff.status].icon} {statusMeta[selDiff.status].label}</span>
           <span onclick={() => stepDiff(-1)} onkeydown={(e) => e.key === 'Enter' && stepDiff(-1)} role="button" tabindex="0" title="Previous" style="margin-left:auto;cursor:pointer;color:var(--text2);font-size:var(--px-14);padding:0 var(--px-6)">◀ Prev</span>
           <span onclick={() => stepDiff(1)} onkeydown={(e) => e.key === 'Enter' && stepDiff(1)} role="button" tabindex="0" title="Next" style="cursor:pointer;color:var(--text2);font-size:var(--px-14);padding:0 var(--px-6)">Next ▶</span>
           <span onclick={() => (selDiff = null)} onkeydown={(e) => e.key === 'Enter' && (selDiff = null)} role="button" tabindex="0" style="cursor:pointer;color:var(--muted);font-size:var(--px-20);margin-left:var(--px-6)">×</span>
