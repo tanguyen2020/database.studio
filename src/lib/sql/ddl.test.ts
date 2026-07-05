@@ -2,7 +2,7 @@
 // dialect, MSSQL dùng TOP, ClickHouse UPDATE/DELETE là ALTER TABLE … mutation.
 
 import { describe, expect, it } from 'vitest'
-import { genAlterTable, genCreate, genDelete, genDrop, genForeignKey, genInsert, genRename, genRenameDatabase, genSelect, genTruncate, genUpdate } from './ddl'
+import { genAlterTable, genCreate, genDelete, genDrop, genDropDatabase, genForeignKey, genInsert, genRename, genRenameDatabase, genSelect, genTruncate, genUpdate } from './ddl'
 import type { ColumnInfo } from '$lib/types'
 
 function col(name: string, data_type: string, opts: Partial<ColumnInfo> = {}): ColumnInfo {
@@ -102,6 +102,19 @@ describe('genAlterTable', () => {
     expect(genAlterTable('postgres', 'public', 'users')).toBe('ALTER TABLE "public"."users"\n  ADD COLUMN "new_column" integer;')
     expect(genAlterTable('mysql', 'app', 'users')).toBe('ALTER TABLE `app`.`users`\n  ADD COLUMN `new_column` INT;')
     expect(genAlterTable('mssql', 'dbo', 'users')).toBe('ALTER TABLE [dbo].[users]\n  ADD [new_column] INT;')
+  })
+})
+
+describe('genDropDatabase', () => {
+  it('DROP DATABASE IF EXISTS per relational dialect (quoted)', () => {
+    expect(genDropDatabase('postgres', 'app')).toBe('DROP DATABASE IF EXISTS "app";')
+    expect(genDropDatabase('mysql', 'app')).toBe('DROP DATABASE IF EXISTS `app`;')
+    expect(genDropDatabase('mariadb', 'app')).toBe('DROP DATABASE IF EXISTS `app`;')
+    expect(genDropDatabase('mssql', 'app')).toBe('DROP DATABASE IF EXISTS [app];')
+    expect(genDropDatabase('clickhouse', 'app')).toBe('DROP DATABASE IF EXISTS `app`;')
+  })
+  it('sqlite returns a comment (file-based)', () => {
+    expect(genDropDatabase('sqlite', 'app')).toMatch(/^-- SQLite databases are files/)
   })
 })
 

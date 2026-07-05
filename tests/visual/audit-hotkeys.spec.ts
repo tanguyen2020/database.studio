@@ -182,3 +182,21 @@ test('MySQL function menu has Execute, Alter, Drop', async ({ page }) => {
   await expect(page.getByText('Drop', { exact: true }).first()).toBeVisible()
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
+
+// User request — allow dropping a database in the connection.
+test('database node context menu can drop a database', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(String(e)))
+  await blockRemoteFonts(page)
+  await page.goto(APP_URL)
+  await page.waitForSelector('#app > *', { timeout: 15_000 })
+  await page.waitForTimeout(300)
+  await page.getByRole('button', { name: /Postgres/ }).first().click()
+  await page.waitForTimeout(500)
+  await page.getByRole('treeitem', { name: /analytics database/ }).first().click({ button: 'right' })
+  await page.waitForTimeout(200)
+  await page.getByText('Drop Database…', { exact: true }).first().click()
+  await page.waitForTimeout(300)
+  await expect(page.locator('.cm-content').first()).toContainText('DROP DATABASE')
+  expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
+})

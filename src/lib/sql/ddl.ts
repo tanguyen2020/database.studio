@@ -119,6 +119,29 @@ export function genRenameDatabase(system: string, database: string): string {
   }
 }
 
+/**
+ * DROP a database. Opened for review before running (destructive). For PostgreSQL
+ * you must not be connected to the target database. SQLite is a file → comment.
+ */
+export function genDropDatabase(system: string, database: string): string {
+  const d = quoteIdent(system, database)
+  switch (system) {
+    case 'postgres':
+      // Run from another database; add WITH (FORCE) on PG 13+ to close sessions.
+      return `DROP DATABASE IF EXISTS ${d};`
+    case 'mssql':
+      return `DROP DATABASE IF EXISTS ${d};`
+    case 'mysql':
+    case 'mariadb':
+    case 'clickhouse':
+      return `DROP DATABASE IF EXISTS ${d};`
+    case 'sqlite':
+      return `-- SQLite databases are files — delete the .sqlite file on disk instead.`
+    default:
+      return `-- Dropping a database is not supported for ${system}.`
+  }
+}
+
 export function genTruncate(system: string, schema: string, table: string): string {
   return `TRUNCATE TABLE ${target(system, schema, table)};`
 }
