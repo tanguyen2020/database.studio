@@ -46,6 +46,37 @@ test('query editor database dropdown selects a database', async ({ page }) => {
   await page.waitForTimeout(150)
   await expect(dbChip).toContainText('analytics')
 
+  // Running against the picked database must NOT report "Tab has no connection":
+  // the run resolves through an attached sub-connection (base::analytics).
+  await page.locator('.cm-content').first().click()
+  await page.keyboard.type('SELECT * FROM students')
+  await page.getByRole('button', { name: 'Run' }).first().click()
+  await page.waitForTimeout(500)
+  await expect(page.locator('.grid-row').first()).toBeVisible()
+  await expect(page.getByText('Tab has no connection', { exact: true })).toHaveCount(0)
+
+  expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
+})
+
+// Bug report (post-batch-2) — context menus on the database node and foreign-db
+// tables were missing for PG/MSSQL. Right-clicking a foreign database now opens a
+// menu (New Query / Refresh …).
+test('foreign database node has a context menu', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(String(e)))
+  await blockRemoteFonts(page)
+  await page.goto(APP_URL)
+  await page.waitForSelector('#app > *', { timeout: 15_000 })
+  await page.waitForTimeout(300)
+  await page.getByRole('button', { name: /Postgres/ }).first().click()
+  await page.waitForTimeout(500)
+
+  // demo list_databases: current 'app' → foreign 'analytics','postgres' listed as
+  // database nodes in the tree. Right-click one → context menu.
+  await page.getByRole('treeitem', { name: /analytics database/ }).first().click({ button: 'right' })
+  await page.waitForTimeout(200)
+  await expect(page.getByText(/New Query \(in analytics\)/).first()).toBeVisible()
+
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
 

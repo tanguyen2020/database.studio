@@ -68,12 +68,20 @@ class ResultsStore {
    */
   async run(tabId: string, connId: string, statements: SplitStatement[]): Promise<void> {
     if (statements.length === 0) return
-    const profile = connections.byId(connId)
+    // `connId` may be an internal per-database sub-connection (`{baseId}::{db}`,
+    // opened via attach_database when the Query Editor's database dropdown points
+    // at another database). The frontend profile registry only knows the base
+    // connection, so resolve the base for the profile/connected checks while still
+    // executing against the sub-connection id (the backend registry has it live).
+    const baseId = connId.includes('::') ? connId.slice(0, connId.indexOf('::')) : connId
+    const profile = connections.byId(baseId)
     if (!profile) {
       toasts.error('Tab has no connection')
       return
     }
-    if (!profile.connected) {
+    // A real (base) connection may need (re)connecting; an attached sub-connection
+    // was already connected by attach_database, so only guard the base case.
+    if (connId === baseId && !profile.connected) {
       const ok = await connections.connect(connId)
       if (!ok) return
     }

@@ -197,19 +197,26 @@
     void explorer.loadTableDetail(selected.id, schema, table)
   }
 
-  function openData(schema: string, t: TableInfo) {
-    if (!selected) return
-    tabs.openTableViewer(selected.id, schema, t.name)
+  function openData(schema: string, t: TableInfo, cid = selected?.id) {
+    if (!cid) return
+    tabs.openTableViewer(cid, schema, t.name)
   }
 
-  function newQuery(schema: string, table?: string) {
+  // `database` binds a Query Editor tab to another database on the same server
+  // (foreign-db subtree) — the base connection stays, tab.state.database routes
+  // the run through an attached sub-connection (see SqlWorkspace.resolveRunConn).
+  function newQuery(schema: string, table?: string, database?: string) {
     if (!selected) return
     const query = table ? selectStarSql(selected.system, schema, table) : ''
-    tabs.openSqlTab({
+    const tab = tabs.openSqlTab({
       connectionId: selected.id,
       title: table ? `${table} · SELECT` : 'Untitled query',
       query,
     })
+    if (database) {
+      tab.state.database = database
+      tabs.schedulePersist()
+    }
   }
 
   async function copyName(name: string) {
@@ -219,15 +226,15 @@
 
   // DDL Viewer + Generate SQL — sinh từ ColumnInfo thật (ddl.ts), mở trong tab
   // SQL Editor (syntax highlight sẵn). Cột nạp lazy nên phải chờ loadTableDetail.
-  async function columnsOf(schema: string, table: string): Promise<ColumnInfo[]> {
-    if (!selected) return []
-    await explorer.loadTableDetail(selected.id, schema, table)
-    return explorer.cache[selected.id]?.bySchema[schema]?.tableDetails[table]?.columns ?? []
+  async function columnsOf(schema: string, table: string, cid = selected?.id): Promise<ColumnInfo[]> {
+    if (!cid) return []
+    await explorer.loadTableDetail(cid, schema, table)
+    return explorer.cache[cid]?.bySchema[schema]?.tableDetails[table]?.columns ?? []
   }
 
-  async function genSqlTab(kind: 'select' | 'insert' | 'update' | 'delete' | 'ddl', schema: string, table: string) {
-    if (!selected) return
-    const cols = await columnsOf(schema, table)
+  async function genSqlTab(kind: 'select' | 'insert' | 'update' | 'delete' | 'ddl', schema: string, table: string, cid = selected?.id, database?: string) {
+    if (!selected || !cid) return
+    const cols = await columnsOf(schema, table, cid)
     if (!cols.length) {
       toasts.show(`Could not load columns for "${table}"`)
       return
@@ -235,12 +242,12 @@
     const sys = selected.system
     const gen = { select: genSelect, insert: genInsert, update: genUpdate, delete: genDelete, ddl: genCreate }[kind]
     const suffix = { select: 'SELECT', insert: 'INSERT', update: 'UPDATE', delete: 'DELETE', ddl: 'DDL' }[kind]
-    tabs.openSqlTab({ connectionId: selected.id, title: `${table} · ${suffix}`, query: gen(sys, schema, table, cols) })
+    stmtTab(`${table} · ${suffix}`, gen(sys, schema, table, cols), database)
   }
 
-  async function copyDdl(schema: string, table: string) {
-    if (!selected) return
-    const cols = await columnsOf(schema, table)
+  async function copyDdl(schema: string, table: string, cid = selected?.id) {
+    if (!selected || !cid) return
+    const cols = await columnsOf(schema, table, cid)
     if (!cols.length) {
       toasts.show(`Could not load columns for "${table}"`)
       return
@@ -250,25 +257,30 @@
   }
 
   // Rename/Truncate/Drop — mở SQL editable để review trước khi Run (port HTML dòng 3370-3398).
-  function stmtTab(title: string, sql: string) {
+  // `database` binds the SQL tab to a foreign database (see newQuery).
+  function stmtTab(title: string, sql: string, database?: string) {
     if (!selected) return
-    tabs.openSqlTab({ connectionId: selected.id, title, query: sql })
+    const tab = tabs.openSqlTab({ connectionId: selected.id, title, query: sql })
+    if (database) {
+      tab.state.database = database
+      tabs.schedulePersist()
+    }
   }
 
   // Generate Scripts cho MỘT bảng theo mode (structure/data/both) — mở SQL tab.
   // Dùng lại engine thuần generateScript + genCreate + genForeignKey + toSqlInsert.
-  async function genTableScript(schema: string, table: string, mode: ScriptMode) {
-    if (!selected) return
+  async function genTableScript(schema: string, table: string, mode: ScriptMode, cid = selected?.id, database?: string) {
+    if (!selected || !cid) return
     const sys = selected.system
-    const cols = await columnsOf(schema, table)
+    const cols = await columnsOf(schema, table, cid)
     if (!cols.length) {
       toasts.show(`Could not load columns for "${table}"`)
       return
     }
-    const fks = (await ipc.listForeignKeys(selected.id, schema).catch(() => [])).filter((f) => f.from_table === table)
+    const fks = (await ipc.listForeignKeys(cid, schema).catch(() => [])).filter((f) => f.from_table === table)
     let dataSql: string | undefined
     if (mode !== 'structure') {
-      const res = await ipc.execStatement(selected.id, buildExportSelect({ system: sys, schema, table }), 0)
+      const res = await ipc.execStatement(cid, buildExportSelect({ system: sys, schema, table }), 0)
       if (res.ok && res.result && res.result.rows.length) {
         dataSql = toSqlInsert(table, res.result.cols.map((c) => c[0]), res.result.rows as Record<string, unknown>[])
       }
@@ -282,15 +294,16 @@
       dataSql,
     }
     const script = generateScript([obj], mode)
-    tabs.openSqlTab({ connectionId: selected.id, title: `${table} · scripts`, query: `-- ${table} (${mode})\n\n${script}` })
+    stmtTab(`${table} · scripts`, `-- ${table} (${mode})\n\n${script}`, database)
   }
 
   // T18 — Show Definition: lấy text định nghĩa THẬT từ server (view/trigger/proc/func).
-  async function showDefinition(kind: string, schema: string, name: string) {
-    if (!selected) return
+  async function showDefinition(kind: string, schema: string, name: string, cid = selected?.id) {
+    if (!selected || !cid) return
     try {
-      const def = await ipc.objectDefinition(selected.id, schema, kind, name)
-      tabs.openSqlTab({ connectionId: selected.id, title: `${name} · definition`, query: def })
+      const def = await ipc.objectDefinition(cid, schema, kind, name)
+      const database = cid !== selected.id ? (Object.entries(dbSubId).find(([, v]) => v === cid)?.[0]) : undefined
+      stmtTab(`${name} · definition`, def, database)
     } catch (e) {
       toasts.error(String(e))
     }
@@ -573,7 +586,18 @@
         <!-- current database header (PG/MSSQL bind one DB per connection); its -->
         <!-- schemas render below at base=1. Other databases follow the schema loop. -->
         {@const curDb = cache?.databases?.find((d) => d.current)}
-        {@render row({ key: 'curdb', depth: 0, glyph: '●', color: 'var(--primary)', name: curDb?.name ?? selected.database ?? 'database', meta: 'current', head: true })}
+        {#snippet curDbMenu()}
+          <ContextMenu.Content class="w-52">
+            <ContextMenu.Item onclick={() => newQuery('')}>New Query</ContextMenu.Item>
+            <ContextMenu.Item onclick={() => selected && scriptsWizard.show(selected.id, cache?.schemas?.[0]?.name ?? '')}>Generate Scripts…</ContextMenu.Item>
+            <ContextMenu.Item onclick={() => selected && backupWizard.show(selected.id, selected.system)}>Backup & Restore…</ContextMenu.Item>
+            <ContextMenu.Item onclick={() => selected && tabs.openSchemaCompare(selected.id)}>Compare Schemas…</ContextMenu.Item>
+            <ContextMenu.Separator />
+            <ContextMenu.Item onclick={() => copyName(curDb?.name ?? selected.database ?? '')}>Copy Name</ContextMenu.Item>
+            <ContextMenu.Item onclick={() => selected && explorer.refresh(selected.id, { kind: 'connection' })}>Refresh</ContextMenu.Item>
+          </ContextMenu.Content>
+        {/snippet}
+        {@render row({ key: 'curdb', depth: 0, glyph: '●', color: 'var(--primary)', name: curDb?.name ?? selected.database ?? 'database', meta: 'current', head: true }, curDbMenu)}
       {/if}
 
       {#if isSqlite}
@@ -1094,7 +1118,16 @@
           {@const fkey = `fdb:${db.name}`}
           {@const sub = dbSubId[db.name]}
           {@const fcache = sub ? explorer.cache[sub] : undefined}
-          {@render row({ key: fkey, depth: 0, glyph: '◇', color: C.schema, name: db.name, meta: attaching === db.name ? 'attaching…' : 'database', head: true, expandable: true, onClick: () => toggleForeignDb(db.name) })}
+          {#snippet dbMenu()}
+            <ContextMenu.Content class="w-52">
+              <ContextMenu.Item onclick={() => newQuery('', undefined, db.name)}>New Query (in {db.name})</ContextMenu.Item>
+              <ContextMenu.Item onclick={() => toggleForeignDb(db.name)}>{expanded.has(fkey) ? 'Collapse' : 'Expand'}</ContextMenu.Item>
+              <ContextMenu.Separator />
+              <ContextMenu.Item onclick={() => copyName(db.name)}>Copy Name</ContextMenu.Item>
+              <ContextMenu.Item onclick={() => sub && explorer.refresh(sub, { kind: 'connection' })}>Refresh</ContextMenu.Item>
+            </ContextMenu.Content>
+          {/snippet}
+          {@render row({ key: fkey, depth: 0, glyph: '◇', color: C.schema, name: db.name, meta: attaching === db.name ? 'attaching…' : 'database', head: true, expandable: true, onClick: () => toggleForeignDb(db.name) }, dbMenu)}
           {#if expanded.has(fkey) && fcache}
             {#each fcache.schemas ?? [] as fsch (fsch.name)}
               {@const skey = `${fkey}:s:${fsch.name}`}
@@ -1111,6 +1144,52 @@
                   {#if expanded.has(folderKey)}
                     {#each items as it (('name' in (it as object) ? (it as { name: string }).name : String(it)))}
                       {@const nm = (it as { name: string }).name}
+                      {#snippet fObjMenu()}
+                        <ContextMenu.Content class="w-52">
+                          {#if fk === 't' || fk === 'v'}
+                            <ContextMenu.Item onclick={() => sub && tabs.openTableViewer(sub, fsch.name, nm)}>Open Data</ContextMenu.Item>
+                          {/if}
+                          <ContextMenu.Item onclick={() => newQuery(fsch.name, fk === 't' || fk === 'v' ? nm : undefined, db.name)}>New Query</ContextMenu.Item>
+                          {#if fk === 't'}
+                            <ContextMenu.Item onclick={() => sub && importWizard.show(sub, fsch.name)}>Import Data…</ContextMenu.Item>
+                            <ContextMenu.Item onclick={() => sub && exportWizard.showTable(sub, fsch.name, nm)}>Export Data…</ContextMenu.Item>
+                            <ContextMenu.Item onclick={() => sub && copyWizard.show(sub, fsch.name, nm)}>Copy to…</ContextMenu.Item>
+                            <ContextMenu.Item onclick={() => sub && testDataWizard.show(sub, fsch.name, nm)}>Generate Test Data…</ContextMenu.Item>
+                            <ContextMenu.Separator />
+                            <ContextMenu.Item onclick={() => sub && tabs.openTableDesigner(sub, fsch.name, nm)}>Design Table</ContextMenu.Item>
+                            <ContextMenu.Item onclick={() => sub && tabs.openIndexManager(sub, fsch.name, nm)}>Manage Indexes & FKs…</ContextMenu.Item>
+                            <ContextMenu.Separator />
+                            <ContextMenu.Item onclick={() => genSqlTab('select', fsch.name, nm, sub, db.name)}>Generate SQL · SELECT</ContextMenu.Item>
+                            <ContextMenu.Item onclick={() => genSqlTab('insert', fsch.name, nm, sub, db.name)}>Generate SQL · INSERT</ContextMenu.Item>
+                            <ContextMenu.Item onclick={() => genSqlTab('update', fsch.name, nm, sub, db.name)}>Generate SQL · UPDATE</ContextMenu.Item>
+                            <ContextMenu.Item onclick={() => genSqlTab('delete', fsch.name, nm, sub, db.name)}>Generate SQL · DELETE</ContextMenu.Item>
+                            <ContextMenu.Sub>
+                              <ContextMenu.SubTrigger>Generate Scripts</ContextMenu.SubTrigger>
+                              <ContextMenu.SubContent class="w-44">
+                                <ContextMenu.Item onclick={() => genTableScript(fsch.name, nm, 'structure', sub, db.name)}>Structure Only</ContextMenu.Item>
+                                <ContextMenu.Item onclick={() => genTableScript(fsch.name, nm, 'data', sub, db.name)}>Data Only</ContextMenu.Item>
+                                <ContextMenu.Item onclick={() => genTableScript(fsch.name, nm, 'both', sub, db.name)}>Structure and Data</ContextMenu.Item>
+                              </ContextMenu.SubContent>
+                            </ContextMenu.Sub>
+                            <ContextMenu.Item onclick={() => genSqlTab('ddl', fsch.name, nm, sub, db.name)}>View DDL</ContextMenu.Item>
+                          {/if}
+                          {#if fk === 'v' || fk === 'p' || fk === 'fn' || fk === 'tg'}
+                            <ContextMenu.Item onclick={() => sub && showDefinition(fk === 'v' ? 'view' : fk === 'p' ? 'procedure' : fk === 'tg' ? 'trigger' : 'function', fsch.name, nm, sub)}>Show Definition</ContextMenu.Item>
+                          {/if}
+                          <ContextMenu.Separator />
+                          <ContextMenu.Item onclick={() => copyName(nm)}>Copy Name</ContextMenu.Item>
+                          <ContextMenu.Item onclick={() => selected && copyName(`${quoteIdent(selected.system, fsch.name)}.${quoteIdent(selected.system, nm)}`)}>Copy Qualified Name</ContextMenu.Item>
+                          {#if fk === 't'}
+                            <ContextMenu.Item onclick={() => copyDdl(fsch.name, nm, sub)}>Copy DDL</ContextMenu.Item>
+                          {/if}
+                          <ContextMenu.Item onclick={() => sub && explorer.refresh(sub, fk === 't' ? { kind: 'table', schema: fsch.name, table: nm } : { kind: 'schema', schema: fsch.name })}>Refresh</ContextMenu.Item>
+                          {#if fk === 't'}
+                            <ContextMenu.Separator />
+                            <ContextMenu.Item variant="destructive" onclick={() => selected && stmtTab(`Truncate ${nm}`, genTruncate(selected.system, fsch.name, nm), db.name)}>Truncate</ContextMenu.Item>
+                            <ContextMenu.Item variant="destructive" onclick={() => selected && stmtTab(`Drop ${nm}`, genDrop(selected.system, fsch.name, nm), db.name)}>Drop</ContextMenu.Item>
+                          {/if}
+                        </ContextMenu.Content>
+                      {/snippet}
                       {@render row({
                         key: `${folderKey}:${nm}`,
                         depth: 3,
@@ -1119,7 +1198,7 @@
                         name: nm,
                         dragData: fk === 't' ? JSON.stringify({ schema: fsch.name, table: nm }) : undefined,
                         onDblClick: fk === 't' && sub ? () => tabs.openTableViewer(sub, fsch.name, nm) : undefined,
-                      })}
+                      }, fk === 'sq' ? undefined : fObjMenu)}
                     {/each}
                   {/if}
                 {/each}
