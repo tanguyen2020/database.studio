@@ -190,7 +190,7 @@ impl MySqlDriver {
         Ok(rows
             .iter()
             .map(|r| SchemaInfo {
-                name: r.get(0),
+                name: text(r, 0),
                 is_default: r.try_get::<i64, _>(1).map(|v| v != 0).unwrap_or(false),
             })
             .collect())
@@ -213,8 +213,8 @@ impl MySqlDriver {
             .iter()
             .map(|r| TableInfo {
                 schema: schema.to_string(),
-                name: r.get(0),
-                kind: r.get(1),
+                name: text(r, 0),
+                kind: text(r, 1),
                 row_estimate: r.try_get::<i64, _>(2).ok(),
                 locked: false,
                 engine: None,
@@ -242,10 +242,10 @@ impl MySqlDriver {
         Ok(rows
             .iter()
             .map(|r| ColumnInfo {
-                name: r.get(0),
-                data_type: r.get(1),
+                name: text(r, 0),
+                data_type: text(r, 1),
                 nullable: r.try_get::<i64, _>(2).map(|v| v != 0).unwrap_or(true),
-                default: r.try_get(3).ok(),
+                default: text_opt(r, 3),
                 is_pk: r.try_get::<i64, _>(4).map(|v| v != 0).unwrap_or(false),
                 is_fk: r.try_get::<i64, _>(5).map(|v| v != 0).unwrap_or(false),
                 ordinal: r.try_get::<i64, _>(6).map(|v| v as i32).unwrap_or(0),
@@ -267,15 +267,15 @@ impl MySqlDriver {
         .map_err(|e| map_error(self.system, &e))?;
         let mut map: Vec<IndexInfo> = Vec::new();
         for r in &rows {
-            let name: String = r.get(0);
-            let col: String = r.get(3);
+            let name: String = text(r, 0);
+            let col: String = text(r, 3);
             if let Some(existing) = map.iter_mut().find(|i| i.name == name) {
                 existing.columns.push(col);
             } else {
                 map.push(IndexInfo {
                     primary: name == "PRIMARY",
                     name,
-                    method: r.get::<String, _>(1),
+                    method: text(r, 1),
                     unique: r.try_get::<i64, _>(2).map(|v| v == 0).unwrap_or(false),
                     columns: vec![col],
                 });
@@ -300,7 +300,7 @@ impl MySqlDriver {
         .map_err(|e| map_error(self.system, &e))?;
         Ok(rows
             .iter()
-            .map(|r| ConstraintInfo { name: r.get(0), kind: r.get(1), definition: None })
+            .map(|r| ConstraintInfo { name: text(r, 0), kind: text(r, 1), definition: None })
             .collect())
     }
 
@@ -317,9 +317,9 @@ impl MySqlDriver {
         .map_err(|e| map_error(self.system, &e))?;
         let mut out = Vec::new();
         for r in &rows {
-            let name: String = r.get(0);
-            let kind: String = r.get(1);
-            let ret: String = r.get(2);
+            let name: String = text(r, 0);
+            let kind: String = text(r, 1);
+            let ret: String = text(r, 2);
             let params = self.routine_params(schema, &name).await.unwrap_or_default();
             out.push(RoutineInfo {
                 schema: schema.to_string(),
@@ -347,9 +347,9 @@ impl MySqlDriver {
         Ok(rows
             .iter()
             .map(|r| ParamInfo {
-                name: r.get(0),
-                data_type: r.get(1),
-                mode: r.get(2),
+                name: text(r, 0),
+                data_type: text(r, 1),
+                mode: text(r, 2),
                 default: None,
             })
             .collect())
@@ -370,9 +370,9 @@ impl MySqlDriver {
             .iter()
             .map(|r| TriggerInfo {
                 schema: schema.to_string(),
-                name: r.get(0),
-                table: r.get(1),
-                event: r.get(2),
+                name: text(r, 0),
+                table: text(r, 1),
+                event: text(r, 2),
             })
             .collect())
     }
@@ -397,11 +397,11 @@ impl MySqlDriver {
         use std::collections::BTreeMap;
         let mut map: BTreeMap<(String, String), IndexScanRow> = BTreeMap::new();
         for r in &rows {
-            let table: String = r.get(0);
-            let name: String = r.get(1);
-            let col: String = r.get(2);
+            let table: String = text(r, 0);
+            let name: String = text(r, 1);
+            let col: String = text(r, 2);
             let non_unique: i64 = r.try_get(4).unwrap_or(1);
-            let itype: String = r.try_get(5).unwrap_or_else(|_| "BTREE".into());
+            let itype: String = if text(r, 5).is_empty() { "BTREE".into() } else { text(r, 5) };
             let entry = map.entry((table.clone(), name.clone())).or_insert_with(|| IndexScanRow {
                 name: name.clone(),
                 table,
@@ -434,11 +434,11 @@ impl MySqlDriver {
         Ok(rows
             .iter()
             .map(|r| ForeignKey {
-                name: r.get(0),
-                from_table: r.get(1),
-                from_column: r.get(2),
-                to_table: r.get(3),
-                to_column: r.get(4),
+                name: text(r, 0),
+                from_table: text(r, 1),
+                from_column: text(r, 2),
+                to_table: text(r, 3),
+                to_column: text(r, 4),
             })
             .collect())
     }
@@ -446,11 +446,40 @@ impl MySqlDriver {
 
 // Monomorphic helpers with a named connection lifetime — see postgres.rs for
 // why inline executor calls fail once the future is boxed/spawned.
+// NOTE: `sqlx::query(sql)` (arguments = Some(empty)) always uses MySQL's binary
+// PREPARED-statement protocol, which rejects several statements the editor may
+// send with error 1295 ("not supported in the prepared statement protocol yet")
+// — e.g. CREATE TRIGGER, SHOW CREATE …, some DDL. Passing the bare `&str` to the
+// Executor (arguments = None) sends it via the TEXT protocol (COM_QUERY), which
+// has no such restriction. Parameterized paths (exec_params) still prepare.
 async fn fetch_all(
     conn: &mut MySqlConnection,
     sql: &str,
 ) -> Result<Vec<sqlx::mysql::MySqlRow>, sqlx::Error> {
-    sqlx::query(sql).fetch_all(conn).await
+    use sqlx::Executor;
+    conn.fetch_all(sql).await
+}
+
+/// Read a possibly-binary text column as `String`. MySQL 8 returns many
+/// `information_schema` string columns with the *binary* charset, so sqlx types
+/// them as VARBINARY and a plain `String` decode PANICS — which crashed every
+/// introspection call (schemas/tables/columns/…), leaving the Explorer tree
+/// empty (AUDIT-5 item 4). Fall back to raw bytes → UTF-8 (lossy).
+fn text(row: &sqlx::mysql::MySqlRow, idx: usize) -> String {
+    row.try_get::<String, _>(idx)
+        .or_else(|_| row.try_get::<Vec<u8>, _>(idx).map(|b| String::from_utf8_lossy(&b).into_owned()))
+        .unwrap_or_default()
+}
+
+/// Like [`text`] but preserves SQL NULL as `None` (nullable columns, e.g. defaults).
+fn text_opt(row: &sqlx::mysql::MySqlRow, idx: usize) -> Option<String> {
+    row.try_get::<Option<String>, _>(idx)
+        .or_else(|_| {
+            row.try_get::<Option<Vec<u8>>, _>(idx)
+                .map(|o| o.map(|b| String::from_utf8_lossy(&b).into_owned()))
+        })
+        .ok()
+        .flatten()
 }
 
 fn bind_mysql<'q>(
@@ -492,7 +521,9 @@ async fn execute(
     conn: &mut MySqlConnection,
     sql: &str,
 ) -> Result<sqlx::mysql::MySqlQueryResult, sqlx::Error> {
-    sqlx::query(sql).execute(conn).await
+    // Text protocol (see `fetch_all` note) so DDL like CREATE TRIGGER succeeds.
+    use sqlx::Executor;
+    conn.execute(sql).await
 }
 
 async fn describe(

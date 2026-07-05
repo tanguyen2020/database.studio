@@ -601,6 +601,10 @@ export const exportQueryToFile = (
 
 export const cancelExport = (exportId: string) => invoke<void>('cancel_export', { exportId })
 
+/** Write UTF-8 text to a file (used by Ctrl+S save-to-file). Tauri-only. */
+export const writeTextFile = (path: string, contents: string) =>
+  invoke<void>('write_text_file', { path, contents })
+
 export const listSchemas = (connId: string) => invoke<SchemaInfo[]>('list_schemas', { connId })
 
 export const listTables = (connId: string, schema: string) =>

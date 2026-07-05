@@ -20,6 +20,35 @@ test('explorer filter reveals matching tables + hides others', async ({ page }) 
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
 
+// AUDIT-5 items 1 + 10 — Query Editor shows a database dropdown; picking a DB
+// updates the toolbar label (the tab now targets that database).
+test('query editor database dropdown selects a database', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(String(e)))
+  await blockRemoteFonts(page)
+  await page.goto(APP_URL)
+  await page.waitForSelector('#app > *', { timeout: 15_000 })
+  await page.waitForTimeout(300)
+  await page.getByRole('button', { name: /Postgres/ }).first().click()
+  await page.waitForTimeout(200)
+  await page.getByTitle('New SQL tab (Ctrl+T)').first().click()
+  await page.waitForTimeout(300)
+
+  // the database chip is visible next to the connection dropdown
+  const dbChip = page.getByTitle('Database').first()
+  await expect(dbChip).toBeVisible()
+  await dbChip.click()
+  await page.waitForTimeout(150)
+  // demo list_databases → app / analytics / postgres. Scope to the dropdown menu
+  // row (.wk-drop-row is unique to the open menu) — a plain text match would also
+  // hit the sidebar "Analytics" connection group behind the menu backdrop.
+  await page.locator('.wk-drop-row').filter({ hasText: 'analytics' }).click()
+  await page.waitForTimeout(150)
+  await expect(dbChip).toContainText('analytics')
+
+  expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
+})
+
 // AUDIT-5 item 2 — Result Grid has a "No." gutter column (row numbers).
 test('result grid shows a No. gutter column', async ({ page }) => {
   const errors: string[] = []

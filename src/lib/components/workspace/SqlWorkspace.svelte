@@ -16,6 +16,8 @@
   import { ui } from '$lib/stores/ui.svelte'
   import { explorer } from '$lib/stores/explorer.svelte'
   import { snippets } from '$lib/stores/snippets.svelte'
+  import * as ipc from '$lib/ipc'
+  import { IS_TAURI } from '$lib/demo'
   import { formatSql } from '$lib/sql/format'
   import { mapErrorToDocument } from '$lib/sql/errors'
   import { lintSql, schemaLints, toCmDiagnostics } from '$lib/sql/lint-client'
@@ -36,6 +38,62 @@
   const profile = $derived(connections.byId(tab.connectionId))
   const isOrphan = $derived(tab.systemType === 'orphan' || (!!tab.connectionId && !profile))
   const disconnected = $derived(!!profile && !profile.connected)
+
+  // ---- database dropdown (AUDIT-5 items 1 + 10) --------------------------------
+  // Query editor shows the active connection AND lets you pick a database within
+  // it. For PG/MSSQL databases come from list_databases; for MySQL/MariaDB/CH a
+  // "database" is a schema (list_schemas). Selecting one that differs from the
+  // connection's own DB attaches an internal sub-connection at run time, so the
+  // connection dropdown keeps showing the base profile.
+  let dbDropOpen = $state(false)
+  let dbList = $state<string[]>([])
+  const supportsDbSwitch = $derived(
+    !isOrphan && ['postgres', 'mysql', 'mariadb', 'mssql', 'clickhouse'].includes(tab.systemType),
+  )
+  const currentDb = $derived(((tab.state.database as string) || profile?.database || '').trim())
+
+  $effect(() => {
+    const p = profile
+    if (!p?.connected || !supportsDbSwitch) return
+    untrack(() => void loadDbList(p.id, p.system))
+  })
+
+  async function loadDbList(connId: string, system: string) {
+    try {
+      if (system === 'postgres' || system === 'mssql') {
+        dbList = (await ipc.listDatabases(connId)).map((d) => d.name)
+      } else {
+        // MySQL/MariaDB/ClickHouse: a schema IS a database.
+        dbList = (await ipc.listSchemas(connId)).map((s) => s.name)
+      }
+    } catch {
+      dbList = []
+    }
+  }
+
+  function pickDatabase(db: string) {
+    tab.state.database = db
+    tabs.schedulePersist()
+    dbDropOpen = false
+  }
+
+  /** Effective connection to run against: the base connection, or an attached
+   *  sub-connection when the tab points at a different database. */
+  async function resolveRunConn(): Promise<string | null> {
+    if (!tab.connectionId) return null
+    const db = currentDb
+    if (!db || !supportsDbSwitch || db === (profile?.database ?? '')) return tab.connectionId
+    try {
+      return await ipc.attachDatabase(tab.connectionId, db)
+    } catch (e) {
+      toasts.error(`Cannot open database "${db}": ${e}`)
+      return tab.connectionId
+    }
+  }
+
+  // Connection ID the last result was run against — grid edits (apply_grid_changes)
+  // must target the same database, not always the base connection.
+  let runConnId = $state<string | null>(null)
 
   // initial buffer from persisted tab state (component remounts per tab via {#key})
   // svelte-ignore state_referenced_locally
@@ -120,7 +178,10 @@
       toasts.show('No statement to run')
       return
     }
-    await results.run(tab.id, tab.connectionId, statements)
+    const cid = await resolveRunConn()
+    if (!cid) return
+    runConnId = cid
+    await results.run(tab.id, cid, statements)
     showExecErrors()
   }
 
@@ -130,7 +191,10 @@
     const doc = editor.getDoc()
     const stmt = statementAtOffset(doc, editor.getCursorOffset())
     if (!stmt) return
-    await results.run(tab.id, tab.connectionId, [stmt])
+    const cid = await resolveRunConn()
+    if (!cid) return
+    runConnId = cid
+    await results.run(tab.id, cid, [stmt])
     showExecErrors()
   }
 
@@ -156,7 +220,8 @@
   }
 
   function cancel() {
-    if (tab.connectionId) void results.cancel(tab.id, tab.connectionId)
+    const cid = runConnId ?? tab.connectionId
+    if (cid) void results.cancel(tab.id, cid)
   }
 
 
@@ -205,11 +270,28 @@
     tabs.openQueryPlan(tab.connectionId, stmt.sql)
   }
 
-  // Ctrl+S — lưu nội dung editor thành snippet (Saved Queries)
+  // Ctrl+S / Cmd+S — save the editor content to a .sql file via a native save
+  // dialog (AUDIT-5 item 5). In the browser (demo/tests) fall back to saving a
+  // named snippet, since there is no file system.
   async function saveSnippet() {
     if (!editor) return
     const sqlText = editor.getDoc().trim()
     if (!sqlText) return
+    if (IS_TAURI) {
+      const { save: saveFileDialog } = await import('@tauri-apps/plugin-dialog')
+      const suggested = `${(tab.title || 'query').replace(/[^\w.-]+/g, '_')}.sql`
+      const path = await saveFileDialog({ defaultPath: suggested, filters: [{ name: 'SQL', extensions: ['sql'] }] })
+      if (!path) return
+      try {
+        await ipc.writeTextFile(path, sqlText.endsWith('\n') ? sqlText : `${sqlText}\n`)
+        savedQuery = editor.getDoc()
+        tabs.setDirty(tab.id, false)
+        toasts.success(`Saved → ${path}`)
+      } catch (e) {
+        toasts.error(String(e))
+      }
+      return
+    }
     const name = window.prompt('Snippet name:', tab.title)
     if (!name) return
     await snippets.save(name, sqlText, tab.systemType === 'orphan' ? null : tab.systemType)
@@ -329,6 +411,46 @@
       {/if}
     </div>
 
+    <!-- database dropdown (AUDIT-5 items 1 + 10) — pick a DB within the connection -->
+    {#if supportsDbSwitch && profile?.connected}
+      <div style="position:relative">
+        <div
+          onclick={() => (dbDropOpen = !dbDropOpen)}
+          onkeydown={(e) => e.key === 'Enter' && (dbDropOpen = !dbDropOpen)}
+          role="button"
+          tabindex="0"
+          title="Database"
+          style="display:flex;align-items:center;gap:var(--px-6);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-7);padding:var(--px-4) var(--px-9);cursor:pointer"
+        >
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" style="flex:none;color:var(--muted)"><ellipse cx="12" cy="5" rx="8" ry="3"></ellipse><path d="M4 5v14c0 1.66 3.58 3 8 3s8-1.34 8-3V5"></path><path d="M4 12c0 1.66 3.58 3 8 3s8-1.34 8-3"></path></svg>
+          <span style="font-size:var(--px-12);font-weight:600;max-width:var(--px-160);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{currentDb || '(database)'}</span>
+          <span style="color:var(--muted);font-size:var(--px-9)">▾</span>
+        </div>
+        {#if dbDropOpen}
+          <div onclick={() => (dbDropOpen = false)} onkeydown={(e) => e.key === 'Escape' && (dbDropOpen = false)} role="presentation" style="position:fixed;inset:0;z-index:39"></div>
+          <div style="position:absolute;top:var(--px-34);left:0;z-index:40;min-width:var(--px-200);max-height:var(--px-300);overflow:auto;background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-10);box-shadow:0 var(--px-16) var(--px-40) var(--rgba-0-0-0-_45);padding:var(--px-5)">
+            <div style="font-size:var(--px-10);font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);padding:var(--px-6) var(--px-9) var(--px-4)">Database</div>
+            {#if dbList.length === 0}
+              <div style="padding:var(--px-6) var(--px-9);font-size:var(--px-11_5);color:var(--muted)">No databases</div>
+            {/if}
+            {#each dbList as db (db)}
+              <div
+                onclick={() => pickDatabase(db)}
+                onkeydown={(e) => e.key === 'Enter' && pickDatabase(db)}
+                role="button"
+                tabindex="0"
+                class="wk-drop-row"
+                style="display:flex;align-items:center;gap:var(--px-9);padding:var(--px-6) var(--px-9);border-radius:var(--px-7);cursor:pointer;background:{db === currentDb ? 'var(--hover)' : 'transparent'}"
+              >
+                <span class="mono" style="font-size:var(--px-12_5);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{db}</span>
+                <span style="margin-left:auto;flex:none;color:var(--primary);font-size:var(--px-12)">{db === currentDb ? '✓' : ''}</span>
+              </div>
+            {/each}
+          </div>
+        {/if}
+      </div>
+    {/if}
+
     <!-- Run / Cancel — dòng 252-254 -->
     {#if exec?.running}
       <div
@@ -406,7 +528,7 @@
   <!-- results -->
   <div style="min-height:0;flex:1;display:flex;flex-direction:column">
     {#if exec}
-      <ResultPanel {exec} connId={tab.connectionId} active={tabs.active?.id === tab.id} accent={systemMeta(tab.systemType).accent} onJump={jump} />
+      <ResultPanel {exec} connId={runConnId ?? tab.connectionId} active={tabs.active?.id === tab.id} accent={systemMeta(tab.systemType).accent} onJump={jump} />
     {:else}
       <div style="flex:1;display:flex;align-items:center;justify-content:center;font-size:var(--px-12);color:var(--muted)">
         Run a query (F5) to see results · Ctrl+Enter runs the statement at the cursor

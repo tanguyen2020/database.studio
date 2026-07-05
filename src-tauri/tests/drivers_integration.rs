@@ -600,6 +600,71 @@ async fn mysql_roundtrip() {
     mysql_like_roundtrip(("mysql", "8"), "MYSQL", "mysql").await;
 }
 
+/// AUDIT-5 item 4 — the Object Explorer renders MySQL correctly. Drives the exact
+/// introspection chain the tree uses (loadSchemas → loadSchemaChildren →
+/// loadTableDetail): schemas() must surface the connected DB (marked default),
+/// tables() must list both a base table AND a view, columns() the real columns,
+/// triggers() the seeded trigger. Seeds then queries back (no hard-coded expects).
+#[tokio::test]
+async fn mysql_explorer_tree_introspection() {
+    let c = GenericImage::new("mysql", "8")
+        .with_exposed_port(3306.tcp())
+        .with_env_var("MYSQL_ROOT_PASSWORD", PASS)
+        .with_env_var("MYSQL_DATABASE", "testdb")
+        .start()
+        .await
+        .expect("start mysql container");
+    let port = c.get_host_port_ipv4(3306).await.unwrap();
+    let params = MySqlConnParams {
+        host: "localhost".into(),
+        port,
+        database: "testdb".into(),
+        user: "root".into(),
+        password: PASS.into(),
+        ssl: false,
+        ssl_ca: String::new(),
+        ssl_cert: String::new(),
+        ssl_key: String::new(),
+    };
+    let mut drv = retry("mysql", || MySqlDriver::connect(&params, "mysql")).await;
+
+    drv.exec("CREATE TABLE students (id int PRIMARY KEY, name varchar(50), gpa decimal(3,2))").await.unwrap();
+    drv.exec("INSERT INTO students VALUES (1,'an',3.5)").await.unwrap();
+    drv.exec("CREATE VIEW v_students AS SELECT id, name FROM students").await.unwrap();
+    drv.exec(
+        "CREATE TRIGGER trg_students_ins BEFORE INSERT ON students \
+         FOR EACH ROW SET NEW.gpa = COALESCE(NEW.gpa, 0)",
+    )
+    .await
+    .unwrap();
+
+    // loadSchemas: the connected database appears and is flagged default.
+    let schemas = drv.schemas().await.unwrap();
+    let testdb = schemas.iter().find(|s| s.name == "testdb").expect("testdb schema present in tree");
+    assert!(testdb.is_default, "connected DB flagged as default (DATABASE())");
+    assert!(
+        !schemas.iter().any(|s| ["mysql", "information_schema", "performance_schema", "sys"].contains(&s.name.as_str())),
+        "system schemas hidden from the tree",
+    );
+
+    // loadSchemaChildren: base table + view both listed with the right kind.
+    let tables = drv.tables("testdb").await.unwrap();
+    let base = tables.iter().find(|t| t.name == "students").expect("students table listed");
+    assert_eq!(base.kind, "table");
+    let view = tables.iter().find(|t| t.name == "v_students").expect("view listed");
+    assert_eq!(view.kind, "view", "view rendered under Views, not Tables");
+
+    // loadTableDetail: real columns.
+    let cols = drv.columns("testdb", "students").await.unwrap();
+    let names: Vec<&str> = cols.iter().map(|c| c.name.as_str()).collect();
+    assert!(names.contains(&"id") && names.contains(&"name") && names.contains(&"gpa"), "columns: {names:?}");
+    assert!(cols.iter().find(|c| c.name == "id").unwrap().is_pk, "id is PK");
+
+    // triggers folder.
+    let trigs = drv.triggers("testdb").await.unwrap();
+    assert!(trigs.iter().any(|t| t.name == "trg_students_ins" && t.table == "students"), "trigger listed: {trigs:?}");
+}
+
 /// T29 — Index/FK Manager DDL runs on MySQL: create/drop index (DROP INDEX … ON)
 /// + add/drop FK (DROP FOREIGN KEY), exactly as genCreate/DropIndex/ForeignKey emit.
 #[tokio::test]
