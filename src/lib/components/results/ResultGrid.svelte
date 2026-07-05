@@ -100,6 +100,40 @@
     editingCell = null
   }
 
+  // Paste (item 5): TSV/CSV from the clipboard, starting at the selected cell,
+  // filling right/down into existing rows as pending edits.
+  async function pasteFromClipboard() {
+    if (!editable || !selectedCell) return
+    let text = ''
+    try {
+      text = await navigator.clipboard.readText()
+    } catch {
+      toasts.error('Clipboard read blocked')
+      return
+    }
+    if (!text) return
+    const grid = text.replace(/\r\n?/g, '\n').replace(/\n$/, '').split('\n').map((r) => (r.includes('\t') ? r.split('\t') : r.split(',')))
+    const startCol = columns.indexOf(selectedCell.col)
+    if (startCol < 0) return
+    const next = new Map(edits)
+    let changed = 0
+    for (let r = 0; r < grid.length; r++) {
+      const targetRow = selectedCell.row + r
+      if (targetRow >= data.rows.length) break // paste only into loaded rows
+      for (let c = 0; c < grid[r].length; c++) {
+        const ci = startCol + c
+        if (ci >= columns.length) break
+        const col = columns[ci]
+        const original = data.rows[targetRow]?.[col]
+        const coerced = coerce(grid[r][c], original)
+        if (JSON.stringify(coerced) === JSON.stringify(original)) next.delete(cellKey(targetRow, col))
+        else { next.set(cellKey(targetRow, col), coerced); changed++ }
+      }
+    }
+    edits = next
+    if (changed) toasts.success(`Pasted into ${changed} cell(s) — Execute to apply`)
+  }
+
   function toggleDeleteSelected() {
     if (selectedRows.size === 0) return
     const next = new Set(deletedRows)
@@ -463,6 +497,11 @@
       void copySelection()
       return
     }
+    if ((e.ctrlKey || e.metaKey) && e.key === 'v' && editable) {
+      e.preventDefault()
+      void pasteFromClipboard()
+      return
+    }
     if (e.key === 'Escape') {
       ctxMenu = null
       return
@@ -686,12 +725,16 @@
             <!-- cell — dòng 436-446: padding 5px 12px, NULL badge; edit → highlight vàng -->
             <td
               style="border-bottom:var(--px-1) solid var(--border);border-right:var(--px-1) solid var(--border);padding:0;white-space:nowrap;max-width:var(--px-420);overflow:hidden;text-overflow:ellipsis;{edited ? `background:var(--rgba-240-160-32-_18);` : ''}{isCellSelected ? 'box-shadow:inset 0 0 0 var(--px-1) var(--primary);' : ''}"
-              onclick={(e) => { e.stopPropagation(); clickCell(ri, col) }}
+              onclick={(e) => {
+                e.stopPropagation()
+                // single-click edits directly on editable grids (item 4); else select
+                if (editable) startEdit(ri, col)
+                else clickCell(ri, col)
+              }}
               oncontextmenu={(e) => openCtx(e, ri, col)}
               ondblclick={(e) => {
                 e.stopPropagation()
-                if (editable) startEdit(ri, col)
-                else { clickCell(ri, col); void copySelection() }
+                if (!editable) { clickCell(ri, col); void copySelection() }
               }}
               title={cell.isNull ? undefined : cell.text}
             >
@@ -866,6 +909,9 @@
     {@render item('Copy cell', () => copyCell(m.row, m.col))}
     {@render item('Copy row', () => copyRowTsv(m.row))}
     {@render item('Copy column', () => copyColumn(m.col))}
+    {#if editable}
+      {@render item('Paste', () => { clickCell(m.row, m.col); void pasteFromClipboard() })}
+    {/if}
     <div style="height:var(--px-1);background:var(--border);margin:var(--px-4) 0"></div>
     <div style="padding:var(--px-3) var(--px-14);font-size:var(--px-9_5);text-transform:uppercase;letter-spacing:.06em;color:var(--muted)">Copy {selN} row(s) as</div>
     {@render item('Tab-separated', () => copyAs('tsv'))}
