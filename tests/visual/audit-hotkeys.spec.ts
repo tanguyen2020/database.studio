@@ -115,3 +115,70 @@ test('closing a dirty query tab prompts to save', async ({ page }) => {
   await expect(page.getByText('Save changes before closing?')).toHaveCount(0)
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
+
+// Follow-up — "Compare Databases (same connection)…" from the database node opens
+// Schema Compare with both source and target preset to that connection.
+test('Compare Databases entry preselects the same connection', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(String(e)))
+  await blockRemoteFonts(page)
+  await page.goto(APP_URL)
+  await page.waitForSelector('#app > *', { timeout: 15_000 })
+  await page.waitForTimeout(300)
+  await page.getByRole('button', { name: /Postgres/ }).first().click()
+  await page.waitForTimeout(500)
+  await page.getByRole('treeitem', { name: /app current/ }).first().click({ button: 'right' })
+  await page.waitForTimeout(200)
+  await page.getByText(/Compare Databases \(same connection\)/).first().click()
+  await page.waitForTimeout(500)
+  await expect(page.getByRole('tab', { name: /Schema Compare/ }).first()).toBeVisible()
+  // both connections preset → both database dropdowns appear
+  await expect(page.getByTitle('Source database')).toBeVisible()
+  await expect(page.getByTitle('Target database')).toBeVisible()
+  expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
+})
+
+// Follow-up — table context menu has "Alter Table…" (relational Alter).
+test('table context menu has Alter Table', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(String(e)))
+  await blockRemoteFonts(page)
+  await page.goto(APP_URL)
+  await page.waitForSelector('#app > *', { timeout: 15_000 })
+  await page.waitForTimeout(300)
+  await page.getByRole('button', { name: /Postgres/ }).first().click()
+  await page.waitForTimeout(500)
+  await page.getByText('public', { exact: true }).first().dblclick()
+  await page.waitForTimeout(300)
+  await page.getByText('Tables', { exact: true }).first().dblclick()
+  await page.waitForTimeout(300)
+  await page.getByText('students', { exact: true }).first().click({ button: 'right' })
+  await page.waitForTimeout(200)
+  await expect(page.getByText('Alter Table…', { exact: true }).first()).toBeVisible()
+  await page.getByText('Alter Table…', { exact: true }).first().click()
+  await page.waitForTimeout(300)
+  await expect(page.locator('.cm-content').first()).toContainText('ALTER TABLE')
+  expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
+})
+
+// Item 2 (MySQL) — the function context menu exposes Execute/Alter/Drop on MySQL too.
+test('MySQL function menu has Execute, Alter, Drop', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(String(e)))
+  await blockRemoteFonts(page)
+  await page.goto(APP_URL)
+  await page.waitForSelector('#app > *', { timeout: 15_000 })
+  await page.waitForTimeout(300)
+  await page.getByText('localhost:3306', { exact: false }).first().click() // MySQL connection
+  await page.waitForTimeout(500)
+  await page.getByText('public', { exact: true }).first().dblclick()
+  await page.waitForTimeout(300)
+  await page.getByText('Functions', { exact: true }).first().dblclick()
+  await page.waitForTimeout(300)
+  await page.getByText(/add_one/).first().click({ button: 'right' })
+  await page.waitForTimeout(200)
+  await expect(page.getByText('Execute…', { exact: true }).first()).toBeVisible()
+  await expect(page.getByText('Alter…', { exact: true }).first()).toBeVisible()
+  await expect(page.getByText('Drop', { exact: true }).first()).toBeVisible()
+  expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
+})

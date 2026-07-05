@@ -2,7 +2,7 @@
 // dialect, MSSQL dùng TOP, ClickHouse UPDATE/DELETE là ALTER TABLE … mutation.
 
 import { describe, expect, it } from 'vitest'
-import { genCreate, genDelete, genDrop, genForeignKey, genInsert, genRename, genRenameDatabase, genSelect, genTruncate, genUpdate } from './ddl'
+import { genAlterTable, genCreate, genDelete, genDrop, genForeignKey, genInsert, genRename, genRenameDatabase, genSelect, genTruncate, genUpdate } from './ddl'
 import type { ColumnInfo } from '$lib/types'
 
 function col(name: string, data_type: string, opts: Partial<ColumnInfo> = {}): ColumnInfo {
@@ -94,6 +94,14 @@ describe('genRename / genTruncate / genDrop', () => {
   it('truncate + drop IF EXISTS', () => {
     expect(genTruncate('mysql', 'app', 'users')).toBe('TRUNCATE TABLE `app`.`users`;')
     expect(genDrop('mysql', 'app', 'users')).toBe('DROP TABLE IF EXISTS `app`.`users`;')
+  })
+})
+
+describe('genAlterTable', () => {
+  it('PG/MySQL use ADD COLUMN; MSSQL uses ADD', () => {
+    expect(genAlterTable('postgres', 'public', 'users')).toBe('ALTER TABLE "public"."users"\n  ADD COLUMN "new_column" integer;')
+    expect(genAlterTable('mysql', 'app', 'users')).toBe('ALTER TABLE `app`.`users`\n  ADD COLUMN `new_column` INT;')
+    expect(genAlterTable('mssql', 'dbo', 'users')).toBe('ALTER TABLE [dbo].[users]\n  ADD [new_column] INT;')
   })
 })
 

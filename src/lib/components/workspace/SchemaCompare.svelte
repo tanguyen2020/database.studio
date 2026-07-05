@@ -22,8 +22,10 @@
   let { tab }: Props = $props()
 
   const options = $derived(connections.profiles.filter((p) => p.connected))
-  let srcConn = $state<string | null>((untrack(() => tab.state) as { srcConn?: string }).srcConn ?? null)
-  let tgtConn = $state<string | null>(null)
+  type CmpState = { srcConn?: string | null; tgtConn?: string | null; srcDb?: string | null; tgtDb?: string | null; presetTick?: number }
+  const st0 = untrack(() => tab.state) as CmpState
+  let srcConn = $state<string | null>(st0.srcConn ?? null)
+  let tgtConn = $state<string | null>(st0.tgtConn ?? null)
   let mode = $state<'diff' | 'sync'>('diff')
   let showIdentical = $state(false)
   let filter = $state<'all' | 'different' | 'src_only' | 'tgt_only'>('all')
@@ -37,10 +39,26 @@
 
   // Compare two databases — of different connections OR two databases within the
   // SAME connection (item 6). Picking a database attaches an internal sub-connection.
-  let srcDb = $state<string | null>(null)
-  let tgtDb = $state<string | null>(null)
+  let srcDb = $state<string | null>(st0.srcDb ?? null)
+  let tgtDb = $state<string | null>(st0.tgtDb ?? null)
   let srcDbs = $state<string[]>([])
   let tgtDbs = $state<string[]>([])
+
+  // Re-apply a new preset when the singleton tab is reopened (openSchemaCompare
+  // bumps presetTick) — e.g. "Compare Databases…" from a database node.
+  let lastTick = st0.presetTick ?? 0
+  $effect(() => {
+    const s = tab.state as CmpState
+    if ((s.presetTick ?? 0) !== lastTick) {
+      lastTick = s.presetTick ?? 0
+      untrack(() => {
+        srcConn = s.srcConn ?? null
+        tgtConn = s.tgtConn ?? null
+        srcDb = s.srcDb ?? null
+        tgtDb = s.tgtDb ?? null
+      })
+    }
+  })
 
   async function loadDbs(connId: string, system: string): Promise<string[]> {
     try {

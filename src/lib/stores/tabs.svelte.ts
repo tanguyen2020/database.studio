@@ -361,10 +361,24 @@ class TabsStore {
     return tab
   }
 
-  /** Mở tab Schema Compare (singleton). */
-  openSchemaCompare(srcConnId: string | null): TabState {
+  /** Mở tab Schema Compare (singleton). `opts` presets source/target — pass the
+   *  same connection for both (with different databases picked in the UI) to
+   *  compare two databases within one connection. `presetTick` lets the reused
+   *  singleton re-read the preset. */
+  openSchemaCompare(
+    srcConnId: string | null,
+    opts?: { tgtConnId?: string | null; srcDb?: string | null; tgtDb?: string | null },
+  ): TabState {
     const existing = this.tabs.find((t) => t.contentType === 'schema-compare')
+    const state = {
+      srcConn: srcConnId,
+      tgtConn: opts?.tgtConnId ?? null,
+      srcDb: opts?.srcDb ?? null,
+      tgtDb: opts?.tgtDb ?? null,
+      presetTick: ((existing?.state as { presetTick?: number })?.presetTick ?? 0) + 1,
+    }
     if (existing) {
+      existing.state = state
       this.activeTabId = existing.id
       return existing
     }
@@ -377,7 +391,7 @@ class TabsStore {
       title: 'Schema Compare',
       isPinned: false,
       isDirty: false,
-      state: { srcConn: srcConnId },
+      state,
     }
     this.tabs.push(tab)
     this.activeTabId = tab.id

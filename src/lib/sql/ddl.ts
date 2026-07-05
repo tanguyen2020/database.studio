@@ -84,6 +84,15 @@ export function genRename(system: string, schema: string, table: string): string
   return `ALTER TABLE ${t} RENAME TO ${quoteIdent(system, table + '_new')};`
 }
 
+/** ALTER TABLE skeleton (add a column) — per-dialect, ready to edit before running.
+ *  MSSQL uses `ADD` (no COLUMN keyword); others use `ADD COLUMN`. */
+export function genAlterTable(system: string, schema: string, table: string): string {
+  const t = target(system, schema, table)
+  const colType = system === 'postgres' ? 'integer' : 'INT'
+  const addKw = system === 'mssql' ? 'ADD' : 'ADD COLUMN'
+  return `ALTER TABLE ${t}\n  ${addKw} ${quoteIdent(system, 'new_column')} ${colType};`
+}
+
 /**
  * Rename a database/schema. Emits a ready-to-edit statement (new name defaults to
  * `<old>_new`). MySQL/MariaDB have no RENAME DATABASE and SQLite is a file — those
