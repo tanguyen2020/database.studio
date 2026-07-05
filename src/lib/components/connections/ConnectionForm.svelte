@@ -212,9 +212,9 @@
 </script>
 
 {#if draft}
-  <!-- overlay — port dòng 2168 -->
+  <!-- overlay — port dòng 2168. Backdrop-click does NOT close the form (avoid
+       losing entered connection details); use the × button or Escape. -->
   <div
-    onclick={close}
     onkeydown={(e) => e.key === 'Escape' && close()}
     role="presentation"
     style="position:fixed;inset:0;background:var(--rgba-0-0-0-_5);display:flex;align-items:center;justify-content:center;z-index:50"

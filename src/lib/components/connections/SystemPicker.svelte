@@ -22,8 +22,9 @@
 </script>
 
 {#if ui.pickerOpen}
+  <!-- Backdrop-click does NOT close (use × or Escape) — consistent with the
+       connection form, so the New Connection flow isn't dismissed accidentally. -->
   <div
-    onclick={close}
     onkeydown={(e) => e.key === 'Escape' && close()}
     role="presentation"
     style="position:fixed;inset:0;background:var(--rgba-0-0-0-_5);display:flex;align-items:center;justify-content:center;z-index:57"
