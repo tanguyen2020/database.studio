@@ -25,7 +25,7 @@
   import { backupWizard } from '$lib/stores/backup.svelte'
   import * as chops from '$lib/sql/chops'
   import { toasts } from '$lib/stores/toast.svelte'
-  import { quoteIdent, selectStarSql } from '$lib/sql/dialect'
+  import { quoteIdent, qualified, selectStarSql } from '$lib/sql/dialect'
   import { genCreate, genDelete, genDrop, genForeignKey, genInsert, genRename, genRenameDatabase, genSelect, genTruncate, genUpdate } from '$lib/sql/ddl'
   import { generateScript, type DbObject, type ScriptMode } from '$lib/sql/scripts'
   import { createTemplate, type CreateKind } from '$lib/sql/create-templates'
@@ -302,15 +302,30 @@
   }
 
   // T18 — Show Definition: lấy text định nghĩa THẬT từ server (view/trigger/proc/func).
-  async function showDefinition(kind: string, schema: string, name: string, cid = selected?.id) {
+  // `titleSuffix='alter'` opens the same server DDL as an editable "Alter" tab —
+  // for PG that DDL is `CREATE OR REPLACE …` (re-running alters in place); for
+  // MSSQL/MySQL the user edits CREATE→ALTER or drops+recreates as the dialect needs.
+  async function showDefinition(kind: string, schema: string, name: string, cid = selected?.id, titleSuffix = 'definition') {
     if (!selected || !cid) return
     try {
       const def = await ipc.objectDefinition(cid, schema, kind, name)
       const database = cid !== selected.id ? (Object.entries(dbSubId).find(([, v]) => v === cid)?.[0]) : undefined
-      stmtTab(`${name} · definition`, def, database)
+      stmtTab(`${name} · ${titleSuffix}`, def, database)
     } catch (e) {
       toasts.error(String(e))
     }
+  }
+  const alterObject = (kind: string, schema: string, name: string, cid = selected?.id) =>
+    showDefinition(kind, schema, name, cid, 'alter')
+
+  // Sequences (PG only) — Alter/Drop skeletons opened for review.
+  function alterSequence(schema: string, name: string) {
+    if (!selected) return
+    stmtTab(`Alter ${name}`, `ALTER SEQUENCE ${qualified(selected.system, schema, name)}\n  INCREMENT BY 1\n  RESTART WITH 1;`)
+  }
+  function dropSequence(schema: string, name: string) {
+    if (!selected) return
+    stmtTab(`Drop ${name}`, `DROP SEQUENCE IF EXISTS ${qualified(selected.system, schema, name)};`)
   }
 
   // T18 — Drop: sinh câu DROP mở trong editor để review (không tự chạy).
@@ -875,6 +890,7 @@
                 <ContextMenu.Content class="w-44">
                   <ContextMenu.Item onclick={() => openData(schema.name, v)}>Open Data</ContextMenu.Item>
                   <ContextMenu.Item onclick={() => showDefinition('view', schema.name, v.name)}>Show Definition</ContextMenu.Item>
+                  <ContextMenu.Item onclick={() => alterObject('view', schema.name, v.name)}>Alter…</ContextMenu.Item>
                   <ContextMenu.Item onclick={() => newQuery(schema.name, v.name)}>New Query</ContextMenu.Item>
                   <ContextMenu.Item onclick={() => copyName(v.name)}>Copy Name</ContextMenu.Item>
                   <ContextMenu.Separator />
@@ -965,6 +981,7 @@
                   <ContextMenu.Content class="w-44">
                     <ContextMenu.Item onclick={() => execRoutine(schema.name, r)}>Execute…</ContextMenu.Item>
                     <ContextMenu.Item onclick={() => showDefinition('procedure', schema.name, r.name)}>Show Definition</ContextMenu.Item>
+                    <ContextMenu.Item onclick={() => alterObject('procedure', schema.name, r.name)}>Alter…</ContextMenu.Item>
                     <ContextMenu.Item onclick={() => renameRoutine(schema.name, r)}>Rename…</ContextMenu.Item>
                     <ContextMenu.Item onclick={() => copyName(r.name)}>Copy Name</ContextMenu.Item>
                     <ContextMenu.Separator />
@@ -1006,6 +1023,7 @@
                     <ContextMenu.Content class="w-44">
                       <ContextMenu.Item onclick={() => execRoutine(schema.name, r)}>Execute…</ContextMenu.Item>
                       <ContextMenu.Item onclick={() => showDefinition('function', schema.name, r.name)}>Show Definition</ContextMenu.Item>
+                      <ContextMenu.Item onclick={() => alterObject('function', schema.name, r.name)}>Alter…</ContextMenu.Item>
                       <ContextMenu.Item onclick={() => renameRoutine(schema.name, r)}>Rename…</ContextMenu.Item>
                       <ContextMenu.Item onclick={() => copyName(r.name)}>Copy Name</ContextMenu.Item>
                       <ContextMenu.Separator />
@@ -1032,6 +1050,7 @@
                     <ContextMenu.Content class="w-44">
                       <ContextMenu.Item onclick={() => execRoutine(schema.name, r)}>Execute…</ContextMenu.Item>
                       <ContextMenu.Item onclick={() => showDefinition('function', schema.name, r.name)}>Show Definition</ContextMenu.Item>
+                      <ContextMenu.Item onclick={() => alterObject('function', schema.name, r.name)}>Alter…</ContextMenu.Item>
                       <ContextMenu.Item onclick={() => renameRoutine(schema.name, r)}>Rename…</ContextMenu.Item>
                       <ContextMenu.Item onclick={() => copyName(r.name)}>Copy Name</ContextMenu.Item>
                       <ContextMenu.Separator />
@@ -1073,6 +1092,7 @@
                     <ContextMenu.Content class="w-44">
                       <ContextMenu.Item onclick={() => execRoutine(schema.name, r)}>Execute…</ContextMenu.Item>
                       <ContextMenu.Item onclick={() => showDefinition('function', schema.name, r.name)}>Show Definition</ContextMenu.Item>
+                      <ContextMenu.Item onclick={() => alterObject('function', schema.name, r.name)}>Alter…</ContextMenu.Item>
                       <ContextMenu.Item onclick={() => renameRoutine(schema.name, r)}>Rename…</ContextMenu.Item>
                       <ContextMenu.Item onclick={() => copyName(r.name)}>Copy Name</ContextMenu.Item>
                       <ContextMenu.Separator />
@@ -1116,6 +1136,7 @@
               {#snippet trigMenu()}
                 <ContextMenu.Content class="w-44">
                   <ContextMenu.Item onclick={() => showDefinition('trigger', schema.name, tg.name)}>Show Definition</ContextMenu.Item>
+                  <ContextMenu.Item onclick={() => alterObject('trigger', schema.name, tg.name)}>Alter…</ContextMenu.Item>
                   <ContextMenu.Item onclick={() => copyName(tg.name)}>Copy Name</ContextMenu.Item>
                   <ContextMenu.Separator />
                   <ContextMenu.Item variant="destructive" onclick={() => dropObject('trigger', schema.name, tg.name, tg.table)}>Drop</ContextMenu.Item>
@@ -1154,7 +1175,15 @@
             }, seqsFolderMenu)}
             {#if searching || expanded.has(`f:${schema.name}:seqs`)}
               {#each sc.sequences ?? [] as sq (sq.name)}
-                {@render row({ key: `sq:${schema.name}.${sq.name}`, depth: base + 2, glyph: '#', color: C.seq, name: sq.name })}
+                {#snippet seqMenu()}
+                  <ContextMenu.Content class="w-44">
+                    <ContextMenu.Item onclick={() => alterSequence(schema.name, sq.name)}>Alter…</ContextMenu.Item>
+                    <ContextMenu.Item onclick={() => copyName(sq.name)}>Copy Name</ContextMenu.Item>
+                    <ContextMenu.Separator />
+                    <ContextMenu.Item variant="destructive" onclick={() => dropSequence(schema.name, sq.name)}>Drop</ContextMenu.Item>
+                  </ContextMenu.Content>
+                {/snippet}
+                {@render row({ key: `sq:${schema.name}.${sq.name}`, depth: base + 2, glyph: '#', color: C.seq, name: sq.name }, seqMenu)}
               {/each}
             {/if}
           {/if}
@@ -1268,7 +1297,14 @@
                             <ContextMenu.Item onclick={() => genSqlTab('ddl', fsch.name, nm, sub, db.name)}>View DDL</ContextMenu.Item>
                           {/if}
                           {#if fk === 'v' || fk === 'p' || fk === 'fn' || fk === 'tg'}
-                            <ContextMenu.Item onclick={() => sub && showDefinition(fk === 'v' ? 'view' : fk === 'p' ? 'procedure' : fk === 'tg' ? 'trigger' : 'function', fsch.name, nm, sub)}>Show Definition</ContextMenu.Item>
+                            {@const okind = fk === 'v' ? 'view' : fk === 'p' ? 'procedure' : fk === 'tg' ? 'trigger' : 'function'}
+                            <ContextMenu.Item onclick={() => sub && showDefinition(okind, fsch.name, nm, sub)}>Show Definition</ContextMenu.Item>
+                            <ContextMenu.Item onclick={() => sub && alterObject(okind, fsch.name, nm, sub)}>Alter…</ContextMenu.Item>
+                            {#if fk === 'p' || fk === 'fn'}
+                              <ContextMenu.Item variant="destructive" onclick={() => stmtTab(`Drop ${nm}`, `DROP ${fk === 'p' ? 'PROCEDURE' : 'FUNCTION'} IF EXISTS ${selected ? qualified(selected.system, fsch.name, nm) : nm};`, db.name)}>Drop</ContextMenu.Item>
+                            {:else}
+                              <ContextMenu.Item variant="destructive" onclick={() => stmtTab(`Drop ${nm}`, `DROP ${fk === 'v' ? 'VIEW' : 'TRIGGER'} IF EXISTS ${selected ? qualified(selected.system, fsch.name, nm) : nm};`, db.name)}>Drop</ContextMenu.Item>
+                            {/if}
                           {/if}
                           <ContextMenu.Separator />
                           <ContextMenu.Item onclick={() => copyName(nm)}>Copy Name</ContextMenu.Item>

@@ -68,3 +68,26 @@ test('MySQL New Query selects the schema database in the tab', async ({ page }) 
   await expect(page.getByTitle('Database').first()).toContainText('public')
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
+
+// Item 5 — View/Proc/Function/Trigger/Sequence context menus expose Alter/Drop
+// (and Execute where applicable).
+test('function context menu has Execute, Alter, Drop', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(String(e)))
+  await blockRemoteFonts(page)
+  await page.goto(APP_URL)
+  await page.waitForSelector('#app > *', { timeout: 15_000 })
+  await page.waitForTimeout(300)
+  await page.getByRole('button', { name: /Postgres/ }).first().click()
+  await page.waitForTimeout(500)
+  await page.getByText('public', { exact: true }).first().dblclick()
+  await page.waitForTimeout(300)
+  await page.getByText('Functions', { exact: true }).first().dblclick()
+  await page.waitForTimeout(300)
+  await page.getByText(/add_one/).first().click({ button: 'right' })
+  await page.waitForTimeout(200)
+  await expect(page.getByText('Execute…', { exact: true }).first()).toBeVisible()
+  await expect(page.getByText('Alter…', { exact: true }).first()).toBeVisible()
+  await expect(page.getByText('Drop', { exact: true }).first()).toBeVisible()
+  expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
+})
