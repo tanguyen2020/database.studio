@@ -983,6 +983,13 @@
     <span class="xbtn" onclick={() => selected && backupWizard.show(selected.id, selected.system)} onkeydown={(e) => e.key === 'Enter' && selected && backupWizard.show(selected.id, selected.system)} role="button" tabindex="0" title="Backup & Restore">
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="8" ry="3"></ellipse><path d="M4 5v6c0 1.66 3.58 3 8 3s8-1.34 8-3V5M4 11v6c0 1.66 3.58 3 8 3s8-1.34 8-3v-6"></path></svg>
     </span>
+    <!-- Session Monitor + Users & privileges (T23) -->
+    <span class="xbtn" onclick={() => selected && tabs.openAdminView(selected.id, 'sessions')} onkeydown={(e) => e.key === 'Enter' && selected && tabs.openAdminView(selected.id, 'sessions')} role="button" tabindex="0" title="Session Monitor">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l3 8 4-16 3 8h4"></path></svg>
+    </span>
+    <span class="xbtn" onclick={() => selected && tabs.openAdminView(selected.id, 'users')} onkeydown={(e) => e.key === 'Enter' && selected && tabs.openAdminView(selected.id, 'users')} role="button" tabindex="0" title="Users & privileges">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3"></circle><path d="M3 20c0-3 3-5 6-5s6 2 6 5"></path><path d="M17 7a3 3 0 0 1 0 6M22 20c0-2.5-2-4-4-4.5"></path></svg>
+    </span>
     <span style="margin-left:auto;display:flex;gap:var(--px-1)">
       <span class="xbtn2" onclick={() => cache?.schemas?.forEach((s) => expandSchema(s.name))} onkeydown={(e) => e.key === 'Enter' && cache?.schemas?.forEach((s) => expandSchema(s.name))} role="button" tabindex="0" title="Expand all">⊕</span>
       <span class="xbtn2" onclick={collapseAll} onkeydown={(e) => e.key === 'Enter' && collapseAll()} role="button" tabindex="0" title="Collapse all">⊖</span>

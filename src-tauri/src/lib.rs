@@ -128,6 +128,8 @@ pub fn run() {
             commands::backup::backup_tool_status,
             commands::backup::backup_database,
             commands::backup::restore_database,
+            commands::admin::admin_view,
+            commands::admin::kill_session,
             // files
             commands::files::write_text_file,
             // lint tầng 1

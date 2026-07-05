@@ -305,6 +305,32 @@ class TabsStore {
     return tab
   }
 
+  /** Mở tab Admin views (Session Monitor / Users / Extensions) — T23. */
+  openAdminView(connectionId: string, view: string): TabState {
+    const existing = this.tabs.find((t) => t.contentType === 'admin' && t.connectionId === connectionId)
+    if (existing) {
+      existing.state = { view }
+      this.activeTabId = existing.id
+      return existing
+    }
+    const profile = connections.byId(connectionId)
+    const tab: TabState = {
+      id: uuid(),
+      connectionId,
+      connectionName: profile?.name ?? '',
+      systemType: (profile?.system as SystemType) ?? 'orphan',
+      contentType: 'admin',
+      title: `Admin · ${profile?.name ?? ''}`,
+      isPinned: false,
+      isDirty: false,
+      state: { view },
+    }
+    this.tabs.push(tab)
+    this.activeTabId = tab.id
+    this.schedulePersist()
+    return tab
+  }
+
   /** Mở tab Schema Compare (singleton). */
   openSchemaCompare(srcConnId: string | null): TabState {
     const existing = this.tabs.find((t) => t.contentType === 'schema-compare')

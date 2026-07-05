@@ -266,6 +266,29 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
           { table: 'enrollments', columns: [], reason: '840 seq scan (idx scan 12), đọc TB 5200 rows/scan trên ~12480 rows — cân nhắc thêm index vào cột lọc' },
         ],
       })
+    case 'admin_view': {
+      const view = String(args?.view ?? 'sessions')
+      if (view === 'users')
+        return ok({ cols: [['role', 'text'], ['is_superuser', 'bool'], ['can_login', 'bool']], rows: [
+          { role: 'postgres', is_superuser: true, can_login: true },
+          { role: 'app_ro', is_superuser: false, can_login: true },
+        ], total: 2 })
+      if (view === 'extensions')
+        return ok({ cols: [['name', 'text'], ['default_version', 'text'], ['installed_version', 'text']], rows: [
+          { name: 'plpgsql', default_version: '1.0', installed_version: '1.0' },
+          { name: 'citext', default_version: '1.6', installed_version: null },
+        ], total: 2 })
+      if (view === 'locks')
+        return ok({ cols: [['pid', 'int4'], ['locktype', 'text'], ['mode', 'text'], ['granted', 'bool']], rows: [
+          { pid: 4821, locktype: 'relation', mode: 'AccessShareLock', granted: true },
+        ], total: 1 })
+      return ok({ cols: [['pid', 'int4'], ['username', 'text'], ['database', 'text'], ['state', 'text'], ['query', 'text']], rows: [
+        { pid: 4821, username: 'app_ro', database: 'sis_prod', state: 'active', query: 'SELECT * FROM students' },
+        { pid: 4830, username: 'app_ro', database: 'sis_prod', state: 'idle', query: '' },
+      ], total: 2 })
+    }
+    case 'kill_session':
+      return ok(null)
     case 'backup_tool_status':
       return ok({ tool: 'pg_dump', available: true })
     case 'backup_database':

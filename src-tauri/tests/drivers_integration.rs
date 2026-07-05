@@ -2594,3 +2594,53 @@ async fn pg_pg_dump_if_binary_present() {
     assert!(content.contains("CREATE TABLE") && content.contains("bkp_t"), "dump phải chứa DDL bảng");
     eprintln!("CHK pg_dump backup OK ({} bytes)", content.len());
 }
+
+/// Phase 5 · T23 — Admin views đọc system view THẬT của Postgres: Session Monitor
+/// (pg_stat_activity) + Users (pg_roles) + Extensions (pg_available_extensions) +
+/// Kill session (pg_terminate_backend) trên 1 phiên thứ hai.
+#[tokio::test]
+async fn pg_admin_views_and_kill_session() {
+    use database_studio_lib::commands::admin::{admin_query, kill_query};
+
+    let (_c, port) = start_pg().await;
+    let params = PgConnParams {
+        host: "localhost".into(),
+        port,
+        database: "testdb".into(),
+        user: "postgres".into(),
+        password: PASS.into(),
+        ssl: false,
+        ssl_ca: String::new(),
+        ssl_cert: String::new(),
+        ssl_key: String::new(),
+    };
+    let mut drv = retry("postgres", || PgDriver::connect(&params)).await;
+
+    // sessions: có ít nhất phiên hiện tại
+    let out = drv.exec(&admin_query("postgres", "sessions").unwrap()).await.unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!("sessions rows") };
+    assert!(result.total >= 1, "phải thấy ≥1 phiên");
+    assert!(result.cols.iter().any(|c| c.0 == "pid") && result.cols.iter().any(|c| c.0 == "state"));
+
+    // users: pg_roles chứa 'postgres'
+    let out = drv.exec(&admin_query("postgres", "users").unwrap()).await.unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!("users rows") };
+    assert!(result.rows.iter().any(|r| r["role"].as_str() == Some("postgres")), "phải thấy role postgres");
+
+    // extensions: plpgsql luôn có + đã cài
+    let out = drv.exec(&admin_query("postgres", "extensions").unwrap()).await.unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!("ext rows") };
+    let plpgsql = result.rows.iter().find(|r| r["name"].as_str() == Some("plpgsql")).expect("thấy plpgsql");
+    assert!(!plpgsql["installed_version"].is_null(), "plpgsql phải đã cài");
+
+    // kill: mở phiên thứ 2, lấy pid, terminate từ phiên chính
+    let mut drv2 = retry("postgres", || PgDriver::connect(&params)).await;
+    let out = drv2.exec("SELECT pg_backend_pid() AS p").await.unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!("pid") };
+    let pid2 = result.rows[0]["p"].as_i64().expect("pid i64");
+    let out = drv.exec(&kill_query("postgres", pid2).unwrap()).await.unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!("terminate rows") };
+    // pg_terminate_backend trả boolean true
+    assert_eq!(result.rows[0].as_object().unwrap().values().next().unwrap(), &serde_json::json!(true), "terminate phải trả true");
+    eprintln!("CHK PG admin views (sessions/users/extensions) + kill OK");
+}

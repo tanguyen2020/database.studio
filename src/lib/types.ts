@@ -204,6 +204,7 @@ export type TabContentType =
   | 'er-diagram'
   | 'schema-compare'
   | 'index-scanner'
+  | 'admin'
 
 export interface TabState {
   id: string

@@ -5,12 +5,19 @@
   import { toasts } from '$lib/stores/toast.svelte'
   import { tabs } from '$lib/stores/tabs.svelte'
   import { ui } from '$lib/stores/ui.svelte'
+  import { connections } from '$lib/stores/connections.svelte'
 
   const themeIcon = $derived(ui.theme === 'dark' ? '☾' : '☀')
   const themeLabel = $derived(ui.theme === 'dark' ? 'Dark' : 'Light')
 
-  function later(label: string, phase: string) {
-    toasts.show(`${label} — ${phase}`)
+  // Session Monitor (T23) — mở Admin view cho connection đang chọn.
+  function openSessions() {
+    const id = connections.selectedId
+    if (!id) {
+      toasts.show('Chọn một connection để xem Session Monitor')
+      return
+    }
+    tabs.openAdminView(id, 'sessions')
   }
 </script>
 
@@ -26,7 +33,7 @@
     <div class="tb-btn" onclick={() => tabs.openUtilityTab('history', 'Query History')} onkeydown={(e) => e.key === 'Enter' && tabs.openUtilityTab('history', 'Query History')} role="button" tabindex="0" title="Query History (Ctrl+H)">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"></path><path d="M3 4v4h4"></path><path d="M12 8v4l3 2"></path></svg><span>History</span>
     </div>
-    <div class="tb-btn" onclick={() => later('Session Monitor', 'Phase 5')} onkeydown={(e) => e.key === 'Enter' && later('Session Monitor', 'Phase 5')} role="button" tabindex="0" title="Session Monitor">
+    <div class="tb-btn" onclick={openSessions} onkeydown={(e) => e.key === 'Enter' && openSessions()} role="button" tabindex="0" title="Session Monitor">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l2 6 4-14 2 8h6"></path></svg><span>Sessions</span>
     </div>
     <div class="tb-btn" onclick={() => ui.toggleTheme()} onkeydown={(e) => e.key === 'Enter' && ui.toggleTheme()} role="button" tabindex="0" title="Toggle theme">

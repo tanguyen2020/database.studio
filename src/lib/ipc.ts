@@ -506,6 +506,12 @@ export const backupDatabase = (connId: string, dest: string) =>
 export const restoreDatabase = (connId: string, src: string) =>
   invoke<string>('restore_database', { connId, src })
 
+/** Admin views (T23): sessions/locks/users/extensions từ system views thật. */
+export const adminView = (connId: string, view: string) =>
+  invoke<{ cols: [string, string][]; rows: Record<string, unknown>[]; total: number }>('admin_view', { connId, view })
+export const killSession = (connId: string, pid: number) =>
+  invoke<null>('kill_session', { connId, pid })
+
 // ---- Query Plan Visualizer (Phase 5 · T1) ----------------------------------
 
 export interface PlanNode {
