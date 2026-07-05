@@ -9,7 +9,7 @@
   import SystemIcon from '$lib/components/SystemIcon.svelte'
   import { CATEGORY_ORDER, SYSTEM_ORDER, envMeta, systemMeta } from '$lib/systems'
   import { groupByFolder } from '$lib/connections/grouping'
-  import { genCreateDatabase } from '$lib/sql/ddl'
+  import { newDatabaseWizard } from '$lib/stores/newdatabase.svelte'
   import { connections } from '$lib/stores/connections.svelte'
   import { tabs } from '$lib/stores/tabs.svelte'
   import { toasts } from '$lib/stores/toast.svelte'
@@ -94,12 +94,10 @@
     tabs.openSqlTab({ connectionId: target.id, title: 'Untitled query' })
   }
 
-  // New Database (DataGrip-style): prompt for a name, open the CREATE DATABASE
-  // statement in a SQL tab on this connection for review before running.
+  // New Database (DataGrip-style): open a dialog to enter the name; Create runs
+  // CREATE DATABASE on this connection.
   function newDatabase(p: ProfilePublic) {
-    const name = window.prompt('New database name:', 'new_database')
-    if (!name) return
-    tabs.openSqlTab({ connectionId: p.id, title: `Create ${name}`, query: genCreateDatabase(p.system, name) })
+    newDatabaseWizard.show(p.id, p.system)
   }
 
   async function testConn(p: ProfilePublic) {

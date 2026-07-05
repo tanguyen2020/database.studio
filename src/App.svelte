@@ -42,6 +42,7 @@
   import GenerateTestDataDialog from '$lib/components/GenerateTestDataDialog.svelte'
   import ExecuteRoutineDialog from '$lib/components/ExecuteRoutineDialog.svelte'
   import ClickHouseCreateDialog from '$lib/components/ClickHouseCreateDialog.svelte'
+  import NewDatabaseDialog from '$lib/components/NewDatabaseDialog.svelte'
   import Settings from '$lib/components/Settings.svelte'
   import { palette } from '$lib/stores/palette.svelte'
   import { settings } from '$lib/stores/settings.svelte'
@@ -325,5 +326,6 @@
 <GenerateTestDataDialog />
 <ExecuteRoutineDialog />
 <ClickHouseCreateDialog />
+<NewDatabaseDialog />
 <Settings />
 <Toasts />

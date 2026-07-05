@@ -20,13 +20,14 @@
   import { testDataWizard } from '$lib/stores/testdata.svelte'
   import { execRoutineWizard } from '$lib/stores/execroutine.svelte'
   import { chCreateWizard } from '$lib/stores/chcreate.svelte'
+  import { newDatabaseWizard } from '$lib/stores/newdatabase.svelte'
   import { genRenameRoutine } from '$lib/sql/routines'
   import { scriptsWizard } from '$lib/stores/scripts.svelte'
   import { backupWizard } from '$lib/stores/backup.svelte'
   import * as chops from '$lib/sql/chops'
   import { toasts } from '$lib/stores/toast.svelte'
   import { quoteIdent, qualified, selectStarSql } from '$lib/sql/dialect'
-  import { genAlterTable, genCreate, genCreateDatabase, genDelete, genDrop, genDropDatabase, genForeignKey, genInsert, genRename, genRenameDatabase, genSelect, genTruncate, genUpdate } from '$lib/sql/ddl'
+  import { genAlterTable, genCreate, genDelete, genDrop, genDropDatabase, genForeignKey, genInsert, genRename, genRenameDatabase, genSelect, genTruncate, genUpdate } from '$lib/sql/ddl'
   import { generateScript, type DbObject, type ScriptMode } from '$lib/sql/scripts'
   import { createTemplate, type CreateKind } from '$lib/sql/create-templates'
   import { buildExportSelect } from '$lib/export/query'
@@ -301,13 +302,10 @@
     stmtTab(`Create ${kind}`, createTemplate(selected.system, kind, schema), dbForSchema(schema, database))
   }
 
-  // New Database (DataGrip-style) — prompt for a name, open CREATE DATABASE on the
-  // connection for review before running.
+  // New Database (DataGrip-style) — open a dialog to enter the name; Create runs
+  // CREATE DATABASE on the connection.
   function newDatabase() {
-    if (!selected) return
-    const name = window.prompt('New database name:', 'new_database')
-    if (!name) return
-    stmtTab(`Create ${name}`, genCreateDatabase(selected.system, name))
+    if (selected) newDatabaseWizard.show(selected.id, selected.system)
   }
 
   // T18 — Show Definition: lấy text định nghĩa THẬT từ server (view/trigger/proc/func).

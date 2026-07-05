@@ -201,11 +201,10 @@ test('database node context menu can drop a database', async ({ page }) => {
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
 
-// User request — New Database on a connection (DataGrip-style).
-test('connection context menu: New Database opens CREATE DATABASE', async ({ page }) => {
+// User request — New Database on a connection opens a form dialog (Cancel/Create).
+test('connection New Database dialog: form → Create', async ({ page }) => {
   const errors: string[] = []
   page.on('pageerror', (e) => errors.push(String(e)))
-  page.on('dialog', (d) => d.accept('shopdb')) // window.prompt for the name
   await blockRemoteFonts(page)
   await page.goto(APP_URL)
   await page.waitForSelector('#app > *', { timeout: 15_000 })
@@ -214,6 +213,36 @@ test('connection context menu: New Database opens CREATE DATABASE', async ({ pag
   await page.waitForTimeout(200)
   await page.getByText('New Database…', { exact: true }).first().click()
   await page.waitForTimeout(300)
-  await expect(page.locator('.cm-content').first()).toContainText('CREATE DATABASE "shopdb"')
+
+  const dialog = page.getByRole('dialog', { name: 'New Database' })
+  await expect(dialog).toBeVisible()
+  await dialog.getByPlaceholder('new_database').fill('shopdb')
+  await page.waitForTimeout(150)
+  // live DDL preview reflects the dialect + name
+  await expect(dialog).toContainText('CREATE DATABASE "shopdb";')
+  await dialog.getByText('Create', { exact: true }).click()
+  await page.waitForTimeout(400)
+  // demo exec returns ok → dialog closes
+  await expect(page.getByRole('dialog', { name: 'New Database' })).toHaveCount(0)
+  expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
+})
+
+// Cancel closes the dialog with no further action.
+test('connection New Database dialog: Cancel closes it', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(String(e)))
+  await blockRemoteFonts(page)
+  await page.goto(APP_URL)
+  await page.waitForSelector('#app > *', { timeout: 15_000 })
+  await page.waitForTimeout(300)
+  await page.getByRole('button', { name: /Postgres/ }).first().click({ button: 'right' })
+  await page.waitForTimeout(200)
+  await page.getByText('New Database…', { exact: true }).first().click()
+  await page.waitForTimeout(300)
+  const dialog = page.getByRole('dialog', { name: 'New Database' })
+  await expect(dialog).toBeVisible()
+  await dialog.getByText('Cancel', { exact: true }).click()
+  await page.waitForTimeout(200)
+  await expect(page.getByRole('dialog', { name: 'New Database' })).toHaveCount(0)
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
