@@ -154,14 +154,16 @@ pub fn definition_query(system: &str, kind: &str, schema: &str, name: &str) -> O
             "SELECT pg_get_functiondef(p.oid) FROM pg_proc p JOIN pg_namespace ns ON ns.oid = p.pronamespace \
              WHERE ns.nspname = '{s}' AND p.proname = '{n}' LIMIT 1"
         ),
+        // CAST … AS CHAR: information_schema definition columns come back as BLOB,
+        // which the value decoder renders as a `0x…` hex string — cast to text.
         ("mysql" | "mariadb", "view") => format!(
-            "SELECT view_definition FROM information_schema.views WHERE table_schema = '{s}' AND table_name = '{n}'"
+            "SELECT CAST(view_definition AS CHAR) FROM information_schema.views WHERE table_schema = '{s}' AND table_name = '{n}'"
         ),
         ("mysql" | "mariadb", "trigger") => format!(
-            "SELECT action_statement FROM information_schema.triggers WHERE trigger_schema = '{s}' AND trigger_name = '{n}'"
+            "SELECT CAST(action_statement AS CHAR) FROM information_schema.triggers WHERE trigger_schema = '{s}' AND trigger_name = '{n}'"
         ),
         ("mysql" | "mariadb", _) => format!(
-            "SELECT routine_definition FROM information_schema.routines WHERE routine_schema = '{s}' AND routine_name = '{n}'"
+            "SELECT CAST(routine_definition AS CHAR) FROM information_schema.routines WHERE routine_schema = '{s}' AND routine_name = '{n}'"
         ),
         ("mssql", _) => format!("SELECT OBJECT_DEFINITION(OBJECT_ID('{s}.{n}')) AS d"),
         ("sqlite", _) => format!("SELECT sql FROM sqlite_master WHERE name = '{n}'"),

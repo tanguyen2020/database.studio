@@ -605,6 +605,43 @@ async fn mysql_roundtrip() {
     mysql_like_roundtrip(("mysql", "8"), "MYSQL", "mysql").await;
 }
 
+/// Bug: Alter/Show Definition of a MySQL routine returned a `0x…` hex BLOB because
+/// `information_schema.routines.routine_definition` comes back binary. The command's
+/// `definition_query` now `CAST(… AS CHAR)`, so the value decodes as TEXT.
+#[tokio::test]
+async fn mysql_routine_definition_is_text_not_hex() {
+    use database_studio_lib::commands::schema::definition_query;
+    let c = GenericImage::new("mysql", "8")
+        .with_exposed_port(3306.tcp())
+        .with_env_var("MYSQL_ROOT_PASSWORD", PASS)
+        .with_env_var("MYSQL_DATABASE", "testdb")
+        .start()
+        .await
+        .expect("start mysql container");
+    let port = c.get_host_port_ipv4(3306).await.unwrap();
+    let params = MySqlConnParams {
+        host: "localhost".into(),
+        port,
+        database: "testdb".into(),
+        user: "root".into(),
+        password: PASS.into(),
+        ssl: false,
+        ssl_ca: String::new(),
+        ssl_cert: String::new(),
+        ssl_key: String::new(),
+    };
+    let mut drv = retry("mysql", || MySqlDriver::connect(&params, "mysql")).await;
+    drv.exec("CREATE FUNCTION add_one(x INT) RETURNS INT DETERMINISTIC BEGIN RETURN x + 1; END")
+        .await
+        .unwrap();
+
+    let q = definition_query("mysql", "function", "testdb", "add_one").expect("query built");
+    let StatementOutcome::Rows { result } = drv.exec(&q).await.unwrap() else { panic!("rows") };
+    let def = result.rows[0].as_object().unwrap().values().next().unwrap().as_str().unwrap();
+    assert!(def.contains("RETURN"), "definition should be readable text, got: {def}");
+    assert!(!def.starts_with("0x"), "definition must NOT be a hex BLOB: {def}");
+}
+
 /// AUDIT-5 item 4 — the Object Explorer renders MySQL correctly. Drives the exact
 /// introspection chain the tree uses (loadSchemas → loadSchemaChildren →
 /// loadTableDetail): schemas() must surface the connected DB (marked default),
