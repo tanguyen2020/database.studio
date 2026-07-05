@@ -1,3 +1,4 @@
+pub mod backup;
 pub mod cassandra;
 pub mod clickhouse;
 pub mod connections;

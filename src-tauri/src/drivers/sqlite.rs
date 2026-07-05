@@ -90,6 +90,35 @@ impl SqliteDriver {
         .map_err(|e| QueryError::new("sqlite", e.to_string(), e.to_string()))?
     }
 
+    /// Backup (T22): online-backup DB hiện tại ra file `dest` (rusqlite backup API,
+    /// nhất quán — không cần công cụ ngoài). Round-trip an toàn.
+    pub async fn backup_to(&self, dest: String) -> Result<(), QueryError> {
+        self.with_conn(move |c| {
+            c.backup(rusqlite::DatabaseName::Main, std::path::Path::new(&dest), None)
+                .map_err(|e| map_rusqlite_error(&e))
+        })
+        .await
+    }
+
+    /// Restore (T22): nạp lại DB từ file backup `src` vào connection hiện tại.
+    pub async fn restore_from(&self, src: String) -> Result<(), QueryError> {
+        let conn = Arc::clone(&self.conn);
+        tokio::task::spawn_blocking(move || {
+            let mut guard = conn
+                .lock()
+                .map_err(|_| QueryError::new("sqlite", "connection poisoned", "mutex poisoned"))?;
+            guard
+                .restore(
+                    rusqlite::DatabaseName::Main,
+                    std::path::Path::new(&src),
+                    None::<fn(rusqlite::backup::Progress)>,
+                )
+                .map_err(|e| map_rusqlite_error(&e))
+        })
+        .await
+        .map_err(|e| QueryError::new("sqlite", e.to_string(), e.to_string()))?
+    }
+
     /// Editable grid: pending changes trong 1 transaction (rollback nếu lỗi).
     /// rusqlite dynamic typing → bind JSON tự nhiên; unchecked_transaction cho
     /// phép mở tx trên &Connection (đang giữ trong Arc<Mutex>).

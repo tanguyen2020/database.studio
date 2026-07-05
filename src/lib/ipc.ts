@@ -494,6 +494,18 @@ export const scanIndexes = (connId: string, schema: string) =>
 export const objectDefinition = (connId: string, schema: string, kind: string, name: string) =>
   invoke<string>('object_definition', { connId, schema, kind, name })
 
+/** Backup & Restore (T22). */
+export interface BackupToolStatus {
+  tool: string | null
+  available: boolean
+}
+export const backupToolStatus = (connId: string) =>
+  invoke<BackupToolStatus>('backup_tool_status', { connId })
+export const backupDatabase = (connId: string, dest: string) =>
+  invoke<string>('backup_database', { connId, dest })
+export const restoreDatabase = (connId: string, src: string) =>
+  invoke<string>('restore_database', { connId, src })
+
 // ---- Query Plan Visualizer (Phase 5 · T1) ----------------------------------
 
 export interface PlanNode {

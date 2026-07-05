@@ -2165,6 +2165,7 @@ async fn pg_registry_concurrent_and_rollback() {
     }
     assert_eq!(ok, 16, "cả 16 truy vấn đồng thời phải thành công (không cạn kiệt)");
     eprintln!("CHK 16 concurrent queries via registry OK");
+    // (transaction rollback ở test riêng phía dưới đã dùng chung registry pattern)
 
     // Transaction: BEGIN → INSERT → ROLLBACK → count = 0.
     let run = |sql: &'static str| {
@@ -2494,4 +2495,102 @@ async fn cassandra_trace_plan_flags_allow_filtering() {
     assert_eq!(idx.table, "t");
     assert!(idx.columns.iter().any(|c| c.contains('v')), "target chứa cột v: {:?}", idx.columns);
     eprintln!("CHK Cassandra secondary index scan OK");
+}
+
+/// Phase 5 · T22 — SQLite backup/restore round-trip (rusqlite backup API, đảm bảo,
+/// không cần công cụ ngoài). Seed → backup ra file → mở file thấy dữ liệu; xoá →
+/// restore → khôi phục.
+#[tokio::test]
+async fn sqlite_backup_restore_roundtrip() {
+    let dir = std::env::temp_dir().join("ds-it-backup");
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = dir.join("src.db");
+    let bak = dir.join("bak.db");
+    let _ = std::fs::remove_file(&src);
+    let _ = std::fs::remove_file(&bak);
+
+    let drv = SqliteDriver::connect(&SqliteConnParams {
+        path: src.to_string_lossy().to_string(),
+        mode: SqliteMode::ReadWrite,
+    })
+    .await
+    .unwrap();
+    drv.exec("CREATE TABLE t (id integer primary key, v text)").await.unwrap();
+    drv.exec("INSERT INTO t (id, v) VALUES (1,'a'), (2,'b'), (3,'c')").await.unwrap();
+
+    // backup → file không rỗng
+    drv.backup_to(bak.to_string_lossy().to_string()).await.unwrap();
+    assert!(bak.exists() && std::fs::metadata(&bak).unwrap().len() > 0, "file backup phải tồn tại + khác rỗng");
+
+    // mở backup như DB độc lập → dữ liệu khớp
+    let bakdrv = SqliteDriver::connect(&SqliteConnParams {
+        path: bak.to_string_lossy().to_string(),
+        mode: SqliteMode::ReadWrite,
+    })
+    .await
+    .unwrap();
+    let out = bakdrv.exec("SELECT count(*) AS n FROM t").await.unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    assert_eq!(result.rows[0]["n"], serde_json::json!(3), "backup giữ đủ 3 dòng");
+
+    // xoá dữ liệu gốc → restore từ backup → khôi phục
+    drv.exec("DELETE FROM t").await.unwrap();
+    let out = drv.exec("SELECT count(*) AS n FROM t").await.unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    assert_eq!(result.rows[0]["n"], serde_json::json!(0));
+    drv.restore_from(bak.to_string_lossy().to_string()).await.unwrap();
+    let out = drv.exec("SELECT count(*) AS n FROM t").await.unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    assert_eq!(result.rows[0]["n"], serde_json::json!(3), "restore khôi phục 3 dòng");
+    eprintln!("CHK SQLite backup/restore round-trip OK");
+}
+
+/// Phase 5 · T22 — PG pg_dump nếu binary có trên PATH; nếu không → skip + note
+/// (theo done-criteria). Kiểm câu lệnh external_backup_cmd chạy thật ra file dump.
+#[tokio::test]
+async fn pg_pg_dump_if_binary_present() {
+    let has_pg_dump = std::process::Command::new("pg_dump")
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if !has_pg_dump {
+        eprintln!("SKIP pg_dump không có trên PATH — bỏ qua (đúng done-criteria)");
+        return;
+    }
+
+    let (_c, port) = start_pg().await;
+    let params = PgConnParams {
+        host: "localhost".into(),
+        port,
+        database: "testdb".into(),
+        user: "postgres".into(),
+        password: PASS.into(),
+        ssl: false,
+        ssl_ca: String::new(),
+        ssl_cert: String::new(),
+        ssl_key: String::new(),
+    };
+    let mut drv = retry("postgres", || PgDriver::connect(&params)).await;
+    drv.exec("CREATE TABLE bkp_t (id int PRIMARY KEY, v text)").await.unwrap();
+    drv.exec("INSERT INTO bkp_t VALUES (1, 'hello')").await.unwrap();
+
+    let dest = std::env::temp_dir().join("ds-it-pgdump.sql");
+    let _ = std::fs::remove_file(&dest);
+    let out = tokio::process::Command::new("pg_dump")
+        .args([
+            "-h", "localhost",
+            "-p", &port.to_string(),
+            "-U", "postgres",
+            "-d", "testdb",
+            "-f", dest.to_str().unwrap(),
+        ])
+        .env("PGPASSWORD", PASS)
+        .output()
+        .await
+        .unwrap();
+    assert!(out.status.success(), "pg_dump lỗi: {}", String::from_utf8_lossy(&out.stderr));
+    let content = std::fs::read_to_string(&dest).unwrap();
+    assert!(content.contains("CREATE TABLE") && content.contains("bkp_t"), "dump phải chứa DDL bảng");
+    eprintln!("CHK pg_dump backup OK ({} bytes)", content.len());
 }

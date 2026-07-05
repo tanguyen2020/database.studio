@@ -1,5 +1,6 @@
 //! Driver layer: one adapter per system, unified behind `LiveConnection`.
 
+pub mod backup;
 pub mod cassandra;
 pub mod clickhouse;
 pub mod grid;

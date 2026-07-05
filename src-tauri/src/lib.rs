@@ -125,6 +125,9 @@ pub fn run() {
             commands::schema::list_foreign_keys,
             commands::schema::scan_indexes,
             commands::schema::object_definition,
+            commands::backup::backup_tool_status,
+            commands::backup::backup_database,
+            commands::backup::restore_database,
             // files
             commands::files::write_text_file,
             // lint tầng 1

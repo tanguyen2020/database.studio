@@ -266,6 +266,12 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
           { table: 'enrollments', columns: [], reason: '840 seq scan (idx scan 12), đọc TB 5200 rows/scan trên ~12480 rows — cân nhắc thêm index vào cột lọc' },
         ],
       })
+    case 'backup_tool_status':
+      return ok({ tool: 'pg_dump', available: true })
+    case 'backup_database':
+      return ok(`✓ backup → ${String(args?.dest ?? 'backup.sql')} (demo)`)
+    case 'restore_database':
+      return ok(`✓ restored ← ${String(args?.src ?? 'backup.sql')} (demo)`)
     case 'object_definition': {
       const kind = String(args?.kind ?? 'object')
       const name = String(args?.name ?? 'obj')

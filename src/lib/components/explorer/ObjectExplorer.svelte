@@ -17,6 +17,7 @@
   import { importWizard } from '$lib/stores/import.svelte'
   import { exportWizard } from '$lib/stores/export.svelte'
   import { scriptsWizard } from '$lib/stores/scripts.svelte'
+  import { backupWizard } from '$lib/stores/backup.svelte'
   import { ui } from '$lib/stores/ui.svelte'
   import * as chops from '$lib/sql/chops'
   import { toasts } from '$lib/stores/toast.svelte'
@@ -974,10 +975,13 @@
     <span class="xbtn" onclick={() => selected && importWizard.show(selected.id, cache?.schemas?.[0]?.name ?? '')} onkeydown={(e) => e.key === 'Enter' && selected && importWizard.show(selected.id, cache?.schemas?.[0]?.name ?? '')} role="button" tabindex="0" title="Import data from file">
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 10l5 5 5-5"></path><path d="M5 21h14"></path></svg>
     </span>
-    <!-- Export/dump → Generate Scripts (T15). Backup (T22), Users & privileges
-         (T23) vẫn ẩn cho tới khi feature tương ứng hoàn thành. -->
+    <!-- Export/dump → Generate Scripts (T15). Users & privileges (T23) còn ẩn. -->
     <span class="xbtn" onclick={() => selected && scriptsWizard.show(selected.id, cache?.schemas?.[0]?.name ?? '')} onkeydown={(e) => e.key === 'Enter' && selected && scriptsWizard.show(selected.id, cache?.schemas?.[0]?.name ?? '')} role="button" tabindex="0" title="Generate scripts (dump schema)">
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21V9M7 14l5 5 5-5"></path><path d="M5 3h14"></path></svg>
+    </span>
+    <!-- Backup & Restore (T22) -->
+    <span class="xbtn" onclick={() => selected && backupWizard.show(selected.id, selected.system)} onkeydown={(e) => e.key === 'Enter' && selected && backupWizard.show(selected.id, selected.system)} role="button" tabindex="0" title="Backup & Restore">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="8" ry="3"></ellipse><path d="M4 5v6c0 1.66 3.58 3 8 3s8-1.34 8-3V5M4 11v6c0 1.66 3.58 3 8 3s8-1.34 8-3v-6"></path></svg>
     </span>
     <span style="margin-left:auto;display:flex;gap:var(--px-1)">
       <span class="xbtn2" onclick={() => cache?.schemas?.forEach((s) => expandSchema(s.name))} onkeydown={(e) => e.key === 'Enter' && cache?.schemas?.forEach((s) => expandSchema(s.name))} role="button" tabindex="0" title="Expand all">⊕</span>
