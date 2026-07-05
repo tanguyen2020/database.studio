@@ -91,4 +91,11 @@ Cập nhật sau MỖI commit. Rule: 1 task/lần, unit+integration xanh mới c
   - **BỔ SUNG chạy được trên CE/container** (commit `T23+:`): **Redis memory** (INFO memory → parse_redis_info), **MSSQL Query Store** (sys.query_store_* sau khi bật QUERY_STORE), **MSSQL Agent Jobs** (msdb.dbo.sysjobs, đọc kể cả Agent off), **MSSQL Availability Groups** (DMV, rỗng nếu không cluster). AdminView system-aware view list. Integration: `redis_memory_info_view` (53 metrics) + `mssql_admin_extra_views` EXIT=0. Fix bug: external-view-sync effect gây effect_update_depth_exceeded (redis 'sessions'⇄'memory') — đã guard theo view hợp lệ.
   - **CÒN LẠI (deferred, cần setup broker/auth đặc biệt)**: Kafka ACL (cần broker authorizer), NATS NKey-JWT (cần JWT operator/nsc). Kafka Avro (Schema Registry) + NATS JetStream mgmt đã có từ phase trước.
 
-## ✅ T10–T23 HOÀN TẤT. Tổng: Rust lib unit 72, vitest 179, playwright 32; integration per-system EXIT=0. Chỉ còn Kafka ACL + NATS NKey-JWT (deferred — cần cấu hình broker/auth ngoài container mặc định).
+## ✅ T10–T23 HOÀN TẤT. Tổng: Rust lib unit 72, vitest 179, playwright 34; integration per-system EXIT=0. Chỉ còn Kafka ACL + NATS NKey-JWT (deferred — cần cấu hình broker/auth ngoài container mặc định).
+
+## AUDIT-1 (post-T23) — xem SPEC_SUPPLEMENT.md mục "AUDIT-1":
+- **A2 hover dòng connection** ✅ (ConnectionList `.conn-row`/`.selected`, bỏ bẫy inline-bg).
+- **A3 Generate Scripts 3-mode trên table context menu** ✅ (ObjectExplorer `ContextMenu.Sub` → `genTableScript`).
+- **A4 Save ER layout** ✅ (ErDiagram persist `tab.state.positions` qua `onnodedragstop` + `tabs.schedulePersist`; Auto-layout xoá saved).
+- **A5 Streaming I/O** ⏳ PLAN-only (chưa code): export/generate đang buffer RAM (sqlx fetch_all + Blob); plan chuyển `export_to_file` stream + `BufWriter` + save-dialog + Channel progress. Cần duyệt trước khi làm.
+- Gates sau AUDIT-1: check 0/0, vitest 179, playwright 34, Rust unit 72.

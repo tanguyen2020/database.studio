@@ -22,7 +22,10 @@
   import * as chops from '$lib/sql/chops'
   import { toasts } from '$lib/stores/toast.svelte'
   import { quoteIdent, selectStarSql } from '$lib/sql/dialect'
-  import { genCreate, genDelete, genDrop, genInsert, genRename, genSelect, genTruncate, genUpdate } from '$lib/sql/ddl'
+  import { genCreate, genDelete, genDrop, genForeignKey, genInsert, genRename, genSelect, genTruncate, genUpdate } from '$lib/sql/ddl'
+  import { generateScript, type DbObject, type ScriptMode } from '$lib/sql/scripts'
+  import { buildExportSelect } from '$lib/export/query'
+  import { toSqlInsert } from '$lib/export/rows'
   import type { ColumnInfo, RoutineInfo, TableInfo } from '$lib/types'
   import { untrack, type Snippet } from 'svelte'
 
@@ -198,6 +201,36 @@
   function stmtTab(title: string, sql: string) {
     if (!selected) return
     tabs.openSqlTab({ connectionId: selected.id, title, query: sql })
+  }
+
+  // Generate Scripts cho MỘT bảng theo mode (structure/data/both) — mở SQL tab.
+  // Dùng lại engine thuần generateScript + genCreate + genForeignKey + toSqlInsert.
+  async function genTableScript(schema: string, table: string, mode: ScriptMode) {
+    if (!selected) return
+    const sys = selected.system
+    const cols = await columnsOf(schema, table)
+    if (!cols.length) {
+      toasts.show(`Không lấy được cột của "${table}"`)
+      return
+    }
+    const fks = (await ipc.listForeignKeys(selected.id, schema).catch(() => [])).filter((f) => f.from_table === table)
+    let dataSql: string | undefined
+    if (mode !== 'structure') {
+      const res = await ipc.execStatement(selected.id, buildExportSelect({ system: sys, schema, table }), 0)
+      if (res.ok && res.result && res.result.rows.length) {
+        dataSql = toSqlInsert(table, res.result.cols.map((c) => c[0]), res.result.rows as Record<string, unknown>[])
+      }
+    }
+    const obj: DbObject = {
+      name: table,
+      kind: 'table',
+      createSql: genCreate(sys, schema, table, cols),
+      deps: fks.map((f) => f.to_table),
+      fkAlters: fks.map((f) => genForeignKey(sys, schema, f)),
+      dataSql,
+    }
+    const script = generateScript([obj], mode)
+    tabs.openSqlTab({ connectionId: selected.id, title: `${table} · scripts`, query: `-- ${table} (${mode})\n\n${script}` })
   }
 
   // T18 — Show Definition: lấy text định nghĩa THẬT từ server (view/trigger/proc/func).
@@ -541,6 +574,14 @@
                   <ContextMenu.Item onclick={() => genSqlTab('insert', schema.name, t.name)}>Generate SQL · INSERT</ContextMenu.Item>
                   <ContextMenu.Item onclick={() => genSqlTab('update', schema.name, t.name)}>Generate SQL · UPDATE</ContextMenu.Item>
                   <ContextMenu.Item onclick={() => genSqlTab('delete', schema.name, t.name)}>Generate SQL · DELETE</ContextMenu.Item>
+                  <ContextMenu.Sub>
+                    <ContextMenu.SubTrigger>Generate Scripts</ContextMenu.SubTrigger>
+                    <ContextMenu.SubContent class="w-44">
+                      <ContextMenu.Item onclick={() => genTableScript(schema.name, t.name, 'structure')}>Structure Only</ContextMenu.Item>
+                      <ContextMenu.Item onclick={() => genTableScript(schema.name, t.name, 'data')}>Data Only</ContextMenu.Item>
+                      <ContextMenu.Item onclick={() => genTableScript(schema.name, t.name, 'both')}>Structure and Data</ContextMenu.Item>
+                    </ContextMenu.SubContent>
+                  </ContextMenu.Sub>
                   <ContextMenu.Item onclick={() => genSqlTab('ddl', schema.name, t.name)}>View DDL</ContextMenu.Item>
                   {#if isClickhouse}
                     <ContextMenu.Item onclick={() => chTtl.show(selected!.id, schema.name, t.name)}>TTL Policy…</ContextMenu.Item>

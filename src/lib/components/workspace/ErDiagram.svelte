@@ -108,11 +108,13 @@
       }
     }
     Dagre.layout(g)
+    const saved = (tab.state as { positions?: Record<string, { x: number; y: number }> }).positions ?? {}
     const pos: Record<string, { x: number; y: number }> = {}
     nodes = tables.map((t) => {
       const n = g.node(t.name)
       const s = tableSize(t)
-      const p = { x: (n?.x ?? 0) - s.w / 2, y: (n?.y ?? 0) - s.h / 2 }
+      // Ưu tiên vị trí đã lưu (persist qua tab.state); nếu chưa có → dùng dagre.
+      const p = saved[t.name] ?? { x: (n?.x ?? 0) - s.w / 2, y: (n?.y ?? 0) - s.h / 2 }
       pos[t.name] = p
       return { id: t.name, type: 'table', position: p, data: { table: t, showAll } }
     })
@@ -135,6 +137,21 @@
   // re-render node data khi toggle showAll (giữ vị trí)
   function applyShowAll() {
     nodes = nodes.map((n) => ({ ...n, data: { ...(n.data as object), showAll } }))
+  }
+
+  // #2 — Persist vị trí node vào tab.state.positions (kéo xong → lưu, debounce
+  // qua tabs.schedulePersist) → mở lại tab giữ đúng layout cũ.
+  function saveLayout() {
+    const p: Record<string, { x: number; y: number }> = {}
+    for (const n of nodes) p[n.id] = { x: n.position.x, y: n.position.y }
+    tab.state = { ...(tab.state as object), positions: p }
+    tabs.schedulePersist()
+  }
+
+  // Auto-layout: xoá vị trí đã lưu rồi tính lại bằng dagre.
+  function autoLayout() {
+    tab.state = { ...(tab.state as object), positions: {} }
+    layout()
   }
 
   $effect(() => {
@@ -200,7 +217,7 @@
         <span onclick={saveToDb} onkeydown={(e) => e.key === 'Enter' && saveToDb()} role="button" tabindex="0" style="font-size:var(--px-11_5);background:#27AE60;color:var(--hex-fff);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer;font-weight:600">Save to DB ({pendingFks.length})</span>
       {/if}
       <span onclick={() => { showAll = !showAll; applyShowAll() }} onkeydown={(e) => e.key === 'Enter' && (showAll = !showAll, applyShowAll())} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">{showAll ? 'PK+FK only' : 'Show all columns'}</span>
-      <span onclick={layout} onkeydown={(e) => e.key === 'Enter' && layout()} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">Auto-layout</span>
+      <span onclick={autoLayout} onkeydown={(e) => e.key === 'Enter' && autoLayout()} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">Auto-layout</span>
       <span onclick={downloadPng} onkeydown={(e) => e.key === 'Enter' && downloadPng()} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">PNG</span>
       <span onclick={downloadSvg} onkeydown={(e) => e.key === 'Enter' && downloadSvg()} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">SVG</span>
       <span onclick={copyMermaid} onkeydown={(e) => e.key === 'Enter' && copyMermaid()} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-6);padding:var(--px-4) var(--px-12);cursor:pointer;font-weight:600">Mermaid</span>
@@ -237,7 +254,7 @@
     {#if error}
       <div style="padding:var(--px-16);color:var(--error);font-size:var(--px-12)">{error}</div>
     {:else}
-      <SvelteFlow bind:nodes bind:edges {nodeTypes} fitView>
+      <SvelteFlow bind:nodes bind:edges {nodeTypes} fitView onnodedragstop={saveLayout}>
         <Background />
         <Controls />
         <MiniMap />

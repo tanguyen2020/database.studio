@@ -182,3 +182,28 @@ Done: integration where a tool is available (SQLite `.dump` round-trip guarantee
 **T23 — MSSQL/PG admin views (Missing, advanced, lowest priority).**
 Scope: Session Monitor (sessions/locks + Kill), PG Extension Manager, MSSQL Agent Jobs / Query Store / Availability Groups, Redis memory analysis, Kafka ACL/Avro, NATS NKey-JWT + JetStream management UI wiring.
 Done: per-feature integration hitting the real engine's system views; commit each independently as green.
+
+---
+
+## AUDIT-1 — Hậu T10–T23 (rà soát desktop). Sửa 3 mục nhỏ + plan 1 mục lớn.
+
+**A1 — Connection persistence: ✅ đã đạt** (audit) — profiles lưu `studio.db` (bảng `connections`, AES-GCM), tự nạp `App.svelte onMount → connections.load()`; cờ runtime `connected` không persist (đúng: reconnect khi mở lại).
+
+**A2 — Hover dòng connection (Fixed).**
+Bug: `ConnectionList.svelte` set `background` INLINE → nuốt `:hover`. Fix: chuyển sang class `.conn-row` + `class:selected`, `:hover` → `var(--hover)`, `.selected` → `var(--hover)` + thanh accent `inset 2px var(--primary)`. Visual `audit-fixes.spec #3`.
+
+**A3 — Generate Scripts 3 chế độ trên table context menu (Fixed).**
+Trước: 3 mode (Structure/Data/Both) chỉ có ở SCHEMA. Bổ sung `ContextMenu.Sub "Generate Scripts"` (Structure Only / Data Only / Structure and Data) vào table menu → `genTableScript(schema, table, mode)` dùng lại engine thuần `generateScript` + `genCreate`/`genForeignKey`/`toSqlInsert` (không trùng logic dialog). Visual `audit-fixes.spec #4`.
+
+**A4 — Save ER diagram layout (Fixed).**
+Persist vị trí node vào `tab.state.positions`; `SvelteFlow onnodedragstop → saveLayout()` (debounce qua `tabs.schedulePersist`, 400ms). `layout()` ưu tiên vị trí đã lưu, fallback dagre. "Auto-layout" xoá saved rồi re-dagre. Mở lại tab giữ layout. (Persistence e2e không test được trên demo/browser vì tab-persist dùng SQLite thật; verify bằng typecheck + logic.)
+
+**A5 — Streaming I/O (PLAN, chưa code — thay đổi kiến trúc lớn).**
+Hiện trạng: export/generate/diagram-export buffer TOÀN BỘ vào RAM (sqlx `.fetch_all` → `Vec<Value>`; frontend gom rows → 1 chuỗi → `Blob`). Chỉ backup (rusqlite backup / pg_dump ghi file) là đúng stream.
+Plan chuyển sang stream:
+  1. Backend command `export_to_file(conn_id, select_sql, format, dest_path)`: `sqlx::query(..).fetch(&mut conn)` (Stream), serialize INCREMENTAL từng row/chunk, ghi `BufWriter<File>` + flush theo chunk → RAM bị chặn ở 1 chunk; export không đi qua IPC.
+  2. Serializer incremental (Rust): CSV (header + dòng), JSON (stream `[ … , … ]`), SQL (INSERT theo N dòng).
+  3. Frontend: thay browser `Blob` bằng `plugin-dialog` save → truyền `dest_path` cho command; progress qua `tauri::ipc::Channel` (số dòng đã ghi). Giữ Blob CHỈ cho export result-panel nhỏ (đã materialized).
+  4. Generate Scripts / whole-schema: dùng chung command file-stream. Backup giữ nguyên (đã ổn).
+  5. Test: integration export ≥100k dòng ra file → đếm dòng file == row count mà không nạp cả set vào RAM.
+Ước lượng: ~1–2 task (backend stream command + serializer + test; frontend save-dialog + progress). Rủi ro: chạm đường exec/serialize hiện có — cần giữ nguyên contract cho export nhỏ.

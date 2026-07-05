@@ -193,14 +193,17 @@
 {#snippet connRow(p: ProfilePublic)}
   <ContextMenu.Root>
     <ContextMenu.Trigger>
-      <!-- connection row — dòng 116-124 -->
+      <!-- connection row — dòng 116-124. Hover/selected qua class (tránh bẫy
+           inline-background nuốt :hover). -->
       <div
+        class="conn-row"
+        class:selected={connections.selectedId === p.id}
         onclick={() => select(p)}
         ondblclick={() => openOrToggle(p)}
         onkeydown={(e) => e.key === 'Enter' && openOrToggle(p)}
         role="button"
         tabindex="0"
-        style="display:flex;align-items:center;gap:var(--px-9);padding:var(--px-6) var(--px-6) var(--px-6) 0;border-radius:var(--px-7);cursor:pointer;position:relative;margin-bottom:var(--px-1);background:{connections.selectedId === p.id ? 'var(--hover)' : 'transparent'}"
+        style="display:flex;align-items:center;gap:var(--px-9);padding:var(--px-6) var(--px-6) var(--px-6) 0;border-radius:var(--px-7);cursor:pointer;position:relative;margin-bottom:var(--px-1)"
       >
         <ConnectionIndicator system={p.system} />
         {#if connections.connecting.has(p.id)}
@@ -385,5 +388,13 @@
   .tbtn:hover,
   .hoverable:hover {
     background: var(--hover);
+  }
+  /* connection row: hover trực quan + selected có thanh accent để phân biệt */
+  .conn-row:hover {
+    background: var(--hover);
+  }
+  .conn-row.selected {
+    background: var(--hover);
+    box-shadow: inset var(--px-2) 0 0 var(--primary);
   }
 </style>
