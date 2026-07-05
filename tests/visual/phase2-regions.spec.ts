@@ -32,6 +32,21 @@ async function grab(page: Page, name: string, source: 'proto' | 'app') {
 
 test('chụp vùng prototype (baseline) + app rồi so pixel', async ({ page }) => {
   await openPrototype(page)
+  // The app intentionally renders connection NAMES in JetBrains Mono (DataGrip
+  // style, per user request); the immutable prototype baseline still uses its
+  // sans UI font for the name (only host:port is mono). Mirror the intended font
+  // onto the prototype's connection-name spans (unique: sidebar, weight 600,
+  // 12.5px) so the pixel diff validates layout under the SAME font instead of
+  // flagging the deliberate change.
+  await page.evaluate(() => {
+    document.querySelectorAll('span').forEach((el) => {
+      const r = el.getBoundingClientRect()
+      const cs = getComputedStyle(el)
+      if (r.x < 278 && cs.fontWeight === '600' && cs.fontSize === '12.5px') {
+        ;(el as HTMLElement).style.fontFamily = "'JetBrains Mono', ui-monospace, monospace"
+      }
+    })
+  })
   await grab(page, 'workspace', 'proto')
 
   await openApp(page)
