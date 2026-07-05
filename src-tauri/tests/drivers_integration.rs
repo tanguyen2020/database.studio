@@ -605,9 +605,9 @@ async fn mysql_roundtrip() {
     mysql_like_roundtrip(("mysql", "8"), "MYSQL", "mysql").await;
 }
 
-/// Bug: Alter/Show Definition of a MySQL routine returned a `0x…` hex BLOB because
-/// `information_schema.routines.routine_definition` comes back binary. The command's
-/// `definition_query` now `CAST(… AS CHAR)`, so the value decodes as TEXT.
+/// Bug: Alter/Show Definition of a MySQL routine showed a `0x…` hex BLOB (the raw
+/// body from information_schema) which wasn't a runnable statement. `definition_query`
+/// now uses `SHOW CREATE …` → the full, valid CREATE DDL as TEXT.
 #[tokio::test]
 async fn mysql_routine_definition_is_text_not_hex() {
     use database_studio_lib::commands::schema::definition_query;
@@ -636,9 +636,17 @@ async fn mysql_routine_definition_is_text_not_hex() {
         .unwrap();
 
     let q = definition_query("mysql", "function", "testdb", "add_one").expect("query built");
+    assert!(q.starts_with("SHOW CREATE FUNCTION"), "uses SHOW CREATE: {q}");
     let StatementOutcome::Rows { result } = drv.exec(&q).await.unwrap() else { panic!("rows") };
-    let def = result.rows[0].as_object().unwrap().values().next().unwrap().as_str().unwrap();
-    assert!(def.contains("RETURN"), "definition should be readable text, got: {def}");
+    // pick the "Create Function" column like object_definition does
+    let obj = result.rows[0].as_object().unwrap();
+    let def = obj
+        .iter()
+        .find(|(k, _)| k.to_lowercase().starts_with("create "))
+        .map(|(_, v)| v)
+        .and_then(|v| v.as_str())
+        .expect("Create Function column present");
+    assert!(def.contains("FUNCTION") && def.contains("RETURN"), "full CREATE text, got: {def}");
     assert!(!def.starts_with("0x"), "definition must NOT be a hex BLOB: {def}");
 }
 

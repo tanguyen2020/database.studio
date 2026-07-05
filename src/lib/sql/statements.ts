@@ -23,6 +23,11 @@ export function splitStatements(doc: string): SplitStatement[] {
 
   type Mode = 'code' | 'line-comment' | 'block-comment' | 'single' | 'double' | 'backtick' | 'bracket'
   let mode: Mode = 'code'
+  // Depth of BEGIN…END blocks in a routine body (CREATE FUNCTION/PROCEDURE/TRIGGER/
+  // EVENT). While > 0, `;` does NOT split — otherwise a compound statement gets
+  // chopped at its internal semicolons and every fragment is a syntax error.
+  let beginDepth = 0
+  const BLOCK_END_KW = new Set(['IF', 'CASE', 'LOOP', 'WHILE', 'REPEAT'])
 
   const push = (endExclusive: number) => {
     const raw = doc.slice(stmtStart, endExclusive)
@@ -42,13 +47,34 @@ export function splitStatements(doc: string): SplitStatement[] {
     const next = doc[i + 1]
     switch (mode) {
       case 'code':
+        // Keyword scan (word boundary) for BEGIN…END block tracking.
+        if (/[A-Za-z_]/.test(ch)) {
+          let j = i
+          while (j < len && /[A-Za-z0-9_]/.test(doc[j])) j++
+          const word = doc.slice(i, j).toUpperCase()
+          if (word === 'BEGIN') {
+            // Only a routine body starts a suppressing block (not a `BEGIN;` txn).
+            if (beginDepth > 0 || /\bCREATE\b[\s\S]*\b(FUNCTION|PROCEDURE|TRIGGER|EVENT)\b/i.test(doc.slice(stmtStart, i))) {
+              beginDepth++
+            }
+          } else if (word === 'END' && beginDepth > 0) {
+            let k = j
+            while (k < len && /\s/.test(doc[k])) k++
+            let m = k
+            while (m < len && /[A-Za-z]/.test(doc[m])) m++
+            // `END IF/CASE/LOOP/WHILE/REPEAT` close a sub-block, not the BEGIN block.
+            if (!BLOCK_END_KW.has(doc.slice(k, m).toUpperCase())) beginDepth--
+          }
+          i = j
+          continue
+        }
         if (ch === '-' && next === '-') mode = 'line-comment'
         else if (ch === '/' && next === '*') mode = 'block-comment'
         else if (ch === "'") mode = 'single'
         else if (ch === '"') mode = 'double'
         else if (ch === '`') mode = 'backtick'
         else if (ch === '[') mode = 'bracket'
-        else if (ch === ';') {
+        else if (ch === ';' && beginDepth === 0) {
           push(i)
           stmtStart = i + 1
         }

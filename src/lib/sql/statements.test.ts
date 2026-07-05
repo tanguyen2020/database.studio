@@ -36,6 +36,36 @@ describe('splitStatements', () => {
     expect(out.map((s) => s.sql)).toEqual(['SELECT 1 -- chú thích; vẫn là 1 câu', 'SELECT 2 /* x;y */'])
   })
 
+  it('không tách ; bên trong BEGIN…END của CREATE FUNCTION/PROCEDURE', () => {
+    const fn =
+      'CREATE FUNCTION seq_next(seqCode VARCHAR(50)) RETURNS BIGINT\nBEGIN\n' +
+      '  DECLARE sequence BIGINT;\n' +
+      '  SELECT seq INTO sequence FROM sequences WHERE `code` = seqCode FOR UPDATE;\n' +
+      '  UPDATE sequences SET seq = seq + 1 WHERE `code` = seqCode;\n' +
+      '  RETURN sequence;\nEND'
+    // whole routine = ONE statement; a trailing SELECT after it = a second one
+    const out = splitStatements(`${fn};\nSELECT 1;`)
+    expect(out).toHaveLength(2)
+    expect(out[0].sql).toContain('BEGIN')
+    expect(out[0].sql).toContain('RETURN sequence')
+    expect(out[1].sql).toBe('SELECT 1')
+  })
+
+  it('nested block keywords: END IF/CASE/LOOP không đóng BEGIN sớm', () => {
+    const proc =
+      'CREATE PROCEDURE p()\nBEGIN\n  IF 1 = 1 THEN\n    SELECT 1;\n  END IF;\n' +
+      '  CASE WHEN 1 THEN SELECT 2; END CASE;\nEND'
+    const out = splitStatements(`${proc};\nSELECT 9;`)
+    expect(out).toHaveLength(2)
+    expect(out[0].sql).toContain('END CASE')
+    expect(out[1].sql).toBe('SELECT 9')
+  })
+
+  it('BEGIN transaction không nuốt các câu sau (không phải routine body)', () => {
+    const out = splitStatements('BEGIN;\nUPDATE t SET a = 1;\nCOMMIT;')
+    expect(out.map((s) => s.sql)).toEqual(['BEGIN', 'UPDATE t SET a = 1', 'COMMIT'])
+  })
+
   it('bỏ statement rỗng, trim nhưng giữ offset đúng', () => {
     const doc = '  SELECT 1 ;  ;   SELECT 2  '
     const out = splitStatements(doc)

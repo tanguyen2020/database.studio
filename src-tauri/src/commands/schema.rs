@@ -154,17 +154,20 @@ pub fn definition_query(system: &str, kind: &str, schema: &str, name: &str) -> O
             "SELECT pg_get_functiondef(p.oid) FROM pg_proc p JOIN pg_namespace ns ON ns.oid = p.pronamespace \
              WHERE ns.nspname = '{s}' AND p.proname = '{n}' LIMIT 1"
         ),
-        // CAST … AS CHAR: information_schema definition columns come back as BLOB,
-        // which the value decoder renders as a `0x…` hex string — cast to text.
-        ("mysql" | "mariadb", "view") => format!(
-            "SELECT CAST(view_definition AS CHAR) FROM information_schema.views WHERE table_schema = '{s}' AND table_name = '{n}'"
-        ),
-        ("mysql" | "mariadb", "trigger") => format!(
-            "SELECT CAST(action_statement AS CHAR) FROM information_schema.triggers WHERE trigger_schema = '{s}' AND trigger_name = '{n}'"
-        ),
-        ("mysql" | "mariadb", _) => format!(
-            "SELECT CAST(routine_definition AS CHAR) FROM information_schema.routines WHERE routine_schema = '{s}' AND routine_name = '{n}'"
-        ),
+        // SHOW CREATE returns the FULL, runnable DDL (information_schema only has the
+        // body, which isn't a valid statement to re-run and also comes back as a BLOB).
+        // Identifiers are backtick-quoted; object_definition picks the "Create …" col.
+        ("mysql" | "mariadb", kind) => {
+            let bs = schema.replace('`', "``");
+            let bn = name.replace('`', "``");
+            let kw = match kind {
+                "view" => "VIEW",
+                "trigger" => "TRIGGER",
+                "procedure" => "PROCEDURE",
+                _ => "FUNCTION",
+            };
+            format!("SHOW CREATE {kw} `{bs}`.`{bn}`")
+        }
         ("mssql", _) => format!("SELECT OBJECT_DEFINITION(OBJECT_ID('{s}.{n}')) AS d"),
         ("sqlite", _) => format!("SELECT sql FROM sqlite_master WHERE name = '{n}'"),
         _ => return None,
@@ -202,7 +205,18 @@ pub async fn object_definition(
                 .rows
                 .first()
                 .and_then(|r| r.as_object())
-                .and_then(|o| o.values().next())
+                .and_then(|o| {
+                    // MySQL SHOW CREATE returns several columns — the DDL is in
+                    // "Create View/Function/Procedure" or (triggers) "SQL Original
+                    // Statement". Single-column engines fall back to the first value.
+                    o.iter()
+                        .find(|(k, _)| {
+                            let kl = k.to_lowercase();
+                            kl.starts_with("create ") || kl == "sql original statement"
+                        })
+                        .map(|(_, v)| v)
+                        .or_else(|| o.values().next())
+                })
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
@@ -231,9 +245,18 @@ mod tests {
         assert!(definition_query("postgres", "trigger", "public", "trg")
             .unwrap()
             .contains("pg_get_triggerdef"));
-        assert!(definition_query("mysql", "function", "app", "f")
-            .unwrap()
-            .contains("information_schema.routines"));
+        assert_eq!(
+            definition_query("mysql", "function", "app", "f").unwrap(),
+            "SHOW CREATE FUNCTION `app`.`f`"
+        );
+        assert_eq!(
+            definition_query("mariadb", "view", "app", "v").unwrap(),
+            "SHOW CREATE VIEW `app`.`v`"
+        );
+        assert_eq!(
+            definition_query("mysql", "trigger", "app", "t").unwrap(),
+            "SHOW CREATE TRIGGER `app`.`t`"
+        );
         assert!(definition_query("mssql", "procedure", "dbo", "p")
             .unwrap()
             .contains("OBJECT_DEFINITION"));

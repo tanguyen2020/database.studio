@@ -309,7 +309,11 @@
     if (!selected || !cid) return
     try {
       const def = await ipc.objectDefinition(cid, schema, kind, name)
-      const database = cid !== selected.id ? (Object.entries(dbSubId).find(([, v]) => v === cid)?.[0]) : undefined
+      // Bind the tab to the object's database: the foreign-db sub-connection's DB,
+      // or (MySQL/MariaDB) the schema itself (schema == database).
+      const database = cid !== selected.id
+        ? Object.entries(dbSubId).find(([, v]) => v === cid)?.[0]
+        : dbForSchema(schema)
       stmtTab(`${name} · ${titleSuffix}`, def, database)
     } catch (e) {
       toasts.error(String(e))
