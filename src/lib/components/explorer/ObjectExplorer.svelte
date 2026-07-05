@@ -1135,7 +1135,7 @@
           {@const fcache = sub ? explorer.cache[sub] : undefined}
           {#snippet dbMenu()}
             <ContextMenu.Content class="w-52">
-              <ContextMenu.Item onclick={() => newQuery('', undefined, db.name)}>New Query (in {db.name})</ContextMenu.Item>
+              <ContextMenu.Item onclick={() => newQuery('', undefined, db.name)}>New Query</ContextMenu.Item>
               <ContextMenu.Item onclick={() => toggleForeignDb(db.name)}>{expanded.has(fkey) ? 'Collapse' : 'Expand'}</ContextMenu.Item>
               <ContextMenu.Separator />
               <ContextMenu.Item onclick={() => copyName(db.name)}>Copy Name</ContextMenu.Item>
