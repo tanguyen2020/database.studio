@@ -17,6 +17,7 @@
   } from '@tanstack/virtual-core'
   import { untrack } from 'svelte'
   import { pageWindow } from '$lib/grid/paging'
+  import { buildGroups, type AggFn, type GroupNode } from '$lib/grid/groupby'
   import { save as saveFileDialog } from '@tauri-apps/plugin-dialog'
   import { invoke } from '@tauri-apps/api/core'
   import { toasts } from '$lib/stores/toast.svelte'
@@ -290,6 +291,62 @@
     return unmount
   })
 
+  // ---- Group By (T27) — client-side grouping of the in-memory result ----------
+  const AGG_FNS: AggFn[] = ['count', 'sum', 'avg', 'min', 'max']
+  let groupOpen = $state(false)
+  let groupBy = $state<string[]>([])
+  let groupFn = $state<AggFn>('count')
+  let groupCol = $state('')
+  let groupActive = $state(false)
+  let collapsed = $state<Set<string>>(new Set())
+  const groupResult = $derived(
+    groupActive && groupBy.length
+      ? buildGroups(data.rows, { by: groupBy, fn: groupFn, col: groupCol })
+      : null,
+  )
+  function toggleGroupCol(c: string) {
+    groupBy = groupBy.includes(c) ? groupBy.filter((x) => x !== c) : [...groupBy, c]
+  }
+  function applyGroup() {
+    groupActive = groupBy.length > 0
+    collapsed = new Set()
+    groupOpen = false
+  }
+  function clearGroup() {
+    groupActive = false
+    groupBy = []
+    groupOpen = false
+  }
+  function toggleCollapsed(path: string) {
+    const next = new Set(collapsed)
+    if (next.has(path)) next.delete(path)
+    else next.add(path)
+    collapsed = next
+  }
+  const fmtAgg = (v: number | null) => (v == null ? '—' : Number.isInteger(v) ? String(v) : v.toFixed(2))
+  // Flatten the group tree into render rows, honoring the collapsed set.
+  interface GroupRow {
+    kind: 'group' | 'data'
+    depth: number
+    node?: GroupNode
+    row?: Record<string, unknown>
+    key: string
+  }
+  function flattenGroups(nodes: GroupNode[]): GroupRow[] {
+    const out: GroupRow[] = []
+    const walk = (list: GroupNode[]) => {
+      for (const n of list) {
+        out.push({ kind: 'group', depth: n.depth, node: n, key: `g:${n.path}` })
+        if (collapsed.has(n.path)) continue
+        if (n.children.length) walk(n.children)
+        else if (n.rows) n.rows.forEach((r, i) => out.push({ kind: 'data', depth: n.depth + 1, row: r, key: `d:${n.path}:${i}` }))
+      }
+    }
+    walk(nodes)
+    return out
+  }
+  const groupRows = $derived(groupResult ? flattenGroups(groupResult.groups) : [])
+
   const isDatetimeType = (type: string) =>
     /timestamp|datetime|timestamptz/i.test(type)
 
@@ -527,6 +584,36 @@
   aria-rowcount={rowCount}
   onkeydown={onKeydown}
 >
+  {#if groupResult}
+    <!-- Group By view (T27): collapsible group tree + subtotals + grand total -->
+    <div class="mono" style="display:flex;align-items:center;gap:var(--px-8);padding:var(--px-4) var(--px-12);border-bottom:var(--px-1) solid var(--border2);font-weight:700;background:var(--header);position:sticky;top:0;z-index:5;font-size:var(--px-11_5)">
+      <span style="color:var(--muted)">Σ Grand total</span>
+      <span style="margin-left:auto;color:var(--text2)">{groupResult.grandCount.toLocaleString()} rows</span>
+      <span style="color:var(--primary)">{groupFn}{groupFn !== 'count' && groupCol ? `(${groupCol})` : ''} = {fmtAgg(groupResult.grandAgg)}</span>
+    </div>
+    {#each groupRows as gr (gr.key)}
+      {#if gr.kind === 'group' && gr.node}
+        {@const node = gr.node}
+        <div
+          role="button"
+          tabindex="0"
+          onclick={() => toggleCollapsed(node.path)}
+          onkeydown={(e) => e.key === 'Enter' && toggleCollapsed(node.path)}
+          style="display:flex;align-items:center;gap:var(--px-6);padding:var(--px-3) var(--px-12);cursor:pointer;padding-left:calc(var(--px-12) + {gr.depth} * var(--px-16));background:var(--panel);border-bottom:var(--px-1) solid var(--border)"
+        >
+          <span class="mono" style="width:var(--px-10);color:var(--muted);font-size:var(--px-9)">{collapsed.has(node.path) ? '▸' : '▾'}</span>
+          <span class="mono" style="font-weight:600;color:var(--text)">{node.key == null ? '∅' : String(node.key)}</span>
+          <span class="mono" style="margin-left:auto;color:var(--muted);font-size:var(--px-10_5)">{node.count.toLocaleString()} rows</span>
+          <span class="mono" style="color:var(--primary);font-size:var(--px-11)">{fmtAgg(node.agg)}</span>
+        </div>
+      {:else if gr.row}
+        {@const drow = gr.row}
+        <div class="mono" style="display:flex;gap:var(--px-14);padding:var(--px-2) var(--px-12);padding-left:calc(var(--px-12) + {gr.depth} * var(--px-16));font-size:var(--px-11);color:var(--text2);border-bottom:var(--px-1) solid var(--border);white-space:nowrap;overflow:hidden">
+          {#each columns as c (c)}<span style="min-width:var(--px-70);max-width:var(--px-220);overflow:hidden;text-overflow:ellipsis">{display(drow[c], c).text}</span>{/each}
+        </div>
+      {/if}
+    {/each}
+  {:else}
   <!-- table — port dòng 421-452: mono 12px, th sticky header 6px 12px/600/text2 -->
   <table class="mono" style="border-collapse:separate;border-spacing:0;width:100%;font-size:var(--px-12)">
     <thead style="position:sticky;top:0;z-index:10">
@@ -653,14 +740,53 @@
       {/if}
     </tbody>
   </table>
+  {/if}
   {#if rowCount === 0 && insertedRows.length === 0}
     <div style="padding:var(--px-12);font-size:var(--px-12);color:var(--muted)">0 rows</div>
   {/if}
 </div>
 {#if !editable && rowCount > 0}
-  <!-- pager (AUDIT item 1): client-side paging over the fetched query result -->
-  <div style="flex:none;display:flex;align-items:center;gap:var(--px-10);padding:var(--px-4) var(--px-12);border-top:var(--px-1) solid var(--border);background:var(--header);font-size:var(--px-11);color:var(--text2)">
-    <span class="mono">Rows {(pageOffset + 1).toLocaleString()}–{(pageOffset + pageRowCount).toLocaleString()} of {rowCount.toLocaleString()}</span>
+  <!-- pager (AUDIT item 1) + Group By (T27) -->
+  <div style="flex:none;display:flex;align-items:center;gap:var(--px-10);padding:var(--px-4) var(--px-12);border-top:var(--px-1) solid var(--border);background:var(--header);font-size:var(--px-11);color:var(--text2);position:relative">
+    <span
+      role="button"
+      tabindex="0"
+      onclick={() => (groupOpen = !groupOpen)}
+      onkeydown={(e) => e.key === 'Enter' && (groupOpen = !groupOpen)}
+      title="Group rows and aggregate"
+      style="cursor:pointer;padding:0 var(--px-6);border-radius:var(--px-4);color:{groupActive ? 'var(--primary)' : 'var(--text2)'};background:{groupActive ? 'var(--panel)' : 'transparent'};font-weight:{groupActive ? 600 : 400}"
+    >Σ Group by{groupActive ? ` (${groupBy.length})` : ''}</span>
+    {#if groupActive}
+      <span role="button" tabindex="0" onclick={clearGroup} onkeydown={(e) => e.key === 'Enter' && clearGroup()} style="cursor:pointer;color:var(--muted)" title="Clear grouping">✕</span>
+    {/if}
+    {#if groupOpen}
+      <div style="position:absolute;bottom:calc(100% + var(--px-4));left:var(--px-8);z-index:62;min-width:var(--px-220);background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-8);box-shadow:0 var(--px-12) var(--px-30) var(--rgba-0-0-0-_5);padding:var(--px-8)">
+        <div style="font-size:var(--px-10);text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:var(--px-4)">Group by columns</div>
+        <div style="max-height:var(--px-150);overflow:auto;display:flex;flex-direction:column;gap:var(--px-2)">
+          {#each columns as c (c)}
+            <label class="mono" style="display:flex;align-items:center;gap:var(--px-6);font-size:var(--px-11_5);cursor:pointer;color:var(--text2)">
+              <input type="checkbox" checked={groupBy.includes(c)} onchange={() => toggleGroupCol(c)} /> {c}
+            </label>
+          {/each}
+        </div>
+        <div style="display:flex;align-items:center;gap:var(--px-6);margin-top:var(--px-8);font-size:var(--px-11)">
+          <select bind:value={groupFn} class="mono" style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-4);padding:0 var(--px-4);color:var(--text)">
+            {#each AGG_FNS as f (f)}<option value={f}>{f}</option>{/each}
+          </select>
+          {#if groupFn !== 'count'}
+            <select bind:value={groupCol} class="mono" style="flex:1;background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-4);padding:0 var(--px-4);color:var(--text)">
+              <option value="">column…</option>
+              {#each columns as c (c)}<option value={c}>{c}</option>{/each}
+            </select>
+          {/if}
+        </div>
+        <div style="display:flex;gap:var(--px-6);margin-top:var(--px-8);justify-content:flex-end">
+          <span class="eg-btn" role="button" tabindex="0" onclick={() => (groupOpen = false)} onkeydown={(e) => e.key === 'Enter' && (groupOpen = false)}>Close</span>
+          <span role="button" tabindex="0" onclick={applyGroup} onkeydown={(e) => e.key === 'Enter' && applyGroup()} style="font-size:var(--px-11);font-weight:600;background:var(--primary);color:var(--hex-fff);border-radius:var(--px-6);padding:var(--px-3) var(--px-12);cursor:{groupBy.length ? 'pointer' : 'not-allowed'};opacity:{groupBy.length ? 1 : 0.5}">Apply</span>
+        </div>
+      </div>
+    {/if}
+    <span class="mono" style="margin-left:var(--px-8)">Rows {(pageOffset + 1).toLocaleString()}–{(pageOffset + pageRowCount).toLocaleString()} of {rowCount.toLocaleString()}</span>
     <label style="margin-left:auto;display:flex;align-items:center;gap:var(--px-5)">Page size
       <select bind:value={pageSize} class="mono" style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-4);padding:0 var(--px-4);color:var(--text);font-size:var(--px-11)">
         {#each PAGE_SIZES as s (s)}<option value={s}>{s}</option>{/each}

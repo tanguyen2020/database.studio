@@ -88,7 +88,7 @@ Status legend: **Implemented** (wired end-to-end, evidence) · **Partial** (pres
 | View modes Grid / JSON / Single Row / Chart | Implemented | `ResultPanel.svelte` | |
 | View-mode shortcuts Ctrl+Alt+G/J/R | Implemented [T21] | `keys/shortcuts.ts` | |
 | Export result ▾ (CSV/JSON/SQL/Excel) + Custom wizard | Implemented [T14] | `ResultPanel.svelte`; `ExportDialog.svelte` | WHERE / limit / column subset |
-| **Group By popover (aggregations)** | **Missing** | grep: none | dc:352-385 — Chart view has group+agg but no grid popover |
+| **Group By popover (aggregations)** | Implemented [T27] | `grid/groupby.ts`; `ResultGrid.svelte` | pager "Σ Group by" → 1+ columns + count/sum/avg/min/max → collapsible group tree with subtotals + grand total (client-side); `buildGroupSql` ready for server-side over truncated results |
 | Copy cell/row/column/selection | Implemented [A2-2] | `ResultGrid.svelte` | Ctrl+Shift+C bound [T21] |
 | **Copy as ▸ (TSV/CSV/JSON/SQL INSERT/SQL UPDATE/Markdown)** | Implemented [A3-5] | `export/clipboard.ts`; `ResultGrid.svelte` | multi-record; unit-tested (12) + e2e |
 | Editable grid (edit/insert/delete) + Execute/Cancel/Reset | Implemented [A3-3] | `ResultGrid.svelte` | Execute=apply, Reset=revert, Cancel=abort running (registry cancel) |
