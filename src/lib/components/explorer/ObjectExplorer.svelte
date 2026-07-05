@@ -26,7 +26,7 @@
   import * as chops from '$lib/sql/chops'
   import { toasts } from '$lib/stores/toast.svelte'
   import { quoteIdent, qualified, selectStarSql } from '$lib/sql/dialect'
-  import { genAlterTable, genCreate, genDelete, genDrop, genDropDatabase, genForeignKey, genInsert, genRename, genRenameDatabase, genSelect, genTruncate, genUpdate } from '$lib/sql/ddl'
+  import { genAlterTable, genCreate, genCreateDatabase, genDelete, genDrop, genDropDatabase, genForeignKey, genInsert, genRename, genRenameDatabase, genSelect, genTruncate, genUpdate } from '$lib/sql/ddl'
   import { generateScript, type DbObject, type ScriptMode } from '$lib/sql/scripts'
   import { createTemplate, type CreateKind } from '$lib/sql/create-templates'
   import { buildExportSelect } from '$lib/export/query'
@@ -299,6 +299,15 @@
   function createObject(kind: CreateKind, schema: string, database?: string) {
     if (!selected) return
     stmtTab(`Create ${kind}`, createTemplate(selected.system, kind, schema), dbForSchema(schema, database))
+  }
+
+  // New Database (DataGrip-style) — prompt for a name, open CREATE DATABASE on the
+  // connection for review before running.
+  function newDatabase() {
+    if (!selected) return
+    const name = window.prompt('New database name:', 'new_database')
+    if (!name) return
+    stmtTab(`Create ${name}`, genCreateDatabase(selected.system, name))
   }
 
   // T18 — Show Definition: lấy text định nghĩa THẬT từ server (view/trigger/proc/func).
@@ -609,6 +618,9 @@
         {#snippet curDbMenu()}
           <ContextMenu.Content class="w-52">
             <ContextMenu.Item onclick={() => newQuery('')}>New Query</ContextMenu.Item>
+            {#if !isSqlite}
+              <ContextMenu.Item onclick={() => newDatabase()}>New Database…</ContextMenu.Item>
+            {/if}
             <ContextMenu.Item onclick={() => selected && scriptsWizard.show(selected.id, cache?.schemas?.[0]?.name ?? '')}>Generate Scripts…</ContextMenu.Item>
             <ContextMenu.Item onclick={() => selected && backupWizard.show(selected.id, selected.system)}>Backup & Restore…</ContextMenu.Item>
             <ContextMenu.Item onclick={() => selected && tabs.openSchemaCompare(selected.id)}>Compare Schemas…</ContextMenu.Item>

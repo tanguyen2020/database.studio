@@ -119,6 +119,24 @@ export function genRenameDatabase(system: string, database: string): string {
   }
 }
 
+/** CREATE a database (DataGrip-style "New Database"), per dialect. SQLite databases
+ *  are files, so it returns a comment instead of DDL. */
+export function genCreateDatabase(system: string, database: string): string {
+  const d = quoteIdent(system, database)
+  switch (system) {
+    case 'postgres':
+    case 'mssql':
+    case 'mysql':
+    case 'mariadb':
+    case 'clickhouse':
+      return `CREATE DATABASE ${d};`
+    case 'sqlite':
+      return `-- SQLite databases are files — create a new connection with a new .sqlite path.`
+    default:
+      return `-- Creating a database is not supported for ${system}.`
+  }
+}
+
 /**
  * DROP a database. Opened for review before running (destructive). For PostgreSQL
  * you must not be connected to the target database. SQLite is a file → comment.

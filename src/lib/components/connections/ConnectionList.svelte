@@ -9,6 +9,7 @@
   import SystemIcon from '$lib/components/SystemIcon.svelte'
   import { CATEGORY_ORDER, SYSTEM_ORDER, envMeta, systemMeta } from '$lib/systems'
   import { groupByFolder } from '$lib/connections/grouping'
+  import { genCreateDatabase } from '$lib/sql/ddl'
   import { connections } from '$lib/stores/connections.svelte'
   import { tabs } from '$lib/stores/tabs.svelte'
   import { toasts } from '$lib/stores/toast.svelte'
@@ -91,6 +92,14 @@
     if (!target) return
     connections.selectedId = target.id
     tabs.openSqlTab({ connectionId: target.id, title: 'Untitled query' })
+  }
+
+  // New Database (DataGrip-style): prompt for a name, open the CREATE DATABASE
+  // statement in a SQL tab on this connection for review before running.
+  function newDatabase(p: ProfilePublic) {
+    const name = window.prompt('New database name:', 'new_database')
+    if (!name) return
+    tabs.openSqlTab({ connectionId: p.id, title: `Create ${name}`, query: genCreateDatabase(p.system, name) })
   }
 
   async function testConn(p: ProfilePublic) {
@@ -223,6 +232,9 @@
     </ContextMenu.Trigger>
     <ContextMenu.Content class="w-56">
       <ContextMenu.Item onclick={() => newQueryConsole(p)}>New Query Console</ContextMenu.Item>
+      {#if isRelational(p.system) && p.system !== 'sqlite'}
+        <ContextMenu.Item onclick={() => newDatabase(p)}>New Database…</ContextMenu.Item>
+      {/if}
       {#if p.connected}
         <ContextMenu.Item onclick={() => connections.disconnect(p.id)}>Disconnect</ContextMenu.Item>
       {:else}

@@ -200,3 +200,20 @@ test('database node context menu can drop a database', async ({ page }) => {
   await expect(page.locator('.cm-content').first()).toContainText('DROP DATABASE')
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
+
+// User request — New Database on a connection (DataGrip-style).
+test('connection context menu: New Database opens CREATE DATABASE', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(String(e)))
+  page.on('dialog', (d) => d.accept('shopdb')) // window.prompt for the name
+  await blockRemoteFonts(page)
+  await page.goto(APP_URL)
+  await page.waitForSelector('#app > *', { timeout: 15_000 })
+  await page.waitForTimeout(300)
+  await page.getByRole('button', { name: /Postgres/ }).first().click({ button: 'right' })
+  await page.waitForTimeout(200)
+  await page.getByText('New Database…', { exact: true }).first().click()
+  await page.waitForTimeout(300)
+  await expect(page.locator('.cm-content').first()).toContainText('CREATE DATABASE "shopdb"')
+  expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
+})
