@@ -40,7 +40,7 @@
         {#if chTtl.error}
           <div style="font-size:var(--px-12_5);color:var(--error)">{chTtl.error}</div>
         {:else if !chTtl.meta}
-          <div style="font-size:var(--px-12_5);color:var(--muted)">Đang tải…</div>
+          <div style="font-size:var(--px-12_5);color:var(--muted)">Loading…</div>
         {:else if rules.length === 0}
           <div style="font-size:var(--px-12_5);color:var(--muted);padding:var(--px-8) 0">No TTL policy defined on <span class="mono" style="color:var(--text2)">{chTtl.table}</span>. Rows are retained indefinitely.</div>
         {:else}

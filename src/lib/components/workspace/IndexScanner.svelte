@@ -59,11 +59,11 @@
   function exportCsv() {
     const headers = ['name', 'table', 'columns', 'index_type', 'unique', 'primary', 'usage', 'flags']
     download(`indexes_${schema}.csv`, toCsv(headers, (result?.indexes ?? []).map((r) => ({ ...r, columns: r.columns.join(' '), flags: r.flags.join(' ') }))), 'text/csv')
-    toasts.success('Đã export CSV')
+    toasts.success('Exported CSV')
   }
   function exportJson() {
     download(`indexes_${schema}.json`, toJson((result?.indexes ?? []) as unknown as Record<string, unknown>[]), 'application/json')
-    toasts.success('Đã export JSON')
+    toasts.success('Exported JSON')
   }
 
   const filters: Array<[typeof flt, string, number]> = $derived([
@@ -98,7 +98,7 @@
       {#if error}
         <div style="padding:var(--px-14);color:var(--error);font-size:var(--px-12)">{error}</div>
       {:else if loading}
-        <div style="padding:var(--px-14);color:var(--muted);font-size:var(--px-12)">Đang quét…</div>
+        <div style="padding:var(--px-14);color:var(--muted);font-size:var(--px-12)">Scanning…</div>
       {:else}
         {#if result?.suggestions?.length}
           <div style="margin:var(--px-10) var(--px-12);padding:var(--px-10) var(--px-12);border:var(--px-1) solid var(--border2);border-left:var(--px-3) solid #f0a020;border-radius:var(--px-6);background:var(--surface)">
@@ -144,12 +144,12 @@
         <div style="font-size:var(--px-11_5);color:var(--text2)">Type: {sel.index_type} · {sel.unique ? 'unique' : 'non-unique'}{sel.primary ? ' · primary' : ''}</div>
         {#if sel.usage != null}<div style="font-size:var(--px-11_5);color:var(--text2)">Usage: {sel.usage} scans</div>{/if}
         {#if sel.flags.length}
-          <div style="font-size:var(--px-11_5);color:#f0a020;font-weight:600;margin-top:var(--px-4)">Gợi ý</div>
-          {#if sel.flags.includes('unused')}<div style="font-size:var(--px-11);color:var(--text2)">Không được dùng — cân nhắc DROP (tự xác nhận).</div>{/if}
-          {#if sel.flags.includes('redundant')}<div style="font-size:var(--px-11);color:var(--text2)">Trùng prefix với index khác — có thể thừa.</div>{/if}
-          {#if sel.flags.includes('fragmented')}<div style="font-size:var(--px-11);color:var(--text2)">Phân mảnh &gt;30% — cân nhắc REBUILD.</div>{/if}
+          <div style="font-size:var(--px-11_5);color:#f0a020;font-weight:600;margin-top:var(--px-4)">Suggestion</div>
+          {#if sel.flags.includes('unused')}<div style="font-size:var(--px-11);color:var(--text2)">Unused — consider DROP (self-confirm).</div>{/if}
+          {#if sel.flags.includes('redundant')}<div style="font-size:var(--px-11);color:var(--text2)">Prefix-redundant with another index — likely superfluous.</div>{/if}
+          {#if sel.flags.includes('fragmented')}<div style="font-size:var(--px-11);color:var(--text2)">Fragmented &gt;30% — consider REBUILD.</div>{/if}
         {:else}
-          <div style="font-size:var(--px-11_5);color:#27AE60">✓ Khỏe mạnh</div>
+          <div style="font-size:var(--px-11_5);color:#27AE60">✓ Healthy</div>
         {/if}
       </div>
     {/if}

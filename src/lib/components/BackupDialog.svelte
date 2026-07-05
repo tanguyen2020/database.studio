@@ -35,7 +35,7 @@
     try {
       result = await ipc.backupDatabase(backupWizard.connId, dest.trim())
       backupWizard.record(dest.trim(), true)
-      toasts.success('Backup xong')
+      toasts.success('Backup complete')
     } catch (e) {
       result = `✗ ${e}`
       backupWizard.record(dest.trim(), false)
@@ -52,7 +52,7 @@
     confirmRestore = false
     try {
       result = await ipc.restoreDatabase(backupWizard.connId, src.trim())
-      toasts.success('Restore xong')
+      toasts.success('Restore complete')
     } catch (e) {
       result = `✗ ${e}`
       toasts.error(String(e))
@@ -72,7 +72,7 @@
       <div style="flex:1;overflow:auto;min-height:0;padding:var(--px-16) var(--px-18);display:flex;flex-direction:column;gap:var(--px-12)">
         {#if toolStatus}
           <div style="font-size:var(--px-11_5);color:{toolStatus.available ? '#27AE60' : 'var(--error)'}">
-            {toolStatus.available ? `✓ Công cụ: ${toolStatus.tool}` : `✗ Thiếu công cụ: ${toolStatus.tool ?? 'không hỗ trợ'} — cài đặt rồi thử lại`}
+            {toolStatus.available ? `✓ Tool: ${toolStatus.tool}` : `✗ Missing tool: ${toolStatus.tool ?? 'not supported'} — install it and retry`}
           </div>
         {/if}
 
@@ -85,13 +85,13 @@
         <div style="height:var(--px-1);background:var(--border);margin:var(--px-4) 0"></div>
         <div style="font-size:var(--px-13);font-weight:600">Restore</div>
         <label style="font-size:var(--px-12);color:var(--text2)">Backup file to restore
-          <input bind:value={src} placeholder="đường dẫn file backup" class="mono" style="display:block;margin-top:var(--px-5);width:100%;background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-8);color:var(--text);font-size:var(--px-12)" />
+          <input bind:value={src} placeholder="backup file path" class="mono" style="display:block;margin-top:var(--px-5);width:100%;background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-8);color:var(--text);font-size:var(--px-12)" />
         </label>
         {#if confirmRestore}
           <div style="display:flex;align-items:center;gap:var(--px-8);font-size:var(--px-11_5);color:var(--error)">
-            Ghi đè dữ liệu hiện tại?
-            <span onclick={runRestore} onkeydown={(e) => e.key === 'Enter' && runRestore()} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--error);color:var(--hex-fff);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer;font-weight:600">Xác nhận restore</span>
-            <span onclick={() => (confirmRestore = false)} onkeydown={(e) => e.key === 'Enter' && (confirmRestore = false)} role="button" tabindex="0" style="font-size:var(--px-11_5);color:var(--text2);cursor:pointer">Huỷ</span>
+            Overwrite current data?
+            <span onclick={runRestore} onkeydown={(e) => e.key === 'Enter' && runRestore()} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--error);color:var(--hex-fff);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer;font-weight:600">Confirm restore</span>
+            <span onclick={() => (confirmRestore = false)} onkeydown={(e) => e.key === 'Enter' && (confirmRestore = false)} role="button" tabindex="0" style="font-size:var(--px-11_5);color:var(--text2);cursor:pointer">Cancel</span>
           </div>
         {:else}
           <span onclick={() => src.trim() && (confirmRestore = true)} onkeydown={(e) => e.key === 'Enter' && src.trim() && (confirmRestore = true)} role="button" tabindex="0" style="align-self:flex-start;font-size:var(--px-12_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-8);padding:var(--px-7) var(--px-16);cursor:pointer">Restore…</span>

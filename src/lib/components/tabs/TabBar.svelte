@@ -190,7 +190,7 @@
       onkeydown={(e) => e.key === 'Enter' && tabs.closeSplit()}
       role="button"
       tabindex="0"
-      title="Đóng split (gộp về 1 pane)"
+      title="Close split (merge to one pane)"
       style="display:flex;align-items:center;padding:0 var(--px-10);cursor:pointer;color:var(--muted);font-size:var(--px-13)"
     >⊟</div>
   {/if}

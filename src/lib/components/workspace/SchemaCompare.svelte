@@ -69,7 +69,7 @@
     diffs = []
     if (!srcConn || !tgtConn) return
     if (srcProfile?.system !== tgtProfile?.system) {
-      warn = `Không thể so sánh chéo hệ: ${srcProfile?.system} vs ${tgtProfile?.system}. Chọn 2 connection CÙNG loại.`
+      warn = `Cannot compare across engines: ${srcProfile?.system} vs ${tgtProfile?.system}. Pick two connections of the SAME type.`
       return
     }
     loading = true
@@ -160,9 +160,9 @@
       <div style="font-size:var(--px-13);max-width:var(--px-420);text-align:center;line-height:1.5">{warn}</div>
     </div>
   {:else if !srcConn || !tgtConn}
-    <div style="flex:1;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:var(--px-12_5)">Chọn SOURCE và TARGET (cùng loại hệ) để so sánh.</div>
+    <div style="flex:1;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:var(--px-12_5)">Pick SOURCE and TARGET (same engine type) to compare.</div>
   {:else if loading}
-    <div style="flex:1;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:var(--px-12_5)">Đang so sánh…</div>
+    <div style="flex:1;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:var(--px-12_5)">Comparing…</div>
   {:else if mode === 'diff'}
     <div style="flex:none;display:flex;align-items:center;gap:var(--px-14);padding:var(--px-8) var(--px-14);border-bottom:var(--px-1) solid var(--border)">
       <span style="font-size:var(--px-11_5);font-weight:700;color:var(--hex-fff);background:#27AE60;border-radius:var(--px-4);padding:var(--px-2) var(--px-8)">＋ {counts.add} add</span>
@@ -208,7 +208,7 @@
     </div>
   {:else}
     <div style="flex:none;display:flex;align-items:center;gap:var(--px-10);padding:var(--px-8) var(--px-14);border-bottom:var(--px-1) solid var(--border)">
-      <span style="font-size:var(--px-11_5);color:var(--muted)">Migration đồng bộ TARGET ({tgtProfile?.name}) theo SOURCE — {selected.size} object đã chọn</span>
+      <span style="font-size:var(--px-11_5);color:var(--muted)">Migration to sync TARGET ({tgtProfile?.name}) to SOURCE — {selected.size} object(s) selected</span>
       <span onclick={openMigration} onkeydown={(e) => e.key === 'Enter' && openMigration()} role="button" tabindex="0" style="margin-left:auto;font-size:var(--px-11_5);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-6);padding:var(--px-5) var(--px-12);cursor:pointer;font-weight:600">Open in editor</span>
     </div>
     <div style="flex:1;overflow:auto;background:var(--bg)">

@@ -234,9 +234,9 @@
             <!-- Phase 6: error boundary — crash 1 tab không sập cả app -->
             <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:var(--px-12);padding:var(--px-30);color:var(--muted)">
               <span style="font-size:var(--px-28);color:var(--error)">⚠</span>
-              <div style="font-size:var(--px-14);font-weight:600;color:var(--text)">Tab gặp lỗi</div>
+              <div style="font-size:var(--px-14);font-weight:600;color:var(--text)">Tab error</div>
               <div class="mono" style="font-size:var(--px-11_5);max-width:var(--px-460);text-align:center;color:var(--text2);white-space:pre-wrap">{String(error)}</div>
-              <span onclick={reset} onkeydown={(e) => e.key === 'Enter' && reset()} role="button" tabindex="0" style="font-size:var(--px-12);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-7);padding:var(--px-6) var(--px-16);cursor:pointer;font-weight:600">Thử lại</span>
+              <span onclick={reset} onkeydown={(e) => e.key === 'Enter' && reset()} role="button" tabindex="0" style="font-size:var(--px-12);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-7);padding:var(--px-6) var(--px-16);cursor:pointer;font-weight:600">Retry</span>
             </div>
           {/snippet}
           </svelte:boundary>
@@ -248,14 +248,14 @@
           <!-- Welcome / onboarding (Phase 6 · T7) — chưa có connection nào -->
           <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:var(--px-14);padding:var(--px-30)">
             <div style="font-size:var(--px-30)">🗄️</div>
-            <div style="font-size:var(--px-18);font-weight:700;color:var(--text)">Chào mừng đến Database Studio</div>
-            <div style="font-size:var(--px-13);color:var(--muted);text-align:center;max-width:var(--px-460);line-height:1.5">Kết nối tới PostgreSQL, MySQL, MariaDB, SQL Server, SQLite, ClickHouse, Cassandra, Redis, Kafka hoặc NATS để bắt đầu.</div>
+            <div style="font-size:var(--px-18);font-weight:700;color:var(--text)">Welcome to Database Studio</div>
+            <div style="font-size:var(--px-13);color:var(--muted);text-align:center;max-width:var(--px-460);line-height:1.5">Connect to PostgreSQL, MySQL, MariaDB, SQL Server, SQLite, ClickHouse, Cassandra, Redis, Kafka or NATS to get started.</div>
             <div onclick={() => (ui.pickerOpen = true)} onkeydown={(e) => e.key === 'Enter' && (ui.pickerOpen = true)} role="button" tabindex="0" style="font-size:var(--px-13);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-8);padding:var(--px-9) var(--px-20);cursor:pointer;font-weight:600">+ Add first connection</div>
-            <div style="font-size:var(--px-11_5);color:var(--muted)">Mẹo: nhấn <span class="mono" style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-4);padding:var(--px-1) var(--px-6)">Ctrl+P</span> để mở Command Palette</div>
+            <div style="font-size:var(--px-11_5);color:var(--muted)">Tip: press <span class="mono" style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-4);padding:var(--px-1) var(--px-6)">Ctrl+P</span> to open the Command Palette</div>
           </div>
         {:else}
           <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:var(--px-8);font-size:var(--px-13);color:var(--muted)">
-            <p>Chưa có tab nào mở</p>
+            <p>No tabs open</p>
             <div
               onclick={() => tabs.openSqlTab({})}
               onkeydown={(e) => e.key === 'Enter' && tabs.openSqlTab({})}
@@ -268,7 +268,7 @@
       {/snippet}
 
       {#if !ready}
-        <div style="flex:1;display:flex;align-items:center;justify-content:center;font-size:var(--px-12);color:var(--muted)">Đang khởi động…</div>
+        <div style="flex:1;display:flex;align-items:center;justify-content:center;font-size:var(--px-12);color:var(--muted)">Starting…</div>
       {:else if tabs.splitDir}
         <!-- split view (T11): 2 pane — v = trái|phải, h = trên/dưới -->
         <div style="flex:1;display:flex;flex-direction:{tabs.splitDir === 'v' ? 'row' : 'column'};min-height:0;min-width:0">

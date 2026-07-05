@@ -116,7 +116,7 @@
     if (!exportWizard.connId) return
     const headers = cols.length ? cols : [...available]
     if (!headers.length) {
-      toasts.error('Chưa chọn cột nào')
+      toasts.error('No columns selected')
       return
     }
     running = true

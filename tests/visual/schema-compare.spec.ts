@@ -42,7 +42,7 @@ test('schema compare: pick source/target + diff view + sync script', async ({ pa
   // Sync Script mode shows migration pre
   await page.getByText('Sync Script', { exact: true }).first().click()
   await page.waitForTimeout(200)
-  await expect(page.getByText(/Migration đồng bộ TARGET/).first()).toBeVisible()
+  await expect(page.getByText(/Migration: sync TARGET/).first()).toBeVisible()
 
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })

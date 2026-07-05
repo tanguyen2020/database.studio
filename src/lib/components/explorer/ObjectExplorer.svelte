@@ -162,7 +162,7 @@
 
   async function copyName(name: string) {
     await navigator.clipboard.writeText(name)
-    toasts.success(`Đã copy "${name}"`)
+    toasts.success(`Copied "${name}"`)
   }
 
   // DDL Viewer + Generate SQL — sinh từ ColumnInfo thật (ddl.ts), mở trong tab
@@ -177,7 +177,7 @@
     if (!selected) return
     const cols = await columnsOf(schema, table)
     if (!cols.length) {
-      toasts.show(`Không lấy được cột của "${table}"`)
+      toasts.show(`Could not load columns for "${table}"`)
       return
     }
     const sys = selected.system
@@ -190,11 +190,11 @@
     if (!selected) return
     const cols = await columnsOf(schema, table)
     if (!cols.length) {
-      toasts.show(`Không lấy được cột của "${table}"`)
+      toasts.show(`Could not load columns for "${table}"`)
       return
     }
     await navigator.clipboard.writeText(genCreate(selected.system, schema, table, cols))
-    toasts.success('Đã copy DDL')
+    toasts.success('Copied DDL')
   }
 
   // Rename/Truncate/Drop — mở SQL editable để review trước khi Run (port HTML dòng 3370-3398).
@@ -210,7 +210,7 @@
     const sys = selected.system
     const cols = await columnsOf(schema, table)
     if (!cols.length) {
-      toasts.show(`Không lấy được cột của "${table}"`)
+      toasts.show(`Could not load columns for "${table}"`)
       return
     }
     const fks = (await ipc.listForeignKeys(selected.id, schema).catch(() => [])).filter((f) => f.from_table === table)
@@ -393,7 +393,7 @@
       <input
         bind:this={searchEl}
         bind:value={search}
-        placeholder="Lọc cây (Ctrl+F)…"
+        placeholder="Filter tree (Ctrl+F)…"
         aria-label="Filter tree"
         style="width:100%;background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-8);color:var(--text);font-size:var(--px-11_5)"
       />
@@ -408,7 +408,7 @@
       </div>
     {:else if !selected.connected}
       <div style="padding:var(--px-16) var(--px-12);text-align:center;font-size:var(--px-12);color:var(--muted)">
-        <p>Chưa kết nối.</p>
+        <p>Not connected.</p>
         <div
           onclick={() => selected && connections.connect(selected.id)}
           onkeydown={(e) => e.key === 'Enter' && selected && connections.connect(selected.id)}
@@ -493,7 +493,7 @@
           {/if}
         {/if}
       {:else}
-        <div style="padding:var(--px-16) var(--px-12);text-align:center;font-size:var(--px-12);color:var(--muted)">Đang tải keyspace…</div>
+        <div style="padding:var(--px-16) var(--px-12);text-align:center;font-size:var(--px-12);color:var(--muted)">Loading keyspace…</div>
       {/if}
     {:else}
       {#if isSqlite}

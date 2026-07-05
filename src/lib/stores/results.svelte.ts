@@ -70,7 +70,7 @@ class ResultsStore {
     if (statements.length === 0) return
     const profile = connections.byId(connId)
     if (!profile) {
-      toasts.error('Tab chưa gắn connection')
+      toasts.error('Tab has no connection')
       return
     }
     if (!profile.connected) {
@@ -206,7 +206,7 @@ class ResultsStore {
         exec.activeSub = exec.subResults.length - 1
         if (err.code === 'CANCELLED') {
           exec.cancelled = true
-          toasts.show('Đã hủy query', { system: profile.system })
+          toasts.show('Query cancelled', { system: profile.system })
         } else {
           toasts.error(`#${index}: ${err.message}`, profile.system)
         }
@@ -217,7 +217,7 @@ class ResultsStore {
     exec.running = false
     if (!exec.cancelled && exec.subResults.every((s) => s.kind !== 'error')) {
       const n = exec.subResults.length
-      toasts.success(`Đã chạy ${n} statement · ${exec.totalMs} ms`, profile.system)
+      toasts.success(`Ran ${n} statement(s) · ${exec.totalMs} ms`, profile.system)
     }
   }
 
@@ -227,7 +227,7 @@ class ResultsStore {
     try {
       await ipc.cancelQuery(connId)
     } catch (e) {
-      toasts.error(`Cancel thất bại: ${e}`)
+      toasts.error(`Cancel failed: ${e}`)
     }
   }
 }

@@ -102,7 +102,7 @@
 
   async function run() {
     if (!editor || !tab.connectionId) {
-      if (!tab.connectionId) toasts.error('Tab chưa gắn connection — chọn ở dropdown toolbar')
+      if (!tab.connectionId) toasts.error('Tab has no connection — pick one in the toolbar dropdown')
       return
     }
     editor.clearErrors()
@@ -117,7 +117,7 @@
         ? all
         : all.filter((s) => s.to > range.from && s.from < range.to)
     if (statements.length === 0) {
-      toasts.show('Không có statement nào để chạy')
+      toasts.show('No statement to run')
       return
     }
     await results.run(tab.id, tab.connectionId, statements)
@@ -190,7 +190,7 @@
       nowMs = Date.now()
       if (!longRunWarned && exec.startedAt && nowMs - exec.startedAt > settings.value.longRunningWarnMs) {
         longRunWarned = true
-        toasts.show(`Query vẫn đang chạy > ${Math.round(settings.value.longRunningWarnMs / 1000)}s — Esc để hủy`)
+        toasts.show(`Query still running > ${Math.round(settings.value.longRunningWarnMs / 1000)}s — press Esc to cancel`)
       }
     }, 500)
     return () => clearInterval(iv)
@@ -231,10 +231,10 @@
     if (!editor) return
     const sqlText = editor.getDoc().trim()
     if (!sqlText) return
-    const name = window.prompt('Tên snippet:', tab.title)
+    const name = window.prompt('Snippet name:', tab.title)
     if (!name) return
     await snippets.save(name, sqlText, tab.systemType === 'orphan' ? null : tab.systemType)
-    toasts.success(`Đã lưu snippet "${name}"`)
+    toasts.success(`Saved snippet "${name}"`)
   }
 
   function jump(line: number, col: number) {
@@ -265,7 +265,7 @@
     <!-- orphaned banner — spec phase-1 §3 (badge xám ⚠ + Reassign) -->
     <div style="flex:none;display:flex;align-items:center;gap:var(--px-8);padding:var(--px-6) var(--px-12);border-bottom:var(--px-1) solid var(--border);background:var(--panel);font-size:var(--px-12)">
       <SystemBadge system="orphan" />
-      <span style="color:var(--text2)">Connection đã bị xóa · tab ở trạng thái orphaned</span>
+      <span style="color:var(--text2)">Connection was deleted · tab is orphaned</span>
       <div style="margin-left:auto">
         <select
           class="wk-select"
@@ -368,7 +368,7 @@
         onkeydown={(e) => e.key === 'Enter' && run()}
         role="button"
         tabindex="0"
-        title="Run (F5) — có selection thì chạy selection"
+        title="Run (F5) — runs the selection if any"
         style="display:flex;align-items:center;gap:var(--px-7);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-7);padding:var(--px-5) var(--px-13);cursor:{isOrphan || !tab.connectionId ? 'not-allowed' : 'pointer'};opacity:{isOrphan || !tab.connectionId ? 0.5 : 1};font-weight:600;font-size:var(--px-12)"
       >
         <span>▶</span><span>Run</span><span class="mono" style="opacity:.7;font-size:var(--px-10)">F5</span>
@@ -379,7 +379,7 @@
     <div class="wk-tbtn" onclick={doFormat} onkeydown={(e) => e.key === 'Enter' && doFormat()} role="button" tabindex="0" title="Format SQL (Ctrl+Shift+F)">
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><line x1="4" y1="6" x2="20" y2="6"></line><line x1="4" y1="12" x2="14" y2="12"></line><line x1="4" y1="18" x2="18" y2="18"></line></svg>Format
     </div>
-    <div class="wk-tbtn" onclick={doExplain} onkeydown={(e) => e.key === 'Enter' && doExplain()} role="button" tabindex="0" title="Explain (Ctrl+Shift+E) — visual plan ở Phase 5">
+    <div class="wk-tbtn" onclick={doExplain} onkeydown={(e) => e.key === 'Enter' && doExplain()} role="button" tabindex="0" title="Explain (Ctrl+Shift+E) — visual query plan">
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="20" x2="6" y2="13"></line><line x1="12" y1="20" x2="12" y2="8"></line><line x1="18" y1="20" x2="18" y2="11"></line></svg>Explain
     </div>
     {#if tab.systemType === 'cassandra'}
@@ -442,7 +442,7 @@
       <ResultPanel {exec} connId={tab.connectionId} active={tabs.active?.id === tab.id} accent={systemMeta(tab.systemType).accent} onJump={jump} />
     {:else}
       <div style="flex:1;display:flex;align-items:center;justify-content:center;font-size:var(--px-12);color:var(--muted)">
-        Chạy query (F5) để xem kết quả · Ctrl+Enter chạy statement tại cursor
+        Run a query (F5) to see results · Ctrl+Enter runs the statement at the cursor
       </div>
     {/if}
   </div>

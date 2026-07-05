@@ -1,8 +1,8 @@
 import { expect, test } from '@playwright/test'
 import { APP_URL, blockRemoteFonts } from './helpers'
 
-// Audit: New-connection form — buttons phải hoạt động (no effect loop), bỏ Group,
-// text tiếng Anh.
+// Audit: New-connection form — buttons must work (no effect loop), no Group field,
+// English text.
 test('connection form: buttons work, no Group field, English', async ({ page }) => {
   const errors: string[] = []
   page.on('pageerror', (e) => errors.push(String(e)))
@@ -19,19 +19,19 @@ test('connection form: buttons work, no Group field, English', async ({ page }) 
   const dialog = page.getByRole('dialog')
   await expect(dialog.getByText('New connection', { exact: true })).toBeVisible()
 
-  // #4-audit: Group field đã bỏ
+  // #4-audit: Group field removed
   await expect(dialog.getByText('Group', { exact: true })).toHaveCount(0)
 
-  // buttons hoạt động: SSH toggle → panel SSH hiện
+  // buttons work: SSH toggle → SSH panel shows
   await dialog.getByText('SSH Tunnel').first().click()
   await page.waitForTimeout(150)
   await expect(dialog.getByText(/Auth|Jump|SSH Host|Password/i).first()).toBeVisible()
 
-  // Test button clickable (không văng lỗi)
-  await dialog.getByText('Test', { exact: true }).first().click()
+  // Test connection button clickable (no thrown error)
+  await dialog.getByText('Test connection', { exact: true }).first().click()
   await page.waitForTimeout(150)
 
-  // Cancel đóng form
+  // Cancel closes the form
   await dialog.getByText('Cancel', { exact: true }).first().click()
   await page.waitForTimeout(200)
   await expect(page.getByRole('dialog').getByText('New connection', { exact: true })).toHaveCount(0)

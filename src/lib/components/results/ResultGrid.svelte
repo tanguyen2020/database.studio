@@ -177,7 +177,7 @@
     applying = true
     try {
       const n = await applyGridChanges(editTarget.connId, buildChanges())
-      toasts.success(`Đã áp dụng — ${n} dòng thay đổi`, editTarget.system)
+      toasts.success(`Applied — ${n} row(s) changed`, editTarget.system)
       discard()
       editTarget.onApplied?.()
     } catch (e) {
@@ -323,7 +323,7 @@
       return
     }
     await navigator.clipboard.writeText(text)
-    toasts.success('Đã copy vào clipboard')
+    toasts.success('Copied to clipboard')
   }
 
   export async function copyRow(rowIdx?: number) {
@@ -351,7 +351,7 @@
       .join('\n')
     try {
       await invoke('write_text_file', { path, contents: `${header}\n${body}\n` })
-      toasts.success(`Đã export ${data.rows.length.toLocaleString()} rows → ${path}`)
+      toasts.success(`Exported ${data.rows.length.toLocaleString()} rows → ${path}`)
     } catch (e) {
       toasts.error(String(e))
     }
@@ -372,10 +372,10 @@
     <span class="eg-btn" onclick={addRow} onkeydown={(e) => e.key === 'Enter' && addRow()} role="button" tabindex="0">＋ Insert row</span>
     <span class="eg-btn" onclick={toggleDeleteSelected} onkeydown={(e) => e.key === 'Enter' && toggleDeleteSelected()} role="button" tabindex="0" style="opacity:{selectedRows.size ? 1 : 0.5}">🗑 Delete row(s)</span>
     {#if isClickhouse}
-      <span style="color:var(--muted);font-size:var(--px-10_5)">ClickHouse: sửa dữ liệu là mutation async — không commit OLTP</span>
+      <span style="color:var(--muted);font-size:var(--px-10_5)">ClickHouse: edits are async mutations — no OLTP commit</span>
     {/if}
     {#if pendingCount > 0}
-      <span style="color:var(--warn)">● {pendingCount} thay đổi chưa lưu</span>
+      <span style="color:var(--warn)">● {pendingCount} unsaved change(s)</span>
       <div style="margin-left:auto;display:flex;gap:var(--px-8)">
         {#if isClickhouse}
           <!-- §7 option (a): route sang Generate mutation (ALTER TABLE … UPDATE/DELETE), KHÔNG apply OLTP -->
@@ -559,13 +559,13 @@
       style="width:var(--px-640);max-width:94vw;background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-14);box-shadow:0 var(--px-30) var(--px-70) var(--rgba-0-0-0-_55);overflow:hidden"
     >
       <div style="padding:var(--px-18) var(--px-20) var(--px-8);font-weight:700;font-size:var(--px-15)">
-        Preview — {previewSql.length} statement sẽ chạy trong 1 transaction
+        Preview — {previewSql.length} statement(s) will run in one transaction
       </div>
       <div style="padding:0 var(--px-20) var(--px-14)">
         <pre class="selectable mono" style="max-height:50vh;overflow:auto;border-radius:var(--px-9);background:var(--panel);border:var(--px-1) solid var(--border);padding:var(--px-12);font-size:var(--px-11_5);line-height:1.6;margin:0">{previewSql.join('\n')}</pre>
       </div>
       <div style="display:flex;gap:var(--px-9);padding:var(--px-14) var(--px-20);border-top:var(--px-1) solid var(--border);background:var(--panel)">
-        <span class="eg-btn" style="margin-left:auto" onclick={() => (previewSql = null)} onkeydown={(e) => e.key === 'Enter' && (previewSql = null)} role="button" tabindex="0">Đóng</span>
+        <span class="eg-btn" style="margin-left:auto" onclick={() => (previewSql = null)} onkeydown={(e) => e.key === 'Enter' && (previewSql = null)} role="button" tabindex="0">Close</span>
         <span
           onclick={() => { previewSql = null; void apply() }}
           onkeydown={(e) => e.key === 'Enter' && (previewSql = null, apply())}
@@ -606,7 +606,7 @@
           role="button"
           tabindex="0"
           style="font-size:var(--px-12_5);font-weight:600;background:var(--primary);color:var(--hex-fff);border-radius:var(--px-8);padding:var(--px-8) var(--px-16);cursor:pointer"
-        >Đóng</span>
+        >Close</span>
       </div>
     </div>
   </div>

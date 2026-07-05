@@ -21,7 +21,7 @@
   async function remove(e: MouseEvent, s: Snippet) {
     e.stopPropagation()
     await snippetStore.remove(s.id)
-    toasts.success(`Đã xóa "${s.name}"`)
+    toasts.success(`Deleted "${s.name}"`)
   }
 
   $effect(() => {
@@ -64,7 +64,7 @@
       </div>
     {:else}
       <div style="padding:var(--px-16);font-size:var(--px-12);color:var(--muted)">
-        Chưa có snippet nào. Ở SQL editor nhấn Ctrl+S để lưu.
+        No snippets yet. Press Ctrl+S in the SQL editor to save one.
       </div>
     {/each}
   </div>

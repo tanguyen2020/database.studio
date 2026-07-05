@@ -14,7 +14,7 @@
   function openSessions() {
     const id = connections.selectedId
     if (!id) {
-      toasts.show('Chọn một connection để xem Session Monitor')
+      toasts.show('Select a connection to view the Session Monitor')
       return
     }
     tabs.openAdminView(id, 'sessions')

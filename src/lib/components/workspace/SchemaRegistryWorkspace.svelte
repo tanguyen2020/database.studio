@@ -82,7 +82,7 @@
           </div>
         {/each}
         {#if !loading && subjects.length === 0}
-          <div style="padding:var(--px-14);color:var(--muted);font-size:var(--px-12)">Không có subject.</div>
+          <div style="padding:var(--px-14);color:var(--muted);font-size:var(--px-12)">No subjects.</div>
         {/if}
       </div>
     </div>
@@ -104,7 +104,7 @@
         </div>
         <div style="flex:none;border-top:var(--px-1) solid var(--border);background:var(--surface);padding:var(--px-8) var(--px-14);font-size:var(--px-11);color:var(--muted)">Compatibility: <span style="color:var(--text2)">{schema.compat}</span> · Schema ID <span class="mono" style="color:var(--text2)">{schema.id}</span></div>
       {:else}
-        <div style="flex:1;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:var(--px-12_5)">{loading ? 'Đang tải…' : 'Chọn subject để xem schema.'}</div>
+        <div style="flex:1;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:var(--px-12_5)">{loading ? 'Loading…' : 'Select a subject to view its schema.'}</div>
       {/if}
     </div>
   </div>

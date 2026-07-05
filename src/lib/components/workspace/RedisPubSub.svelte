@@ -62,9 +62,9 @@
     try {
       await ipc.redisSubscribe(tab.connectionId, channels, patterns)
       subscribed = true
-      if (!IS_TAURI) toasts.show('Stream chỉ hoạt động trong app Tauri (không phải browser demo)')
+      if (!IS_TAURI) toasts.show('Streaming only works in the Tauri app (not the browser demo)')
     } catch (e) {
-      toasts.error(`Subscribe thất bại: ${e}`)
+      toasts.error(`Subscribe failed: ${e}`)
     }
   }
 
@@ -75,7 +75,7 @@
       toasts.success(`PUBLISH → ${n} subscriber`)
       pubMsg = ''
     } catch (e) {
-      toasts.error(`Publish thất bại: ${e}`)
+      toasts.error(`Publish failed: ${e}`)
     }
   }
 </script>
@@ -99,7 +99,7 @@
   <div style="flex:1;overflow:auto;min-height:0;padding:var(--px-6) 0">
     {#if messages.length === 0}
       <div style="padding:var(--px-16) var(--px-16);text-align:center;font-size:var(--px-12);color:var(--muted)">
-        {subscribed ? 'Đang chờ message…' : 'Nhập pattern rồi Subscribe để nhận message real-time.'}
+        {subscribed ? 'Waiting for messages…' : 'Enter a pattern then Subscribe for real-time messages.'}
       </div>
     {:else}
       {#each messages as m, i (i)}

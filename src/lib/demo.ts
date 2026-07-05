@@ -263,7 +263,7 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
         ],
         summary: { total: 5, total_size_bytes: 163840, unused: 1, redundant: 1, fragmented: 0, invalid: 0 },
         suggestions: [
-          { table: 'enrollments', columns: [], reason: '840 seq scan (idx scan 12), đọc TB 5200 rows/scan trên ~12480 rows — cân nhắc thêm index vào cột lọc' },
+          { table: 'enrollments', columns: [], reason: '840 seq scans (12 index scans), avg 5200 rows/scan read over ~12480 rows — consider adding an index on the filter column' },
         ],
       })
     case 'admin_view': {
@@ -564,7 +564,7 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
       if (/\bjoin\b/.test(cql)) {
         return ok({
           ok: false,
-          error: { message: 'CQL không hỗ trợ JOIN', detail: 'InvalidRequest' },
+          error: { message: 'CQL does not support JOIN', detail: 'InvalidRequest' },
           duration_ms: 1,
           warnings: [],
         })
@@ -715,12 +715,12 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
         sorting_key: 'event_type, student_id',
         create_sql: `CREATE TABLE analytics.${tbl} (event_date Date, event_type LowCardinality(String)) ENGINE = MergeTree PARTITION BY toYYYYMM(event_date) ORDER BY (event_type, student_id) TTL event_date + toIntervalDay(90) DELETE, event_date + toIntervalDay(30) TO VOLUME 'cold' SETTINGS index_granularity = 8192`,
         ttl_rules: [
-          { expr: 'event_date + toIntervalDay(90)', action: 'DELETE', human: 'Xóa dữ liệu khi: event_date + toIntervalDay(90)' },
-          { expr: 'event_date + toIntervalDay(30)', action: 'MOVE', human: "Chuyển part sang disk/volume khi: event_date + toIntervalDay(30) (TO VOLUME 'cold')" },
+          { expr: 'event_date + toIntervalDay(90)', action: 'DELETE', human: 'Delete data when: event_date + toIntervalDay(90)' },
+          { expr: 'event_date + toIntervalDay(30)', action: 'MOVE', human: "Move part to disk/volume when: event_date + toIntervalDay(30) (TO VOLUME 'cold')" },
         ],
       })
     }
     default:
-      return Promise.reject(new Error(`demo: chưa mock command "${cmd}"`))
+      return Promise.reject(new Error(`demo: command "${cmd}" not mocked yet`))
   }
 }

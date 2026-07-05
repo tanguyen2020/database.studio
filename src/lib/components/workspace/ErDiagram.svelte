@@ -48,7 +48,7 @@
 
   function addRelationship() {
     if (!relFromTable || !relFromCol || !relToTable || !relToCol) {
-      toasts.error('Chọn đủ from/to table + cột')
+      toasts.error('Pick from/to table + column')
       return
     }
     pendingFks = [
@@ -64,7 +64,7 @@
   function saveToDb() {
     if (!pendingFks.length || !tab.connectionId) return
     const sql = pendingFks.map((fk) => genForeignKey(system, schema, fk)).join('\n')
-    tabs.openSqlTab({ connectionId: tab.connectionId, title: `Add Relationships · ${schema}`, query: `-- Review kỹ trước khi chạy\n${sql}` })
+    tabs.openSqlTab({ connectionId: tab.connectionId, title: `Add Relationships · ${schema}`, query: `-- Review carefully before running\n${sql}` })
   }
 
   function applySearch() {
@@ -160,7 +160,7 @@
   })
 
   function copyMermaid() {
-    void navigator.clipboard.writeText(toMermaid(tables, fks)).then(() => toasts.success('Đã copy Mermaid'))
+    void navigator.clipboard.writeText(toMermaid(tables, fks)).then(() => toasts.success('Copied Mermaid'))
   }
   function downloadSvg() {
     triggerDownload(new Blob([toSvg(tables, fks, positions)], { type: 'image/svg+xml' }), `er_${schema || 'schema'}.svg`)
@@ -207,7 +207,7 @@
       bind:this={searchEl}
       bind:value={search}
       oninput={applySearch}
-      placeholder="Tìm bảng (Ctrl+F)…"
+      placeholder="Find table (Ctrl+F)…"
       aria-label="Find table"
       style="width:var(--px-150);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-3) var(--px-8);color:var(--text);font-size:var(--px-11)"
     />

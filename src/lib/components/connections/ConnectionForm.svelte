@@ -565,7 +565,7 @@
               role="button"
               tabindex="0"
               style="font-size:var(--px-12_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-8);padding:var(--px-8) var(--px-16);cursor:pointer"
-            >{testing ? 'Testing…' : 'Test'}</span>
+            >{testing ? 'Testing…' : 'Test connection'}</span>
             <span
               onclick={close}
               onkeydown={(e) => e.key === 'Enter' && close()}
@@ -588,7 +588,7 @@
                 role="button"
                 tabindex="0"
                 style="font-size:var(--px-12_5);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-8);padding:var(--px-8) var(--px-18);cursor:pointer;font-weight:600"
-              >{saving ? 'Saving…' : 'Save'}</span>
+              >{saving ? 'Connecting…' : 'Connect'}</span>
             {/if}
           </div>
         </div>

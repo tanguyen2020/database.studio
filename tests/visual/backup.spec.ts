@@ -18,7 +18,7 @@ test('backup dialog: tool status + backup now + history', async ({ page }) => {
 
   const dialog = page.getByRole('dialog')
   await expect(dialog.getByText(/Backup & Restore ·/)).toBeVisible()
-  await expect(dialog.getByText(/Công cụ:/).first()).toBeVisible()
+  await expect(dialog.getByText(/Tool:/).first()).toBeVisible()
   await expect(dialog.getByText('Destination file')).toBeVisible()
 
   await dialog.getByRole('button', { name: 'Backup now' }).click()

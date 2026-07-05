@@ -119,7 +119,7 @@ export function diffCounts(diffs: ObjectDiff[]): { add: number; changed: number;
 export function genMigration(diffs: ObjectDiff[], system: string, selected?: Set<string>): string {
   const q = (n: string) => quoteIdent(system, n)
   const pick = (d: ObjectDiff) => !selected || selected.has(d.name)
-  const out: string[] = ['-- Migration: đồng bộ TARGET theo SOURCE', '-- Review kỹ trước khi chạy.', '']
+  const out: string[] = ['-- Migration: sync TARGET to match SOURCE', '-- Review carefully before running.', '']
 
   for (const d of diffs.filter(pick)) {
     // Routines/triggers: đồng bộ bằng chính DDL nguồn (CREATE OR REPLACE) / DROP.
@@ -128,7 +128,7 @@ export function genMigration(diffs: ObjectDiff[], system: string, selected?: Set
       if (d.status === 'tgt_only') {
         out.push(`DROP ${kw} IF EXISTS ${q(d.name)};`)
       } else if ((d.status === 'src_only' || d.status === 'different') && d.srcDdl) {
-        if (d.status === 'different') out.push(`-- ${kw} ${d.name}: TARGET khác SOURCE, thay bằng định nghĩa nguồn`)
+        if (d.status === 'different') out.push(`-- ${kw} ${d.name}: TARGET differs from SOURCE, replacing with source definition`)
         out.push(d.srcDdl.trim().endsWith(';') ? d.srcDdl.trim() : `${d.srcDdl.trim()};`)
       }
       continue

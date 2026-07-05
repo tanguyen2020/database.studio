@@ -25,7 +25,7 @@
       toasts.success(`Produced → partition ${res.partition}, offset ${res.offset}`)
       sent = [{ topic: topic.trim(), key, value, partition: res.partition, offset: res.offset }, ...sent].slice(0, 50)
     } catch (e) {
-      toasts.error(`Produce thất bại: ${e}`)
+      toasts.error(`Produce failed: ${e}`)
     }
   }
 
@@ -47,7 +47,7 @@
       <input bind:value={topic} class="pi mono" />
     </div>
     <div>
-      <div class="pl">Partition <span style="color:var(--muted);font-weight:400">(trống = auto)</span></div>
+      <div class="pl">Partition <span style="color:var(--muted);font-weight:400">(empty = auto)</span></div>
       <input bind:value={partition} placeholder="auto" class="pi mono" />
     </div>
     <div style="grid-column:1/3">
@@ -65,7 +65,7 @@
   </div>
 
   {#if sent.length > 0}
-    <div class="pl" style="margin-top:var(--px-8)">Đã gửi (click để dùng lại)</div>
+    <div class="pl" style="margin-top:var(--px-8)">Sent (click to reuse)</div>
     <table class="mono" style="border-collapse:collapse;width:100%;font-size:var(--px-11_5)">
       <thead><tr>
         {#each ['Partition', 'Offset', 'Key', 'Value'] as h (h)}

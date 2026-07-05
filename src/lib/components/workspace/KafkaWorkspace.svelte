@@ -67,16 +67,16 @@
 
   async function createTopic() {
     if (!tab.connectionId) return
-    const name = window.prompt('Tên topic:')
+    const name = window.prompt('Topic name:')
     if (!name) return
     const partitions = parseInt(window.prompt('Partitions:', '3') ?? '3', 10) || 1
     const replication = parseInt(window.prompt('Replication factor:', '1') ?? '1', 10) || 1
     try {
       await ipc.kafkaCreateTopic(tab.connectionId, name, partitions, replication)
-      toasts.success(`Đã tạo topic "${name}"`)
+      toasts.success(`Created topic "${name}"`)
       await load()
     } catch (e) {
-      toasts.error(`Tạo topic thất bại: ${e}`)
+      toasts.error(`Create topic failed: ${e}`)
     }
   }
 
@@ -107,27 +107,27 @@
 
   async function resetOffset(topic: string, partition: number) {
     if (!tab.connectionId || !selGroup) return
-    const target = window.prompt(`Reset offset "${selGroup}" · ${topic}[${partition}] → earliest / latest / <số offset>:`, 'earliest')
+    const target = window.prompt(`Reset offset "${selGroup}" · ${topic}[${partition}] → earliest / latest / <offset number>:`, 'earliest')
     if (!target) return
     const isNum = /^\d+$/.test(target)
     try {
       await ipc.kafkaResetOffset(tab.connectionId, selGroup, topic, partition, isNum ? 'offset' : target, isNum ? parseInt(target, 10) : 0)
-      toasts.success('Đã reset offset')
+      toasts.success('Offset reset')
       await selectGroup(selGroup)
     } catch (e) {
-      toasts.error(`Reset offset thất bại (group đang active?): ${e}`)
+      toasts.error(`Reset offset failed (group active?): ${e}`)
     }
   }
 
   async function deleteTopic(name: string) {
     if (!tab.connectionId) return
-    if (!window.confirm(`Xóa topic "${name}"?`)) return
+    if (!window.confirm(`Delete topic "${name}"?`)) return
     try {
       await ipc.kafkaDeleteTopic(tab.connectionId, name)
-      toasts.success(`Đã xóa topic "${name}"`)
+      toasts.success(`Deleted topic "${name}"`)
       await load()
     } catch (e) {
-      toasts.error(`Xóa topic thất bại: ${e}`)
+      toasts.error(`Delete topic failed: ${e}`)
     }
   }
 </script>
@@ -155,7 +155,7 @@
     <div style="flex:1;display:flex;min-height:0">
       <div style="width:var(--px-300);flex:none;border-right:var(--px-1) solid var(--border);overflow:auto;padding:var(--px-6)">
         {#if groups.length === 0}
-          <div style="padding:var(--px-12);font-size:var(--px-12);color:var(--muted)">Không có consumer group.</div>
+          <div style="padding:var(--px-12);font-size:var(--px-12);color:var(--muted)">No consumer groups.</div>
         {:else}
           {#each groups as g (g.name)}
             <div onclick={() => selectGroup(g.name)} onkeydown={(e) => e.key === 'Enter' && selectGroup(g.name)} role="button" tabindex="0" style="padding:var(--px-7) var(--px-9);border-radius:var(--px-6);cursor:pointer;background:{selGroup === g.name ? 'var(--hover)' : 'transparent'}">
@@ -167,7 +167,7 @@
       </div>
       <div style="flex:1;overflow:auto;min-width:0;padding:var(--px-10) var(--px-14)">
         {#if !selGroup}
-          <div style="color:var(--muted);font-size:var(--px-12)">Chọn group để xem lag + members.</div>
+          <div style="color:var(--muted);font-size:var(--px-12)">Select a group to view lag + members.</div>
         {:else}
           {@const grp = groups.find((g) => g.name === selGroup)}
           {#if grp && grp.members.length > 0}
@@ -220,9 +220,9 @@
     {#if error}
       <div style="padding:var(--px-14);font-size:var(--px-12);color:var(--error)">{error}</div>
     {:else if loading && topics.length === 0}
-      <div style="padding:var(--px-14);font-size:var(--px-12);color:var(--muted)">Đang tải metadata…</div>
+      <div style="padding:var(--px-14);font-size:var(--px-12);color:var(--muted)">Loading metadata…</div>
     {:else if filtered.length === 0}
-      <div style="padding:var(--px-14);font-size:var(--px-12);color:var(--muted)">Không có topic khớp.</div>
+      <div style="padding:var(--px-14);font-size:var(--px-12);color:var(--muted)">No matching topics.</div>
     {:else}
       {#each filtered as t (t.name)}
         {@const open = expanded.has(t.name)}

@@ -77,10 +77,10 @@
       const res = await ipc.execStatement(tab.connectionId, ddl, 0)
       if (res.ok) {
         execMsg = '✓ Applied'
-        toasts.success(`Đã tạo/áp dụng ${name}`)
+        toasts.success(`Created/applied ${name}`)
         explorer.refresh(tab.connectionId, { kind: 'connection' })
       } else {
-        toasts.error(res.error?.message ?? 'DDL lỗi')
+        toasts.error(res.error?.message ?? 'DDL error')
       }
     } catch (e) {
       toasts.error(`${e}`)

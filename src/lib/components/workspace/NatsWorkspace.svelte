@@ -81,9 +81,9 @@
     try {
       await ipc.natsSubscribe(tab.connectionId, subject.trim())
       subscribed = true
-      if (!IS_TAURI) toasts.show('Stream chỉ hoạt động trong app Tauri (không phải browser demo)')
+      if (!IS_TAURI) toasts.show('Streaming only works in the Tauri app (not the browser demo)')
     } catch (e) {
-      toasts.error(`Subscribe thất bại: ${e}`)
+      toasts.error(`Subscribe failed: ${e}`)
     }
   }
 
@@ -91,10 +91,10 @@
     if (!tab.connectionId || !pubSubject.trim()) return
     try {
       await ipc.natsPublish(tab.connectionId, pubSubject.trim(), pubMsg)
-      toasts.success(`Đã publish → ${pubSubject.trim()}`)
+      toasts.success(`Published → ${pubSubject.trim()}`)
       pubMsg = ''
     } catch (e) {
-      toasts.error(`Publish thất bại: ${e}`)
+      toasts.error(`Publish failed: ${e}`)
     }
   }
 
@@ -105,7 +105,7 @@
       reqReply = await ipc.natsRequest(tab.connectionId, reqSubject.trim(), reqMsg, 3000)
     } catch (e) {
       reqReply = null
-      toasts.error(`Request thất bại: ${e}`)
+      toasts.error(`Request failed: ${e}`)
     }
   }
 
@@ -142,7 +142,7 @@
       toasts.success(`PUT ${key}`)
       await selKvBucket(kvSel)
     } catch (e) {
-      toasts.error(`KV put lỗi: ${e}`)
+      toasts.error(`KV put failed: ${e}`)
     }
   }
   async function kvDelKey(key: string) {
@@ -184,7 +184,7 @@
       toasts.success(`Uploaded ${name}`)
       await selObjBucket(objSel)
     } catch (e) {
-      toasts.error(`Upload lỗi: ${e}`)
+      toasts.error(`Upload failed: ${e}`)
     }
   }
   async function objDownload(name: string) {
@@ -226,7 +226,7 @@
     try {
       peekResult = await ipc.natsJsPeek(tab.connectionId, jsSel, peekSeq)
     } catch (e) {
-      toasts.error(`Peek thất bại: ${e}`)
+      toasts.error(`Peek failed: ${e}`)
     }
   }
 </script>
@@ -332,7 +332,7 @@
             <pre class="mono" style="margin-top:var(--px-10);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-8);font-size:var(--px-12);white-space:pre-wrap;word-break:break-word">{kvValue.key} = {kvValue.value}</pre>
           {/if}
         {:else}
-          <div style="color:var(--muted);font-size:var(--px-12)">Chọn bucket để xem keys.</div>
+          <div style="color:var(--muted);font-size:var(--px-12)">Select a bucket to view keys.</div>
         {/if}
       </div>
     </div>
@@ -362,7 +362,7 @@
             </tbody>
           </table>
         {:else}
-          <div style="color:var(--muted);font-size:var(--px-12)">Chọn bucket để xem objects.</div>
+          <div style="color:var(--muted);font-size:var(--px-12)">Select a bucket to view objects.</div>
         {/if}
       </div>
     </div>
@@ -371,7 +371,7 @@
   <div style="flex:1;overflow:auto;min-height:0;padding:var(--px-8) 0">
     {#if messages.length === 0}
       <div style="padding:var(--px-16);text-align:center;font-size:var(--px-12);color:var(--muted)">
-        {subscribed ? 'Đang chờ message…' : 'Nhập subject (vd orders.>) rồi Subscribe.'}
+        {subscribed ? 'Waiting for messages…' : 'Enter a subject (e.g. orders.>) then Subscribe.'}
       </div>
     {:else}
       {#each messages as m, i (i)}

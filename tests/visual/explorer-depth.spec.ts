@@ -16,7 +16,7 @@ test('explorer depth: Show Definition + properties + view columns + filter', asy
   await page.waitForTimeout(500)
 
   // tree filter input present (Ctrl+F target)
-  await expect(page.getByPlaceholder(/Lọc cây/).first()).toBeVisible()
+  await expect(page.getByPlaceholder(/Filter tree/).first()).toBeVisible()
 
   await page.getByText('public', { exact: true }).first().click()
   await page.waitForTimeout(300)
@@ -43,7 +43,7 @@ test('explorer depth: Show Definition + properties + view columns + filter', asy
   await expect(page.getByText('first_name').first()).toBeVisible()
 
   // tree filter narrows the tree
-  await page.getByPlaceholder(/Lọc cây/).first().fill('add_one')
+  await page.getByPlaceholder(/Filter tree/).first().fill('add_one')
   await page.waitForTimeout(200)
   await expect(page.getByText(/add_one/).first()).toBeVisible()
 

@@ -40,7 +40,7 @@
 
   async function copyAll() {
     await navigator.clipboard.writeText(text)
-    toasts.success('Đã copy JSON')
+    toasts.success('Copied JSON')
   }
 </script>
 

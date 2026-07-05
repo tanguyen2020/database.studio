@@ -98,4 +98,6 @@ Cập nhật sau MỖI commit. Rule: 1 task/lần, unit+integration xanh mới c
 - **A3 Generate Scripts 3-mode trên table context menu** ✅ (ObjectExplorer `ContextMenu.Sub` → `genTableScript`).
 - **A4 Save ER layout** ✅ (ErDiagram persist `tab.state.positions` qua `onnodedragstop` + `tabs.schedulePersist`; Auto-layout xoá saved).
 - **A5 Streaming I/O** ⏳ PLAN-only (chưa code): export/generate đang buffer RAM (sqlx fetch_all + Blob); plan chuyển `export_to_file` stream + `BufWriter` + save-dialog + Channel progress. Cần duyệt trước khi làm.
-- Gates sau AUDIT-1: check 0/0, vitest 179, playwright 34, Rust unit 72.
+- **A6 ConnectionForm "chết nút" + bỏ Group + English** ✅ (fix `$effect` self-loop `effect_update_depth_exceeded` bằng build-local-assign-once; bỏ field Group; nút **Test → "Test connection"**, **Save → "Connect"**).
+- **A7 i18n sweep — toàn bộ user-facing text = English** ✅ (App/stores/workspace/dialogs/demo/plan/diff; chỉ chừa comment + test desc + dữ liệu mẫu + `×`). Specs cập nhật theo text mới.
+- Gates sau AUDIT-1: check 0/0, vitest 179, playwright 35, Rust unit 72.

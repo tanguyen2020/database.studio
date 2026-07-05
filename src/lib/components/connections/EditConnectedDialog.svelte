@@ -67,9 +67,9 @@
       <div style="padding:0 var(--px-20) var(--px-14)">
         <div style="font-size:var(--px-12_5);color:var(--text2)">
           {#if req.tabCount > 0}
-            Connection này đang có <b>{req.tabCount} tab</b> mở.
+            This connection has <b>{req.tabCount} tab(s)</b> open.
           {/if}
-          Thay đổi sẽ có hiệu lực ở lần kết nối tiếp theo.
+          Changes take effect on the next connection.
         </div>
       </div>
       <div style="display:flex;gap:var(--px-9);padding:var(--px-14) var(--px-20);border-top:var(--px-1) solid var(--border);background:var(--panel)">

@@ -136,7 +136,7 @@
     if (!importWizard.connId) return
     const { columns, mappedRows } = mappedPlan()
     if (!columns.length) {
-      toasts.error('Chưa map cột nào')
+      toasts.error('No columns mapped')
       return
     }
     running = true
@@ -209,7 +209,7 @@
             </label>
           </div>
           {#if parseError}
-            <div style="font-size:var(--px-11_5);color:var(--error)">Parse lỗi: {parseError}</div>
+            <div style="font-size:var(--px-11_5);color:var(--error)">Parse error: {parseError}</div>
           {/if}
           {#if headers.length}
             <div style="font-size:var(--px-11);color:var(--muted)">Preview ({rows.length} rows)</div>
@@ -251,7 +251,7 @@
             </select>
           </label>
           {#if !conflictOk}
-            <div style="font-size:var(--px-11);color:var(--muted)">{system === 'clickhouse' ? 'ClickHouse: append-only — on-conflict không áp dụng, INSERT luôn theo batch.' : 'Hệ này không hỗ trợ skip-duplicate trong 1 câu INSERT.'}</div>
+            <div style="font-size:var(--px-11);color:var(--muted)">{system === 'clickhouse' ? 'ClickHouse: append-only — on-conflict does not apply, INSERT is always batched.' : 'This engine does not support skip-duplicate within a single INSERT.'}</div>
           {/if}
         {:else}
           <!-- progress + result -->

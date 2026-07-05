@@ -29,7 +29,7 @@ class ConnectionsStore {
       this.profiles = await ipc.listConnections()
       this.loaded = true
     } catch (e) {
-      toasts.error(`Không tải được danh sách connection: ${e}`)
+      toasts.error(`Failed to load connections: ${e}`)
     }
   }
 
@@ -41,7 +41,7 @@ class ConnectionsStore {
       else this.profiles.push(saved)
       return saved
     } catch (e) {
-      toasts.error(`Lưu connection thất bại: ${e}`)
+      toasts.error(`Failed to save connection: ${e}`)
       return null
     }
   }
@@ -60,7 +60,7 @@ class ConnectionsStore {
       this.profiles = this.profiles.filter((p) => p.id !== id)
       if (this.selectedId === id) this.selectedId = null
     } catch (e) {
-      toasts.error(`Xóa connection thất bại: ${e}`)
+      toasts.error(`Failed to delete connection: ${e}`)
       throw e
     }
   }
@@ -75,7 +75,7 @@ class ConnectionsStore {
       toasts.success(`Quick connect "${p.name || p.host}" OK`, p.system)
       return p
     } catch (e) {
-      toasts.error(`Quick connect thất bại: ${e}`)
+      toasts.error(`Quick connect failed: ${e}`)
       return null
     }
   }
@@ -108,9 +108,9 @@ class ConnectionsStore {
       const copy = await ipc.duplicateConnection(id)
       const idx = this.profiles.findIndex((p) => p.id === id)
       this.profiles.splice(idx >= 0 ? idx + 1 : this.profiles.length, 0, copy)
-      toasts.success(`Đã nhân bản "${copy.name}"`, copy.system)
+      toasts.success(`Duplicated "${copy.name}"`, copy.system)
     } catch (e) {
-      toasts.error(`Duplicate thất bại: ${e}`)
+      toasts.error(`Duplicate failed: ${e}`)
     }
   }
 
@@ -142,7 +142,7 @@ class ConnectionsStore {
         profile.latency_ms = undefined
       }
     } catch (e) {
-      toasts.error(`Disconnect thất bại: ${e}`)
+      toasts.error(`Disconnect failed: ${e}`)
     }
   }
 
@@ -158,7 +158,7 @@ class ConnectionsStore {
     } catch (e) {
       profile.connected = false
       profile.latency_ms = undefined
-      toasts.error(`${profile.name}: reconnect thất bại — ${e}`, profile.system)
+      toasts.error(`${profile.name}: reconnect failed — ${e}`, profile.system)
       return false
     } finally {
       const next = new Set(this.connecting)

@@ -105,7 +105,7 @@
 
   async function copyKey(name: string) {
     await navigator.clipboard.writeText(name)
-    toasts.success(`Đã copy "${name}"`)
+    toasts.success(`Copied "${name}"`)
   }
 
   async function selectKey(path: string) {
@@ -134,16 +134,16 @@
 
   async function flushDb() {
     if (!tab.connectionId) return
-    const ans = window.prompt(`FLUSHDB sẽ XÓA TOÀN BỘ db${dbIndex}. Gõ "db${dbIndex}" để xác nhận:`)
+    const ans = window.prompt(`FLUSHDB will DELETE ALL of db${dbIndex}. Type "db${dbIndex}" to confirm:`)
     if (ans !== `db${dbIndex}`) return
     try {
       await ipc.redisFlushDb(tab.connectionId)
-      toasts.success('FLUSHDB — đã xóa toàn bộ DB')
+      toasts.success('FLUSHDB — entire DB cleared')
       selected = null
       selectedValue = null
       await load()
     } catch (e) {
-      toasts.error(`FLUSHDB thất bại: ${e}`)
+      toasts.error(`FLUSHDB failed: ${e}`)
     }
   }
 
@@ -155,7 +155,7 @@
       await selectKey(selected)
       await load()
     } catch (e) {
-      toasts.error(`Sửa thất bại: ${e}`)
+      toasts.error(`Edit failed: ${e}`)
     }
   }
 
@@ -180,7 +180,7 @@
       const value = window.prompt('Value (RPUSH):')
       if (value !== null) void edit({ op: 'rPush', value }, 'RPUSH')
     } else if (v.kind === 'stream') {
-      const raw = window.prompt('Fields (dạng f1=v1,f2=v2):')
+      const raw = window.prompt('Fields (format f1=v1,f2=v2):')
       if (!raw) return
       const fields = raw.split(',').map((p) => p.split('=') as [string, string]).filter((p) => p[0])
       void edit({ op: 'xAdd', fields }, 'XADD')
@@ -246,22 +246,22 @@
 
   async function delKey() {
     if (!tab.connectionId || !selected) return
-    if (!window.confirm(`Xóa key "${selected}"? (DEL)`)) return
+    if (!window.confirm(`Delete key "${selected}"? (DEL)`)) return
     try {
       await ipc.redisDel(tab.connectionId, selected)
-      toasts.success(`Đã DEL "${selected}"`)
+      toasts.success(`Deleted "${selected}"`)
       selected = null
       selectedValue = null
       await load()
     } catch (e) {
-      toasts.error(`DEL thất bại: ${e}`)
+      toasts.error(`DEL failed: ${e}`)
     }
   }
 
   async function editTtl() {
     if (!tab.connectionId || !selected) return
     const cur = selectedValue?.ttl ?? -1
-    const input = window.prompt('TTL (giây; 0 hoặc trống = PERSIST bỏ hết hạn):', cur > 0 ? String(cur) : '')
+    const input = window.prompt('TTL (seconds; 0 or empty = PERSIST removes expiry):', cur > 0 ? String(cur) : '')
     if (input === null) return
     const secs = parseInt(input, 10) || 0
     try {
@@ -270,7 +270,7 @@
       await selectKey(selected)
       await load()
     } catch (e) {
-      toasts.error(`Set TTL thất bại: ${e}`)
+      toasts.error(`Set TTL failed: ${e}`)
     }
   }
 </script>
@@ -322,7 +322,7 @@
       <span class="mono" style="font-size:var(--px-11);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-3) var(--px-9)">db{dbIndex}</span>
       <span class="mono" style="margin-left:auto;font-size:var(--px-11);color:var(--muted)">SCAN · {dbsize} keys</span>
       <span onclick={() => tab.connectionId && tabs.openRedisPubSubTab(tab.connectionId)} onkeydown={(e) => e.key === 'Enter' && tab.connectionId && tabs.openRedisPubSubTab(tab.connectionId)} role="button" tabindex="0" title="Pub/Sub Monitor" style="flex:none;font-size:var(--px-10_5);color:var(--primary);cursor:pointer">Pub/Sub ▸</span>
-      <span onclick={flushDb} onkeydown={(e) => e.key === 'Enter' && flushDb()} role="button" tabindex="0" title="FLUSHDB (xóa toàn bộ DB)" style="flex:none;font-size:var(--px-10_5);color:var(--error);cursor:pointer">Flush</span>
+      <span onclick={flushDb} onkeydown={(e) => e.key === 'Enter' && flushDb()} role="button" tabindex="0" title="FLUSHDB (clear entire DB)" style="flex:none;font-size:var(--px-10_5);color:var(--error);cursor:pointer">Flush</span>
     </div>
     <!-- search pattern -->
     <div style="flex:none;padding:var(--px-6) var(--px-8)">
@@ -338,9 +338,9 @@
       {#if error}
         <div style="padding:var(--px-10);font-size:var(--px-11_5);color:var(--error)">{error}</div>
       {:else if loading && rows.length === 0}
-        <div style="padding:var(--px-10);font-size:var(--px-11_5);color:var(--muted)">Đang SCAN…</div>
+        <div style="padding:var(--px-10);font-size:var(--px-11_5);color:var(--muted)">Scanning…</div>
       {:else if rows.length === 0}
-        <div style="padding:var(--px-10);font-size:var(--px-11_5);color:var(--muted)">Không có key khớp.</div>
+        <div style="padding:var(--px-10);font-size:var(--px-11_5);color:var(--muted)">No matching keys.</div>
       {:else}
         {#each rows as r (r.path)}
           {#if r.kind === 'folder'}
@@ -398,7 +398,7 @@
       </div>
       <div style="flex:1;overflow:auto;min-height:0">
         {#if valLoading}
-          <div style="padding:var(--px-14);font-size:var(--px-12);color:var(--muted)">Đang tải…</div>
+          <div style="padding:var(--px-14);font-size:var(--px-12);color:var(--muted)">Loading…</div>
         {:else if valError}
           <div style="padding:var(--px-14);font-size:var(--px-12);color:var(--error)">{valError}</div>
         {:else if v?.value.kind === 'string'}
@@ -409,7 +409,7 @@
               style="flex:1;width:100%;box-sizing:border-box;resize:none;background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-8);padding:var(--px-10);font-size:var(--px-12_5);color:var(--text);outline:none"
             ></textarea>
             <div style="flex:none;display:flex;justify-content:flex-end">
-              <span onclick={() => edit({ op: 'setString', value: stringDraft }, 'SET (đã lưu)')} onkeydown={(e) => e.key === 'Enter' && edit({ op: 'setString', value: stringDraft }, 'SET')} role="button" tabindex="0" style="font-size:var(--px-12);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-7);padding:var(--px-6) var(--px-16);cursor:pointer;font-weight:600">Save</span>
+              <span onclick={() => edit({ op: 'setString', value: stringDraft }, 'SET (saved)')} onkeydown={(e) => e.key === 'Enter' && edit({ op: 'setString', value: stringDraft }, 'SET')} role="button" tabindex="0" style="font-size:var(--px-12);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-7);padding:var(--px-6) var(--px-16);cursor:pointer;font-weight:600">Save</span>
             </div>
           </div>
         {:else if v?.value.kind === 'hash'}
@@ -434,12 +434,12 @@
             </tbody>
           </table>
         {:else}
-          <div style="padding:var(--px-14);font-size:var(--px-12);color:var(--muted)">(empty / key không tồn tại)</div>
+          <div style="padding:var(--px-14);font-size:var(--px-12);color:var(--muted)">(empty / key not found)</div>
         {/if}
       </div>
     {:else}
       <div style="flex:1;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:var(--px-12)">
-        Chọn một key để xem giá trị
+        Select a key to view its value
       </div>
     {/if}
 

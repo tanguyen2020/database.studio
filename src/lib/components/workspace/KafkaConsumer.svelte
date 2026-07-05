@@ -83,9 +83,9 @@
     try {
       await ipc.kafkaConsume(tab.connectionId, topic, from, offset, Number.isNaN(part as number) ? null : part)
       consuming = true
-      if (!IS_TAURI) toasts.show('Stream chỉ hoạt động trong app Tauri (không phải browser demo)')
+      if (!IS_TAURI) toasts.show('Streaming only works in the Tauri app (not the browser demo)')
     } catch (e) {
-      toasts.error(`Consume thất bại: ${e}`)
+      toasts.error(`Consume failed: ${e}`)
     }
   }
 </script>
@@ -130,7 +130,7 @@
   <div style="flex:1;overflow:auto;min-height:0">
     {#if messages.length === 0}
       <div style="padding:var(--px-16);text-align:center;font-size:var(--px-12);color:var(--muted)">
-        {consuming ? 'Đang chờ message…' : 'Chọn vị trí bắt đầu rồi Consume.'}
+        {consuming ? 'Waiting for messages…' : 'Pick a start position then Consume.'}
       </div>
     {:else}
       <table class="mono" style="border-collapse:collapse;width:100%;font-size:var(--px-12)">

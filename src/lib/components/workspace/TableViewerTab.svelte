@@ -228,7 +228,7 @@
 
   <div style="min-height:0;flex:1;display:flex;flex-direction:column">
     {#if loading}
-      <div style="flex:1;display:flex;align-items:center;justify-content:center;font-size:var(--px-12);color:var(--muted)">Đang tải…</div>
+      <div style="flex:1;display:flex;align-items:center;justify-content:center;font-size:var(--px-12);color:var(--muted)">Loading…</div>
     {:else if error}
       <div class="selectable" style="padding:var(--px-16);font-size:var(--px-12_5);color:var(--error)">
         ✗ {error.message}
@@ -240,7 +240,7 @@
       <ResultGrid {data} {editTarget} />
     {:else}
       <div style="flex:1;display:flex;align-items:center;justify-content:center;font-size:var(--px-12);color:var(--muted)">
-        {profile ? 'Không có dữ liệu' : 'Connection không tồn tại'}
+        {profile ? 'No data' : 'Connection not found'}
       </div>
     {/if}
   </div>

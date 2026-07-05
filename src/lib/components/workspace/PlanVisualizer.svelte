@@ -42,7 +42,7 @@
   function toggleActual() {
     if (!actual) {
       // bật actual = query THỰC SỰ chạy (side-effect với DML)
-      if (!confirm('Actual Plan sẽ THỰC SỰ chạy query (ANALYZE). Tiếp tục?')) return
+      if (!confirm('Actual Plan will REALLY run the query (ANALYZE). Continue?')) return
     }
     actual = !actual
     void run()
@@ -68,11 +68,11 @@
   <div style="flex:1;display:flex;min-height:0">
     <div style="flex:1;overflow:auto;min-width:0;padding:var(--px-14) var(--px-16)">
       {#if loading}
-        <div style="color:var(--muted);font-size:var(--px-12)">Đang EXPLAIN…</div>
+        <div style="color:var(--muted);font-size:var(--px-12)">Running EXPLAIN…</div>
       {:else if error}
         <div style="color:var(--error);font-size:var(--px-12);white-space:pre-wrap">{error}</div>
       {:else if notApplicable}
-        <div style="color:var(--muted);font-size:var(--px-12_5)">EXPLAIN không áp dụng cho hệ <b>{plan?.system}</b>.</div>
+        <div style="color:var(--muted);font-size:var(--px-12_5)">EXPLAIN does not apply to <b>{plan?.system}</b>.</div>
       {:else if showRaw}
         <pre class="mono" style="margin:0;font-size:var(--px-12);line-height:1.55;white-space:pre-wrap;color:var(--text)">{plan?.raw}</pre>
       {:else if plan?.root}
@@ -95,7 +95,7 @@
             <div style="font-size:var(--px-11_5);color:#e0803a;background:rgba(224,128,58,.1);border:var(--px-1) solid #e0803a;border-radius:var(--px-6);padding:var(--px-6) var(--px-9)">⚠ {w}</div>
           {/each}
         {:else}
-          <div style="font-size:var(--px-11_5);color:#27AE60">✓ Không có cảnh báo</div>
+          <div style="font-size:var(--px-11_5);color:#27AE60">✓ No warnings</div>
         {/if}
       </div>
     {/if}

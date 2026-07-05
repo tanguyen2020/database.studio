@@ -80,7 +80,7 @@ export function chunk<T>(arr: T[], size: number): T[][] {
  *  + rows aligned to those headers. Nested objects/arrays are JSON-stringified. */
 export function parseJson(text: string): { headers: string[]; rows: string[][] } {
   const data = JSON.parse(text)
-  if (!Array.isArray(data)) throw new Error('JSON import cần một mảng object')
+  if (!Array.isArray(data)) throw new Error('JSON import needs an array of objects')
   const headers: string[] = []
   for (const obj of data) {
     if (obj && typeof obj === 'object' && !Array.isArray(obj)) {

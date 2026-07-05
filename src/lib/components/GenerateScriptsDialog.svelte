@@ -74,7 +74,7 @@
     const schema = scriptsWizard.schema
     const chosen = objects.filter((t) => picked.has(t.name))
     if (!chosen.length) {
-      toasts.error('Chưa chọn object nào')
+      toasts.error('No objects selected')
       return
     }
     running = true
@@ -121,7 +121,7 @@
       toasts.success(`Generated ${chosen.length} objects (${mode})`)
       scriptsWizard.close()
     } catch (e) {
-      toasts.error(`Generate thất bại: ${e}`)
+      toasts.error(`Generate failed: ${e}`)
     } finally {
       running = false
     }

@@ -163,7 +163,7 @@
       <div style="overflow:auto;padding:var(--px-6)">
         {#if filtered.length === 0}
           <div style="padding:var(--px-16);text-align:center;color:var(--muted);font-size:var(--px-12_5)">
-            {#if palette.query}Không có kết quả cho “{palette.query}”{:else}Gõ để tìm lệnh…{/if}
+            {#if palette.query}No results for “{palette.query}”{:else}Type to search commands…{/if}
           </div>
           {#if !palette.query && palette.recent.length}
             <div style="padding:var(--px-6) var(--px-12) var(--px-2);font-size:var(--px-10);text-transform:uppercase;letter-spacing:.06em;color:var(--muted)">Recent</div>

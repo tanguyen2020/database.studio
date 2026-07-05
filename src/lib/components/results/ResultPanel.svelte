@@ -46,7 +46,7 @@
   function copyResultJson() {
     const r = activeResult?.kind === 'rows' ? activeResult.result : undefined
     if (!r) return
-    void navigator.clipboard.writeText(toJson(r.rows as Record<string, unknown>[])).then(() => toasts.success('Đã copy result (JSON)'))
+    void navigator.clipboard.writeText(toJson(r.rows as Record<string, unknown>[])).then(() => toasts.success('Copied result (JSON)'))
   }
 
   let grid = $state<ResultGrid | null>(null)
@@ -142,7 +142,7 @@
       </div>
     {/if}
     {#if exec.running}
-      <span style="display:flex;align-items:center;padding:0 var(--px-13);font-size:var(--px-11);color:var(--text2)">Đang chạy…</span>
+      <span style="display:flex;align-items:center;padding:0 var(--px-13);font-size:var(--px-11);color:var(--text2)">Running…</span>
     {/if}
   </div>
 
@@ -239,7 +239,7 @@
           </div>
         {/each}
         {#if exec.messages.length === 0}
-          <div style="padding:var(--px-8) var(--px-12);color:var(--muted)">Chưa có message nào</div>
+          <div style="padding:var(--px-8) var(--px-12);color:var(--muted)">No messages yet</div>
         {/if}
       </div>
     {:else if activeResult}
@@ -299,7 +299,7 @@
       {/if}
     {:else}
       <div style="flex:1;display:flex;align-items:center;justify-content:center;font-size:var(--px-12);color:var(--muted)">
-        Chạy query (F5) để xem kết quả
+        Run a query (F5) to see results
       </div>
     {/if}
   </div>

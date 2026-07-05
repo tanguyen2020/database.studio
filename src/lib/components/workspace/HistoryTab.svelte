@@ -70,7 +70,7 @@
       </div>
     {:else}
       <div style="padding:var(--px-16);font-size:var(--px-12);color:var(--muted)">
-        {search ? 'Không có query khớp' : 'Chưa có lịch sử query'}
+        {search ? 'No matching queries' : 'No query history yet'}
       </div>
     {/each}
   </div>
