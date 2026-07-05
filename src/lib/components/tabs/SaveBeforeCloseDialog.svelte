@@ -1,7 +1,11 @@
 <script lang="ts">
-  // Save-before-close — port 1:1 từ Database Studio.dc.html dòng 2093-2113.
-  // Cancel / Don't Save / Save. "Save" (Phase 1) đánh dấu sạch + persist buffer rồi đóng.
+  // Save-before-close — Cancel / Don't Save / Save. "Save" writes each dirty SQL
+  // editor tab to a .sql file via a native save dialog (item 4), then closes;
+  // in the browser (demo/tests) it falls back to marking clean + persisting.
   import { tabs } from '$lib/stores/tabs.svelte'
+  import { toasts } from '$lib/stores/toast.svelte'
+  import * as ipc from '$lib/ipc'
+  import { IS_TAURI } from '$lib/demo'
 
   const pending = $derived(tabs.pendingClose)
   const dirtyTabs = $derived(pending?.filter((t) => t.isDirty) ?? [])
@@ -16,12 +20,31 @@
 
   async function saveAndClose() {
     if (!pending) return
+    const toClose: string[] = []
     for (const t of pending) {
       const live = tabs.byId(t.id)
-      if (live) live.isDirty = false
+      if (!live) continue
+      const query = ((live.state as { query?: string }).query ?? '').trim()
+      // SQL editor tab with content, in Tauri → save to a file the user picks.
+      if (IS_TAURI && live.contentType === 'sql-editor' && query) {
+        const { save } = await import('@tauri-apps/plugin-dialog')
+        const suggested = `${(live.title || 'query').replace(/[^\w.-]+/g, '_')}.sql`
+        const path = await save({ defaultPath: suggested, filters: [{ name: 'SQL', extensions: ['sql'] }] })
+        if (!path) continue // user cancelled this file dialog → keep the tab open
+        try {
+          await ipc.writeTextFile(path, query.endsWith('\n') ? query : `${query}\n`)
+          toasts.success(`Saved → ${path}`)
+        } catch (e) {
+          toasts.error(String(e))
+          continue
+        }
+      }
+      live.isDirty = false
+      toClose.push(t.id)
     }
     await tabs.persist()
-    tabs.forceClose(pending.map((t) => t.id))
+    if (toClose.length) tabs.forceClose(toClose)
+    tabs.pendingClose = null
   }
 </script>
 

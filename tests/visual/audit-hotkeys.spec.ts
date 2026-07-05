@@ -91,3 +91,27 @@ test('function context menu has Execute, Alter, Drop', async ({ page }) => {
   await expect(page.getByText('Drop', { exact: true }).first()).toBeVisible()
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
+
+// Item 4 — closing a query-editor tab with unsaved changes prompts to save.
+test('closing a dirty query tab prompts to save', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(String(e)))
+  await blockRemoteFonts(page)
+  await page.goto(APP_URL)
+  await page.waitForSelector('#app > *', { timeout: 15_000 })
+  await page.waitForTimeout(300)
+  await page.getByRole('button', { name: /Postgres/ }).first().click()
+  await page.waitForTimeout(200)
+  await page.getByTitle('New SQL tab (Ctrl+T)').first().click()
+  await page.waitForTimeout(200)
+  await page.locator('.cm-content').first().click()
+  await page.keyboard.type('SELECT 1')
+  await page.waitForTimeout(200)
+  await page.keyboard.press('Control+w') // close active tab
+  await page.waitForTimeout(200)
+  await expect(page.getByText('Save changes before closing?').first()).toBeVisible()
+  await page.getByRole('button', { name: "Don't Save" }).first().click()
+  await page.waitForTimeout(200)
+  await expect(page.getByText('Save changes before closing?')).toHaveCount(0)
+  expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
+})
