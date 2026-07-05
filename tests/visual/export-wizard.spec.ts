@@ -17,9 +17,9 @@ test('Table Export wizard: format/columns/WHERE/limit/filename → download', as
 
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(500)
-  await page.getByText('public', { exact: true }).first().click()
+  await page.getByText('public', { exact: true }).first().dblclick()
   await page.waitForTimeout(300)
-  await page.getByText('Tables', { exact: true }).first().click()
+  await page.getByText('Tables', { exact: true }).first().dblclick()
   await page.waitForTimeout(300)
   await page.getByText('students').first().click({ button: 'right' })
   await page.waitForTimeout(200)

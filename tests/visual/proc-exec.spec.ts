@@ -14,9 +14,9 @@ test('execute routine: dialog by signature → SQL tab', async ({ page }) => {
 
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(400)
-  await page.getByText('public', { exact: true }).first().click()
+  await page.getByText('public', { exact: true }).first().dblclick()
   await page.waitForTimeout(200)
-  await page.getByText('Functions', { exact: true }).first().click()
+  await page.getByText('Functions', { exact: true }).first().dblclick()
   await page.waitForTimeout(200)
   await page.getByText('add_one').first().click({ button: 'right' })
   await page.waitForTimeout(200)

@@ -14,9 +14,9 @@ test('generate test data: preview + run', async ({ page }) => {
 
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(400)
-  await page.getByText('public', { exact: true }).first().click()
+  await page.getByText('public', { exact: true }).first().dblclick()
   await page.waitForTimeout(200)
-  await page.getByText('Tables', { exact: true }).first().click()
+  await page.getByText('Tables', { exact: true }).first().dblclick()
   await page.waitForTimeout(200)
   await page.getByText('students').first().click({ button: 'right' })
   await page.getByText('Generate Test Data…').first().click()

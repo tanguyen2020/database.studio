@@ -417,10 +417,13 @@
     <!-- node row — port dòng 145-151 -->
     <div
       onclick={() => {
+        // single-click SELECTS only; expansion needs a double-click (or the chevron)
         treeSel = p.key
-        p.onClick?.()
       }}
-      ondblclick={() => p.onDblClick?.()}
+      ondblclick={() => {
+        treeSel = p.key
+        ;(p.onDblClick ?? p.onClick)?.()
+      }}
       onkeydown={(e) => e.key === 'Enter' && (p.onDblClick ?? p.onClick)?.()}
       role="treeitem"
       aria-selected={sel}
@@ -436,7 +439,14 @@
       title={p.name}
       style="display:flex;align-items:center;gap:var(--px-5);padding:var(--px-3) var(--px-6);border-radius:var(--px-5);cursor:pointer;white-space:nowrap;padding-left:calc(var(--px-6) + {p.depth} * var(--px-15));background:{sel ? 'var(--rgba-91-124-255-_16)' : 'transparent'};box-shadow:inset var(--px-2) 0 0 {sel ? 'var(--primary)' : 'transparent'}"
     >
-      <span class="mono" style="flex:none;width:var(--px-10);text-align:center;font-size:var(--px-9);color:var(--muted)">{p.expandable ? (expanded.has(p.key) ? '▾' : '▸') : ''}</span>
+      <!-- chevron: single-click toggles expansion (row single-click only selects) -->
+      <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
+      <span
+        class="mono"
+        role={p.expandable ? 'button' : undefined}
+        onclick={(e) => { if (p.expandable) { e.stopPropagation(); treeSel = p.key; p.onClick?.() } }}
+        style="flex:none;width:var(--px-10);text-align:center;font-size:var(--px-9);color:var(--muted);cursor:{p.expandable ? 'pointer' : 'default'}"
+      >{p.expandable ? (expanded.has(p.key) ? '▾' : '▸') : ''}</span>
       <span class="mono" style="flex:none;width:var(--px-15);display:flex;align-items:center;justify-content:center;font-size:var(--px-12);color:{p.color}">{#if p.svg}{@html p.svg}{:else}{p.glyph}{/if}</span>
       <span class="mono" style="font-size:var(--px-12_5);font-weight:{p.head ? 700 : 500};color:{sel || p.head ? 'var(--text)' : 'var(--text2)'};overflow:hidden;text-overflow:ellipsis">{p.name}</span>
       {#if p.locked}<span style="font-size:var(--px-9)" title="System table — read-only">🔒</span>{/if}

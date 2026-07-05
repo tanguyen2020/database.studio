@@ -19,11 +19,13 @@ test('Set as Filter → opens Table Viewer with the column filter', async ({ pag
 
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(500)
-  await page.getByText('public', { exact: true }).first().click()
+  await page.getByText('public', { exact: true }).first().dblclick()
   await page.waitForTimeout(300)
-  await page.getByText('Tables', { exact: true }).first().click()
+  await page.getByText('Tables', { exact: true }).first().dblclick()
   await page.waitForTimeout(300)
-  await page.getByText('students').first().click() // expand columns
+  // expand the table's columns via its chevron (row single-click only selects,
+  // double-click opens data — so use the chevron to reveal columns)
+  await page.getByRole('treeitem', { name: /students/ }).first().getByRole('button').first().click()
   await page.waitForTimeout(300)
   await page.getByText('id', { exact: true }).first().click({ button: 'right' })
   await page.waitForTimeout(200)

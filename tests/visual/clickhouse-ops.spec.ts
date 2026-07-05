@@ -12,9 +12,9 @@ test('clickhouse ops: table context menu → generated SQL editor', async ({ pag
   // ClickHouse connection → Explorer → expand schema/Tables
   await page.getByRole('button', { name: /Analytics ClickHouse/ }).first().click()
   await page.waitForTimeout(500)
-  await page.getByText('public', { exact: true }).first().click()
+  await page.getByText('public', { exact: true }).first().dblclick()
   await page.waitForTimeout(300)
-  await page.getByText('Tables', { exact: true }).first().click()
+  await page.getByText('Tables', { exact: true }).first().dblclick()
   await page.waitForTimeout(300)
 
   // right-click a table → advanced ops menu
@@ -31,7 +31,7 @@ test('clickhouse ops: table context menu → generated SQL editor', async ({ pag
   await expect(page.getByText(/OPTIMIZE TABLE/).first()).toBeVisible()
 
   // Dictionaries node (§3 clickhouseTree) → expand → Show Definition
-  await page.getByText('Dictionaries', { exact: true }).first().click()
+  await page.getByText('Dictionaries', { exact: true }).first().dblclick()
   await page.waitForTimeout(300)
   await expect(page.getByText('geo_regions').first()).toBeVisible()
   await page.getByText('geo_regions').first().click({ button: 'right' })

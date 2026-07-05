@@ -74,7 +74,7 @@ test('object folders offer Create <type>', async ({ page }) => {
   await page.waitForTimeout(300)
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(500)
-  await page.getByText('public', { exact: true }).first().click() // expand schema → folders appear
+  await page.getByText('public', { exact: true }).first().dblclick() // expand schema → folders appear
   await page.waitForTimeout(400)
 
   await page.getByText('Stored Procedures', { exact: true }).first().click({ button: 'right' })

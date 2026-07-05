@@ -21,12 +21,13 @@ test('cassandra: CQL editor + keyspace tree + Ring topology', async ({ page }) =
 
   // keyspace tree: campus_ks + Tables + partition/clustering meta
   await expect(page.getByText('campus_ks').first()).toBeVisible()
-  await page.getByText('campus_ks').first().click()
+  await page.getByText('campus_ks').first().dblclick()
   await page.waitForTimeout(200)
-  await page.getByText('Tables', { exact: true }).first().click()
+  await page.getByText('Tables', { exact: true }).first().dblclick()
   await page.waitForTimeout(200)
   await expect(page.getByText('students_by_id').first()).toBeVisible()
-  await page.getByText('grades_by_student').first().click()
+  // expand the table's columns via its chevron (row single-click only selects)
+  await page.getByRole('treeitem', { name: /grades_by_student/ }).first().getByRole('button').first().click()
   await page.waitForTimeout(200)
   // clustering column meta " · CK"
   await expect(page.getByText(/· CK/).first()).toBeVisible()

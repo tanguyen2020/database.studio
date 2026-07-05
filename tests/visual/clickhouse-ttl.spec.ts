@@ -14,9 +14,9 @@ test('clickhouse: engine badge + TTL Policy viewer', async ({ page }) => {
   await page.waitForTimeout(500)
 
   // expand schema → Tables → engine badge on a table row (MergeTree)
-  await page.getByText('public', { exact: true }).first().click()
+  await page.getByText('public', { exact: true }).first().dblclick()
   await page.waitForTimeout(300)
-  await page.getByText('Tables', { exact: true }).first().click()
+  await page.getByText('Tables', { exact: true }).first().dblclick()
   await page.waitForTimeout(300)
   await expect(page.getByText('students').first()).toBeVisible()
   await expect(page.getByText('MergeTree').first()).toBeVisible()

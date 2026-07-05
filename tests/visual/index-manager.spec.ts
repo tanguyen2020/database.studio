@@ -14,9 +14,9 @@ test('index/FK manager: lists indexes + live CREATE INDEX preview', async ({ pag
 
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(400)
-  await page.getByText('public', { exact: true }).first().click()
+  await page.getByText('public', { exact: true }).first().dblclick()
   await page.waitForTimeout(200)
-  await page.getByText('Tables', { exact: true }).first().click()
+  await page.getByText('Tables', { exact: true }).first().dblclick()
   await page.waitForTimeout(200)
   await page.getByText('students').first().click({ button: 'right' })
   await page.getByText('Manage Indexes & FKs…').first().click()

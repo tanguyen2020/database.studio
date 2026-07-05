@@ -23,7 +23,7 @@ test('explorer per-database tree: current header + foreign database expands', as
 
   // expanding the foreign database loads ITS schema tree (a second "public")
   const before = await page.getByRole('treeitem', { name: /public/ }).count()
-  await foreign.first().click()
+  await foreign.first().dblclick() // expand (single-click only selects)
   await page.waitForTimeout(1000)
   expect(await page.getByRole('treeitem', { name: /public/ }).count()).toBeGreaterThan(before)
 

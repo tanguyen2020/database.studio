@@ -15,11 +15,11 @@ test('explorer depth: Show Definition + properties + view columns', async ({ pag
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(500)
 
-  await page.getByText('public', { exact: true }).first().click()
+  await page.getByText('public', { exact: true }).first().dblclick()
   await page.waitForTimeout(300)
 
   // Functions → Show Definition on add_one
-  await page.getByText('Functions', { exact: true }).first().click()
+  await page.getByText('Functions', { exact: true }).first().dblclick()
   await page.waitForTimeout(200)
   await page.getByText(/add_one/).first().click() // select → Properties panel
   await page.waitForTimeout(150)
@@ -32,10 +32,10 @@ test('explorer depth: Show Definition + properties + view columns', async ({ pag
   await expect(page.getByRole('tab', { name: /add_one · definition/ }).first()).toBeVisible()
   await expect(page.locator('.cm-content').first()).toContainText('CREATE')
 
-  // View column expansion: expand Views → vw_active_students → columns appear
-  await page.getByText('Views', { exact: true }).first().click()
+  // View column expansion: expand Views → vw_active_students columns via chevron
+  await page.getByText('Views', { exact: true }).first().dblclick()
   await page.waitForTimeout(200)
-  await page.getByText('vw_active_students').first().click()
+  await page.getByRole('treeitem', { name: /vw_active_students/ }).first().getByRole('button').first().click()
   await page.waitForTimeout(300)
   await expect(page.getByText('first_name').first()).toBeVisible()
 
