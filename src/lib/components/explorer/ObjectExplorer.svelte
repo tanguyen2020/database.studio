@@ -425,7 +425,7 @@
     >
       <span class="mono" style="flex:none;width:var(--px-10);text-align:center;font-size:var(--px-9);color:var(--muted)">{p.expandable ? (expanded.has(p.key) ? '▾' : '▸') : ''}</span>
       <span class="mono" style="flex:none;width:var(--px-15);display:flex;align-items:center;justify-content:center;font-size:var(--px-12);color:{p.color}">{#if p.svg}{@html p.svg}{:else}{p.glyph}{/if}</span>
-      <span style="font-size:var(--px-12_5);font-weight:{p.head ? 700 : 500};color:{sel || p.head ? 'var(--text)' : 'var(--text2)'};overflow:hidden;text-overflow:ellipsis">{p.name}</span>
+      <span class="mono" style="font-size:var(--px-12_5);font-weight:{p.head ? 700 : 500};color:{sel || p.head ? 'var(--text)' : 'var(--text2)'};overflow:hidden;text-overflow:ellipsis">{p.name}</span>
       {#if p.locked}<span style="font-size:var(--px-9)" title="System table — read-only">🔒</span>{/if}
       <span class="mono" style="font-size:var(--px-10);color:var(--muted);margin-left:auto">{p.meta ?? ''}</span>
     </div>
@@ -451,7 +451,7 @@
     <span style="font-size:var(--px-10_5);font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--muted)">Explorer</span>
     {#if selected}
       <span style="display:flex;align-items:center;flex:none"><SystemIcon system={selected.system} size={16} /></span>
-      <span style="font-size:var(--px-11_5);color:var(--text2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{selected.name}</span>
+      <span class="mono" style="font-size:var(--px-11_5);color:var(--text2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{selected.name}</span>
     {/if}
     <span
       onclick={() => selected && explorer.refresh(selected.id, { kind: 'connection' })}
