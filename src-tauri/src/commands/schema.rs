@@ -26,6 +26,16 @@ pub async fn list_schemas(
 }
 
 #[tauri::command]
+pub async fn list_databases(
+    state: State<'_, AppState>,
+    conn_id: String,
+) -> Result<Vec<DatabaseInfo>, AppError> {
+    introspect!(state, conn_id, |driver| async move {
+        driver.lock().await.databases().await
+    })
+}
+
+#[tauri::command]
 pub async fn list_tables(
     state: State<'_, AppState>,
     conn_id: String,
@@ -175,7 +185,7 @@ pub async fn object_definition(
         .map(|p| p.system.as_str().to_string())
         .unwrap_or_default();
     let q = definition_query(&system, &kind, &schema, &name)
-        .ok_or_else(|| AppError::Driver(format!("Show Definition chưa hỗ trợ cho {system}")))?;
+        .ok_or_else(|| AppError::Driver(format!("Show Definition is not supported for {system}")))?;
     let outcome = state
         .registry
         .exec_statement(&conn_id, q)
@@ -192,12 +202,12 @@ pub async fn object_definition(
                 .unwrap_or("")
                 .to_string();
             if def.trim().is_empty() {
-                Err(AppError::Driver("Không tìm thấy định nghĩa".into()))
+                Err(AppError::Driver("Definition not found".into()))
             } else {
                 Ok(def)
             }
         }
-        _ => Err(AppError::Driver("Không trả về định nghĩa".into())),
+        _ => Err(AppError::Driver("No definition returned".into())),
     }
 }
 

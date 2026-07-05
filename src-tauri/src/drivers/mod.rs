@@ -126,7 +126,7 @@ fn redis_params(p: &ConnectionProfile, ep: &Endpoint, password: &str) -> RedisCo
 fn redis_not_sql() -> QueryError {
     QueryError::new(
         "redis",
-        "Redis là key-value store — dùng Key Explorer / CLI, không phải SQL",
+        "Redis is a key-value store — use Key Explorer / CLI, not SQL",
         "sql operation not applicable to redis",
     )
 }
@@ -145,7 +145,7 @@ fn nats_params(p: &ConnectionProfile, ep: &Endpoint, password: &str) -> NatsConn
 fn nats_not_sql() -> QueryError {
     QueryError::new(
         "nats",
-        "NATS là messaging — dùng Subscriber / Publish / JetStream, không phải SQL",
+        "NATS is messaging — use Subscriber / Publish / JetStream, not SQL",
         "sql operation not applicable to nats",
     )
 }
@@ -174,7 +174,7 @@ fn kafka_params(p: &ConnectionProfile, ep: &Endpoint, password: &str) -> KafkaCo
 fn kafka_not_sql() -> QueryError {
     QueryError::new(
         "kafka",
-        "Kafka là streaming — dùng Topic Browser / Consumer / Producer, không phải SQL",
+        "Kafka is streaming — use Topic Browser / Consumer / Producer, not SQL",
         "sql operation not applicable to kafka",
     )
 }
@@ -248,7 +248,7 @@ impl LiveConnection {
             )),
             other => Err(QueryError::new(
                 other.as_str(),
-                format!("Hệ {} chưa được hỗ trợ", other.as_str()),
+                format!("System {} is not supported yet", other.as_str()),
                 "unsupported system",
             )),
         }
@@ -280,7 +280,7 @@ impl LiveConnection {
                 ok: false,
                 latency_ms: None,
                 server_version: None,
-                error: Some(format!("Hệ {} chưa được hỗ trợ", other.as_str())),
+                error: Some(format!("System {} is not supported yet", other.as_str())),
             },
         }
     }
@@ -335,7 +335,7 @@ impl LiveConnection {
             Self::Sqlite(d) => d.exec_params(sql, params.to_vec()).await,
             Self::Clickhouse(_) => Err(QueryError::new(
                 "clickhouse",
-                "Filter builder chưa hỗ trợ ClickHouse ở Phase 2",
+                "Filter builder does not support ClickHouse in Phase 2",
                 "clickhouse param select not supported yet",
             )),
             Self::Redis(_) => Err(redis_not_sql()),
@@ -345,7 +345,7 @@ impl LiveConnection {
             // tự viết literal, path tham số hóa (nếu có) đi qua prepared statement.
             Self::Cassandra(_) => Err(QueryError::new(
                 "cassandra",
-                "Filter builder chưa hỗ trợ Cassandra — dùng CQL editor với WHERE theo key",
+                "Filter builder does not support Cassandra — use the CQL editor with WHERE on the key",
                 "cassandra param select not supported",
             )),
         }
@@ -364,7 +364,7 @@ impl LiveConnection {
             Self::Sqlite(d) => d.apply_changes(changes.to_vec()).await,
             Self::Clickhouse(_) => Err(QueryError::new(
                 "clickhouse",
-                "ClickHouse: sửa dữ liệu là mutation async (ALTER TABLE … UPDATE/DELETE) — dùng ở Phase 5, không commit kiểu OLTP",
+                "ClickHouse: data changes are async mutations (ALTER TABLE … UPDATE/DELETE) — used in Phase 5, not committed OLTP-style",
                 "editable grid not applicable to clickhouse",
             )),
             Self::Redis(_) => Err(redis_not_sql()),
@@ -374,7 +374,7 @@ impl LiveConnection {
             // CQL editor (INSERT/UPDATE ... IF, không transaction OLTP).
             Self::Cassandra(_) => Err(QueryError::new(
                 "cassandra",
-                "Editable grid chưa hỗ trợ Cassandra — dùng CQL UPDATE/DELETE theo primary key",
+                "Editable grid does not support Cassandra — use CQL UPDATE/DELETE by primary key",
                 "editable grid not applicable to cassandra",
             )),
         }
@@ -394,6 +394,15 @@ impl LiveConnection {
             Self::Kafka(_) => Ok(Vec::new()),
             // Cassandra: cây keyspace lấy qua command cassandra_tree chuyên biệt.
             Self::Cassandra(_) => Ok(Vec::new()),
+        }
+    }
+
+    /// Databases on the server. Only Postgres implements this today (one DB per
+    /// connection → the Explorer lists them so the user can open another).
+    pub async fn databases(&mut self) -> Result<Vec<DatabaseInfo>, QueryError> {
+        match self {
+            Self::Postgres(d) => d.databases().await,
+            _ => Ok(Vec::new()),
         }
     }
 

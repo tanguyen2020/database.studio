@@ -153,6 +153,95 @@ async fn pg_roundtrip_null_multi_and_error_position() {
     assert!(summary.total >= 2);
 }
 
+/// Item 3 — Explorer must list every database on a Postgres server. `databases()`
+/// returns the server catalog with `current` marking the connected DB (testdb).
+#[tokio::test]
+async fn pg_list_databases_marks_current() {
+    let (_c, port) = start_pg().await;
+    let params = PgConnParams {
+        host: "localhost".into(),
+        port,
+        database: "testdb".into(),
+        user: "postgres".into(),
+        password: PASS.into(),
+        ssl: false,
+        ssl_ca: String::new(),
+        ssl_cert: String::new(),
+        ssl_key: String::new(),
+    };
+    let mut drv = retry("postgres", || PgDriver::connect(&params)).await;
+    // Seed a second database so the list has more than the connected one.
+    drv.exec("CREATE DATABASE extra_db").await.unwrap();
+
+    let dbs = drv.databases().await.unwrap();
+    let cur = dbs.iter().find(|d| d.name == "testdb").expect("testdb listed");
+    assert!(cur.current, "connected database is marked current");
+    let extra = dbs.iter().find(|d| d.name == "extra_db").expect("extra_db listed");
+    assert!(!extra.current, "other databases are not current");
+    // Template databases must be filtered out.
+    assert!(!dbs.iter().any(|d| d.name == "template0"), "template dbs excluded");
+    assert_eq!(dbs.iter().filter(|d| d.current).count(), 1, "exactly one current db");
+}
+
+/// Item 5 — a `timestamp`/`timestamptz`/`date` value of ±infinity or beyond
+/// chrono's range must NOT panic (sqlx's decoder does `NaiveDateTime + Duration`
+/// which panics; under `panic = "abort"` that kills the app). We decode raw bytes
+/// defensively and return sentinel strings instead.
+#[tokio::test]
+async fn pg_infinity_and_out_of_range_timestamp_do_not_panic() {
+    let (_c, port) = start_pg().await;
+    let params = PgConnParams {
+        host: "localhost".into(),
+        port,
+        database: "testdb".into(),
+        user: "postgres".into(),
+        password: PASS.into(),
+        ssl: false,
+        ssl_ca: String::new(),
+        ssl_cert: String::new(),
+        ssl_key: String::new(),
+    };
+    let mut drv = retry("postgres", || PgDriver::connect(&params)).await;
+    drv.exec("CREATE TABLE it_ts (id int PRIMARY KEY, ts timestamp, tstz timestamptz, d date)")
+        .await
+        .unwrap();
+    drv.exec(
+        "INSERT INTO it_ts VALUES \
+         (1, 'infinity', 'infinity', 'infinity'), \
+         (2, '-infinity', '-infinity', '-infinity'), \
+         (3, '2024-01-15 10:30:00', '2024-01-15 10:30:00+00', '2024-01-15')",
+    )
+    .await
+    .unwrap();
+
+    // This SELECT would previously panic the task while decoding row 1/2.
+    let out = drv.exec("SELECT ts, tstz, d FROM it_ts ORDER BY id").await.unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    assert_eq!(result.total, 3);
+    assert_eq!(result.rows[0]["ts"], serde_json::json!("infinity"));
+    assert_eq!(result.rows[0]["tstz"], serde_json::json!("infinity"));
+    assert_eq!(result.rows[0]["d"], serde_json::json!("infinity"));
+    assert_eq!(result.rows[1]["ts"], serde_json::json!("-infinity"));
+    assert_eq!(result.rows[1]["d"], serde_json::json!("-infinity"));
+    // A normal value still decodes to a readable ISO string.
+    assert!(
+        result.rows[2]["ts"].as_str().unwrap().starts_with("2024-01-15"),
+        "normal timestamp decodes, got {:?}",
+        result.rows[2]["ts"]
+    );
+    assert_eq!(result.rows[2]["d"], serde_json::json!("2024-01-15"));
+
+    // A far-future timestamp beyond chrono's range is clamped to a marker, not a panic.
+    drv.exec("INSERT INTO it_ts (id, ts) VALUES (4, '294276-01-01 00:00:00')").await.unwrap();
+    let out = drv.exec("SELECT ts FROM it_ts WHERE id = 4").await.unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    let v = result.rows[0]["ts"].as_str().unwrap();
+    assert!(
+        v.starts_with("<timestamp out of range") || v.starts_with("294276"),
+        "out-of-range timestamp is handled without panic, got {v:?}"
+    );
+}
+
 /// Phase 2 · Section 8 — Quick Connect: một connection với id ephemeral (`quick-*`)
 /// được đăng ký thẳng vào Registry (không qua storage) và truy vấn được như mọi
 /// live connection; disconnect gỡ sạch. Đây là hợp đồng backend của `quick_connect`.

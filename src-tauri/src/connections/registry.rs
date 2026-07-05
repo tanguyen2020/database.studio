@@ -55,6 +55,16 @@ impl Registry {
         self.entries.lock().unwrap().keys().cloned().collect()
     }
 
+    /// Profile + plaintext password of a live connection (for "open database" on
+    /// ephemeral connections that aren't in storage). SSH password isn't retained.
+    pub fn live_credentials(&self, id: &str) -> Result<(ConnectionProfile, String), AppError> {
+        let entries = self.entries.lock().unwrap();
+        let e = entries
+            .get(id)
+            .ok_or_else(|| AppError::Driver("Connection is not open".into()))?;
+        Ok((e.profile.clone(), e.password.clone()))
+    }
+
     /// Opens tunnel (if configured) + driver connection and registers it.
     pub async fn connect(
         &self,
@@ -187,7 +197,7 @@ impl Registry {
                 if let Some(e) = self.entries.lock().unwrap().get_mut(id) {
                     e.poisoned = true;
                 }
-                let mut qe = QueryError::new(system, "Query đã bị hủy", "cancelled by user");
+                let mut qe = QueryError::new(system, "Query was cancelled", "cancelled by user");
                 qe.code = Some("CANCELLED".into());
                 Ok(Err(qe))
             }
@@ -224,7 +234,7 @@ impl Registry {
         let map = self.entries.lock().unwrap();
         let e = map
             .get(id)
-            .ok_or_else(|| AppError::Driver("Connection không tồn tại / chưa kết nối".into()))?;
+            .ok_or_else(|| AppError::Driver("Connection does not exist / not connected".into()))?;
         Ok(crate::drivers::redis::RedisConnParams {
             host: e.endpoint.host.clone(),
             port: e.endpoint.port,
@@ -244,11 +254,11 @@ impl Registry {
         let map = self.entries.lock().unwrap();
         let e = map
             .get(id)
-            .ok_or_else(|| AppError::Driver("Connection không tồn tại / chưa kết nối".into()))?;
+            .ok_or_else(|| AppError::Driver("Connection does not exist / not connected".into()))?;
         let base_url = e.profile.schema_registry_url.trim().to_string();
         if base_url.is_empty() {
             return Err(AppError::Driver(
-                "Connection chưa cấu hình Schema Registry URL".into(),
+                "Connection has no Schema Registry URL configured".into(),
             ));
         }
         Ok(crate::drivers::schema_registry::SchemaRegistryParams {
@@ -265,7 +275,7 @@ impl Registry {
         let d = driver.lock().await;
         match &*d {
             LiveConnection::Nats(n) => Ok(n.client()),
-            _ => Err(AppError::Driver("Connection không phải NATS".into())),
+            _ => Err(AppError::Driver("Connection is not NATS".into())),
         }
     }
 

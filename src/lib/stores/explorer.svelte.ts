@@ -30,6 +30,8 @@ export interface SchemaCache {
 
 export interface ConnCache {
   schemas?: SchemaInfo[]
+  /** all databases on the server (Postgres) — `current` marks the connected one */
+  databases?: ipc.DatabaseInfo[]
   /** keyed by schema name */
   bySchema: Record<string, SchemaCache>
   loading: Set<string>
@@ -80,6 +82,18 @@ class ExplorerStore {
     await this.track(connId, 'schemas', async () => {
       c.schemas = await ipc.listSchemas(connId)
     })
+  }
+
+  /** Load the server's database list (Postgres). Best-effort — failures are
+   *  swallowed so a missing privilege doesn't blank the whole tree. */
+  async loadDatabases(connId: string, force = false) {
+    const c = this.conn(connId)
+    if (c.databases && !force) return
+    try {
+      c.databases = await ipc.listDatabases(connId)
+    } catch {
+      c.databases = []
+    }
   }
 
   async loadSchemaChildren(connId: string, schema: string, force = false) {

@@ -11,7 +11,7 @@ use crate::error::{AppError, QueryError};
 use crate::state::AppState;
 
 fn not_nats() -> QueryError {
-    QueryError::new("nats", "Connection không phải NATS", "not a nats connection")
+    QueryError::new("nats", "Connection is not NATS", "not a nats connection")
 }
 
 /// Message emit ra frontend qua event "nats-msg".

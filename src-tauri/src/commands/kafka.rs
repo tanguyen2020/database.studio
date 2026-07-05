@@ -11,7 +11,7 @@ use crate::error::{AppError, QueryError};
 use crate::state::AppState;
 
 fn not_kafka() -> QueryError {
-    QueryError::new("kafka", "Connection không phải Kafka", "not a kafka connection")
+    QueryError::new("kafka", "Connection is not Kafka", "not a kafka connection")
 }
 
 /// Event "kafka-msg" gửi ra frontend (1 message consume được).

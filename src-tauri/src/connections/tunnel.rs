@@ -54,20 +54,20 @@ pub async fn open_tunnel(
     let addr = (ssh.host.as_str(), if ssh.port == 0 { 22 } else { ssh.port });
     let mut session = client::connect(config, addr, AcceptAllHandler)
         .await
-        .map_err(|e| AppError::Tunnel(format!("SSH connect {}:{} thất bại: {e}", ssh.host, addr.1)))?;
+        .map_err(|e| AppError::Tunnel(format!("SSH connect to {}:{} failed: {e}", ssh.host, addr.1)))?;
 
     let authenticated = match ssh.auth {
         SshAuthMethod::Password => session
             .authenticate_password(&ssh.user, ssh_password)
             .await
-            .map_err(|e| AppError::Tunnel(format!("SSH auth lỗi: {e}")))?,
+            .map_err(|e| AppError::Tunnel(format!("SSH auth error: {e}")))?,
         SshAuthMethod::Key => {
             let key = russh::keys::load_secret_key(&ssh.key_path, None)
-                .map_err(|e| AppError::Tunnel(format!("Không đọc được private key '{}': {e}", ssh.key_path)))?;
+                .map_err(|e| AppError::Tunnel(format!("Failed to read private key '{}': {e}", ssh.key_path)))?;
             let hash_alg = session
                 .best_supported_rsa_hash()
                 .await
-                .map_err(|e| AppError::Tunnel(format!("SSH negotiation lỗi: {e}")))?
+                .map_err(|e| AppError::Tunnel(format!("SSH negotiation error: {e}")))?
                 .flatten();
             session
                 .authenticate_publickey(
@@ -75,19 +75,19 @@ pub async fn open_tunnel(
                     russh::keys::PrivateKeyWithHashAlg::new(Arc::new(key), hash_alg),
                 )
                 .await
-                .map_err(|e| AppError::Tunnel(format!("SSH auth lỗi: {e}")))?
+                .map_err(|e| AppError::Tunnel(format!("SSH auth error: {e}")))?
         }
     };
     if !authenticated.success() {
         return Err(AppError::Tunnel(
-            "SSH authentication bị từ chối (sai user/mật khẩu/key)".into(),
+            "SSH authentication rejected (wrong user/password/key)".into(),
         ));
     }
 
     let session = Arc::new(session);
     let listener = TcpListener::bind(("127.0.0.1", 0))
         .await
-        .map_err(|e| AppError::Tunnel(format!("Không bind được cổng local: {e}")))?;
+        .map_err(|e| AppError::Tunnel(format!("Failed to bind local port: {e}")))?;
     let local_port = listener
         .local_addr()
         .map_err(|e| AppError::Tunnel(e.to_string()))?

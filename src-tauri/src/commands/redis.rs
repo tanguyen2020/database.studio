@@ -18,7 +18,7 @@ struct PubSubMsg {
 }
 
 fn not_redis() -> QueryError {
-    QueryError::new("redis", "Connection không phải Redis", "not a redis connection")
+    QueryError::new("redis", "Connection is not Redis", "not a redis connection")
 }
 
 /// Một vòng SCAN: trả cursor kế tiếp (0 = hết) + keys (type/ttl) + dbsize.

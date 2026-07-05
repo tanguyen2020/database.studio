@@ -12,7 +12,7 @@ use crate::error::{AppError, QueryError};
 use crate::state::AppState;
 
 fn not_sqlite() -> QueryError {
-    QueryError::new("sqlite", "Connection không phải SQLite", "not sqlite")
+    QueryError::new("sqlite", "Connection is not SQLite", "not sqlite")
 }
 
 /// Kiểm tra binary backup có trên PATH không (chạy `<tool> --version`).
@@ -80,10 +80,10 @@ pub async fn backup_database(
     }
 
     let tool = backup_tool(&system)
-        .ok_or_else(|| AppError::Driver(format!("Backup chưa hỗ trợ cho {system}")))?;
+        .ok_or_else(|| AppError::Driver(format!("Backup is not supported for {system}")))?;
     if !tool_available(tool) {
         return Err(AppError::Driver(format!(
-            "Không tìm thấy `{tool}` trên PATH — cài đặt công cụ rồi thử lại."
+            "`{tool}` not found on PATH — install the tool and try again."
         )));
     }
     let (prog, args) = external_backup_cmd(
@@ -96,7 +96,7 @@ pub async fn backup_database(
         },
         &dest,
     )
-    .ok_or_else(|| AppError::Driver(format!("Backup chưa hỗ trợ cho {system}")))?;
+    .ok_or_else(|| AppError::Driver(format!("Backup is not supported for {system}")))?;
     let password = crypto::decrypt(&profile.password_enc).unwrap_or_default();
     let out = tokio::process::Command::new(&prog)
         .args(&args)
@@ -104,10 +104,10 @@ pub async fn backup_database(
         .env("MYSQL_PWD", &password)
         .output()
         .await
-        .map_err(|e| AppError::Driver(format!("Không chạy được {prog}: {e}")))?;
+        .map_err(|e| AppError::Driver(format!("Failed to run {prog}: {e}")))?;
     if !out.status.success() {
         return Err(AppError::Driver(format!(
-            "{prog} lỗi: {}",
+            "{prog} error: {}",
             String::from_utf8_lossy(&out.stderr)
         )));
     }
@@ -141,6 +141,6 @@ pub async fn restore_database(
         return Ok(format!("✓ SQLite restored ← {src}"));
     }
     Err(AppError::Driver(format!(
-        "Restore tự động cho {system} chưa hỗ trợ — mở file .sql trong SQL editor để chạy."
+        "Automatic restore is not supported for {system} — open the .sql file in the SQL editor to run it."
     )))
 }

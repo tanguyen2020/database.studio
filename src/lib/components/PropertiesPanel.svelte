@@ -48,4 +48,16 @@
       </div>
     </div>
   </div>
+{:else}
+  <!-- collapsed handle — click to reopen the Properties panel -->
+  <div
+    onclick={() => (ui.rightPanelOpen = true)}
+    onkeydown={(e) => e.key === 'Enter' && (ui.rightPanelOpen = true)}
+    role="button"
+    tabindex="0"
+    title="Show Properties panel"
+    style="flex:none;width:var(--px-18);align-self:stretch;display:flex;align-items:center;justify-content:center;cursor:pointer;background:var(--surface);border-left:var(--px-1) solid var(--border);color:var(--muted)"
+  >
+    <span style="font-size:var(--px-12);font-weight:700;letter-spacing:.1em;writing-mode:vertical-rl;text-orientation:mixed;text-transform:uppercase">⇤ Properties</span>
+  </div>
 {/if}

@@ -148,6 +148,13 @@ pub struct SchemaInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DatabaseInfo {
+    pub name: String,
+    /// The database this connection is currently attached to.
+    pub current: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TableInfo {
     pub schema: String,
     pub name: String,

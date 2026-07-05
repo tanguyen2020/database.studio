@@ -8,7 +8,7 @@ use crate::error::{AppError, QueryError};
 use crate::state::AppState;
 
 fn not_ch() -> QueryError {
-    QueryError::new("clickhouse", "Connection không phải ClickHouse", "not clickhouse")
+    QueryError::new("clickhouse", "Connection is not ClickHouse", "not clickhouse")
 }
 
 /// Dictionaries của một database (Explorer tree §3 — clickhouseTree).

@@ -564,6 +564,18 @@ export const chDictionaries = (connId: string, schema: string) =>
 
 // ---- schema (Object Explorer) ----------------------------------------------
 
+export interface DatabaseInfo {
+  name: string
+  current: boolean
+}
+
+/** All databases on the server (Postgres). `current` marks the connected one. */
+export const listDatabases = (connId: string) => invoke<DatabaseInfo[]>('list_databases', { connId })
+
+/** Open another database on the same server as a new (ephemeral) connection. */
+export const openDatabase = (connId: string, database: string) =>
+  invoke<ProfilePublic>('open_database', { connId, database })
+
 export const listSchemas = (connId: string) => invoke<SchemaInfo[]>('list_schemas', { connId })
 
 export const listTables = (connId: string, schema: string) =>

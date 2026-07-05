@@ -24,6 +24,19 @@ class ConnectionsStore {
     return this.profiles.find((p) => p.id === id) ?? null
   }
 
+  /** Add an already-connected (server-side) ephemeral profile to the list,
+   *  replacing any existing entry with the same id. Used by "open database". */
+  adopt(p: ProfilePublic) {
+    p.ephemeral = true
+    const idx = this.profiles.findIndex((x) => x.id === p.id)
+    if (idx >= 0) this.profiles[idx] = p
+    else this.profiles.push(p)
+  }
+
+  select(id: string) {
+    this.selectedId = id
+  }
+
   async load() {
     try {
       this.profiles = await ipc.listConnections()

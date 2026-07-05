@@ -135,7 +135,7 @@ pub async fn admin_view(
     // Redis không phải SQL: memory analysis qua INFO memory.
     if system == "redis" {
         if view != "memory" {
-            return Err(AppError::Driver(format!("Admin view '{view}' chưa hỗ trợ cho redis")));
+            return Err(AppError::Driver(format!("Admin view '{view}' is not supported for redis")));
         }
         let text = state
             .registry
@@ -152,7 +152,7 @@ pub async fn admin_view(
     }
 
     let sql = admin_query(&system, &view)
-        .ok_or_else(|| AppError::Driver(format!("Admin view '{view}' chưa hỗ trợ cho {system}")))?;
+        .ok_or_else(|| AppError::Driver(format!("Admin view '{view}' is not supported for {system}")))?;
     let outcome = state
         .registry
         .exec_statement(&conn_id, sql)
@@ -176,7 +176,7 @@ pub async fn kill_session(
         .map(|p| p.system.as_str().to_string())
         .unwrap_or_default();
     let sql = kill_query(&system, pid)
-        .ok_or_else(|| AppError::Driver(format!("Kill session chưa hỗ trợ cho {system}")))?;
+        .ok_or_else(|| AppError::Driver(format!("Kill session is not supported for {system}")))?;
     state
         .registry
         .exec_statement(&conn_id, sql)

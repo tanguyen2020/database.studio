@@ -235,6 +235,17 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
     }
     case 'duplicate_connection':
       return ok({ ...DEMO_PROFILES[0], id: 'copy', name: 'Copy' })
+    case 'list_databases':
+      return ok([
+        { name: 'app', current: true },
+        { name: 'analytics', current: false },
+        { name: 'postgres', current: false },
+      ])
+    case 'open_database': {
+      const db = String(args?.database ?? 'db')
+      const base = DEMO_PROFILES[0]
+      return ok({ ...base, id: `quick-demo-db-${db}`, name: `${base.name} · ${db}`, database: db, connected: true, latency_ms: 7, has_password: false })
+    }
     case 'list_schemas':
       return ok([{ name: 'public', is_default: true }])
     case 'list_tables':

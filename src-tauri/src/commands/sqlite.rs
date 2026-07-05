@@ -17,7 +17,7 @@ macro_rules! with_sqlite {
                     LiveConnection::Sqlite($drv) => $body,
                     _ => Err(crate::error::QueryError::new(
                         "sqlite",
-                        "Connection này không phải SQLite",
+                        "This connection is not SQLite",
                         "",
                     )),
                 }

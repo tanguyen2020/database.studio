@@ -49,7 +49,7 @@ pub async fn explain_plan(
 
     let rows = match outcome {
         StatementOutcome::Rows { result } => result.rows,
-        _ => return Err(AppError::Driver("EXPLAIN không trả về kế hoạch".into())),
+        _ => return Err(AppError::Driver("EXPLAIN did not return a plan".into())),
     };
 
     parse_for_system(&system, actual, &rows).map_err(AppError::Driver)
@@ -75,14 +75,14 @@ async fn explain_mssql(
     let outcome = res?.map_err(|e| AppError::Driver(e.message))?;
     let rows = match outcome {
         StatementOutcome::Rows { result } => result.rows,
-        _ => return Err(AppError::Driver("SHOWPLAN_XML không trả kế hoạch".into())),
+        _ => return Err(AppError::Driver("SHOWPLAN_XML did not return a plan".into())),
     };
     let xml = rows
         .first()
         .and_then(|r| r.as_object())
         .and_then(|o| o.values().next())
         .and_then(|v| v.as_str())
-        .ok_or_else(|| AppError::Driver("SHOWPLAN_XML rỗng".into()))?;
+        .ok_or_else(|| AppError::Driver("SHOWPLAN_XML is empty".into()))?;
     plan::parse_mssql_xml(xml).map_err(AppError::Driver)
 }
 
@@ -101,7 +101,7 @@ async fn explain_cassandra(
             let d = driver.lock().await;
             match &*d {
                 LiveConnection::Cassandra(c) => c.trace_cql(&traced).await,
-                _ => Err(QueryError::new("cassandra", "Connection không phải Cassandra", "not cassandra")),
+                _ => Err(QueryError::new("cassandra", "Connection is not Cassandra", "not cassandra")),
             }
         })
         .await?
@@ -136,7 +136,7 @@ fn parse_for_system(
 ) -> Result<QueryPlan, String> {
     match system {
         "postgres" => {
-            let cell = first_cell(rows).ok_or("PG EXPLAIN rỗng")?;
+            let cell = first_cell(rows).ok_or("PG EXPLAIN returned no rows")?;
             let json = if cell.is_string() {
                 cell.as_str().unwrap().to_string()
             } else {
@@ -145,7 +145,7 @@ fn parse_for_system(
             plan::parse_pg(&json, actual)
         }
         "mysql" | "mariadb" => {
-            let cell = first_cell(rows).ok_or("MySQL EXPLAIN rỗng")?;
+            let cell = first_cell(rows).ok_or("MySQL EXPLAIN returned no rows")?;
             let json = cell.as_str().map(String::from).unwrap_or_else(|| cell.to_string());
             plan::parse_mysql(&json, system, actual && system == "mariadb")
         }

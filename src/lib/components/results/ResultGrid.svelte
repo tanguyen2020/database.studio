@@ -362,6 +362,44 @@
       e.preventDefault()
       void copySelection()
     }
+    if (e.key === 'Escape') ctxMenu = null
+  }
+
+  // ---- right-click copy menu -----------------------------------------------
+  let ctxMenu = $state<{ x: number; y: number; row: number; col: string } | null>(null)
+
+  function openCtx(e: MouseEvent, rowIdx: number, col: string) {
+    e.preventDefault()
+    e.stopPropagation()
+    // Right-clicking a cell outside the current selection selects just it.
+    if (!(selectedCell?.row === rowIdx && selectedCell?.col === col) && !selectedRows.has(rowIdx)) {
+      clickCell(rowIdx, col)
+    }
+    ctxMenu = { x: e.clientX, y: e.clientY, row: rowIdx, col }
+  }
+
+  async function copyText(text: string, label: string) {
+    ctxMenu = null
+    await navigator.clipboard.writeText(text)
+    toasts.success(label)
+  }
+
+  function copyCell(row: number, col: string) {
+    void copyText(rawText(data.rows[row]?.[col]), 'Copied cell')
+  }
+
+  function copyRowTsv(row: number) {
+    void copyText(columns.map((c) => tsvEscape(rawText(data.rows[row]?.[c]))).join('\t'), 'Copied row')
+  }
+
+  function copyColumn(col: string) {
+    void copyText(data.rows.map((r) => tsvEscape(rawText(r[col]))).join('\n'), `Copied column "${col}"`)
+  }
+
+  function copyAllCsv() {
+    const header = columns.map(csvEscape).join(',')
+    const body = data.rows.map((row) => columns.map((c) => csvEscape(rawText(row[c]))).join(',')).join('\n')
+    void copyText(`${header}\n${body}`, `Copied ${data.rows.length.toLocaleString()} rows as CSV`)
   }
 </script>
 
@@ -448,6 +486,7 @@
             <td
               style="border-bottom:var(--px-1) solid var(--border);border-right:var(--px-1) solid var(--border);padding:0;white-space:nowrap;max-width:var(--px-420);overflow:hidden;text-overflow:ellipsis;{edited ? `background:var(--rgba-240-160-32-_18);` : ''}{isCellSelected ? 'box-shadow:inset 0 0 0 var(--px-1) var(--primary);' : ''}"
               onclick={(e) => { e.stopPropagation(); clickCell(vi.index, col) }}
+              oncontextmenu={(e) => openCtx(e, vi.index, col)}
               ondblclick={(e) => {
                 e.stopPropagation()
                 if (editable) startEdit(vi.index, col)
@@ -541,6 +580,25 @@
   {/if}
 </div>
 </div>
+
+<!-- right-click copy menu -->
+{#if ctxMenu}
+  {@const m = ctxMenu}
+  <div role="presentation" style="position:fixed;inset:0;z-index:60" onclick={() => (ctxMenu = null)} oncontextmenu={(e) => { e.preventDefault(); ctxMenu = null }}></div>
+  <div class="mono" style="position:fixed;left:{Math.min(m.x, window.innerWidth - 190)}px;top:{Math.min(m.y, window.innerHeight - 170)}px;z-index:61;min-width:var(--px-170);background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-8);box-shadow:0 var(--px-12) var(--px-30) rgba(0,0,0,.5);padding:var(--px-4) 0;font-size:var(--px-12)">
+    {#each [['Copy cell', () => copyCell(m.row, m.col)], ['Copy row', () => copyRowTsv(m.row)], ['Copy column', () => copyColumn(m.col)], ['Copy selection', () => { ctxMenu = null; void copySelection() }], ['Copy all as CSV', copyAllCsv]] as [label, act] (label)}
+      <div
+        role="button"
+        tabindex="0"
+        onclick={act as () => void}
+        onkeydown={(e) => e.key === 'Enter' && (act as () => void)()}
+        style="padding:var(--px-6) var(--px-14);cursor:pointer;color:var(--text);white-space:nowrap"
+        onmouseenter={(e) => (e.currentTarget.style.background = 'var(--hover)')}
+        onmouseleave={(e) => (e.currentTarget.style.background = 'transparent')}
+      >{label}</div>
+    {/each}
+  </div>
+{/if}
 
 <!-- Preview diff dialog — SQL sẽ chạy trước khi Apply (spec §5 editable) -->
 {#if previewSql !== null}

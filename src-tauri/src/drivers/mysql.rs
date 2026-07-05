@@ -594,12 +594,12 @@ fn map_exec_error(system: &str, e: &sqlx::Error) -> QueryError {
 fn hint_for_code(code: &str) -> Option<String> {
     let hint = match code {
         // sqlx exposes SQLSTATE-style codes for MySQL where available
-        "42S02" => "Bảng không tồn tại. Kiểm tra tên bảng hoặc database hiện tại.",
-        "42S22" => "Cột không tồn tại. Kiểm tra tên cột.",
-        "42000" => "Lỗi cú pháp hoặc không có quyền.",
-        "28000" => "Sai user hoặc mật khẩu.",
-        "23000" => "Vi phạm ràng buộc (duplicate key / foreign key).",
-        "3D000" => "Chưa chọn database. Thêm `USE db` hoặc đặt database trong connection.",
+        "42S02" => "Table does not exist. Check the table name or the current database.",
+        "42S22" => "Column does not exist. Check the column name.",
+        "42000" => "Syntax error or insufficient permissions.",
+        "28000" => "Wrong user or password.",
+        "23000" => "Constraint violation (duplicate key / foreign key).",
+        "3D000" => "No database selected. Add `USE db` or set the database in the connection.",
         _ => return None,
     };
     Some(hint.to_string())

@@ -80,9 +80,30 @@
   $effect(() => {
     const s = selected
     if (s?.connected) {
-      untrack(() => void explorer.loadSchemas(s.id))
+      untrack(() => {
+        void explorer.loadSchemas(s.id)
+        // Postgres: list every database on the server (browse/switch).
+        if (s.system === 'postgres') void explorer.loadDatabases(s.id)
+      })
     }
   })
+
+  // Open another database on the same server as its own connection.
+  let openingDb = $state('')
+  async function openDatabase(dbName: string) {
+    if (!selected || openingDb) return
+    openingDb = dbName
+    try {
+      const p = await ipc.openDatabase(selected.id, dbName)
+      connections.adopt(p)
+      connections.select(p.id)
+    } catch (e) {
+      toasts.error(String(e))
+    } finally {
+      openingDb = ''
+    }
+  }
+  let dbSectionOpen = $state(true)
 
   // Cassandra (Phase 4b): cây keyspace lấy qua command chuyên biệt (cassandra_tree),
   // không đi qua explorer store quan hệ.
@@ -404,7 +425,7 @@
   <div style="flex:1;overflow:auto;padding:0 var(--px-6) var(--px-10)">
     {#if !selected}
       <div style="padding:var(--px-16) var(--px-12);text-align:center;font-size:var(--px-12);color:var(--muted)">
-        Chọn một connection để xem cấu trúc
+        Select a connection to view its structure
       </div>
     {:else if !selected.connected}
       <div style="padding:var(--px-16) var(--px-12);text-align:center;font-size:var(--px-12);color:var(--muted)">
@@ -496,6 +517,25 @@
         <div style="padding:var(--px-16) var(--px-12);text-align:center;font-size:var(--px-12);color:var(--muted)">Loading keyspace…</div>
       {/if}
     {:else}
+      {#if selected.system === 'postgres' && (cache?.databases?.length ?? 0) > 0}
+        <!-- Postgres: every database on the server. Current one is marked; -->
+        <!-- clicking another opens it as its own connection. -->
+        {@render row({ key: 'databases', depth: 0, glyph: '🗄', color: C.folder, name: 'Databases', meta: String(cache?.databases?.length ?? 0), head: true, expandable: true, onClick: () => (dbSectionOpen = !dbSectionOpen) })}
+        {#if dbSectionOpen}
+          {#each cache?.databases ?? [] as db (db.name)}
+            {@render row({
+              key: `db:${db.name}`,
+              depth: 1,
+              glyph: db.current ? '●' : '◇',
+              color: db.current ? 'var(--primary)' : C.schema,
+              name: db.name,
+              meta: db.current ? 'current' : openingDb === db.name ? 'opening…' : 'open',
+              onClick: () => !db.current && openDatabase(db.name),
+            })}
+          {/each}
+        {/if}
+      {/if}
+
       {#if isSqlite}
         {@render row({
           key: 'file',

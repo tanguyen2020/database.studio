@@ -122,9 +122,9 @@ pub fn normalize_op(native: &str) -> String {
 
 /// Parse output PG `EXPLAIN (FORMAT JSON)`: `[{"Plan": {...}, "Execution Time":..}]`.
 pub fn parse_pg(json_text: &str, actual: bool) -> Result<QueryPlan, String> {
-    let v: Value = serde_json::from_str(json_text).map_err(|e| format!("PG plan JSON lỗi: {e}"))?;
-    let obj = v.as_array().and_then(|a| a.first()).ok_or("PG plan rỗng")?;
-    let plan = obj.get("Plan").ok_or("thiếu Plan")?;
+    let v: Value = serde_json::from_str(json_text).map_err(|e| format!("PG plan JSON error: {e}"))?;
+    let obj = v.as_array().and_then(|a| a.first()).ok_or("PG plan is empty")?;
+    let plan = obj.get("Plan").ok_or("missing Plan")?;
     let mut warnings = Vec::new();
     let root = parse_pg_node(plan, &mut warnings);
     let total_time = obj.get("Execution Time").and_then(Value::as_f64);
@@ -158,8 +158,8 @@ fn parse_pg_node(plan: &Value, warnings: &mut Vec<String>) -> PlanNode {
 /// MariaDB, có `r_rows`/`r_total_time_ms`). Đơn giản hóa: 1 nhánh chính theo
 /// query_block/nested_loop/table.
 pub fn parse_mysql(json_text: &str, system: &str, actual: bool) -> Result<QueryPlan, String> {
-    let v: Value = serde_json::from_str(json_text).map_err(|e| format!("MySQL plan JSON lỗi: {e}"))?;
-    let qb = v.get("query_block").ok_or("thiếu query_block")?;
+    let v: Value = serde_json::from_str(json_text).map_err(|e| format!("MySQL plan JSON error: {e}"))?;
+    let qb = v.get("query_block").ok_or("missing query_block")?;
     let mut warnings = Vec::new();
     let root = parse_mysql_block(qb, actual, &mut warnings);
     let total_time = qb.get("r_total_time_ms").and_then(Value::as_f64);
@@ -327,7 +327,7 @@ pub fn parse_clickhouse(text: &str) -> QueryPlan {
             if n.operation == "SeqScan" {
                 n.is_hotspot = true;
                 let rel = n.extra.get("relation").and_then(Value::as_str).unwrap_or("table");
-                warnings.push(format!("ClickHouse đọc toàn bộ {rel} (không dùng index)"));
+                warnings.push(format!("ClickHouse reads all of {rel} (no index used)"));
             }
         }
     }
@@ -365,11 +365,11 @@ fn mssql_parent_relop(n: roxmltree::Node) -> Option<roxmltree::NodeId> {
 /// Parse SHOWPLAN_XML: mỗi `<RelOp>` là 1 node; con là các `<RelOp>` lồng bên
 /// trong (không có RelOp trung gian). PhysicalOp → operation chuẩn hóa.
 pub fn parse_mssql_xml(xml: &str) -> Result<QueryPlan, String> {
-    let doc = roxmltree::Document::parse(xml).map_err(|e| format!("SHOWPLAN_XML lỗi: {e}"))?;
+    let doc = roxmltree::Document::parse(xml).map_err(|e| format!("SHOWPLAN_XML error: {e}"))?;
     let root_relop = doc
         .descendants()
         .find(|n| n.tag_name().name() == "RelOp")
-        .ok_or("không thấy RelOp trong SHOWPLAN_XML")?;
+        .ok_or("no RelOp found in SHOWPLAN_XML")?;
     let mut warnings = Vec::new();
     let root = build_mssql_node(root_relop, &mut warnings);
     let total_cost = root.estimated_cost;
@@ -434,7 +434,7 @@ pub fn parse_cassandra_trace(
     let mut root = PlanNode::leaf(if filtering { "SeqScan" } else { "CqlRead" }, "CQL Read");
     if filtering {
         root.is_hotspot = true;
-        warnings.push("ALLOW FILTERING: quét toàn bộ partitions (không dùng partition key) — tốn kém".into());
+        warnings.push("ALLOW FILTERING: scans all partitions (no partition key) — expensive".into());
     }
 
     for (activity, source, elapsed) in events {
@@ -510,14 +510,14 @@ fn mark_hotspot(node: &mut PlanNode, warnings: &mut Vec<String>) {
     let rows = node.estimated_rows.or(node.actual_rows).unwrap_or(0.0);
     if node.operation == "SeqScan" && rows > LARGE_ROWS {
         node.is_hotspot = true;
-        let rel = node.extra.get("Relation Name").and_then(Value::as_str).unwrap_or("bảng");
-        warnings.push(format!("Seq Scan trên {rel} (~{} rows)", rows as i64));
+        let rel = node.extra.get("Relation Name").and_then(Value::as_str).unwrap_or("table");
+        warnings.push(format!("Seq Scan on {rel} (~{} rows)", rows as i64));
     }
     if let (Some(est), Some(act)) = (node.estimated_rows, node.actual_rows) {
         if est > 0.0 && (act / est > 10.0 || est / act.max(1.0) > 10.0) {
             node.is_hotspot = true;
             warnings.push(format!(
-                "{}: actual {} vs estimated {} (lệch >10x)",
+                "{}: actual {} vs estimated {} (off by >10x)",
                 node.operation, act as i64, est as i64
             ));
         }

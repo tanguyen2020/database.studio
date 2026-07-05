@@ -35,7 +35,7 @@ impl NatsDriver {
         let url = format!("nats://{}:{}", p.host, p.port);
         opts.connect(&url)
             .await
-            .map_err(|e| err(format!("Không kết nối được NATS {url}"), e))
+            .map_err(|e| err(format!("Failed to connect to NATS {url}"), e))
     }
 
     pub async fn connect(p: &NatsConnParams) -> Result<Self, QueryError> {
@@ -70,7 +70,7 @@ impl NatsDriver {
         self.client
             .subscribe(subject)
             .await
-            .map_err(|e| err("Subscribe lỗi", e))
+            .map_err(|e| err("Subscribe error", e))
     }
 
     /// Publish payload lên subject (kèm reply-to tùy chọn), flush để chắc chắn gửi.
@@ -86,10 +86,10 @@ impl NatsDriver {
                 .client
                 .publish_with_reply(subject, r, bytes)
                 .await
-                .map_err(|e| err("Publish lỗi", e))?,
-            None => self.client.publish(subject, bytes).await.map_err(|e| err("Publish lỗi", e))?,
+                .map_err(|e| err("Publish error", e))?,
+            None => self.client.publish(subject, bytes).await.map_err(|e| err("Publish error", e))?,
         }
-        self.client.flush().await.map_err(|e| err("Flush lỗi", e))?;
+        self.client.flush().await.map_err(|e| err("Flush error", e))?;
         Ok(())
     }
 
@@ -104,7 +104,7 @@ impl NatsDriver {
         let msg = tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), fut)
             .await
             .map_err(|_| err("Request timeout", "no reply within timeout"))?
-            .map_err(|e| err("Request lỗi", e))?;
+            .map_err(|e| err("Request error", e))?;
         Ok(String::from_utf8_lossy(&msg.payload).into_owned())
     }
 
@@ -134,21 +134,21 @@ impl NatsDriver {
         let js = async_nats::jetstream::new(self.client.clone());
         js.create_key_value(async_nats::jetstream::kv::Config { bucket, ..Default::default() })
             .await
-            .map_err(|e| err("Tạo KV bucket lỗi", e))?;
+            .map_err(|e| err("Failed to create KV bucket", e))?;
         Ok(())
     }
 
     pub async fn kv_delete_bucket(&self, bucket: &str) -> Result<(), QueryError> {
         let js = async_nats::jetstream::new(self.client.clone());
-        js.delete_key_value(bucket).await.map_err(|e| err("Xóa KV bucket lỗi", e))?;
+        js.delete_key_value(bucket).await.map_err(|e| err("Failed to delete KV bucket", e))?;
         Ok(())
     }
 
     pub async fn kv_keys(&self, bucket: &str) -> Result<Vec<String>, QueryError> {
         use futures::StreamExt;
         let js = async_nats::jetstream::new(self.client.clone());
-        let store = js.get_key_value(bucket).await.map_err(|e| err("Get KV bucket lỗi", e))?;
-        let mut keys = store.keys().await.map_err(|e| err("KV keys lỗi", e))?;
+        let store = js.get_key_value(bucket).await.map_err(|e| err("Failed to get KV bucket", e))?;
+        let mut keys = store.keys().await.map_err(|e| err("KV keys error", e))?;
         let mut out = Vec::new();
         while let Some(k) = keys.next().await {
             if let Ok(k) = k {
@@ -160,22 +160,22 @@ impl NatsDriver {
 
     pub async fn kv_get(&self, bucket: &str, key: &str) -> Result<Option<String>, QueryError> {
         let js = async_nats::jetstream::new(self.client.clone());
-        let store = js.get_key_value(bucket).await.map_err(|e| err("Get KV bucket lỗi", e))?;
-        let v = store.get(key).await.map_err(|e| err("KV get lỗi", e))?;
+        let store = js.get_key_value(bucket).await.map_err(|e| err("Failed to get KV bucket", e))?;
+        let v = store.get(key).await.map_err(|e| err("KV get error", e))?;
         Ok(v.map(|b| String::from_utf8_lossy(&b).into_owned()))
     }
 
     pub async fn kv_put(&self, bucket: &str, key: &str, value: String) -> Result<(), QueryError> {
         let js = async_nats::jetstream::new(self.client.clone());
-        let store = js.get_key_value(bucket).await.map_err(|e| err("Get KV bucket lỗi", e))?;
-        store.put(key, value.into_bytes().into()).await.map_err(|e| err("KV put lỗi", e))?;
+        let store = js.get_key_value(bucket).await.map_err(|e| err("Failed to get KV bucket", e))?;
+        store.put(key, value.into_bytes().into()).await.map_err(|e| err("KV put error", e))?;
         Ok(())
     }
 
     pub async fn kv_delete(&self, bucket: &str, key: &str) -> Result<(), QueryError> {
         let js = async_nats::jetstream::new(self.client.clone());
-        let store = js.get_key_value(bucket).await.map_err(|e| err("Get KV bucket lỗi", e))?;
-        store.delete(key).await.map_err(|e| err("KV delete lỗi", e))?;
+        let store = js.get_key_value(bucket).await.map_err(|e| err("Failed to get KV bucket", e))?;
+        store.delete(key).await.map_err(|e| err("KV delete error", e))?;
         Ok(())
     }
 
@@ -201,13 +201,13 @@ impl NatsDriver {
         let js = async_nats::jetstream::new(self.client.clone());
         js.create_object_store(async_nats::jetstream::object_store::Config { bucket, ..Default::default() })
             .await
-            .map_err(|e| err("Tạo Object bucket lỗi", e))?;
+            .map_err(|e| err("Failed to create Object bucket", e))?;
         Ok(())
     }
 
     pub async fn obj_delete_bucket(&self, bucket: &str) -> Result<(), QueryError> {
         let js = async_nats::jetstream::new(self.client.clone());
-        js.delete_object_store(bucket).await.map_err(|e| err("Xóa Object bucket lỗi", e))?;
+        js.delete_object_store(bucket).await.map_err(|e| err("Failed to delete Object bucket", e))?;
         Ok(())
     }
 
@@ -215,8 +215,8 @@ impl NatsDriver {
     pub async fn obj_list(&self, bucket: &str) -> Result<Vec<ObjInfo>, QueryError> {
         use futures::StreamExt;
         let js = async_nats::jetstream::new(self.client.clone());
-        let store = js.get_object_store(bucket).await.map_err(|e| err("Get Object bucket lỗi", e))?;
-        let mut list = store.list().await.map_err(|e| err("Object list lỗi", e))?;
+        let store = js.get_object_store(bucket).await.map_err(|e| err("Failed to get Object bucket", e))?;
+        let mut list = store.list().await.map_err(|e| err("Object list error", e))?;
         let mut out = Vec::new();
         while let Some(o) = list.next().await {
             if let Ok(o) = o {
@@ -229,10 +229,10 @@ impl NatsDriver {
     /// Upload object từ path file thật (đọc bytes).
     pub async fn obj_put_file(&self, bucket: &str, name: String, path: &str) -> Result<(), QueryError> {
         let js = async_nats::jetstream::new(self.client.clone());
-        let store = js.get_object_store(bucket).await.map_err(|e| err("Get Object bucket lỗi", e))?;
-        let bytes = tokio::fs::read(path).await.map_err(|e| err(format!("Đọc file {path} lỗi"), e))?;
+        let store = js.get_object_store(bucket).await.map_err(|e| err("Failed to get Object bucket", e))?;
+        let bytes = tokio::fs::read(path).await.map_err(|e| err(format!("Failed to read file {path}"), e))?;
         let mut slice: &[u8] = &bytes;
-        store.put(name.as_str(), &mut slice).await.map_err(|e| err("Object put lỗi", e))?;
+        store.put(name.as_str(), &mut slice).await.map_err(|e| err("Object put error", e))?;
         Ok(())
     }
 
@@ -240,18 +240,18 @@ impl NatsDriver {
     pub async fn obj_get_file(&self, bucket: &str, name: &str, path: &str) -> Result<(), QueryError> {
         use tokio::io::AsyncReadExt;
         let js = async_nats::jetstream::new(self.client.clone());
-        let store = js.get_object_store(bucket).await.map_err(|e| err("Get Object bucket lỗi", e))?;
-        let mut obj = store.get(name).await.map_err(|e| err("Object get lỗi", e))?;
+        let store = js.get_object_store(bucket).await.map_err(|e| err("Failed to get Object bucket", e))?;
+        let mut obj = store.get(name).await.map_err(|e| err("Object get error", e))?;
         let mut buf = Vec::new();
-        obj.read_to_end(&mut buf).await.map_err(|e| err("Đọc object lỗi", e))?;
-        tokio::fs::write(path, buf).await.map_err(|e| err(format!("Ghi file {path} lỗi"), e))?;
+        obj.read_to_end(&mut buf).await.map_err(|e| err("Failed to read object", e))?;
+        tokio::fs::write(path, buf).await.map_err(|e| err(format!("Failed to write file {path}"), e))?;
         Ok(())
     }
 
     pub async fn obj_delete(&self, bucket: &str, name: &str) -> Result<(), QueryError> {
         let js = async_nats::jetstream::new(self.client.clone());
-        let store = js.get_object_store(bucket).await.map_err(|e| err("Get Object bucket lỗi", e))?;
-        store.delete(name).await.map_err(|e| err("Object delete lỗi", e))?;
+        let store = js.get_object_store(bucket).await.map_err(|e| err("Failed to get Object bucket", e))?;
+        store.delete(name).await.map_err(|e| err("Object delete error", e))?;
         Ok(())
     }
 
@@ -267,7 +267,7 @@ impl NatsDriver {
         let js = async_nats::jetstream::new(self.client.clone());
         let mut out = Vec::new();
         let mut infos = js.streams();
-        while let Some(info) = infos.try_next().await.map_err(|e| err("List streams lỗi", e))? {
+        while let Some(info) = infos.try_next().await.map_err(|e| err("List streams error", e))? {
             out.push(JsStream {
                 name: info.config.name,
                 subjects: info.config.subjects,
@@ -285,10 +285,10 @@ impl NatsDriver {
     pub async fn js_consumers(&self, stream: &str) -> Result<Vec<JsConsumer>, QueryError> {
         use futures::TryStreamExt;
         let js = async_nats::jetstream::new(self.client.clone());
-        let s = js.get_stream(stream).await.map_err(|e| err("Get stream lỗi", e))?;
+        let s = js.get_stream(stream).await.map_err(|e| err("Failed to get stream", e))?;
         let mut out = Vec::new();
         let mut cons = s.consumers();
-        while let Some(ci) = cons.try_next().await.map_err(|e| err("List consumers lỗi", e))? {
+        while let Some(ci) = cons.try_next().await.map_err(|e| err("List consumers error", e))? {
             out.push(JsConsumer {
                 name: ci.name,
                 deliver_policy: format!("{:?}", ci.config.deliver_policy),
@@ -306,22 +306,22 @@ impl NatsDriver {
         let js = async_nats::jetstream::new(self.client.clone());
         js.create_stream(async_nats::jetstream::stream::Config { name, subjects, ..Default::default() })
             .await
-            .map_err(|e| err("Tạo stream lỗi", e))?;
+            .map_err(|e| err("Failed to create stream", e))?;
         Ok(())
     }
 
     /// Xóa stream.
     pub async fn js_delete_stream(&self, name: &str) -> Result<(), QueryError> {
         let js = async_nats::jetstream::new(self.client.clone());
-        js.delete_stream(name).await.map_err(|e| err("Xóa stream lỗi", e))?;
+        js.delete_stream(name).await.map_err(|e| err("Failed to delete stream", e))?;
         Ok(())
     }
 
     /// Purge toàn bộ message của stream.
     pub async fn js_purge_stream(&self, name: &str) -> Result<(), QueryError> {
         let js = async_nats::jetstream::new(self.client.clone());
-        let stream = js.get_stream(name).await.map_err(|e| err("Get stream lỗi", e))?;
-        stream.purge().await.map_err(|e| err("Purge stream lỗi", e))?;
+        let stream = js.get_stream(name).await.map_err(|e| err("Failed to get stream", e))?;
+        stream.purge().await.map_err(|e| err("Failed to purge stream", e))?;
         Ok(())
     }
 
@@ -333,38 +333,38 @@ impl NatsDriver {
         filter: String,
     ) -> Result<(), QueryError> {
         let js = async_nats::jetstream::new(self.client.clone());
-        let s = js.get_stream(stream).await.map_err(|e| err("Get stream lỗi", e))?;
+        let s = js.get_stream(stream).await.map_err(|e| err("Failed to get stream", e))?;
         s.create_consumer(async_nats::jetstream::consumer::pull::Config {
             durable_name: Some(durable),
             filter_subject: filter,
             ..Default::default()
         })
         .await
-        .map_err(|e| err("Tạo consumer lỗi", e))?;
+        .map_err(|e| err("Failed to create consumer", e))?;
         Ok(())
     }
 
     /// Xóa consumer của stream.
     pub async fn js_delete_consumer(&self, stream: &str, name: &str) -> Result<(), QueryError> {
         let js = async_nats::jetstream::new(self.client.clone());
-        let s = js.get_stream(stream).await.map_err(|e| err("Get stream lỗi", e))?;
-        s.delete_consumer(name).await.map_err(|e| err("Xóa consumer lỗi", e))?;
+        let s = js.get_stream(stream).await.map_err(|e| err("Failed to get stream", e))?;
+        s.delete_consumer(name).await.map_err(|e| err("Failed to delete consumer", e))?;
         Ok(())
     }
 
     /// Xóa 1 message theo sequence.
     pub async fn js_delete_message(&self, stream: &str, seq: u64) -> Result<(), QueryError> {
         let js = async_nats::jetstream::new(self.client.clone());
-        let s = js.get_stream(stream).await.map_err(|e| err("Get stream lỗi", e))?;
-        s.delete_message(seq).await.map_err(|e| err("Xóa message lỗi", e))?;
+        let s = js.get_stream(stream).await.map_err(|e| err("Failed to get stream", e))?;
+        s.delete_message(seq).await.map_err(|e| err("Failed to delete message", e))?;
         Ok(())
     }
 
     /// Peek message theo sequence number.
     pub async fn js_peek(&self, stream: &str, seq: u64) -> Result<JsMessage, QueryError> {
         let js = async_nats::jetstream::new(self.client.clone());
-        let s = js.get_stream(stream).await.map_err(|e| err("Get stream lỗi", e))?;
-        let raw = s.get_raw_message(seq).await.map_err(|e| err(format!("Peek seq {seq} lỗi"), e))?;
+        let s = js.get_stream(stream).await.map_err(|e| err("Failed to get stream", e))?;
+        let raw = s.get_raw_message(seq).await.map_err(|e| err(format!("Failed to peek seq {seq}"), e))?;
         Ok(JsMessage {
             seq: raw.sequence,
             subject: raw.subject.to_string(),

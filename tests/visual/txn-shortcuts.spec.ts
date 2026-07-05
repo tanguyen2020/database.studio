@@ -1,9 +1,10 @@
 import { expect, test } from '@playwright/test'
 import { APP_URL, blockRemoteFonts } from './helpers'
 
-// T21 — transaction controls in the SQL toolbar + pooling/retry settings section.
+// AUDIT-2 item 6 — transaction buttons removed from the SQL toolbar.
+// Pooling/retry settings section still present (T21).
 
-test('transaction buttons + Connections settings (pool/retry)', async ({ page }) => {
+test('no transaction buttons in SQL toolbar + Connections settings (pool/retry)', async ({ page }) => {
   const errors: string[] = []
   page.on('pageerror', (e) => errors.push(String(e)))
   await blockRemoteFonts(page)
@@ -11,14 +12,14 @@ test('transaction buttons + Connections settings (pool/retry)', async ({ page })
   await page.waitForSelector('#app > *', { timeout: 15_000 })
   await page.waitForTimeout(300)
 
-  // bound SQL tab (Postgres) → BEGIN/COMMIT/ROLLBACK buttons present
+  // bound SQL tab (Postgres) → BEGIN/COMMIT/ROLLBACK buttons must NOT exist
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(300)
   await page.getByTitle('New SQL tab (Ctrl+T)').first().click()
   await page.waitForTimeout(300)
-  await expect(page.getByRole('button', { name: 'BEGIN', exact: true }).first()).toBeVisible()
-  await expect(page.getByRole('button', { name: 'COMMIT', exact: true }).first()).toBeVisible()
-  await expect(page.getByRole('button', { name: 'ROLLBACK', exact: true }).first()).toBeVisible()
+  await expect(page.getByRole('button', { name: 'BEGIN', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'COMMIT', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'ROLLBACK', exact: true })).toHaveCount(0)
 
   // Settings → Connections → pool/retry fields
   await page.keyboard.press('Control+,')

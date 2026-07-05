@@ -41,6 +41,7 @@ pub fn run() {
             commands::connections::disconnect,
             commands::connections::reconnect,
             commands::connections::quick_connect,
+            commands::connections::open_database,
             commands::connections::test_connection,
             commands::connections::cancel_test,
             commands::connections::ping_connection,
@@ -115,6 +116,7 @@ pub fn run() {
             commands::plan::explain_plan,
             // schema
             commands::schema::list_schemas,
+            commands::schema::list_databases,
             commands::schema::list_tables,
             commands::schema::list_columns,
             commands::schema::list_indexes,

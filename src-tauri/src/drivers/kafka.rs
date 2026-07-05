@@ -61,14 +61,14 @@ impl KafkaDriver {
         let config = Self::build_config(p);
         let consumer: BaseConsumer = config
             .create()
-            .map_err(|e| err("Tạo Kafka consumer lỗi", e))?;
+            .map_err(|e| err("Failed to create Kafka consumer", e))?;
         let consumer = Arc::new(consumer);
         // xác nhận broker bằng fetch_metadata (blocking → spawn_blocking)
         let c = consumer.clone();
         tokio::task::spawn_blocking(move || c.fetch_metadata(None, META_TIMEOUT))
             .await
-            .map_err(|e| err("spawn_blocking lỗi", e))?
-            .map_err(|e| err("Không lấy được metadata (broker không tới được?)", e))?;
+            .map_err(|e| err("spawn_blocking error", e))?
+            .map_err(|e| err("Failed to fetch metadata (broker unreachable?)", e))?;
         Ok(Self { consumer, config })
     }
 
@@ -100,8 +100,8 @@ impl KafkaDriver {
         let c = self.consumer.clone();
         let md = tokio::task::spawn_blocking(move || c.fetch_metadata(None, META_TIMEOUT))
             .await
-            .map_err(|e| err("spawn_blocking lỗi", e))?
-            .map_err(|e| err("fetch_metadata lỗi", e))?;
+            .map_err(|e| err("spawn_blocking error", e))?
+            .map_err(|e| err("fetch_metadata error", e))?;
         Ok(md.brokers().len())
     }
 
@@ -120,8 +120,8 @@ impl KafkaDriver {
         let c = self.consumer.clone();
         let md = tokio::task::spawn_blocking(move || c.fetch_metadata(None, META_TIMEOUT))
             .await
-            .map_err(|e| err("spawn_blocking lỗi", e))?
-            .map_err(|e| err("fetch_metadata lỗi", e))?;
+            .map_err(|e| err("spawn_blocking error", e))?
+            .map_err(|e| err("fetch_metadata error", e))?;
         let brokers: Vec<KafkaBroker> = md
             .brokers()
             .iter()
@@ -175,8 +175,8 @@ impl KafkaDriver {
             Ok(topics)
         })
         .await
-        .map_err(|e| err("spawn_blocking lỗi", e))?
-        .map_err(|e| err("List topics lỗi", e))?;
+        .map_err(|e| err("spawn_blocking error", e))?
+        .map_err(|e| err("List topics error", e))?;
         Ok(out)
     }
 }
@@ -196,7 +196,7 @@ impl KafkaDriver {
         let mut cfg = self.config.clone();
         cfg.set("group.id", format!("dbstudio-browse-{}", uuid::Uuid::new_v4()));
         cfg.set("enable.auto.commit", "false");
-        let consumer: BaseConsumer = cfg.create().map_err(|e| err("Tạo BaseConsumer lỗi", e))?;
+        let consumer: BaseConsumer = cfg.create().map_err(|e| err("Failed to create BaseConsumer", e))?;
 
         let partitions: Vec<i32> = match partition {
             Some(p) => vec![p],
@@ -204,7 +204,7 @@ impl KafkaDriver {
                 let md = self
                     .consumer
                     .fetch_metadata(Some(topic), META_TIMEOUT)
-                    .map_err(|e| err("fetch_metadata (partitions) lỗi", e))?;
+                    .map_err(|e| err("fetch_metadata (partitions) error", e))?;
                 md.topics()
                     .iter()
                     .find(|t| t.name() == topic)
@@ -219,9 +219,9 @@ impl KafkaDriver {
         };
         let mut tpl = TopicPartitionList::new();
         for p in partitions {
-            tpl.add_partition_offset(topic, p, off).map_err(|e| err("TPL lỗi", e))?;
+            tpl.add_partition_offset(topic, p, off).map_err(|e| err("TPL error", e))?;
         }
-        consumer.assign(&tpl).map_err(|e| err("assign lỗi", e))?;
+        consumer.assign(&tpl).map_err(|e| err("assign error", e))?;
         Ok(consumer)
     }
 
@@ -234,7 +234,7 @@ impl KafkaDriver {
         partition: Option<i32>,
     ) -> Result<(i32, i64), QueryError> {
         let producer: FutureProducer =
-            self.config.create().map_err(|e| err("Tạo producer lỗi", e))?;
+            self.config.create().map_err(|e| err("Failed to create producer", e))?;
         let mut record = FutureRecord::to(topic).payload(value);
         if !key.is_empty() {
             record = record.key(key);
@@ -246,7 +246,7 @@ impl KafkaDriver {
             .send(record, Duration::from_secs(15))
             .await
             .map(|d| (d.partition, d.offset))
-            .map_err(|(e, _)| err("Produce lỗi", e))
+            .map_err(|(e, _)| err("Produce error", e))
     }
 
     // ---- consumer groups (T6) -----------------------------------------------
@@ -277,8 +277,8 @@ impl KafkaDriver {
             Ok(groups)
         })
         .await
-        .map_err(|e| err("spawn_blocking lỗi", e))?
-        .map_err(|e| err("fetch_group_list lỗi", e))?;
+        .map_err(|e| err("spawn_blocking error", e))?
+        .map_err(|e| err("fetch_group_list error", e))?;
         Ok(out)
     }
 
@@ -324,8 +324,8 @@ impl KafkaDriver {
             Ok(out)
         })
         .await
-        .map_err(|e| err("spawn_blocking lỗi", e))?
-        .map_err(|e| err("group_lag lỗi", e))?;
+        .map_err(|e| err("spawn_blocking error", e))?
+        .map_err(|e| err("group_lag error", e))?;
         Ok(out)
     }
 
@@ -368,23 +368,23 @@ impl KafkaDriver {
             Ok(())
         })
         .await
-        .map_err(|e| err("spawn_blocking lỗi", e))?
-        .map_err(|e| err("reset offset lỗi (group đang active?)", e))?;
+        .map_err(|e| err("spawn_blocking error", e))?
+        .map_err(|e| err("reset offset error (group active?)", e))?;
         Ok(())
     }
 
     /// Tạo topic (admin) — partitions + replication factor.
     pub async fn create_topic(&self, name: &str, partitions: i32, replication: i32) -> Result<(), QueryError> {
         let admin: AdminClient<DefaultClientContext> =
-            self.config.create().map_err(|e| err("Tạo admin client lỗi", e))?;
+            self.config.create().map_err(|e| err("Failed to create admin client", e))?;
         let nt = NewTopic::new(name, partitions, TopicReplication::Fixed(replication));
         let opts = AdminOptions::new().operation_timeout(Some(Duration::from_secs(30)));
         let res = admin
             .create_topics([&nt], &opts)
             .await
-            .map_err(|e| err("create_topics lỗi", e))?;
+            .map_err(|e| err("create_topics error", e))?;
         for r in res {
-            r.map_err(|(t, e)| err(format!("Tạo topic '{t}' lỗi"), e))?;
+            r.map_err(|(t, e)| err(format!("Failed to create topic '{t}'"), e))?;
         }
         Ok(())
     }
@@ -392,14 +392,14 @@ impl KafkaDriver {
     /// Xóa topic (admin).
     pub async fn delete_topic(&self, name: &str) -> Result<(), QueryError> {
         let admin: AdminClient<DefaultClientContext> =
-            self.config.create().map_err(|e| err("Tạo admin client lỗi", e))?;
+            self.config.create().map_err(|e| err("Failed to create admin client", e))?;
         let opts = AdminOptions::new().operation_timeout(Some(Duration::from_secs(30)));
         let res = admin
             .delete_topics(&[name], &opts)
             .await
-            .map_err(|e| err("delete_topics lỗi", e))?;
+            .map_err(|e| err("delete_topics error", e))?;
         for r in res {
-            r.map_err(|(t, e)| err(format!("Xóa topic '{t}' lỗi"), e))?;
+            r.map_err(|(t, e)| err(format!("Failed to delete topic '{t}'"), e))?;
         }
         Ok(())
     }

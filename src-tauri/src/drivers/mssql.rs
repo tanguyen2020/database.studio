@@ -41,7 +41,7 @@ impl MssqlDriver {
             #[cfg(not(windows))]
             return Err(QueryError::new(
                 "mssql",
-                "Windows Authentication chỉ khả dụng trên Windows",
+                "Windows Authentication is only available on Windows",
                 "integrated auth unsupported on this OS",
             ));
         } else {
@@ -62,7 +62,7 @@ impl MssqlDriver {
 
         let tcp = TcpStream::connect((p.host.as_str(), p.port))
             .await
-            .map_err(|e| QueryError::new("mssql", format!("Không kết nối được {}:{} — {e}", p.host, p.port), e.to_string()))?;
+            .map_err(|e| QueryError::new("mssql", format!("Failed to connect to {}:{} — {e}", p.host, p.port), e.to_string()))?;
         tcp.set_nodelay(true)
             .map_err(|e| QueryError::new("mssql", e.to_string(), e.to_string()))?;
         let client = Client::connect(config, tcp.compat_write())
@@ -579,7 +579,7 @@ impl MssqlDriver {
                         .filter(|s| !s.trim().is_empty())
                         .map(|s| s.trim().to_string())
                         .collect(),
-                    reason: format!("thiếu index (impact {impact:.0}%, {seeks} seeks)"),
+                    reason: format!("missing index (impact {impact:.0}%, {seeks} seeks)"),
                     estimated_benefit: Some(impact),
                 }
             })
@@ -783,14 +783,14 @@ fn map_error(e: &tiberius::error::Error) -> QueryError {
 
 fn hint_for_code(code: u32) -> Option<String> {
     let hint = match code {
-        208 => "Bảng hoặc object không tồn tại. Kiểm tra tên và schema (dbo.*).",
-        207 => "Cột không tồn tại. Kiểm tra tên cột.",
-        102 | 156 => "Lỗi cú pháp T-SQL. Lưu ý MSSQL dùng TOP thay vì LIMIT.",
-        18456 => "Đăng nhập thất bại — sai user/mật khẩu hoặc user bị khóa.",
-        4060 => "Không mở được database. Kiểm tra tên database và quyền.",
-        2627 | 2601 => "Vi phạm ràng buộc UNIQUE/PRIMARY KEY.",
-        547 => "Vi phạm ràng buộc khóa ngoại hoặc CHECK.",
-        515 => "Cột NOT NULL không được để trống.",
+        208 => "Table or object does not exist. Check the name and schema (dbo.*).",
+        207 => "Column does not exist. Check the column name.",
+        102 | 156 => "T-SQL syntax error. Note MSSQL uses TOP instead of LIMIT.",
+        18456 => "Login failed — wrong user/password or the user is locked.",
+        4060 => "Failed to open database. Check the database name and permissions.",
+        2627 | 2601 => "UNIQUE/PRIMARY KEY constraint violation.",
+        547 => "Foreign key or CHECK constraint violation.",
+        515 => "NOT NULL column cannot be empty.",
         _ => return None,
     };
     Some(hint.to_string())

@@ -200,6 +200,27 @@ impl PgDriver {
             .collect())
     }
 
+    /// Every database on the server the user can connect to; `current` marks
+    /// the one this connection is attached to (Postgres binds one DB per conn).
+    pub async fn databases(&mut self) -> Result<Vec<DatabaseInfo>, QueryError> {
+        let rows = sqlx::query(
+            "SELECT datname, datname = current_database() AS is_current
+             FROM pg_catalog.pg_database
+             WHERE datistemplate = false AND datallowconn = true
+             ORDER BY datname",
+        )
+        .fetch_all(&mut self.conn)
+        .await
+        .map_err(|e| map_error("postgres", &e))?;
+        Ok(rows
+            .iter()
+            .map(|r| DatabaseInfo {
+                name: r.get::<String, _>(0),
+                current: r.try_get::<bool, _>(1).unwrap_or(false),
+            })
+            .collect())
+    }
+
     pub async fn tables(&mut self, schema: &str) -> Result<Vec<TableInfo>, QueryError> {
         let rows = sqlx::query(
             "SELECT c.relname,
@@ -636,18 +657,13 @@ fn decode_value(row: &sqlx::postgres::PgRow, idx: usize) -> Value {
             .map(|v| Value::String(v.to_string()))
             .unwrap_or(Value::Null),
         "JSON" | "JSONB" => row.try_get::<Value, _>(idx).unwrap_or(Value::Null),
-        "TIMESTAMPTZ" => row
-            .try_get::<chrono::DateTime<chrono::Utc>, _>(idx)
-            .map(|v| Value::String(v.to_rfc3339()))
-            .unwrap_or(Value::Null),
-        "TIMESTAMP" => row
-            .try_get::<chrono::NaiveDateTime, _>(idx)
-            .map(|v| Value::String(v.format("%Y-%m-%dT%H:%M:%S%.f").to_string()))
-            .unwrap_or(Value::Null),
-        "DATE" => row
-            .try_get::<chrono::NaiveDate, _>(idx)
-            .map(|v| Value::String(v.to_string()))
-            .unwrap_or(Value::Null),
+        // Decode timestamp/date from raw bytes: sqlx's own decoder does
+        // `NaiveDateTime + Duration` which *panics* on out-of-range values
+        // (±infinity → i64::MAX/MIN, or year > 262143). With `panic = "abort"`
+        // in release that would kill the whole app, so we decode defensively.
+        "TIMESTAMPTZ" => decode_pg_timestamp(&raw, true),
+        "TIMESTAMP" => decode_pg_timestamp(&raw, false),
+        "DATE" => decode_pg_date(&raw),
         "TIME" => row
             .try_get::<chrono::NaiveTime, _>(idx)
             .map(|v| Value::String(v.to_string()))
@@ -671,6 +687,71 @@ fn decode_value(row: &sqlx::postgres::PgRow, idx: usize) -> Value {
 
 fn hex_encode(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn pg_epoch_datetime() -> chrono::NaiveDateTime {
+    chrono::NaiveDate::from_ymd_opt(2000, 1, 1)
+        .unwrap()
+        .and_hms_opt(0, 0, 0)
+        .unwrap()
+}
+
+/// Decode a PG `timestamp`/`timestamptz` without hitting sqlx's panicking
+/// `NaiveDateTime + Duration` path. Binary values are microseconds since the
+/// Postgres epoch (2000-01-01); i64::MAX/MIN are the ±infinity sentinels.
+fn decode_pg_timestamp(raw: &sqlx::postgres::PgValueRef<'_>, tz: bool) -> Value {
+    use sqlx::postgres::PgValueFormat;
+    match raw.format() {
+        PgValueFormat::Binary => {
+            let bytes = match raw.as_bytes() {
+                Ok(b) if b.len() == 8 => b,
+                _ => return Value::Null,
+            };
+            let us = i64::from_be_bytes(bytes.try_into().unwrap());
+            if us == i64::MAX {
+                return Value::String("infinity".into());
+            }
+            if us == i64::MIN {
+                return Value::String("-infinity".into());
+            }
+            match pg_epoch_datetime().checked_add_signed(chrono::Duration::microseconds(us)) {
+                Some(dt) => {
+                    let s = dt.format("%Y-%m-%dT%H:%M:%S%.f").to_string();
+                    Value::String(if tz { format!("{s}+00:00") } else { s })
+                }
+                None => Value::String(format!("<timestamp out of range: {us} µs since 2000-01-01>")),
+            }
+        }
+        PgValueFormat::Text => raw.as_str().map(|s| Value::String(s.to_string())).unwrap_or(Value::Null),
+    }
+}
+
+/// Decode a PG `date` safely (days since 2000-01-01; i32::MAX/MIN = ±infinity).
+fn decode_pg_date(raw: &sqlx::postgres::PgValueRef<'_>) -> Value {
+    use sqlx::postgres::PgValueFormat;
+    match raw.format() {
+        PgValueFormat::Binary => {
+            let bytes = match raw.as_bytes() {
+                Ok(b) if b.len() == 4 => b,
+                _ => return Value::Null,
+            };
+            let days = i32::from_be_bytes(bytes.try_into().unwrap());
+            if days == i32::MAX {
+                return Value::String("infinity".into());
+            }
+            if days == i32::MIN {
+                return Value::String("-infinity".into());
+            }
+            match pg_epoch_datetime()
+                .date()
+                .checked_add_signed(chrono::Duration::days(days as i64))
+            {
+                Some(d) => Value::String(d.to_string()),
+                None => Value::String(format!("<date out of range: {days} days since 2000-01-01>")),
+            }
+        }
+        PgValueFormat::Text => raw.as_str().map(|s| Value::String(s.to_string())).unwrap_or(Value::Null),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -708,17 +789,17 @@ fn map_exec_error(system: &str, sql: &str, e: &sqlx::Error) -> QueryError {
 
 fn hint_for_sqlstate(code: &str) -> Option<String> {
     let hint = match code {
-        "42P01" => "Bảng không tồn tại. Kiểm tra schema hiện tại hoặc tên bảng.",
-        "42703" => "Cột không tồn tại. Kiểm tra tên cột hoặc alias.",
-        "42601" => "Lỗi cú pháp SQL.",
-        "42883" => "Hàm không tồn tại hoặc sai kiểu tham số.",
-        "28P01" => "Sai mật khẩu hoặc user không có quyền đăng nhập.",
-        "3D000" => "Database không tồn tại.",
-        "23505" => "Vi phạm ràng buộc UNIQUE.",
-        "23503" => "Vi phạm ràng buộc khóa ngoại.",
-        "23502" => "Cột NOT NULL không được để trống.",
-        "40001" => "Xung đột serialization — thử lại transaction.",
-        "57014" => "Query đã bị hủy.",
+        "42P01" => "Table does not exist. Check the current schema or the table name.",
+        "42703" => "Column does not exist. Check the column name or alias.",
+        "42601" => "SQL syntax error.",
+        "42883" => "Function does not exist or has the wrong argument types.",
+        "28P01" => "Wrong password or the user cannot log in.",
+        "3D000" => "Database does not exist.",
+        "23505" => "UNIQUE constraint violation.",
+        "23503" => "Foreign key constraint violation.",
+        "23502" => "NOT NULL column cannot be empty.",
+        "40001" => "Serialization conflict — retry the transaction.",
+        "57014" => "Query was cancelled.",
         _ => return None,
     };
     Some(hint.to_string())

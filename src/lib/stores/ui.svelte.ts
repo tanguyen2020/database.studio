@@ -29,8 +29,9 @@ class UiStore {
   sidebarWidth = $state(278)
   connListHeight = $state(200)
   editorHeight = $state(320)
-  // Object Properties (right panel) — mặc định mở 264px như prototype (dòng 2295)
-  rightPanelOpen = $state(true)
+  // Object Properties (right panel) — hidden on startup; reopen via the edge
+  // handle / title-bar button. Width 264px when shown.
+  rightPanelOpen = $state(false)
   rightPanelWidth = $state(264)
   sizesLoaded = $state(false)
 
@@ -85,7 +86,8 @@ class UiStore {
         if (parsed.connListHeight > 100) this.connListHeight = parsed.connListHeight
         if (parsed.editorHeight > 100) this.editorHeight = parsed.editorHeight
         if (parsed.rightPanelWidth > 150) this.rightPanelWidth = parsed.rightPanelWidth
-        if (typeof parsed.rightPanelOpen === 'boolean') this.rightPanelOpen = parsed.rightPanelOpen
+        // rightPanelOpen intentionally NOT restored — the Properties panel always
+        // starts hidden on app open; the user reopens it via the edge handle.
       }
     } catch {
       // defaults are fine

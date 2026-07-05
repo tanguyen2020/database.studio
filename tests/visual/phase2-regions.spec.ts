@@ -35,6 +35,11 @@ test('chụp vùng prototype (baseline) + app rồi so pixel', async ({ page }) 
   await grab(page, 'workspace', 'proto')
 
   await openApp(page)
+  // The Properties panel is hidden on startup (AUDIT-2 item 4); the prototype
+  // baseline shows it, so open it here to keep the chrome-region comparison
+  // apples-to-apples (its right edge shares the tab-bar / status-bar rows).
+  await page.getByTitle('Show Properties panel').first().click()
+  await page.waitForTimeout(200)
   await grab(page, 'workspace', 'app')
 
   // so từng vùng bằng pixelmatch qua toHaveScreenshot không dùng được cho

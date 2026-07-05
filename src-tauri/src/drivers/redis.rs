@@ -54,14 +54,14 @@ impl RedisDriver {
         // CA tùy chọn cho self-signed rediss → build_with_tls; còn lại webpki roots.
         if p.ssl && !p.ssl_ca.is_empty() {
             let ca = std::fs::read(&p.ssl_ca)
-                .map_err(|e| err(format!("Không đọc được CA cert: {}", p.ssl_ca), e))?;
+                .map_err(|e| err(format!("Failed to read CA cert: {}", p.ssl_ca), e))?;
             redis::Client::build_with_tls(
                 info,
                 redis::TlsCertificates { client_tls: None, root_cert: Some(ca) },
             )
-            .map_err(|e| err("Cấu hình TLS Redis lỗi", e))
+            .map_err(|e| err("Redis TLS configuration error", e))
         } else {
-            redis::Client::open(info).map_err(|e| err("Redis connection info lỗi", e))
+            redis::Client::open(info).map_err(|e| err("Redis connection info error", e))
         }
     }
 
@@ -69,7 +69,7 @@ impl RedisDriver {
         Self::client(p)?
             .get_multiplexed_async_connection()
             .await
-            .map_err(|e| err(format!("Không kết nối được Redis {}:{}", p.host, p.port), e))
+            .map_err(|e| err(format!("Failed to connect to Redis {}:{}", p.host, p.port), e))
     }
 
     /// Mở connection PUB/SUB riêng (redis pub/sub chiếm trọn 1 connection).
@@ -77,7 +77,7 @@ impl RedisDriver {
         Self::client(p)?
             .get_async_pubsub()
             .await
-            .map_err(|e| err("Không mở được Redis pub/sub", e))
+            .map_err(|e| err("Failed to open Redis pub/sub", e))
     }
 
     /// PUBLISH channel message → số subscriber nhận.
@@ -87,7 +87,7 @@ impl RedisDriver {
             .arg(message)
             .query_async(&mut self.conn)
             .await
-            .map_err(|e| err("PUBLISH lỗi", e))
+            .map_err(|e| err("PUBLISH error", e))
     }
 
     pub async fn connect(p: &RedisConnParams) -> Result<Self, QueryError> {
@@ -96,7 +96,7 @@ impl RedisDriver {
         let _: String = redis::cmd("PING")
             .query_async(&mut conn)
             .await
-            .map_err(|e| err("Redis PING thất bại (sai password?)", e))?;
+            .map_err(|e| err("Redis PING failed (wrong password?)", e))?;
         Ok(Self { conn })
     }
 
@@ -138,7 +138,7 @@ impl RedisDriver {
         redis::cmd("DBSIZE")
             .query_async(&mut self.conn)
             .await
-            .map_err(|e| err("DBSIZE lỗi", e))
+            .map_err(|e| err("DBSIZE error", e))
     }
 
     /// SCAN cursor-based (KHÔNG dùng KEYS *) + TYPE + TTL cho từng key.
@@ -158,7 +158,7 @@ impl RedisDriver {
             .arg(count.max(1))
             .query_async(&mut self.conn)
             .await
-            .map_err(|e| err("SCAN lỗi", e))?;
+            .map_err(|e| err("SCAN error", e))?;
 
         let mut keys = Vec::with_capacity(names.len());
         for name in names {
@@ -180,27 +180,27 @@ impl RedisDriver {
             .arg(key)
             .query_async(&mut self.conn)
             .await
-            .map_err(|e| err("TYPE lỗi", e))?;
+            .map_err(|e| err("TYPE error", e))?;
         let ttl: i64 = redis::cmd("TTL").arg(key).query_async(&mut self.conn).await.unwrap_or(-1);
 
         let value = match key_type.as_str() {
             "string" => RedisValue::String {
-                value: redis::cmd("GET").arg(key).query_async(&mut self.conn).await.map_err(|e| err("GET lỗi", e))?,
+                value: redis::cmd("GET").arg(key).query_async(&mut self.conn).await.map_err(|e| err("GET error", e))?,
             },
             "hash" => RedisValue::Hash {
-                fields: redis::cmd("HGETALL").arg(key).query_async(&mut self.conn).await.map_err(|e| err("HGETALL lỗi", e))?,
+                fields: redis::cmd("HGETALL").arg(key).query_async(&mut self.conn).await.map_err(|e| err("HGETALL error", e))?,
             },
             "list" => RedisValue::List {
-                items: redis::cmd("LRANGE").arg(key).arg(0).arg(-1).query_async(&mut self.conn).await.map_err(|e| err("LRANGE lỗi", e))?,
+                items: redis::cmd("LRANGE").arg(key).arg(0).arg(-1).query_async(&mut self.conn).await.map_err(|e| err("LRANGE error", e))?,
             },
             "set" => RedisValue::Set {
-                members: redis::cmd("SMEMBERS").arg(key).query_async(&mut self.conn).await.map_err(|e| err("SMEMBERS lỗi", e))?,
+                members: redis::cmd("SMEMBERS").arg(key).query_async(&mut self.conn).await.map_err(|e| err("SMEMBERS error", e))?,
             },
             "zset" => {
                 // ZRANGE … WITHSCORES → [member, score, member, score, …]
                 let flat: Vec<String> = redis::cmd("ZRANGE")
                     .arg(key).arg(0).arg(-1).arg("WITHSCORES")
-                    .query_async(&mut self.conn).await.map_err(|e| err("ZRANGE lỗi", e))?;
+                    .query_async(&mut self.conn).await.map_err(|e| err("ZRANGE error", e))?;
                 let mut members = Vec::new();
                 let mut it = flat.into_iter();
                 while let (Some(m), Some(s)) = (it.next(), it.next()) {
@@ -211,7 +211,7 @@ impl RedisDriver {
             "stream" => {
                 let raw: redis::Value = redis::cmd("XRANGE")
                     .arg(key).arg("-").arg("+")
-                    .query_async(&mut self.conn).await.map_err(|e| err("XRANGE lỗi", e))?;
+                    .query_async(&mut self.conn).await.map_err(|e| err("XRANGE error", e))?;
                 RedisValue::Stream { entries: parse_stream(&raw) }
             }
             _ => RedisValue::None,
@@ -221,7 +221,7 @@ impl RedisDriver {
 
     /// Xóa key (DEL) — trả số key đã xóa (0/1).
     pub async fn del(&mut self, key: &str) -> Result<u64, QueryError> {
-        redis::cmd("DEL").arg(key).query_async(&mut self.conn).await.map_err(|e| err("DEL lỗi", e))
+        redis::cmd("DEL").arg(key).query_async(&mut self.conn).await.map_err(|e| err("DEL error", e))
     }
 
     /// Sửa giá trị theo op (per-type). Chạy đúng lệnh Redis tương ứng.
@@ -229,34 +229,34 @@ impl RedisDriver {
         let c = &mut self.conn;
         match op {
             RedisEditOp::SetString { value } => {
-                let _: () = redis::cmd("SET").arg(key).arg(value).query_async(c).await.map_err(|e| err("SET lỗi", e))?;
+                let _: () = redis::cmd("SET").arg(key).arg(value).query_async(c).await.map_err(|e| err("SET error", e))?;
             }
             RedisEditOp::HSet { field, value } => {
-                let _: i64 = redis::cmd("HSET").arg(key).arg(field).arg(value).query_async(c).await.map_err(|e| err("HSET lỗi", e))?;
+                let _: i64 = redis::cmd("HSET").arg(key).arg(field).arg(value).query_async(c).await.map_err(|e| err("HSET error", e))?;
             }
             RedisEditOp::HDel { field } => {
-                let _: i64 = redis::cmd("HDEL").arg(key).arg(field).query_async(c).await.map_err(|e| err("HDEL lỗi", e))?;
+                let _: i64 = redis::cmd("HDEL").arg(key).arg(field).query_async(c).await.map_err(|e| err("HDEL error", e))?;
             }
             RedisEditOp::RPush { value } => {
-                let _: i64 = redis::cmd("RPUSH").arg(key).arg(value).query_async(c).await.map_err(|e| err("RPUSH lỗi", e))?;
+                let _: i64 = redis::cmd("RPUSH").arg(key).arg(value).query_async(c).await.map_err(|e| err("RPUSH error", e))?;
             }
             RedisEditOp::LSet { index, value } => {
-                let _: () = redis::cmd("LSET").arg(key).arg(index).arg(value).query_async(c).await.map_err(|e| err("LSET lỗi", e))?;
+                let _: () = redis::cmd("LSET").arg(key).arg(index).arg(value).query_async(c).await.map_err(|e| err("LSET error", e))?;
             }
             RedisEditOp::LRem { value } => {
-                let _: i64 = redis::cmd("LREM").arg(key).arg(0).arg(value).query_async(c).await.map_err(|e| err("LREM lỗi", e))?;
+                let _: i64 = redis::cmd("LREM").arg(key).arg(0).arg(value).query_async(c).await.map_err(|e| err("LREM error", e))?;
             }
             RedisEditOp::SAdd { member } => {
-                let _: i64 = redis::cmd("SADD").arg(key).arg(member).query_async(c).await.map_err(|e| err("SADD lỗi", e))?;
+                let _: i64 = redis::cmd("SADD").arg(key).arg(member).query_async(c).await.map_err(|e| err("SADD error", e))?;
             }
             RedisEditOp::SRem { member } => {
-                let _: i64 = redis::cmd("SREM").arg(key).arg(member).query_async(c).await.map_err(|e| err("SREM lỗi", e))?;
+                let _: i64 = redis::cmd("SREM").arg(key).arg(member).query_async(c).await.map_err(|e| err("SREM error", e))?;
             }
             RedisEditOp::ZAdd { member, score } => {
-                let _: i64 = redis::cmd("ZADD").arg(key).arg(score).arg(member).query_async(c).await.map_err(|e| err("ZADD lỗi", e))?;
+                let _: i64 = redis::cmd("ZADD").arg(key).arg(score).arg(member).query_async(c).await.map_err(|e| err("ZADD error", e))?;
             }
             RedisEditOp::ZRem { member } => {
-                let _: i64 = redis::cmd("ZREM").arg(key).arg(member).query_async(c).await.map_err(|e| err("ZREM lỗi", e))?;
+                let _: i64 = redis::cmd("ZREM").arg(key).arg(member).query_async(c).await.map_err(|e| err("ZREM error", e))?;
             }
             RedisEditOp::XAdd { fields } => {
                 let mut cmd = redis::cmd("XADD");
@@ -264,10 +264,10 @@ impl RedisDriver {
                 for (f, v) in fields {
                     cmd.arg(f).arg(v);
                 }
-                let _: String = cmd.query_async(c).await.map_err(|e| err("XADD lỗi", e))?;
+                let _: String = cmd.query_async(c).await.map_err(|e| err("XADD error", e))?;
             }
             RedisEditOp::XDel { id } => {
-                let _: i64 = redis::cmd("XDEL").arg(key).arg(id).query_async(c).await.map_err(|e| err("XDEL lỗi", e))?;
+                let _: i64 = redis::cmd("XDEL").arg(key).arg(id).query_async(c).await.map_err(|e| err("XDEL error", e))?;
             }
         }
         Ok(())
@@ -276,7 +276,7 @@ impl RedisDriver {
     /// CLI console: chạy 1 lệnh Redis thô (args đã tách) → RESP format text.
     pub async fn command(&mut self, args: &[String]) -> Result<String, QueryError> {
         let Some(name) = args.first() else {
-            return Err(err("Lệnh rỗng", "empty command"));
+            return Err(err("Empty command", "empty command"));
         };
         let mut cmd = redis::cmd(name);
         for a in &args[1..] {
@@ -285,7 +285,7 @@ impl RedisDriver {
         let v: redis::Value = cmd
             .query_async(&mut self.conn)
             .await
-            .map_err(|e| err(format!("{} lỗi", name.to_uppercase()), e))?;
+            .map_err(|e| err(format!("{} error", name.to_uppercase()), e))?;
         Ok(format_resp(&v))
     }
 
@@ -296,7 +296,7 @@ impl RedisDriver {
             .arg(key)
             .query_async(&mut self.conn)
             .await
-            .map_err(|e| err("MEMORY USAGE lỗi", e))
+            .map_err(|e| err("MEMORY USAGE error", e))
     }
 
     /// FLUSHDB — xóa toàn bộ DB hiện tại.
@@ -304,16 +304,16 @@ impl RedisDriver {
         let _: () = redis::cmd("FLUSHDB")
             .query_async(&mut self.conn)
             .await
-            .map_err(|e| err("FLUSHDB lỗi", e))?;
+            .map_err(|e| err("FLUSHDB error", e))?;
         Ok(())
     }
 
     /// Đặt TTL: secs > 0 → EXPIRE; secs <= 0 → PERSIST (bỏ hết hạn).
     pub async fn set_ttl(&mut self, key: &str, secs: i64) -> Result<(), QueryError> {
         if secs > 0 {
-            let _: i64 = redis::cmd("EXPIRE").arg(key).arg(secs).query_async(&mut self.conn).await.map_err(|e| err("EXPIRE lỗi", e))?;
+            let _: i64 = redis::cmd("EXPIRE").arg(key).arg(secs).query_async(&mut self.conn).await.map_err(|e| err("EXPIRE error", e))?;
         } else {
-            let _: i64 = redis::cmd("PERSIST").arg(key).query_async(&mut self.conn).await.map_err(|e| err("PERSIST lỗi", e))?;
+            let _: i64 = redis::cmd("PERSIST").arg(key).query_async(&mut self.conn).await.map_err(|e| err("PERSIST error", e))?;
         }
         Ok(())
     }

@@ -49,10 +49,10 @@ const SYSTEM: &str = "clickhouse";
 
 fn hint_for(code: Option<&str>) -> Option<String> {
     match code {
-        Some("60") => Some("Bảng không tồn tại. Kiểm tra database hiện tại hoặc tên bảng.".into()),
-        Some("81") => Some("Database không tồn tại.".into()),
-        Some("62") => Some("Lỗi cú pháp ClickHouse. Lưu ý: không có OFFSET kiểu SQL, UPDATE/DELETE phải là ALTER TABLE.".into()),
-        Some("516") => Some("Sai user hoặc password.".into()),
+        Some("60") => Some("Table does not exist. Check the current database or the table name.".into()),
+        Some("81") => Some("Database does not exist.".into()),
+        Some("62") => Some("ClickHouse syntax error. Note: no SQL-style OFFSET; UPDATE/DELETE must be ALTER TABLE.".into()),
+        Some("516") => Some("Wrong user or password.".into()),
         _ => None,
     }
 }
@@ -101,7 +101,7 @@ impl ChDriver {
             .body(sql.to_string())
             .send()
             .await
-            .map_err(|e| QueryError::new(SYSTEM, format!("Không kết nối được ClickHouse: {e}"), e.to_string()))?;
+            .map_err(|e| QueryError::new(SYSTEM, format!("Failed to connect to ClickHouse: {e}"), e.to_string()))?;
 
         let status = res.status().as_u16();
         let summary = res
@@ -112,7 +112,7 @@ impl ChDriver {
         let body = res
             .text()
             .await
-            .map_err(|e| QueryError::new(SYSTEM, format!("Lỗi đọc response: {e}"), e.to_string()))?;
+            .map_err(|e| QueryError::new(SYSTEM, format!("Failed to read response: {e}"), e.to_string()))?;
         if status != 200 {
             return Err(parse_ch_error(status, &body));
         }
@@ -174,7 +174,7 @@ impl ChDriver {
             return Ok(StatementOutcome::Ok);
         }
         let parsed: ChJsonBody = serde_json::from_str(&body)
-            .map_err(|e| QueryError::new(SYSTEM, format!("Không parse được JSON từ ClickHouse: {e}"), body.clone()))?;
+            .map_err(|e| QueryError::new(SYSTEM, format!("Failed to parse JSON from ClickHouse: {e}"), body.clone()))?;
         Ok(StatementOutcome::Rows {
             result: QueryResultSet {
                 cols: parsed.meta.into_iter().map(|m| (m.name, m.ty)).collect(),
@@ -329,7 +329,7 @@ impl ChDriver {
         let r = parsed
             .data
             .first()
-            .ok_or_else(|| QueryError::new(SYSTEM, format!("Bảng {schema}.{table} không tồn tại"), "not found"))?;
+            .ok_or_else(|| QueryError::new(SYSTEM, format!("Table {schema}.{table} does not exist"), "not found"))?;
         let create_sql = r["create_table_query"].as_str().unwrap_or("").to_string();
         let engine_full = r["engine_full"].as_str().unwrap_or("").to_string();
         Ok(ChTableMeta {
@@ -404,10 +404,10 @@ pub fn parse_ttl(create_sql: &str) -> Vec<TtlRule> {
                 ("DELETE".to_string(), seg.to_string())
             };
             let human = match action.as_str() {
-                "DELETE" => format!("Xóa dữ liệu khi: {expr}"),
-                "MOVE" => format!("Chuyển part sang disk/volume khi: {expr} ({})", extract_tail(seg)),
-                "GROUP BY" => format!("Rollup (GROUP BY) khi: {expr}"),
-                "RECOMPRESS" => format!("Nén lại khi: {expr}"),
+                "DELETE" => format!("Delete data when: {expr}"),
+                "MOVE" => format!("Move part to disk/volume when: {expr} ({})", extract_tail(seg)),
+                "GROUP BY" => format!("Rollup (GROUP BY) when: {expr}"),
+                "RECOMPRESS" => format!("Recompress when: {expr}"),
                 _ => expr.clone(),
             };
             TtlRule { expr, action, human }

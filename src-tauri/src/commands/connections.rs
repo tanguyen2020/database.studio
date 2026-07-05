@@ -155,6 +155,47 @@ pub async fn quick_connect(
     Ok(ProfilePublic::from_profile(profile, true, Some(latency)))
 }
 
+/// Open another database on the *same* server as its own ephemeral connection.
+/// Postgres binds one database per connection, so browsing a different database
+/// means a fresh connection. Reuses the source connection's host/credentials
+/// (resolved from storage for saved connections, else the live registry entry)
+/// so the frontend never needs the password.
+#[tauri::command]
+pub async fn open_database(
+    state: State<'_, AppState>,
+    conn_id: String,
+    database: String,
+) -> Result<ProfilePublic, AppError> {
+    let (mut profile, password, ssh_password) = match state.storage.get_connection(&conn_id) {
+        Ok(p) => {
+            let pw = crypto::decrypt(&p.password_enc)?;
+            let sshpw = crypto::decrypt(&p.ssh.password_enc)?;
+            (p, pw, sshpw)
+        }
+        // Ephemeral / already-opened database: pull the profile + password from
+        // the live registry (SSH password isn't retained → empty, fine for TCP).
+        Err(_) => {
+            let (p, pw) = state.registry.live_credentials(&conn_id)?;
+            (p, pw, String::new())
+        }
+    };
+    if profile.system != crate::drivers::types::SystemType::Postgres {
+        return Err(AppError::Driver(
+            "Opening another database is only supported for PostgreSQL".into(),
+        ));
+    }
+    // Keep the base name stable across hops (strip a prior " · db" suffix).
+    let base_name = profile.name.split(" · ").next().unwrap_or(&profile.name).to_string();
+    profile.id = format!("quick-{}", Uuid::new_v4());
+    profile.database = database.clone();
+    profile.name = format!("{base_name} · {database}");
+    let latency = state
+        .registry
+        .connect(profile.clone(), password, ssh_password)
+        .await?;
+    Ok(ProfilePublic::from_profile(profile, true, Some(latency)))
+}
+
 /// Timeout kết nối mặc định cho Test (T10). Mọi Test phải trả kết quả rõ ràng
 /// trong khoảng này thay vì treo theo OS TCP timeout.
 pub const CONNECT_TIMEOUT_SECS: u64 = 10;

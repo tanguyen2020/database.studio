@@ -83,7 +83,7 @@ pub fn suggest_missing_pg(stats: &[TableScanStat]) -> Vec<MissingIndexSuggestion
             table: s.table.clone(),
             columns: Vec::new(),
             reason: format!(
-                "{} seq scan (idx scan {}), đọc TB {} rows/scan trên ~{} rows — cân nhắc thêm index vào cột lọc",
+                "{} seq scans ({} index scans), avg {} rows/scan read over ~{} rows — consider adding an index on the filter column",
                 s.seq_scan,
                 s.idx_scan,
                 s.seq_tup_read / s.seq_scan.max(1),

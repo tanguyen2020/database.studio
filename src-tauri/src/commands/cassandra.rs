@@ -11,7 +11,7 @@ use crate::error::{AppError, QueryError};
 use crate::state::AppState;
 
 fn not_cassandra() -> QueryError {
-    QueryError::new("cassandra", "Connection không phải Cassandra", "not a cassandra connection")
+    QueryError::new("cassandra", "Connection is not Cassandra", "not a cassandra connection")
 }
 
 /// Kết quả execute CQL — giống contract của SQL editor + paging token & warnings.

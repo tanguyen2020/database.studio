@@ -582,19 +582,19 @@ fn clean_message(raw: &str) -> String {
 fn hint_for(raw: &str) -> Option<String> {
     let lower = raw.to_lowercase();
     let hint = if lower.contains("no such table") {
-        "Bảng không tồn tại trong file này. Kiểm tra tên bảng hoặc schema (main/attached)."
+        "Table does not exist in this file. Check the table name or schema (main/attached)."
     } else if lower.contains("no such column") {
-        "Cột không tồn tại. Kiểm tra tên cột."
+        "Column does not exist. Check the column name."
     } else if lower.contains("syntax error") {
-        "Lỗi cú pháp SQLite."
+        "SQLite syntax error."
     } else if lower.contains("readonly") || lower.contains("read-only") {
-        "Database đang mở ở chế độ Read-Only — đổi mode trong connection để ghi."
+        "Database is open in Read-Only mode — change the connection mode to write."
     } else if lower.contains("unique constraint") {
-        "Vi phạm ràng buộc UNIQUE."
+        "UNIQUE constraint violation."
     } else if lower.contains("foreign key constraint") {
-        "Vi phạm ràng buộc khóa ngoại."
+        "Foreign key constraint violation."
     } else if lower.contains("database is locked") {
-        "File đang bị process khác giữ khóa. Đóng ứng dụng khác đang mở file này."
+        "File is locked by another process. Close the other app that has this file open."
     } else {
         return None;
     };
@@ -693,12 +693,12 @@ impl SqliteDriver {
             .iter()
             .find(|(k, _)| *k == key)
             .ok_or_else(|| {
-                QueryError::new("sqlite", format!("PRAGMA '{key}' không được phép sửa từ panel"), "")
+                QueryError::new("sqlite", format!("PRAGMA '{key}' cannot be changed from the panel"), "")
             })?;
         if !allowed.1.contains(&value.as_str()) {
             return Err(QueryError::new(
                 "sqlite",
-                format!("Giá trị '{value}' không hợp lệ cho PRAGMA {key}"),
+                format!("Value '{value}' is not valid for PRAGMA {key}"),
                 "",
             ));
         }

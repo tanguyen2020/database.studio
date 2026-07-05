@@ -78,7 +78,7 @@ pub fn consistency_from_str(name: &str) -> Consistency {
 }
 
 fn new_session_err(e: NewSessionError) -> QueryError {
-    QueryError::new("cassandra", format!("Kết nối Cassandra thất bại: {e}"), format!("{e}"))
+    QueryError::new("cassandra", format!("Cassandra connection failed: {e}"), format!("{e}"))
 }
 
 /// Map a driver execution error to the locked `QueryError`. CQL errors are
@@ -87,15 +87,15 @@ pub fn map_exec_err(e: ExecutionError) -> QueryError {
     let raw = format!("{e}");
     // Surface the most useful Cassandra category in the user message.
     let friendly = if raw.contains("ALLOW FILTERING") {
-        format!("Query cần ALLOW FILTERING (quét toàn cluster): {raw}")
+        format!("Query requires ALLOW FILTERING (full cluster scan): {raw}")
     } else if raw.to_ascii_lowercase().contains("unauthorized") {
-        format!("Không đủ quyền: {raw}")
+        format!("Insufficient permissions: {raw}")
     } else if raw.to_ascii_lowercase().contains("syntax") {
-        format!("Lỗi cú pháp CQL: {raw}")
+        format!("CQL syntax error: {raw}")
     } else if raw.to_ascii_lowercase().contains("invalid") {
-        format!("Yêu cầu không hợp lệ: {raw}")
+        format!("Invalid request: {raw}")
     } else if raw.to_ascii_lowercase().contains("timeout") {
-        format!("Hết thời gian chờ (read/write timeout): {raw}")
+        format!("Timed out (read/write timeout): {raw}")
     } else {
         raw.clone()
     };
@@ -111,7 +111,7 @@ fn build_tls(_ssl_ca: &str) -> Arc<rustls::ClientConfig> {
         rustls::crypto::ring::default_provider(),
     ))
     .with_safe_default_protocol_versions()
-    .expect("rustls ring provider hỗ trợ protocol mặc định")
+    .expect("rustls ring provider supports the default protocol versions")
     .dangerous()
     .with_custom_certificate_verifier(Arc::new(danger::NoVerifier))
     .with_no_client_auth();
@@ -194,7 +194,7 @@ impl CassandraDriver {
     ) -> Result<Self, QueryError> {
         let addr: std::net::SocketAddr = format!("{host}:{port}")
             .parse()
-            .map_err(|e| QueryError::new("cassandra", "Địa chỉ dịch không hợp lệ", format!("{e}")))?;
+            .map_err(|e| QueryError::new("cassandra", "Invalid translated address", format!("{e}")))?;
         let translator = std::sync::Arc::new(ForceTranslator(addr))
             as std::sync::Arc<dyn scylla::policies::address_translator::AddressTranslator>;
         let session = Self::build_session_with(params, Some(translator))
@@ -265,7 +265,7 @@ impl CassandraDriver {
                 use base64::Engine;
                 let bytes = base64::engine::general_purpose::STANDARD
                     .decode(tok)
-                    .map_err(|e| QueryError::new("cassandra", "Paging token hỏng", format!("{e}")))?;
+                    .map_err(|e| QueryError::new("cassandra", "Corrupt paging token", format!("{e}")))?;
                 PagingState::new_from_raw_bytes(bytes)
             }
             _ => PagingState::start(),
@@ -289,7 +289,7 @@ impl CassandraDriver {
         }
 
         let rows_result = result.into_rows_result().map_err(|e| {
-            QueryError::new("cassandra", "Không đọc được result set", format!("{e}"))
+            QueryError::new("cassandra", "Failed to read result set", format!("{e}"))
         })?;
 
         let cols: Vec<ColumnDef> = rows_result
@@ -302,10 +302,10 @@ impl CassandraDriver {
         let mut rows: Vec<Value> = Vec::with_capacity(rows_result.rows_num());
         for row in rows_result
             .rows::<scylla::value::Row>()
-            .map_err(|e| QueryError::new("cassandra", "Giải mã row lỗi", format!("{e}")))?
+            .map_err(|e| QueryError::new("cassandra", "Failed to decode row", format!("{e}")))?
         {
             let row = row.map_err(|e| {
-                QueryError::new("cassandra", "Giải mã row lỗi", format!("{e}"))
+                QueryError::new("cassandra", "Failed to decode row", format!("{e}"))
             })?;
             let mut obj = Map::new();
             for (i, cell) in row.columns.into_iter().enumerate() {
@@ -522,14 +522,14 @@ impl CassandraDriver {
             .await
             .map_err(map_exec_err)?
             .into_rows_result()
-            .map_err(|e| QueryError::new("cassandra", "Không đọc được metadata", format!("{e}")))?;
+            .map_err(|e| QueryError::new("cassandra", "Failed to read metadata", format!("{e}")))?;
         let mut out = Vec::with_capacity(res.rows_num());
         for row in res
             .rows::<T>()
-            .map_err(|e| QueryError::new("cassandra", "Giải mã metadata lỗi", format!("{e}")))?
+            .map_err(|e| QueryError::new("cassandra", "Failed to decode metadata", format!("{e}")))?
         {
             out.push(row.map_err(|e| {
-                QueryError::new("cassandra", "Giải mã metadata lỗi", format!("{e}"))
+                QueryError::new("cassandra", "Failed to decode metadata", format!("{e}"))
             })?);
         }
         Ok(out)
@@ -783,7 +783,7 @@ impl CassandraDriver {
         if cols.is_empty() {
             return Err(QueryError::new(
                 "cassandra",
-                format!("Table {keyspace}.{table} không tồn tại"),
+                format!("Table {keyspace}.{table} does not exist"),
                 "table not found",
             ));
         }

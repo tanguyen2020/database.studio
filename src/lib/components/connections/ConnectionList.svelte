@@ -58,9 +58,9 @@
   const selConn = $derived(connections.byId(connections.selectedId ?? ''))
   // selRel: dòng 4643 chỉ liệt kê pg/mysql/mssql/clickhouse — mâu thuẫn với tab
   // dispatch dòng 2731 (có mariadb/sqlite) và README; theo dispatch + README.
-  const selRel = $derived(
-    !!selConn && ['postgres', 'mysql', 'mariadb', 'mssql', 'clickhouse', 'sqlite'].includes(selConn.system),
-  )
+  const REL_SYSTEMS = ['postgres', 'mysql', 'mariadb', 'mssql', 'clickhouse', 'sqlite']
+  const isRelational = (system: string) => REL_SYSTEMS.includes(system)
+  const selRel = $derived(!!selConn && isRelational(selConn.system))
 
   function toggleGroup(system: string) {
     const next = new Set(collapsed)
@@ -235,6 +235,10 @@
       {/if}
       <ContextMenu.Item onclick={() => testConn(p)}>Test Connection</ContextMenu.Item>
       <ContextMenu.Item onclick={() => copyConnString(p)}>Copy Connection String</ContextMenu.Item>
+      {#if isRelational(p.system)}
+        <ContextMenu.Separator />
+        <ContextMenu.Item onclick={() => tabs.openSchemaCompare(p.id)}>Compare Schemas…</ContextMenu.Item>
+      {/if}
       <ContextMenu.Separator />
       {#if p.ephemeral}
         <ContextMenu.Item class="text-error data-highlighted:text-error" onclick={() => connections.remove(p.id)}>
@@ -276,7 +280,7 @@
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><rect x="3" y="3.5" width="7.5" height="6.5" rx="1"></rect><rect x="13.5" y="3.5" width="7.5" height="6.5" rx="1"></rect><rect x="8" y="14" width="8" height="6.5" rx="1"></rect><path d="M10.5 6.7h3M12 10v4" stroke-linecap="round"></path></svg>
     </span>
     <span class="tbtn" onclick={() => selRel && phase5('Generate scripts')} onkeydown={(e) => e.key === 'Enter' && selRel && phase5('Generate scripts')} role="button" tabindex="0" title="DDL / Generate scripts" style="width:auto;cursor:{selRel ? 'pointer' : 'not-allowed'};opacity:{selRel ? 1 : 0.35};font-size:var(--px-10);font-weight:700;letter-spacing:.03em;padding:0 var(--px-6)">DDL</span>
-    <span class="tbtn" onclick={() => selRel && phase5('Compare databases')} onkeydown={(e) => e.key === 'Enter' && selRel && phase5('Compare databases')} role="button" tabindex="0" title="Compare databases" style="cursor:{selRel ? 'pointer' : 'not-allowed'};opacity:{selRel ? 1 : 0.35}">
+    <span class="tbtn" onclick={() => selRel && tabs.openSchemaCompare(selConn?.id ?? null)} onkeydown={(e) => e.key === 'Enter' && selRel && tabs.openSchemaCompare(selConn?.id ?? null)} role="button" tabindex="0" title="Compare schemas" style="cursor:{selRel ? 'pointer' : 'not-allowed'};opacity:{selRel ? 1 : 0.35}">
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 8h13l-3-3M5 8l3 3"></path><path d="M19 16H6l3 3M19 16l-3-3"></path></svg>
     </span>
     <span class="tbtn" onclick={toggleFilter} onkeydown={(e) => e.key === 'Enter' && toggleFilter()} role="button" tabindex="0" title="Filter connections" style="cursor:pointer;background:{filterOpen ? 'var(--hover)' : 'transparent'}">

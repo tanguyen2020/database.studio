@@ -132,7 +132,7 @@ fn ast_lints(system: &str, sql: &str, ast: &[Statement]) -> Vec<LintDiagnostic> 
                         sql, m, 6,
                         LintSeverity::Warning,
                         "danger.update_without_where",
-                        "UPDATE không có WHERE — sẽ sửa TOÀN BỘ bảng",
+                        "UPDATE without WHERE — this will modify the ENTIRE table",
                         None,
                     ));
                 }
@@ -143,7 +143,7 @@ fn ast_lints(system: &str, sql: &str, ast: &[Statement]) -> Vec<LintDiagnostic> 
                         sql, m, 6,
                         LintSeverity::Warning,
                         "danger.delete_without_where",
-                        "DELETE không có WHERE — sẽ xóa TOÀN BỘ bảng",
+                        "DELETE without WHERE — this will delete the ENTIRE table",
                         None,
                     ));
                 }
@@ -172,7 +172,7 @@ fn ast_lints(system: &str, sql: &str, ast: &[Statement]) -> Vec<LintDiagnostic> 
                                                     LintSeverity::Warning,
                                                     "mysql.only_full_group_by",
                                                     &format!(
-                                                        "Cột `{name}` không nằm trong GROUP BY — lỗi với ONLY_FULL_GROUP_BY"
+                                                        "Column `{name}` is not in GROUP BY — invalid under ONLY_FULL_GROUP_BY"
                                                     ),
                                                     None,
                                                 ));
@@ -223,7 +223,7 @@ fn rule_pack_lints(system: &str, sql: &str) -> Vec<LintDiagnostic> {
         r"(?i)\bTRUNCATE\s+TABLE\b|\bTRUNCATE\b",
         LintSeverity::Warning,
         "danger.truncate",
-        "TRUNCATE xóa toàn bộ dữ liệu bảng — cần xác nhận khi chạy",
+        "TRUNCATE removes all table data — requires confirmation to run",
         None,
     );
     push_all(
@@ -231,7 +231,7 @@ fn rule_pack_lints(system: &str, sql: &str) -> Vec<LintDiagnostic> {
         r"(?i)\bDROP\s+(TABLE|DATABASE|SCHEMA|VIEW|INDEX)\b",
         LintSeverity::Warning,
         "danger.drop",
-        "DROP là thao tác không hoàn tác — cần xác nhận khi chạy",
+        "DROP is irreversible — requires confirmation to run",
         None,
     );
 
@@ -243,8 +243,8 @@ fn rule_pack_lints(system: &str, sql: &str) -> Vec<LintDiagnostic> {
                         sql, m, 1,
                         LintSeverity::Warning,
                         "pg.backtick_ident",
-                        "PostgreSQL dùng \"…\" cho định danh, không phải backtick",
-                        Some("Thay ` bằng \""),
+                        "PostgreSQL uses \"…\" for identifiers, not backticks",
+                        Some("Replace ` with \""),
                     ));
                 }
             }
@@ -255,7 +255,7 @@ fn rule_pack_lints(system: &str, sql: &str) -> Vec<LintDiagnostic> {
                 r"(?i)\bLIMIT\s+\d+",
                 LintSeverity::Warning,
                 "mssql.limit_to_top",
-                "SQL Server không có LIMIT — dùng TOP n (hoặc OFFSET…FETCH)",
+                "SQL Server has no LIMIT — use TOP n (or OFFSET…FETCH)",
                 Some("SELECT TOP n …"),
             );
         }
@@ -265,7 +265,7 @@ fn rule_pack_lints(system: &str, sql: &str) -> Vec<LintDiagnostic> {
                 r"(?i)\b(RIGHT|FULL)\s+(OUTER\s+)?JOIN\b",
                 LintSeverity::Warning,
                 "sqlite.right_full_join",
-                "SQLite bản cũ (<3.39) không hỗ trợ RIGHT/FULL JOIN",
+                "Older SQLite (<3.39) does not support RIGHT/FULL JOIN",
                 None,
             );
         }
@@ -275,7 +275,7 @@ fn rule_pack_lints(system: &str, sql: &str) -> Vec<LintDiagnostic> {
                 r"(?i)\bOFFSET\s+\d+",
                 LintSeverity::Warning,
                 "ch.no_offset",
-                "ClickHouse không dùng OFFSET kiểu SQL — dùng LIMIT n, m hoặc paging",
+                "ClickHouse does not use SQL-style OFFSET — use LIMIT n, m or paging",
                 None,
             );
             push_all(
@@ -283,23 +283,23 @@ fn rule_pack_lints(system: &str, sql: &str) -> Vec<LintDiagnostic> {
                 r"(?i)^\s*UPDATE\b",
                 LintSeverity::Warning,
                 "ch.update_is_mutation",
-                "ClickHouse: UPDATE phải là `ALTER TABLE … UPDATE … WHERE …` (mutation async)",
-                Some("ALTER TABLE <bảng> UPDATE … WHERE …"),
+                "ClickHouse: UPDATE must be `ALTER TABLE … UPDATE … WHERE …` (async mutation)",
+                Some("ALTER TABLE <table> UPDATE … WHERE …"),
             );
             push_all(
                 &mut out,
                 r"(?i)^\s*DELETE\s+FROM\b",
                 LintSeverity::Warning,
                 "ch.delete_is_mutation",
-                "ClickHouse: DELETE là mutation async (`ALTER TABLE … DELETE WHERE …`)",
-                Some("ALTER TABLE <bảng> DELETE WHERE …"),
+                "ClickHouse: DELETE is an async mutation (`ALTER TABLE … DELETE WHERE …`)",
+                Some("ALTER TABLE <table> DELETE WHERE …"),
             );
             push_all(
                 &mut out,
                 r"(?i)\b(BEGIN|COMMIT|ROLLBACK)\b",
                 LintSeverity::Warning,
                 "ch.no_transaction",
-                "ClickHouse không có transaction — BEGIN/COMMIT/ROLLBACK không có tác dụng",
+                "ClickHouse has no transactions — BEGIN/COMMIT/ROLLBACK have no effect",
                 None,
             );
         }
@@ -332,7 +332,7 @@ fn cql_lints(sql: &str) -> Vec<LintDiagnostic> {
         r"(?i)\b(INNER\s+|LEFT\s+|RIGHT\s+|FULL\s+|CROSS\s+)?(OUTER\s+)?JOIN\b",
         LintSeverity::Error,
         "cql.no_join",
-        "CQL không hỗ trợ JOIN — mô hình wide-column phi chuẩn hoá (đọc theo partition key)",
+        "CQL does not support JOIN — wide-column denormalized model (read by partition key)",
         None,
     );
     push_all(
@@ -340,7 +340,7 @@ fn cql_lints(sql: &str) -> Vec<LintDiagnostic> {
         r"(?i)\bUNION\b",
         LintSeverity::Error,
         "cql.no_union",
-        "CQL không hỗ trợ UNION",
+        "CQL does not support UNION",
         None,
     );
     push_all(
@@ -348,7 +348,7 @@ fn cql_lints(sql: &str) -> Vec<LintDiagnostic> {
         r"(?i)\bOFFSET\b",
         LintSeverity::Error,
         "cql.no_offset",
-        "CQL không có OFFSET — phân trang bằng paging state (LIMIT + token trang kế)",
+        "CQL has no OFFSET — paginate with paging state (LIMIT + next-page token)",
         None,
     );
     push_all(
@@ -356,7 +356,7 @@ fn cql_lints(sql: &str) -> Vec<LintDiagnostic> {
         r"(?i)\(\s*SELECT\b",
         LintSeverity::Error,
         "cql.no_subquery",
-        "CQL không hỗ trợ subquery",
+        "CQL does not support subqueries",
         None,
     );
     push_all(
@@ -364,7 +364,7 @@ fn cql_lints(sql: &str) -> Vec<LintDiagnostic> {
         r"(?i)\bALLOW\s+FILTERING\b",
         LintSeverity::Warning,
         "cql.allow_filtering",
-        "ALLOW FILTERING quét toàn cluster (anti-pattern) — chỉ dùng khi thật sự cần",
+        "ALLOW FILTERING scans the whole cluster (anti-pattern) — use only when truly needed",
         None,
     );
     push_all(
@@ -372,7 +372,7 @@ fn cql_lints(sql: &str) -> Vec<LintDiagnostic> {
         r"(?i)\bIF\s+NOT\s+EXISTS\b|\bIF\s+EXISTS\b",
         LintSeverity::Info,
         "cql.lwt_cost",
-        "Lightweight transaction (Paxos) — chi phí cao, tránh dùng ở hot path",
+        "Lightweight transaction (Paxos) — expensive, avoid on the hot path",
         None,
     );
     push_all(
@@ -380,7 +380,7 @@ fn cql_lints(sql: &str) -> Vec<LintDiagnostic> {
         r"(?i)\bBEGIN\s+(LOGGED\s+|UNLOGGED\s+)?BATCH\b",
         LintSeverity::Info,
         "cql.batch_not_faster",
-        "BATCH chỉ đảm bảo atomicity trong 1 partition — KHÔNG dùng để tăng tốc",
+        "BATCH only guarantees atomicity within one partition — do NOT use it for speed",
         None,
     );
     // danger chung
@@ -389,7 +389,7 @@ fn cql_lints(sql: &str) -> Vec<LintDiagnostic> {
         r"(?i)\bTRUNCATE\b",
         LintSeverity::Warning,
         "danger.truncate",
-        "TRUNCATE xóa toàn bộ dữ liệu bảng — cần xác nhận khi chạy",
+        "TRUNCATE removes all table data — requires confirmation to run",
         None,
     );
     push_all(
@@ -397,7 +397,7 @@ fn cql_lints(sql: &str) -> Vec<LintDiagnostic> {
         r"(?i)\bDROP\s+(KEYSPACE|TABLE|MATERIALIZED\s+VIEW|TYPE|INDEX|FUNCTION|AGGREGATE)\b",
         LintSeverity::Warning,
         "danger.drop",
-        "DROP là thao tác không hoàn tác — cần xác nhận khi chạy",
+        "DROP is irreversible — requires confirmation to run",
         None,
     );
     out

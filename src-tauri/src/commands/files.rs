@@ -6,5 +6,5 @@ use crate::error::AppError;
 pub async fn write_text_file(path: String, contents: String) -> Result<(), AppError> {
     tokio::fs::write(&path, contents)
         .await
-        .map_err(|e| AppError::Other(format!("Không ghi được file '{path}': {e}")))
+        .map_err(|e| AppError::Other(format!("Failed to write file '{path}': {e}")))
 }
