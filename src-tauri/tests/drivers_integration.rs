@@ -183,6 +183,49 @@ async fn pg_list_databases_marks_current() {
     assert_eq!(dbs.iter().filter(|d| d.current).count(), 1, "exactly one current db");
 }
 
+/// T26 — Generate Test Data output contract (id=sequence, parent_id from the
+/// parent-key pool, email unique) must satisfy FK + UNIQUE on a real engine.
+/// The pure generator (testdata/generate.ts) produces exactly this shape.
+#[tokio::test]
+async fn pg_test_data_contract_respects_fk_and_unique() {
+    let (_c, port) = start_pg().await;
+    let params = PgConnParams {
+        host: "localhost".into(),
+        port,
+        database: "testdb".into(),
+        user: "postgres".into(),
+        password: PASS.into(),
+        ssl: false,
+        ssl_ca: String::new(),
+        ssl_cert: String::new(),
+        ssl_key: String::new(),
+    };
+    let mut drv = retry("postgres", || PgDriver::connect(&params)).await;
+    drv.exec("CREATE TABLE td_parent (id int PRIMARY KEY)").await.unwrap();
+    drv.exec("INSERT INTO td_parent VALUES (1),(2),(3)").await.unwrap();
+    drv.exec("CREATE TABLE td_child (id int PRIMARY KEY, parent_id int NOT NULL REFERENCES td_parent(id), email text UNIQUE NOT NULL)")
+        .await
+        .unwrap();
+
+    // Rows shaped like generateRows() output: sequence PK, FK from pool {1,2,3}, unique email.
+    let pool = [1, 2, 3];
+    let values: Vec<String> = (1..=300).map(|i| format!("({i}, {}, 'user{i}@example.com')", pool[(i - 1) % 3])).collect();
+    let ins = drv
+        .exec(&format!("INSERT INTO td_child (id, parent_id, email) VALUES {}", values.join(",")))
+        .await
+        .unwrap();
+    assert!(matches!(ins, StatementOutcome::Affected { affected: 300 }), "all rows insert without constraint violation");
+
+    // FK integrity: every child references a real parent.
+    let out = drv.exec("SELECT count(*) AS n FROM td_child c JOIN td_parent p ON c.parent_id = p.id").await.unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    assert_eq!(result.rows[0]["n"], serde_json::json!(300));
+    // UNIQUE holds (the insert would have failed otherwise).
+    let u = drv.exec("SELECT count(DISTINCT email) AS n FROM td_child").await.unwrap();
+    let StatementOutcome::Rows { result } = u else { panic!("expected rows") };
+    assert_eq!(result.rows[0]["n"], serde_json::json!(300));
+}
+
 /// T24 — streaming export writes ≥1M rows straight to a file one row at a time,
 /// so memory stays bounded regardless of result size (no fetch_all buffering).
 /// Verifies the exact row count + file line count.

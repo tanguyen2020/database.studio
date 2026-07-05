@@ -42,7 +42,7 @@ Status legend: **Implemented** (wired end-to-end, evidence) · **Partial** (pres
 | Expand View → columns | Implemented [T18] | `ObjectExplorer.svelte` | |
 | Proc/Func/Trigger context menus | Partial [T18] | `ObjectExplorer.svelte` | Show Definition + Drop done; **Execute / Rename / Enable** still Missing (dc:3416-3440) |
 | Table context menu (Open/New Query/Copy/DDL/Truncate/Drop) | Implemented | `ObjectExplorer.svelte` | + Generate Scripts 3-mode submenu [A3] |
-| Table context extras: Edit Data, **Generate Test Data**, **Copy Table to…**, Compare/Migrate, Dump, Row Count & Stats | Partial | `CopyTableDialog.svelte`; `copy/types.ts` | **Copy to… ✅ [T25]** (dialect-aware DDL translation + dry-run preview + paged copy + progress/cancel + dest verify); Edit Data = table viewer; Dump = backup; Compare/Migrate via menu; **Generate Test Data (T26) + Row Count & Stats still Missing** |
+| Table context extras: Edit Data, **Generate Test Data**, **Copy Table to…**, Compare/Migrate, Dump, Row Count & Stats | Partial | `CopyTableDialog.svelte`; `GenerateTestDataDialog.svelte` | **Copy to… ✅ [T25]**, **Generate Test Data ✅ [T26]**; Edit Data = table viewer; Dump = backup; Compare/Migrate via menu; **Row Count & Stats still Missing** |
 | "Set as Filter" (column menu) | Implemented [T12] | `ObjectExplorer.svelte` → Table Viewer seeded filter | |
 | Design Table (context) | Implemented | `openTableDesigner` | |
 | Dictionaries node (ClickHouse §3) | Implemented | `clickhouse.rs dictionaries()`; `ch_dictionaries` | |
@@ -109,7 +109,7 @@ Status legend: **Implemented** (wired end-to-end, evidence) · **Partial** (pres
 | Column reorder / unique / auto-increment / IDENTITY | Partial | `TableDesigner.svelte` | PK/nullable/default/type only |
 | DDL Viewer (single object) | Implemented (Differs) | `sql/ddl.ts` | client-generated CREATE |
 | **Generate Scripts whole schema/DB** (structure/data/both, dependency order) | Implemented [T15] | `sql/scripts.ts`; `GenerateScriptsDialog.svelte` | topo order, FK ALTERs last; 3-mode on table ctx menu [A3-audit] |
-| **Generate Test Data** | **Missing** | grep: none | dc:1808-1844 |
+| **Generate Test Data** | Implemented [T26] | `testdata/generate.ts`; `GenerateTestDataDialog.svelte` | seeded per-column generators (name/email/phone/date/number/enum/uuid/bool/text/fk); honors NOT NULL + UNIQUE + FK (values from parent pool); preview + batched INSERT |
 
 ---
 
@@ -202,7 +202,7 @@ Status legend: **Implemented** (wired end-to-end, evidence) · **Partial** (pres
 
 **Genuine remaining gaps (highest-impact first):**
 1. **Streaming I/O** for large export / Generate Scripts (still buffers RAM) — plan A5.
-2. **Generate Test Data** (dc:1808-1844) — no code.
+2. ~~Generate Test Data~~ — done [T26].
 3. ~~Copy Table to… (cross-connection copy)~~ — done [T25].
 4. **Result Grid Group By popover** (dc:352-385) — Chart view covers aggregation only.
 5. **Proc/Func Execute + Rename** context actions (Show Definition/Drop done in T18).
