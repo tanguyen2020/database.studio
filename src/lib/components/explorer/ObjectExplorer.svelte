@@ -23,7 +23,6 @@
   import { genRenameRoutine } from '$lib/sql/routines'
   import { scriptsWizard } from '$lib/stores/scripts.svelte'
   import { backupWizard } from '$lib/stores/backup.svelte'
-  import { ui } from '$lib/stores/ui.svelte'
   import * as chops from '$lib/sql/chops'
   import { toasts } from '$lib/stores/toast.svelte'
   import { quoteIdent, selectStarSql } from '$lib/sql/dialect'
@@ -56,29 +55,13 @@
 
   let expanded = $state<Set<string>>(new Set())
   let treeSel = $state<string | null>(null)
-  // T18 — tree filter (Ctrl+F)
-  let search = $state('')
-  let searchEl = $state<HTMLInputElement | null>(null)
-  function matchSearch(name: string): boolean {
-    const s = search.trim().toLowerCase()
-    return !s || name.toLowerCase().includes(s)
+  // Tree filter removed (user request) — `matchSearch` always matches and
+  // `searching` is always false so the `{#if searching || expanded…}` guards
+  // fall back to expand-on-click behavior.
+  function matchSearch(_name: string): boolean {
+    return true
   }
-  // AUDIT-5 item 7 — while filtering, auto-expand folders and lazy-load each
-  // schema's children so matches are revealed without manual expansion.
-  const searching = $derived(!!search.trim())
-  $effect(() => {
-    const s = selected
-    if (searching && s?.connected) {
-      untrack(() => {
-        for (const sch of cache?.schemas ?? []) void explorer.loadSchemaChildren(s.id, sch.name)
-      })
-    }
-  })
-  // T21 — shortcut Ctrl+F từ App.svelte phát tín hiệu qua ui.explorerFindTick.
-  $effect(() => {
-    void ui.explorerFindTick
-    if (ui.explorerFindTick > 0) untrack(() => { searchEl?.focus(); searchEl?.select() })
-  })
+  const searching = false
   // T18 — Object Properties panel: suy ra type/schema/name từ key node đang chọn.
   const selProps = $derived.by(() => {
     const k = treeSel
@@ -456,13 +439,6 @@
   style="flex:1;display:flex;flex-direction:column;min-height:0"
   role="tree"
   tabindex="-1"
-  onkeydown={(e) => {
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
-      e.preventDefault()
-      searchEl?.focus()
-      searchEl?.select()
-    }
-  }}
 >
   <!-- header — dòng 137-142 -->
   <div style="flex:none;display:flex;align-items:center;gap:var(--px-8);padding:var(--px-9) var(--px-12) var(--px-7)">
@@ -481,18 +457,6 @@
     >⟳</span>
   </div>
 
-  <!-- tree filter (Ctrl+F) — T18 -->
-  {#if selected}
-    <div style="flex:none;padding:var(--px-4) var(--px-8) var(--px-6)">
-      <input
-        bind:this={searchEl}
-        bind:value={search}
-        placeholder="Filter tree (Ctrl+F)…"
-        aria-label="Filter tree"
-        style="width:100%;background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-8);color:var(--text);font-size:var(--px-11_5)"
-      />
-    </div>
-  {/if}
 
   <!-- tree — dòng 143-152 -->
   <div style="flex:1;overflow:auto;padding:0 var(--px-6) var(--px-10)">

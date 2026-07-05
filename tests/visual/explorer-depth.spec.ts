@@ -1,10 +1,10 @@
 import { expect, test } from '@playwright/test'
 import { APP_URL, blockRemoteFonts } from './helpers'
 
-// T18 — Explorer depth: Show Definition, view column expansion, tree filter,
-// Object Properties panel.
+// T18 — Explorer depth: Show Definition, view column expansion,
+// Object Properties panel. (Tree filter removed by later user request.)
 
-test('explorer depth: Show Definition + properties + view columns + filter', async ({ page }) => {
+test('explorer depth: Show Definition + properties + view columns', async ({ page }) => {
   const errors: string[] = []
   page.on('pageerror', (e) => errors.push(String(e)))
   await blockRemoteFonts(page)
@@ -14,9 +14,6 @@ test('explorer depth: Show Definition + properties + view columns + filter', asy
 
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(500)
-
-  // tree filter input present (Ctrl+F target)
-  await expect(page.getByPlaceholder(/Filter tree/).first()).toBeVisible()
 
   await page.getByText('public', { exact: true }).first().click()
   await page.waitForTimeout(300)
@@ -41,11 +38,6 @@ test('explorer depth: Show Definition + properties + view columns + filter', asy
   await page.getByText('vw_active_students').first().click()
   await page.waitForTimeout(300)
   await expect(page.getByText('first_name').first()).toBeVisible()
-
-  // tree filter narrows the tree
-  await page.getByPlaceholder(/Filter tree/).first().fill('add_one')
-  await page.waitForTimeout(200)
-  await expect(page.getByText(/add_one/).first()).toBeVisible()
 
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
