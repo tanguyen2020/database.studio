@@ -3,6 +3,7 @@ pub mod backup;
 pub mod cassandra;
 pub mod clickhouse;
 pub mod connections;
+pub mod export;
 pub mod files;
 pub mod grid;
 pub mod kafka;

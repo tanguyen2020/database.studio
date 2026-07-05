@@ -28,6 +28,7 @@ pub fn run() {
                 pubsub: Default::default(),
                 kafka_stops: Default::default(),
                 test_cancels: Default::default(),
+                export_cancels: Default::default(),
             });
             Ok(())
         })
@@ -43,6 +44,8 @@ pub fn run() {
             commands::connections::quick_connect,
             commands::connections::open_database,
             commands::connections::attach_database,
+            commands::export::export_query_to_file,
+            commands::export::cancel_export,
             commands::connections::test_connection,
             commands::connections::cancel_test,
             commands::connections::ping_connection,

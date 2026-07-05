@@ -2,7 +2,7 @@
 // Ngoài Tauri runtime (vite dev browser / Playwright) → demo fixtures để
 // pixel-diff so được với prototype (dữ liệu port từ CONNS/TABS của HTML).
 
-import { invoke as tauriInvoke } from '@tauri-apps/api/core'
+import { invoke as tauriInvoke, Channel } from '@tauri-apps/api/core'
 import { IS_TAURI, demoInvoke } from './demo'
 
 const invoke: typeof tauriInvoke = (cmd, args, options) =>
@@ -581,6 +581,25 @@ export const openDatabase = (connId: string, database: string) =>
  *  Returns `connId` unchanged for the connection's own current database. */
 export const attachDatabase = (connId: string, database: string) =>
   invoke<string>('attach_database', { connId, database })
+
+// ---- streaming export (T24) — Tauri-only; bounded-memory stream to a file ----
+/** Stream a query to `path` in `format` (csv|json|sql). `onProgress` gets rows
+ *  written so far; cancel via `cancelExport(exportId)`. Returns total rows. */
+export const exportQueryToFile = (
+  connId: string,
+  sql: string,
+  path: string,
+  format: 'csv' | 'json' | 'sql',
+  table: string | null,
+  exportId: string,
+  onProgress: (rows: number) => void,
+): Promise<number> => {
+  const channel = new Channel<number>()
+  channel.onmessage = onProgress
+  return tauriInvoke<number>('export_query_to_file', { connId, sql, path, format, table, exportId, onProgress: channel })
+}
+
+export const cancelExport = (exportId: string) => invoke<void>('cancel_export', { exportId })
 
 export const listSchemas = (connId: string) => invoke<SchemaInfo[]>('list_schemas', { connId })
 

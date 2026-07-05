@@ -28,6 +28,9 @@ export interface AppSettings {
   poolAcquireSecs: number
   connectRetryAttempts: number
   connectRetryBackoffMs: number
+  // Data (T24) — stream large exports straight to a file (bounded memory).
+  // Off → the classic in-memory export path.
+  streamingIo: boolean
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -50,6 +53,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   poolAcquireSecs: 10,
   connectRetryAttempts: 3,
   connectRetryBackoffMs: 200,
+  streamingIo: false,
 }
 
 /** Hợp nhất giá trị đã lưu lên defaults, chỉ nhận key hợp lệ + đúng kiểu. Thuần. */

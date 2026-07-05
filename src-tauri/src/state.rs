@@ -73,10 +73,35 @@ impl TestCancels {
     }
 }
 
+/// Cancellation flags for streaming exports (T24). Each export carries an
+/// export_id; cancel_export(id) flips the flag so the streaming loop stops.
+#[derive(Default)]
+pub struct ExportCancels(Mutex<HashMap<String, Arc<AtomicBool>>>);
+
+impl ExportCancels {
+    /// Register + return a fresh flag for export_id.
+    pub fn register(&self, id: String) -> Arc<AtomicBool> {
+        let flag = Arc::new(AtomicBool::new(false));
+        self.0.lock().unwrap().insert(id, flag.clone());
+        flag
+    }
+    /// Set the cancel flag (if the export is still running).
+    pub fn cancel(&self, id: &str) {
+        if let Some(f) = self.0.lock().unwrap().get(id) {
+            f.store(true, Ordering::Relaxed);
+        }
+    }
+    /// Drop the flag when the export finishes.
+    pub fn remove(&self, id: &str) {
+        self.0.lock().unwrap().remove(id);
+    }
+}
+
 pub struct AppState {
     pub storage: Storage,
     pub registry: Registry,
     pub pubsub: PubSubTasks,
     pub kafka_stops: KafkaStops,
     pub test_cancels: TestCancels,
+    pub export_cancels: ExportCancels,
 }

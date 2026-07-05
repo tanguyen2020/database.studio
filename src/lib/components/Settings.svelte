@@ -71,6 +71,7 @@
               <select bind:value={s.timezone} onchange={save} class="set-inp"><option value="local">Local</option><option value="utc">UTC</option></select>
             </label>
             <label class="set-row">NULL display text <input bind:value={s.nullText} onchange={save} class="set-inp" /></label>
+            <label class="set-row">Stream large exports to file <input type="checkbox" bind:checked={s.streamingIo} onchange={save} /></label>
           {:else if active === 'Kafka'}
             <label class="set-row">Max messages buffer <input type="number" min="50" max="10000" bind:value={s.kafkaMaxMessages} onchange={save} class="set-inp" /></label>
             <label class="set-row">Render throttle (ms) <input type="number" min="0" max="2000" bind:value={s.kafkaThrottleMs} onchange={save} class="set-inp" /></label>

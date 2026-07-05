@@ -183,6 +183,93 @@ async fn pg_list_databases_marks_current() {
     assert_eq!(dbs.iter().filter(|d| d.current).count(), 1, "exactly one current db");
 }
 
+/// T24 — streaming export writes ≥1M rows straight to a file one row at a time,
+/// so memory stays bounded regardless of result size (no fetch_all buffering).
+/// Verifies the exact row count + file line count.
+#[tokio::test]
+async fn pg_stream_export_million_rows_to_file() {
+    use database_studio_lib::drivers::postgres::ExportFormat;
+    use std::io::BufRead;
+    use std::sync::atomic::AtomicBool;
+
+    let (_c, port) = start_pg().await;
+    let params = PgConnParams {
+        host: "localhost".into(),
+        port,
+        database: "testdb".into(),
+        user: "postgres".into(),
+        password: PASS.into(),
+        ssl: false,
+        ssl_ca: String::new(),
+        ssl_cert: String::new(),
+        ssl_key: String::new(),
+    };
+    let mut drv = retry("postgres", || PgDriver::connect(&params)).await;
+    drv.exec("CREATE TABLE big AS SELECT g AS id, 'row-' || g AS label FROM generate_series(1, 1000000) g")
+        .await
+        .unwrap();
+
+    let path = std::env::temp_dir().join(format!("ds_stream_export_{port}.csv"));
+    let mut w = std::io::BufWriter::new(std::fs::File::create(&path).unwrap());
+    let cancel = AtomicBool::new(false);
+    let mut last_progress = 0u64;
+    let total = drv
+        .stream_export("SELECT id, label FROM big ORDER BY id", ExportFormat::Csv, "big", &mut w, |n| last_progress = n, &cancel)
+        .await
+        .unwrap();
+    drop(w); // flush BufWriter
+
+    assert_eq!(total, 1_000_000, "all rows streamed");
+    assert_eq!(last_progress, 1_000_000, "final progress reported");
+    let lines = std::io::BufReader::new(std::fs::File::open(&path).unwrap()).lines().count();
+    assert_eq!(lines, 1_000_001, "CSV header + 1M data rows");
+    let _ = std::fs::remove_file(&path);
+}
+
+/// T24 — cancelling a streaming export stops the loop promptly and cleanly (no
+/// connection poison): the follow-up query still runs on the same connection.
+#[tokio::test]
+async fn pg_stream_export_cancel_stops_early() {
+    use database_studio_lib::drivers::postgres::ExportFormat;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let (_c, port) = start_pg().await;
+    let params = PgConnParams {
+        host: "localhost".into(),
+        port,
+        database: "testdb".into(),
+        user: "postgres".into(),
+        password: PASS.into(),
+        ssl: false,
+        ssl_ca: String::new(),
+        ssl_cert: String::new(),
+        ssl_key: String::new(),
+    };
+    let mut drv = retry("postgres", || PgDriver::connect(&params)).await;
+    drv.exec("CREATE TABLE big AS SELECT g AS id FROM generate_series(1, 1000000) g").await.unwrap();
+
+    let path = std::env::temp_dir().join(format!("ds_stream_cancel_{port}.csv"));
+    let mut w = std::io::BufWriter::new(std::fs::File::create(&path).unwrap());
+    let cancel = AtomicBool::new(false);
+    // flip cancel once the first progress tick (10k rows) fires
+    let total = drv
+        .stream_export("SELECT id FROM big ORDER BY id", ExportFormat::Csv, "big", &mut w, |n| {
+            if n >= 10_000 {
+                cancel.store(true, Ordering::Relaxed);
+            }
+        }, &cancel)
+        .await
+        .unwrap();
+    drop(w);
+    let _ = std::fs::remove_file(&path);
+
+    assert!(total >= 10_000 && total < 1_000_000, "cancel stopped early, got {total}");
+    // connection is still usable after cancel (no poison / half-read stream)
+    let out = drv.exec("SELECT count(*) AS n FROM big").await.unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    assert_eq!(result.rows[0]["n"], serde_json::json!(1_000_000));
+}
+
 /// AUDIT-4 item 2 — per-database Explorer relies on opening a connection to
 /// another database on the same server (what `attach_database` does with an
 /// internal sub-connection id). Verify a connection bound to database B sees B's
