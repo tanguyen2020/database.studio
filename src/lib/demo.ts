@@ -282,6 +282,22 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
         return ok({ cols: [['pid', 'int4'], ['locktype', 'text'], ['mode', 'text'], ['granted', 'bool']], rows: [
           { pid: 4821, locktype: 'relation', mode: 'AccessShareLock', granted: true },
         ], total: 1 })
+      if (view === 'agent_jobs')
+        return ok({ cols: [['name', 'text'], ['enabled', 'bit'], ['category', 'text']], rows: [
+          { name: 'nightly_reindex', enabled: true, category: 'Maintenance' },
+        ], total: 1 })
+      if (view === 'query_store')
+        return ok({ cols: [['query_id', 'int'], ['query_text', 'text'], ['count_executions', 'int'], ['avg_ms', 'decimal']], rows: [
+          { query_id: 7, query_text: 'SELECT * FROM exams WHERE score > @p', count_executions: 1240, avg_ms: 18.42 },
+        ], total: 1 })
+      if (view === 'availability_groups')
+        return ok({ cols: [['name', 'text'], ['role', 'text'], ['sync_health', 'text']], rows: [], total: 0 })
+      if (view === 'memory')
+        return ok({ cols: [['metric', 'text'], ['value', 'text']], rows: [
+          { metric: 'used_memory', value: '2097152' },
+          { metric: 'used_memory_human', value: '2.00M' },
+          { metric: 'maxmemory_policy', value: 'noeviction' },
+        ], total: 3 })
       return ok({ cols: [['pid', 'int4'], ['username', 'text'], ['database', 'text'], ['state', 'text'], ['query', 'text']], rows: [
         { pid: 4821, username: 'app_ro', database: 'sis_prod', state: 'active', query: 'SELECT * FROM students' },
         { pid: 4830, username: 'app_ro', database: 'sis_prod', state: 'idle', query: '' },

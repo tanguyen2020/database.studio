@@ -39,3 +39,23 @@ test('admin views: session monitor + kill + users + extensions', async ({ page }
 
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
+
+test('admin views: Redis memory analysis (CE-native)', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(String(e)))
+  await blockRemoteFonts(page)
+  await page.goto(APP_URL)
+  await page.waitForSelector('#app > *', { timeout: 15_000 })
+  await page.waitForTimeout(300)
+
+  // select the Redis connection, then open admin → normalizes to Memory view
+  await page.getByRole('button', { name: /Cache Redis/ }).first().click()
+  await page.waitForTimeout(400)
+  await page.getByTitle('Session Monitor').first().click()
+  await page.waitForTimeout(400)
+
+  await expect(page.getByRole('button', { name: 'Memory', exact: true }).first()).toBeVisible()
+  await expect(page.getByText('used_memory').first()).toBeVisible()
+
+  expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
+})

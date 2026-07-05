@@ -4,9 +4,31 @@
 
 use tauri::State;
 
-use crate::drivers::types::{QueryResultSet, StatementOutcome};
-use crate::error::AppError;
+use crate::drivers::types::{ColumnDef, QueryResultSet, StatementOutcome};
+use crate::drivers::LiveConnection;
+use crate::error::{AppError, QueryError};
 use crate::state::AppState;
+
+/// Parse output `INFO memory` của Redis (dòng `key:value`, bỏ header `# …`) →
+/// bảng metric/value. Thuần → unit-test được.
+pub fn parse_redis_info(text: &str) -> QueryResultSet {
+    let rows: Vec<serde_json::Value> = text
+        .lines()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .filter_map(|l| l.split_once(':'))
+        .map(|(k, v)| serde_json::json!({ "metric": k, "value": v }))
+        .collect();
+    let total = rows.len() as u64;
+    QueryResultSet {
+        cols: vec![
+            ("metric".to_string(), "text".to_string()) as ColumnDef,
+            ("value".to_string(), "text".to_string()),
+        ],
+        rows,
+        total,
+    }
+}
 
 /// SQL cho từng admin view theo hệ. None nếu hệ không hỗ trợ view đó.
 pub fn admin_query(system: &str, view: &str) -> Option<String> {
@@ -50,6 +72,31 @@ pub fn admin_query(system: &str, view: &str) -> Option<String> {
             "SELECT name AS role, type_desc AS kind, is_disabled \
              FROM sys.server_principals WHERE type IN ('S','U','G') ORDER BY name"
         }
+        // --- MSSQL: Agent Jobs (đọc msdb.dbo.sysjobs — được kể cả khi Agent off) ---
+        ("mssql", "agent_jobs") => {
+            "SELECT j.name, j.enabled, COALESCE(c.name,'') AS category, j.date_created \
+             FROM msdb.dbo.sysjobs j \
+             LEFT JOIN msdb.dbo.syscategories c ON c.category_id = j.category_id \
+             ORDER BY j.name"
+        }
+        // --- MSSQL: Query Store (mọi edition; cần bật QUERY_STORE trên DB) ---
+        ("mssql", "query_store") => {
+            "SELECT TOP 50 q.query_id, LEFT(t.query_sql_text, 100) AS query_text, \
+                    rs.count_executions, CAST(rs.avg_duration/1000.0 AS decimal(18,2)) AS avg_ms \
+             FROM sys.query_store_query q \
+             JOIN sys.query_store_query_text t ON t.query_text_id = q.query_text_id \
+             JOIN sys.query_store_plan p ON p.query_id = q.query_id \
+             JOIN sys.query_store_runtime_stats rs ON rs.plan_id = p.plan_id \
+             ORDER BY rs.avg_duration DESC"
+        }
+        // --- MSSQL: Availability Groups (DMV luôn tồn tại; rỗng nếu không có cluster) ---
+        ("mssql", "availability_groups") => {
+            "SELECT ag.name, COALESCE(rs.role_desc,'') AS role, \
+                    COALESCE(rs.synchronization_health_desc,'') AS sync_health \
+             FROM sys.availability_groups ag \
+             LEFT JOIN sys.dm_hadr_availability_replica_states rs ON rs.group_id = ag.group_id \
+             ORDER BY ag.name"
+        }
         // --- PG Extension Manager ---
         ("postgres", "extensions") => {
             "SELECT a.name, a.default_version, i.extversion AS installed_version, a.comment \
@@ -84,6 +131,26 @@ pub async fn admin_view(
         .get_connection(&conn_id)
         .map(|p| p.system.as_str().to_string())
         .unwrap_or_default();
+
+    // Redis không phải SQL: memory analysis qua INFO memory.
+    if system == "redis" {
+        if view != "memory" {
+            return Err(AppError::Driver(format!("Admin view '{view}' chưa hỗ trợ cho redis")));
+        }
+        let text = state
+            .registry
+            .with_driver(&conn_id, move |d| async move {
+                let mut g = d.lock().await;
+                match &mut *g {
+                    LiveConnection::Redis(r) => r.command(&["INFO".into(), "memory".into()]).await,
+                    _ => Err(QueryError::new("redis", "not redis", "not redis")),
+                }
+            })
+            .await?
+            .map_err(|e| AppError::Driver(e.message))?;
+        return Ok(parse_redis_info(&text));
+    }
+
     let sql = admin_query(&system, &view)
         .ok_or_else(|| AppError::Driver(format!("Admin view '{view}' chưa hỗ trợ cho {system}")))?;
     let outcome = state
@@ -133,6 +200,19 @@ mod tests {
         assert!(admin_query("redis", "sessions").is_none());
         // extensions chỉ PG
         assert!(admin_query("mysql", "extensions").is_none());
+        // MSSQL admin views mở rộng (T23)
+        assert!(admin_query("mssql", "agent_jobs").unwrap().contains("msdb.dbo.sysjobs"));
+        assert!(admin_query("mssql", "query_store").unwrap().contains("sys.query_store_query"));
+        assert!(admin_query("mssql", "availability_groups").unwrap().contains("sys.availability_groups"));
+    }
+
+    #[test]
+    fn redis_info_parse() {
+        let r = parse_redis_info("# Memory\nused_memory:1048576\nused_memory_human:1.00M\n\nmaxmemory:0\n");
+        assert_eq!(r.total, 3);
+        assert_eq!(r.rows[0]["metric"], serde_json::json!("used_memory"));
+        assert_eq!(r.rows[0]["value"], serde_json::json!("1048576"));
+        assert!(r.rows.iter().any(|x| x["metric"] == serde_json::json!("maxmemory")));
     }
 
     #[test]

@@ -2644,3 +2644,82 @@ async fn pg_admin_views_and_kill_session() {
     assert_eq!(result.rows[0].as_object().unwrap().values().next().unwrap(), &serde_json::json!(true), "terminate phải trả true");
     eprintln!("CHK PG admin views (sessions/users/extensions) + kill OK");
 }
+
+/// Phase 5 · T23 (CE alternative) — Redis memory analysis qua INFO memory (bản CE
+/// hỗ trợ sẵn), parse thành bảng metric/value.
+#[tokio::test]
+async fn redis_memory_info_view() {
+    use database_studio_lib::commands::admin::parse_redis_info;
+    use database_studio_lib::drivers::redis::{RedisConnParams, RedisDriver};
+
+    let (_c, port) = start_redis("test123").await;
+    let params = RedisConnParams {
+        host: "localhost".into(),
+        port,
+        password: "test123".into(),
+        db: 0,
+        ssl: false,
+        ssl_ca: String::new(),
+    };
+    let mut drv = retry("redis", || RedisDriver::connect(&params)).await;
+
+    let text = drv.command(&["INFO".into(), "memory".into()]).await.unwrap();
+    let rs = parse_redis_info(&text);
+    assert!(rs.total >= 1, "INFO memory phải có metric");
+    assert!(rs.rows.iter().any(|r| r["metric"] == serde_json::json!("used_memory")), "phải có used_memory");
+    eprintln!("CHK Redis memory INFO view OK ({} metrics)", rs.total);
+}
+
+/// Phase 5 · T23 (CE alternative) — MSSQL admin views đọc được trên bản
+/// Developer/container: Agent Jobs (msdb.sysjobs), Availability Groups (DMV rỗng
+/// nếu không cluster), Query Store (bật trên 1 DB rồi truy catalog view).
+#[tokio::test]
+async fn mssql_admin_extra_views() {
+    use database_studio_lib::commands::admin::admin_query;
+
+    let c = GenericImage::new("mcr.microsoft.com/mssql/server", "2022-latest")
+        .with_exposed_port(1433.tcp())
+        .with_env_var("ACCEPT_EULA", "Y")
+        .with_env_var("MSSQL_SA_PASSWORD", MSSQL_PASS)
+        .start()
+        .await
+        .expect("start mssql container");
+    let port = c.get_host_port_ipv4(1433).await.unwrap();
+    let params_master = MssqlConnParams {
+        host: "localhost".into(),
+        port,
+        database: String::new(),
+        user: "sa".into(),
+        password: MSSQL_PASS.into(),
+        ssl: false,
+        ssl_ca: String::new(),
+        auth: "sql".into(),
+    };
+    let params_qs = MssqlConnParams {
+        host: "localhost".into(),
+        port,
+        database: "qsdb".into(),
+        user: "sa".into(),
+        password: MSSQL_PASS.into(),
+        ssl: false,
+        ssl_ca: String::new(),
+        auth: "sql".into(),
+    };
+    let mut drv = retry("mssql", || MssqlDriver::connect(&params_master)).await;
+
+    // Agent Jobs — msdb.sysjobs đọc được (rỗng trong container) không lỗi
+    let out = drv.exec(&admin_query("mssql", "agent_jobs").unwrap()).await.unwrap();
+    assert!(matches!(out, StatementOutcome::Rows { .. }), "agent_jobs phải trả rows (có thể rỗng)");
+
+    // Availability Groups — DMV luôn tồn tại, rỗng nếu không cluster
+    let out = drv.exec(&admin_query("mssql", "availability_groups").unwrap()).await.unwrap();
+    assert!(matches!(out, StatementOutcome::Rows { .. }), "availability_groups phải trả rows");
+
+    // Query Store — bật trên 1 DB người dùng rồi truy catalog view
+    drv.exec("CREATE DATABASE qsdb").await.unwrap();
+    drv.exec("ALTER DATABASE qsdb SET QUERY_STORE = ON").await.unwrap();
+    let mut drv2 = retry("mssql", || MssqlDriver::connect(&params_qs)).await;
+    let out = drv2.exec(&admin_query("mssql", "query_store").unwrap()).await.unwrap();
+    assert!(matches!(out, StatementOutcome::Rows { .. }), "query_store catalog view phải truy được khi QS bật");
+    eprintln!("CHK MSSQL agent_jobs + availability_groups + query_store OK");
+}

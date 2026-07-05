@@ -11,14 +11,41 @@
   }
   let { tab }: Props = $props()
 
-  const VIEWS = [
-    ['sessions', 'Session Monitor'],
-    ['locks', 'Locks'],
-    ['users', 'Users & Privileges'],
-    ['extensions', 'Extensions'],
-  ] as const
+  // Danh sách view theo hệ (T23 + mở rộng CE): MSSQL Agent Jobs/Query Store/AG,
+  // Redis Memory — tất cả đọc được trên bản container/CE.
+  const VIEWS = $derived.by((): [string, string][] => {
+    switch (tab.systemType) {
+      case 'redis':
+        return [['memory', 'Memory']]
+      case 'mssql':
+        return [
+          ['sessions', 'Session Monitor'],
+          ['users', 'Users & Privileges'],
+          ['agent_jobs', 'Agent Jobs'],
+          ['query_store', 'Query Store'],
+          ['availability_groups', 'Availability Groups'],
+        ]
+      case 'mysql':
+      case 'mariadb':
+        return [['sessions', 'Session Monitor'], ['users', 'Users & Privileges']]
+      case 'postgres':
+        return [
+          ['sessions', 'Session Monitor'],
+          ['locks', 'Locks'],
+          ['users', 'Users & Privileges'],
+          ['extensions', 'Extensions'],
+        ]
+      default:
+        return [['sessions', 'Session Monitor']]
+    }
+  })
 
   let view = $state<string>((untrack(() => tab.state) as { view?: string }).view ?? 'sessions')
+
+  // Chuẩn hóa: nếu view không hợp lệ cho hệ (vd 'sessions' trên redis) → dùng view đầu.
+  $effect(() => {
+    if (!VIEWS.some(([v]) => v === view)) untrack(() => (view = VIEWS[0][0]))
+  })
   let cols = $state<[string, string][]>([])
   let rows = $state<Record<string, unknown>[]>([])
   let loading = $state(false)
@@ -47,10 +74,11 @@
     untrack(() => void load())
   })
 
-  // Đồng bộ khi view được đổi từ ngoài (nút Session Monitor/Users ở toolbar mở lại tab).
+  // Đồng bộ khi view được đổi từ ngoài (nút Session Monitor/Users mở lại tab) —
+  // CHỈ khi view hợp lệ cho hệ, tránh xung đột vòng lặp với normalize ở trên.
   $effect(() => {
     const v = (tab.state as { view?: string }).view
-    if (v && v !== view) untrack(() => (view = v))
+    if (v && v !== view && VIEWS.some(([x]) => x === v)) untrack(() => (view = v))
   })
 
   function pick(v: string) {
@@ -78,8 +106,8 @@
   <div style="flex:none;display:flex;align-items:center;gap:var(--px-8);padding:var(--px-9) var(--px-14);border-bottom:var(--px-1) solid var(--border);background:var(--surface);flex-wrap:wrap">
     <span style="font-size:var(--px-11_5);font-weight:700">Admin</span>
     <div style="display:flex;background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-7);overflow:hidden">
-      {#each VIEWS as [v, label] (v)}
-        <span onclick={() => pick(v)} onkeydown={(e) => e.key === 'Enter' && pick(v)} role="button" tabindex="0" style="padding:var(--px-5) var(--px-12);font-size:var(--px-12);font-weight:600;cursor:pointer;background:{view === v ? 'var(--primary)' : 'transparent'};color:{view === v ? 'var(--hex-fff)' : 'var(--text2)'};border-left:{v === 'sessions' ? 'none' : 'var(--px-1) solid var(--border)'}">{label}</span>
+      {#each VIEWS as [v, label], i (v)}
+        <span onclick={() => pick(v)} onkeydown={(e) => e.key === 'Enter' && pick(v)} role="button" tabindex="0" style="padding:var(--px-5) var(--px-12);font-size:var(--px-12);font-weight:600;cursor:pointer;background:{view === v ? 'var(--primary)' : 'transparent'};color:{view === v ? 'var(--hex-fff)' : 'var(--text2)'};border-left:{i === 0 ? 'none' : 'var(--px-1) solid var(--border)'}">{label}</span>
       {/each}
     </div>
     <span style="font-size:var(--px-11);color:var(--muted)">{rows.length} rows</span>
