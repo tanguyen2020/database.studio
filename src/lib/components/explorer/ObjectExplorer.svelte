@@ -19,6 +19,7 @@
   import { copyWizard } from '$lib/stores/copy.svelte'
   import { testDataWizard } from '$lib/stores/testdata.svelte'
   import { execRoutineWizard } from '$lib/stores/execroutine.svelte'
+  import { chCreateWizard } from '$lib/stores/chcreate.svelte'
   import { genRenameRoutine } from '$lib/sql/routines'
   import { scriptsWizard } from '$lib/stores/scripts.svelte'
   import { backupWizard } from '$lib/stores/backup.svelte'
@@ -580,6 +581,10 @@
             <ContextMenu.Item onclick={() => selected && tabs.openErDiagram(selected.id, schema.name, { blank: true })}>New ER Diagram (drag tables in)</ContextMenu.Item>
             <ContextMenu.Item onclick={() => selected && tabs.openIndexScanner(selected.id, schema.name)}>Scan Indexes</ContextMenu.Item>
             <ContextMenu.Item onclick={() => selected && tabs.openTableDesigner(selected.id, schema.name, '')}>New Table…</ContextMenu.Item>
+            {#if isClickhouse}
+              <ContextMenu.Item onclick={() => selected && chCreateWizard.show(selected.id, schema.name, 'mv')}>Create Materialized View…</ContextMenu.Item>
+              <ContextMenu.Item onclick={() => selected && chCreateWizard.show(selected.id, schema.name, 'dict')}>Create Dictionary…</ContextMenu.Item>
+            {/if}
             <ContextMenu.Item onclick={() => selected && scriptsWizard.show(selected.id, schema.name)}>Generate Scripts…</ContextMenu.Item>
             <ContextMenu.Separator />
             <ContextMenu.Item onclick={() => selected && explorer.refresh(selected.id, { kind: 'schema', schema: schema.name })}>Refresh</ContextMenu.Item>

@@ -825,6 +825,48 @@ async fn mssql_showplan_xml_estimated_plan() {
 // (Phase 2 basics — CLICKHOUSE_SPEC_ADDENDUM)
 // ---------------------------------------------------------------------------
 
+/// T30 — Create a ClickHouse Materialized View + Dictionary (as emitted by
+/// buildCreateMaterializedView / buildCreateDictionary). Both appear in the
+/// system catalog.
+#[tokio::test]
+async fn clickhouse_create_mv_and_dictionary() {
+    let c = GenericImage::new("clickhouse/clickhouse-server", "24.8")
+        .with_exposed_port(8123.tcp())
+        .with_env_var("CLICKHOUSE_PASSWORD", PASS)
+        .start()
+        .await
+        .expect("start clickhouse container");
+    let port = c.get_host_port_ipv4(8123).await.unwrap();
+    let params = ChConnParams {
+        host: "localhost".into(),
+        port,
+        database: "default".into(),
+        user: "default".into(),
+        password: PASS.into(),
+        ssl: false,
+    };
+    let mut drv = retry("clickhouse", || ChDriver::connect(&params)).await;
+    drv.exec("CREATE TABLE it_src (n UInt64, kind String) ENGINE = MergeTree ORDER BY n").await.unwrap();
+
+    async fn n(drv: &mut ChDriver, sql: &str) -> i64 {
+        let StatementOutcome::Rows { result } = drv.exec(sql).await.unwrap() else { panic!("rows") };
+        let v = result.rows[0].as_object().unwrap().values().next().unwrap();
+        // CH returns UInt64 as a JSON string to preserve precision.
+        v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())).unwrap()
+    }
+
+    // Materialized view (ENGINE form, as buildCreateMaterializedView emits).
+    drv.exec("CREATE MATERIALIZED VIEW default.mv_kind ENGINE = MergeTree() ORDER BY kind\nAS SELECT kind, count() AS c FROM it_src GROUP BY kind;").await.unwrap();
+    assert!(n(&mut drv, "SELECT count() AS c FROM system.tables WHERE database='default' AND name='mv_kind'").await >= 1, "MV in catalog");
+
+    // Dictionary (CLICKHOUSE source referencing it_src), as buildCreateDictionary emits.
+    let dict = format!(
+        "CREATE DICTIONARY default.dict_kind (\n  n UInt64,\n  kind String\n)\nPRIMARY KEY n\nSOURCE(CLICKHOUSE(TABLE 'it_src' DB 'default' USER 'default' PASSWORD '{PASS}'))\nLAYOUT(FLAT())\nLIFETIME(MIN 0 MAX 3600);"
+    );
+    drv.exec(&dict).await.unwrap();
+    assert!(n(&mut drv, "SELECT count() AS c FROM system.dictionaries WHERE database='default' AND name='dict_kind'").await >= 1, "dictionary in catalog");
+}
+
 #[tokio::test]
 async fn clickhouse_roundtrip_types_and_errors() {
     let c = GenericImage::new("clickhouse/clickhouse-server", "24.8")

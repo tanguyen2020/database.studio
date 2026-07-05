@@ -41,6 +41,7 @@
   import CopyTableDialog from '$lib/components/CopyTableDialog.svelte'
   import GenerateTestDataDialog from '$lib/components/GenerateTestDataDialog.svelte'
   import ExecuteRoutineDialog from '$lib/components/ExecuteRoutineDialog.svelte'
+  import ClickHouseCreateDialog from '$lib/components/ClickHouseCreateDialog.svelte'
   import Settings from '$lib/components/Settings.svelte'
   import { palette } from '$lib/stores/palette.svelte'
   import { settings } from '$lib/stores/settings.svelte'
@@ -322,5 +323,6 @@
 <CopyTableDialog />
 <GenerateTestDataDialog />
 <ExecuteRoutineDialog />
+<ClickHouseCreateDialog />
 <Settings />
 <Toasts />
