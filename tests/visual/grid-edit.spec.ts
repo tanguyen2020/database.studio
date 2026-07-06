@@ -96,10 +96,18 @@ test('editable grid: Tab moves cell, Insert row focuses, paste adds records', as
   })
   expect(atBottom, 'grid should be scrolled to the bottom after Insert row').toBe(true)
 
+  // item 3a — paste a multi-column record straight into the new insert row
+  // (editor is still focused on the row from item 2). Values spread across the
+  // row's columns instead of dumping into one cell.
+  await page.evaluate(() => navigator.clipboard.writeText('PXALPHA\tPXBETA\tPXGAMMA'))
+  await page.keyboard.press('Control+v')
+  await expect(page.getByText(/Pasted/).first()).toBeVisible({ timeout: 5000 })
+  await expect(page.getByText('PXALPHA', { exact: true }).first()).toBeVisible()
+  await expect(page.getByText('PXBETA', { exact: true }).first()).toBeVisible()
+
+  // item 3b — Ctrl+V with a cell selected: multiple TSV records → appended rows
   await page.keyboard.press('Escape')
   await page.waitForTimeout(150)
-
-  // item 3 — paste multiple TSV records → appended as new inserted rows
   await page.evaluate(() => navigator.clipboard.writeText('a\t1\nb\t2\nc\t3\nd\t4\ne\t5'))
   await page.locator('.grid-row td:not(:first-child)').first().click()
   await page.waitForTimeout(100)

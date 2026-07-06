@@ -91,11 +91,12 @@
     if (editingCell?.seed == null) node.select()
   }
 
-  // Commit an edit to an EXPLICIT cell (never inferred from editingCell): a Tab
-  // that moves the editor causes the old input's onblur to fire after editingCell
-  // already points at the next cell, so relying on editingCell would write the old
-  // value into the new cell. Only clears editingCell if it's still on this cell.
+  // Commit an edit to an EXPLICIT cell. Only the CURRENTLY-open editor commits:
+  // a late onblur (fired when the input unmounts because a Tab moved the editor,
+  // or a multi-cell paste closed it) must not clobber the new cell/value. So if
+  // editingCell no longer points at this cell, do nothing.
   function commitEdit(row: number, col: string, value: string, original: unknown, insert?: number) {
+    if (!(editingCell && editingCell.row === row && editingCell.col === col && editingCell.insert === insert)) return
     if (insert != null) {
       insertedRows[insert][col] = coerce(value, original ?? '')
       insertedRows = [...insertedRows]
@@ -108,9 +109,7 @@
       }
       edits = new Map(edits)
     }
-    if (editingCell && editingCell.row === row && editingCell.col === col && editingCell.insert === insert) {
-      editingCell = null
-    }
+    editingCell = null
   }
 
   // Tab / Shift+Tab across cells while editing (Navicat data entry): commit then
@@ -131,10 +130,65 @@
     }
   }
 
-  // Paste TSV/CSV from the clipboard. Rows that map onto loaded rows become
-  // pending edits; rows past the end are appended as NEW inserted records — so
-  // copying many records from another source pastes them all in one go. With no
-  // selected cell, everything is appended as new rows from the first column.
+  // Spread TSV/CSV `text` across cells starting at (startAbsRow, startColName).
+  // Rows live in a unified space: data rows [0, data.rows.length), then pending
+  // inserted rows after them. So pasting onto a loaded row edits it; pasting onto
+  // an existing inserted row FILLS it (the "paste into a new row" case); pasting
+  // past the end appends new inserted rows.
+  function applyPaste(text: string, startColName: string, startAbsRow: number) {
+    if (!editable || !text) return
+    const grid = text.replace(/\r\n?/g, '\n').replace(/\n$/, '').split('\n').map((r) => (r.includes('\t') ? r.split('\t') : r.split(',')))
+    const startCol = columns.indexOf(startColName)
+    if (startCol < 0) return
+    const next = new Map(edits)
+    const inserts = [...insertedRows]
+    let cellsChanged = 0
+    let newRows = 0
+    for (let r = 0; r < grid.length; r++) {
+      const abs = startAbsRow + r
+      if (abs < data.rows.length) {
+        // edit an existing (loaded) row
+        for (let c = 0; c < grid[r].length; c++) {
+          const ci = startCol + c
+          if (ci >= columns.length) break
+          const col = columns[ci]
+          const original = data.rows[abs]?.[col]
+          const coerced = coerce(grid[r][c], original)
+          if (JSON.stringify(coerced) === JSON.stringify(original)) next.delete(cellKey(abs, col))
+          else { next.set(cellKey(abs, col), coerced); cellsChanged++ }
+        }
+      } else {
+        // an inserted row — fill the existing pending row or append new ones
+        const insIdx = abs - data.rows.length
+        while (inserts.length <= insIdx) {
+          inserts.push(Object.fromEntries(columns.map((c) => [c, null])))
+          newRows++
+        }
+        for (let c = 0; c < grid[r].length; c++) {
+          const ci = startCol + c
+          if (ci >= columns.length) break
+          inserts[insIdx][columns[ci]] = coerce(grid[r][c], '')
+          cellsChanged++
+        }
+      }
+    }
+    edits = next
+    editingCell = null
+    insertedRows = inserts
+    if (startAbsRow >= data.rows.length || newRows) {
+      page = Math.max(0, pageCount - 1) // reveal inserted rows
+      void scrollToBottom()
+    }
+    if (cellsChanged || newRows) {
+      const parts: string[] = []
+      if (cellsChanged) parts.push(`${cellsChanged} cell(s)`)
+      if (newRows) parts.push(`${newRows} new record(s)`)
+      toasts.success(`Pasted ${parts.join(' + ')} — Execute to apply`)
+    }
+  }
+
+  // Ctrl+V on the grid (not while editing): anchor at the selected cell, or the
+  // insert row under edit, else append from the first column of a new row.
   async function pasteFromClipboard() {
     if (!editable) return
     let text = ''
@@ -145,48 +199,23 @@
       return
     }
     if (!text) return
-    const grid = text.replace(/\r\n?/g, '\n').replace(/\n$/, '').split('\n').map((r) => (r.includes('\t') ? r.split('\t') : r.split(',')))
-    // No selection → append all pasted rows as new records from the first column.
-    const start = selectedCell ?? { row: data.rows.length, col: columns[0] }
-    const startCol = columns.indexOf(start.col)
-    if (startCol < 0) return
-    const next = new Map(edits)
-    const newRows: Record<string, unknown>[] = []
-    let cellsChanged = 0
-    for (let r = 0; r < grid.length; r++) {
-      const targetRow = start.row + r
-      if (targetRow < data.rows.length) {
-        // edit an existing (loaded) row
-        for (let c = 0; c < grid[r].length; c++) {
-          const ci = startCol + c
-          if (ci >= columns.length) break
-          const col = columns[ci]
-          const original = data.rows[targetRow]?.[col]
-          const coerced = coerce(grid[r][c], original)
-          if (JSON.stringify(coerced) === JSON.stringify(original)) next.delete(cellKey(targetRow, col))
-          else { next.set(cellKey(targetRow, col), coerced); cellsChanged++ }
-        }
-      } else {
-        // past the end → a brand-new inserted record
-        const rowObj: Record<string, unknown> = Object.fromEntries(columns.map((c) => [c, null]))
-        for (let c = 0; c < grid[r].length; c++) {
-          const ci = startCol + c
-          if (ci >= columns.length) break
-          rowObj[columns[ci]] = coerce(grid[r][c], '')
-        }
-        newRows.push(rowObj)
-      }
+    if (editingCell?.insert != null) {
+      applyPaste(text, editingCell.col, data.rows.length + editingCell.insert)
+    } else if (selectedCell) {
+      applyPaste(text, selectedCell.col, selectedCell.row)
+    } else {
+      applyPaste(text, columns[0], data.rows.length) // append as new records
     }
-    edits = next
-    if (newRows.length) {
-      insertedRows = [...insertedRows, ...newRows]
-      page = Math.max(0, pageCount - 1) // reveal the appended rows
-      void scrollToBottom()
-    }
-    const parts: string[] = []
-    if (cellsChanged) parts.push(`${cellsChanged} cell(s)`)
-    if (newRows.length) parts.push(`${newRows.length} new record(s)`)
-    if (parts.length) toasts.success(`Pasted ${parts.join(' + ')} — Execute to apply`)
+  }
+
+  // Paste directly inside a cell editor. A single value pastes natively into the
+  // input; a multi-value clipboard (tabs/newlines) is spread across cells/rows —
+  // this is what makes pasting a record into a freshly-inserted row work.
+  function onCellPaste(e: ClipboardEvent, startColName: string, startAbsRow: number) {
+    const text = e.clipboardData?.getData('text') ?? ''
+    if (!text || !/[\t\n]/.test(text.replace(/\n$/, ''))) return // single value → native
+    e.preventDefault()
+    applyPaste(text, startColName, startAbsRow)
   }
 
   function toggleDeleteSelected() {
@@ -841,6 +870,7 @@
                   value={editingCell?.seed ?? (cell.isNull ? '' : cell.text)}
                   use:focusEditor
                   style="width:100%;border:none;outline:none;background:var(--raised);color:var(--text);font-size:var(--px-12);padding:var(--px-5) var(--px-12);font-family:inherit"
+                  onpaste={(e) => onCellPaste(e, col, ri)}
                   onblur={(e) => commitEdit(ri, col, e.currentTarget.value, row?.[col] ?? null)}
                   onkeydown={(e) => {
                     // Keep keys inside the editor — don't let them bubble to the
@@ -903,6 +933,7 @@
                     value={ins[col] == null ? '' : String(ins[col])}
                     use:focusEditor
                     style="width:100%;border:none;outline:none;background:var(--raised);color:var(--text);font-size:var(--px-12);padding:var(--px-5) var(--px-12);font-family:inherit"
+                    onpaste={(e) => onCellPaste(e, col, data.rows.length + insIdx)}
                     onblur={(e) => commitEdit(insIdx, col, e.currentTarget.value, ins[col], insIdx)}
                     onkeydown={(e) => {
                       e.stopPropagation()
