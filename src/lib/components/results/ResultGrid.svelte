@@ -534,6 +534,18 @@
     ctxMenu = { x: e.clientX, y: e.clientY, row: rowIdx, col }
   }
 
+  // Right-click the No. (#) gutter → same copy menu, scoped to the whole row.
+  function openRowCtx(e: MouseEvent, rowIdx: number) {
+    e.preventDefault()
+    e.stopPropagation()
+    if (!selectedRows.has(rowIdx)) {
+      selectedCell = null
+      selectedRows = new Set([rowIdx])
+      lastAnchorRow = rowIdx
+    }
+    ctxMenu = { x: e.clientX, y: e.clientY, row: rowIdx, col: columns[0] }
+  }
+
   async function copyText(text: string, label: string) {
     ctxMenu = null
     await navigator.clipboard.writeText(text)
@@ -709,13 +721,14 @@
         <tr
           class="grid-row"
           onclick={(e) => clickRowNumber(e, ri)}
-          style="height:{ROW_H}px;cursor:pointer;background:{isDeleted ? 'var(--rgba-224-108-117-_14)' : isRowSelected ? 'color-mix(in srgb, var(--primary) 30%, transparent)' : ri % 2 === 1 ? 'var(--grid-zebra)' : 'transparent'};box-shadow:inset var(--px-2) 0 0 {isRowSelected ? 'var(--primary)' : 'transparent'};{isDeleted ? 'text-decoration:line-through;opacity:.65;' : ''}"
+          style="height:{ROW_H}px;cursor:pointer;background:{isDeleted ? 'var(--rgba-224-108-117-_14)' : isRowSelected ? 'color-mix(in srgb, var(--grid-select) 30%, transparent)' : ri % 2 === 1 ? 'var(--grid-zebra)' : 'transparent'};box-shadow:inset var(--px-2) 0 0 {isRowSelected ? 'var(--grid-select)' : 'transparent'};{isDeleted ? 'text-decoration:line-through;opacity:.65;' : ''}"
         >
           <td
             onclick={(e) => { e.stopPropagation(); clickRowNumber(e, ri) }}
-            title="Click to select · Shift/Ctrl for multiple"
+            oncontextmenu={(e) => openRowCtx(e, ri)}
+            title="Click to select · Shift/Ctrl for multiple · right-click for menu"
             class="mono"
-            style="padding:var(--px-3) var(--px-8);text-align:right;color:{isRowSelected ? 'var(--hex-fff)' : 'var(--muted)'};border-bottom:var(--px-1) solid var(--border);border-right:var(--px-1) solid var(--border);background:{isRowSelected ? 'color-mix(in srgb, var(--primary) 65%, transparent)' : 'var(--header)'};position:sticky;left:0;font-size:var(--px-10_5);user-select:none">{ri + 1}</td>
+            style="padding:var(--px-3) var(--px-8);text-align:right;color:{isRowSelected ? 'var(--hex-fff)' : 'var(--muted)'};border-bottom:var(--px-1) solid var(--border);border-right:var(--px-1) solid var(--border);background:{isRowSelected ? 'var(--grid-select)' : 'var(--header)'};position:sticky;left:0;font-size:var(--px-10_5);user-select:none">{ri + 1}</td>
           {#each columns as col (col)}
             {@const edited = edits.has(cellKey(ri, col))}
             {@const rawVal = edited ? edits.get(cellKey(ri, col)) : row?.[col]}
@@ -724,7 +737,7 @@
             {@const isEditing = editingCell?.row === ri && editingCell?.col === col && editingCell?.insert == null}
             <!-- cell — dòng 436-446: padding 5px 12px, NULL badge; edit → highlight vàng -->
             <td
-              style="border-bottom:var(--px-1) solid var(--border);border-right:var(--px-1) solid var(--border);padding:0;white-space:nowrap;max-width:var(--px-420);overflow:hidden;text-overflow:ellipsis;{edited ? `background:var(--rgba-240-160-32-_18);` : ''}{isCellSelected ? 'box-shadow:inset 0 0 0 var(--px-1) var(--primary);' : ''}"
+              style="border-bottom:var(--px-1) solid var(--border);border-right:var(--px-1) solid var(--border);padding:0;white-space:nowrap;max-width:var(--px-420);overflow:hidden;text-overflow:ellipsis;{edited ? `background:var(--rgba-240-160-32-_18);` : ''}{isCellSelected ? 'box-shadow:inset 0 0 0 var(--px-1) var(--grid-select);' : ''}"
               onclick={(e) => {
                 e.stopPropagation()
                 // single-click edits directly on editable grids (item 4); else select

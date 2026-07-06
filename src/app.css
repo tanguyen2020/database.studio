@@ -17,6 +17,9 @@
   --warn: var(--hex-f0a020);
   --warn2: var(--hex-f0c674);
   --error: var(--hex-e06c75);
+  /* Result Grid row selection — ocean/sea blue ("xanh nước biển"), distinct from
+     the indigo --primary. Not a prototype token; used only for grid selection. */
+  --grid-select: #0277bd;
 
   /* shadcn-svelte mapping */
   --background: var(--bg);

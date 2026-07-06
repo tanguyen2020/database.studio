@@ -34,5 +34,12 @@ test('result grid copy menu: raw + 6 extract formats', async ({ page }) => {
   })
   expect(fontFamily).toContain('JetBrains Mono')
 
+  // right-clicking the No. (#) gutter opens the same copy menu (scoped to the row)
+  await page.keyboard.press('Escape')
+  await page.waitForTimeout(100)
+  await page.locator('.grid-row td:first-child').first().click({ button: 'right' })
+  await page.waitForTimeout(150)
+  await expect(page.getByText('Copy row', { exact: true }).first()).toBeVisible()
+
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
