@@ -497,9 +497,11 @@ impl MssqlDriver {
         let rows = self
             .client
             .query(
+                // FOR XML PATH concat instead of STRING_AGG (which needs SQL Server 2017+).
                 "SELECT t.name, OBJECT_NAME(t.parent_id),
-                        (SELECT STRING_AGG(te.type_desc, ',')
-                         FROM sys.trigger_events te WHERE te.object_id = t.object_id)
+                        STUFF((SELECT ',' + te.type_desc
+                               FROM sys.trigger_events te WHERE te.object_id = t.object_id
+                               FOR XML PATH('')), 1, 1, '')
                  FROM sys.triggers t
                  JOIN sys.objects o ON o.object_id = t.object_id
                  WHERE SCHEMA_NAME(o.schema_id) = @P1 AND t.parent_class = 1

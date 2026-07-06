@@ -2,6 +2,7 @@
 // per-node refresh (no full-tree reloads).
 
 import * as ipc from '$lib/ipc'
+import { toasts } from '$lib/stores/toast.svelte'
 import type {
   ColumnInfo,
   ConstraintInfo,
@@ -100,17 +101,31 @@ class ExplorerStore {
     const sc = this.schema(connId, schema)
     if (sc.tables && !force) return
     await this.track(connId, `schema:${schema}`, async () => {
+      // Resilient: one failing introspection query (e.g. MSSQL triggers() uses
+      // STRING_AGG which errors on SQL Server < 2017) must NOT blank the whole
+      // schema — load each independently and keep what succeeds.
+      const failed: string[] = []
+      const safe = async <T>(label: string, p: Promise<T[]>): Promise<T[]> => {
+        try {
+          return await p
+        } catch (e) {
+          failed.push(label)
+          console.error(`loadSchemaChildren ${label} failed:`, e)
+          return []
+        }
+      }
       const [tables, routines, triggers, sequences] = await Promise.all([
-        ipc.listTables(connId, schema),
-        ipc.listRoutines(connId, schema),
-        ipc.listTriggers(connId, schema),
-        ipc.listSequences(connId, schema),
+        safe('tables', ipc.listTables(connId, schema)),
+        safe('routines', ipc.listRoutines(connId, schema)),
+        safe('triggers', ipc.listTriggers(connId, schema)),
+        safe('sequences', ipc.listSequences(connId, schema)),
       ])
       sc.tables = tables
       sc.routines = routines
       sc.triggers = triggers
       sc.sequences = sequences
       if (force) sc.tableDetails = {}
+      if (failed.length) toasts.error(`Some objects failed to load (${failed.join(', ')})`)
     })
   }
 
