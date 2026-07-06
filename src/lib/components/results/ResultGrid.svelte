@@ -805,7 +805,7 @@
         <tr
           class="grid-row"
           onclick={(e) => clickRowNumber(e, ri)}
-          style="height:{ROW_H}px;cursor:pointer;background:{isDeleted ? 'var(--rgba-224-108-117-_14)' : isRowSelected ? 'color-mix(in srgb, var(--grid-select) 30%, transparent)' : ri % 2 === 1 ? 'var(--grid-zebra)' : 'transparent'};box-shadow:inset var(--px-2) 0 0 {isRowSelected ? 'var(--grid-select)' : 'transparent'};{isDeleted ? 'text-decoration:line-through;opacity:.65;' : ''}"
+          style="height:{ROW_H}px;cursor:pointer;background:{isDeleted ? 'var(--rgba-224-108-117-_14)' : isRowSelected ? 'color-mix(in srgb, var(--grid-select) 62%, transparent)' : ri % 2 === 1 ? 'var(--grid-zebra)' : 'transparent'};box-shadow:inset var(--px-3) 0 0 {isRowSelected ? 'var(--grid-select)' : 'transparent'};color:{isRowSelected ? 'var(--hex-fff)' : 'inherit'};{isDeleted ? 'text-decoration:line-through;opacity:.65;' : ''}"
         >
           <td
             onclick={(e) => { e.stopPropagation(); clickRowNumber(e, ri) }}
@@ -821,7 +821,7 @@
             {@const isEditing = editingCell?.row === ri && editingCell?.col === col && editingCell?.insert == null}
             <!-- cell — dòng 436-446: padding 5px 12px, NULL badge; edit → highlight vàng -->
             <td
-              style="border-bottom:var(--px-1) solid var(--border);border-right:var(--px-1) solid var(--border);padding:0;white-space:nowrap;max-width:var(--px-420);overflow:hidden;text-overflow:ellipsis;{edited ? `background:var(--rgba-240-160-32-_18);` : ''}{isCellSelected ? 'box-shadow:inset 0 0 0 var(--px-1) var(--grid-select);' : ''}"
+              style="border-bottom:var(--px-1) solid var(--border);border-right:var(--px-1) solid var(--border);padding:0;white-space:nowrap;max-width:var(--px-420);overflow:hidden;text-overflow:ellipsis;{edited ? `background:var(--rgba-240-160-32-_18);` : isCellSelected ? 'background:color-mix(in srgb, var(--grid-select) 45%, transparent);' : ''}{isCellSelected ? 'box-shadow:inset 0 0 0 var(--px-2) var(--grid-select);color:var(--hex-fff);' : ''}"
               onclick={(e) => { e.stopPropagation(); clickCell(ri, col) }}
               oncontextmenu={(e) => openCtx(e, ri, col)}
               ondblclick={(e) => {
