@@ -91,11 +91,14 @@
     if (editingCell?.seed == null) node.select()
   }
 
-  function commitEdit(value: string, original: unknown) {
-    if (!editingCell) return
-    const { row, col, insert } = editingCell
+  // Commit an edit to an EXPLICIT cell (never inferred from editingCell): a Tab
+  // that moves the editor causes the old input's onblur to fire after editingCell
+  // already points at the next cell, so relying on editingCell would write the old
+  // value into the new cell. Only clears editingCell if it's still on this cell.
+  function commitEdit(row: number, col: string, value: string, original: unknown, insert?: number) {
     if (insert != null) {
       insertedRows[insert][col] = coerce(value, original ?? '')
+      insertedRows = [...insertedRows]
     } else {
       const coerced = coerce(value, original)
       if (JSON.stringify(coerced) === JSON.stringify(data.rows[row]?.[col])) {
@@ -105,13 +108,35 @@
       }
       edits = new Map(edits)
     }
-    editingCell = null
+    if (editingCell && editingCell.row === row && editingCell.col === col && editingCell.insert === insert) {
+      editingCell = null
+    }
   }
 
-  // Paste (item 5): TSV/CSV from the clipboard, starting at the selected cell,
-  // filling right/down into existing rows as pending edits.
+  // Tab / Shift+Tab across cells while editing (Navicat data entry): commit then
+  // open the editor on the adjacent column; closes at the row's edge.
+  function editAdjacent(row: number, col: string, dCol: number, insert?: number) {
+    const ci = columns.indexOf(col) + dCol
+    if (ci < 0 || ci >= columns.length) {
+      editingCell = null
+      return
+    }
+    const nextCol = columns[ci]
+    if (insert != null) {
+      startEdit(insert, nextCol, insert)
+    } else {
+      selectedRows = new Set()
+      selectedCell = { row, col: nextCol }
+      startEdit(row, nextCol)
+    }
+  }
+
+  // Paste TSV/CSV from the clipboard. Rows that map onto loaded rows become
+  // pending edits; rows past the end are appended as NEW inserted records — so
+  // copying many records from another source pastes them all in one go. With no
+  // selected cell, everything is appended as new rows from the first column.
   async function pasteFromClipboard() {
-    if (!editable || !selectedCell) return
+    if (!editable) return
     let text = ''
     try {
       text = await navigator.clipboard.readText()
@@ -121,25 +146,46 @@
     }
     if (!text) return
     const grid = text.replace(/\r\n?/g, '\n').replace(/\n$/, '').split('\n').map((r) => (r.includes('\t') ? r.split('\t') : r.split(',')))
-    const startCol = columns.indexOf(selectedCell.col)
+    // No selection → append all pasted rows as new records from the first column.
+    const start = selectedCell ?? { row: data.rows.length, col: columns[0] }
+    const startCol = columns.indexOf(start.col)
     if (startCol < 0) return
     const next = new Map(edits)
-    let changed = 0
+    const newRows: Record<string, unknown>[] = []
+    let cellsChanged = 0
     for (let r = 0; r < grid.length; r++) {
-      const targetRow = selectedCell.row + r
-      if (targetRow >= data.rows.length) break // paste only into loaded rows
-      for (let c = 0; c < grid[r].length; c++) {
-        const ci = startCol + c
-        if (ci >= columns.length) break
-        const col = columns[ci]
-        const original = data.rows[targetRow]?.[col]
-        const coerced = coerce(grid[r][c], original)
-        if (JSON.stringify(coerced) === JSON.stringify(original)) next.delete(cellKey(targetRow, col))
-        else { next.set(cellKey(targetRow, col), coerced); changed++ }
+      const targetRow = start.row + r
+      if (targetRow < data.rows.length) {
+        // edit an existing (loaded) row
+        for (let c = 0; c < grid[r].length; c++) {
+          const ci = startCol + c
+          if (ci >= columns.length) break
+          const col = columns[ci]
+          const original = data.rows[targetRow]?.[col]
+          const coerced = coerce(grid[r][c], original)
+          if (JSON.stringify(coerced) === JSON.stringify(original)) next.delete(cellKey(targetRow, col))
+          else { next.set(cellKey(targetRow, col), coerced); cellsChanged++ }
+        }
+      } else {
+        // past the end → a brand-new inserted record
+        const rowObj: Record<string, unknown> = Object.fromEntries(columns.map((c) => [c, null]))
+        for (let c = 0; c < grid[r].length; c++) {
+          const ci = startCol + c
+          if (ci >= columns.length) break
+          rowObj[columns[ci]] = coerce(grid[r][c], '')
+        }
+        newRows.push(rowObj)
       }
     }
     edits = next
-    if (changed) toasts.success(`Pasted into ${changed} cell(s) — Execute to apply`)
+    if (newRows.length) {
+      insertedRows = [...insertedRows, ...newRows]
+      page = Math.max(0, pageCount - 1) // reveal the appended rows
+    }
+    const parts: string[] = []
+    if (cellsChanged) parts.push(`${cellsChanged} cell(s)`)
+    if (newRows.length) parts.push(`${newRows.length} new record(s)`)
+    if (parts.length) toasts.success(`Pasted ${parts.join(' + ')} — Execute to apply`)
   }
 
   function toggleDeleteSelected() {
@@ -155,6 +201,11 @@
   function addRow() {
     insertedRows.push(Object.fromEntries(columns.map((c) => [c, null])))
     insertedRows = [...insertedRows]
+    // Inserted rows only render on the last page — jump there and open the editor
+    // on the first cell so the user can start typing immediately.
+    const idx = insertedRows.length - 1
+    page = Math.max(0, pageCount - 1)
+    if (columns.length) startEdit(idx, columns[0], idx)
   }
 
   function discard() {
@@ -780,13 +831,17 @@
                   value={editingCell?.seed ?? (cell.isNull ? '' : cell.text)}
                   use:focusEditor
                   style="width:100%;border:none;outline:none;background:var(--raised);color:var(--text);font-size:var(--px-12);padding:var(--px-5) var(--px-12);font-family:inherit"
-                  onblur={(e) => commitEdit(e.currentTarget.value, row?.[col] ?? null)}
+                  onblur={(e) => commitEdit(ri, col, e.currentTarget.value, row?.[col] ?? null)}
                   onkeydown={(e) => {
                     // Keep keys inside the editor — don't let them bubble to the
                     // grid (which would re-open the editor or move the cell).
                     e.stopPropagation()
-                    if (e.key === 'Enter') commitEdit(e.currentTarget.value, row?.[col] ?? null)
-                    if (e.key === 'Escape') editingCell = null
+                    if (e.key === 'Enter') commitEdit(ri, col, e.currentTarget.value, row?.[col] ?? null)
+                    else if (e.key === 'Tab') {
+                      e.preventDefault()
+                      commitEdit(ri, col, e.currentTarget.value, row?.[col] ?? null)
+                      editAdjacent(ri, col, e.shiftKey ? -1 : 1)
+                    } else if (e.key === 'Escape') editingCell = null
                   }}
                 />
               {:else}
@@ -832,11 +887,15 @@
                     value={ins[col] == null ? '' : String(ins[col])}
                     use:focusEditor
                     style="width:100%;border:none;outline:none;background:var(--raised);color:var(--text);font-size:var(--px-12);padding:var(--px-5) var(--px-12);font-family:inherit"
-                    onblur={(e) => commitEdit(e.currentTarget.value, ins[col])}
+                    onblur={(e) => commitEdit(insIdx, col, e.currentTarget.value, ins[col], insIdx)}
                     onkeydown={(e) => {
                       e.stopPropagation()
-                      if (e.key === 'Enter') commitEdit(e.currentTarget.value, ins[col])
-                      if (e.key === 'Escape') editingCell = null
+                      if (e.key === 'Enter') commitEdit(insIdx, col, e.currentTarget.value, ins[col], insIdx)
+                      else if (e.key === 'Tab') {
+                        e.preventDefault()
+                        commitEdit(insIdx, col, e.currentTarget.value, ins[col], insIdx)
+                        editAdjacent(insIdx, col, e.shiftKey ? -1 : 1, insIdx)
+                      } else if (e.key === 'Escape') editingCell = null
                     }}
                   />
                 {:else}

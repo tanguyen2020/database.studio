@@ -52,3 +52,52 @@ test('editable grid: single-click selects, double-click / type edits (Navicat-st
 
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
+
+// items 1–3: Tab moves to the next cell while editing; Insert row focuses a cell
+// for immediate entry; pasting many rows appends them as new records.
+test('editable grid: Tab moves cell, Insert row focuses, paste adds records', async ({ page, context }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(String(e)))
+  await context.grantPermissions(['clipboard-read', 'clipboard-write'])
+  await blockRemoteFonts(page)
+  await page.goto(APP_URL)
+  await page.waitForSelector('#app > *', { timeout: 15_000 })
+  await page.waitForTimeout(400)
+
+  await page.getByRole('button', { name: /Postgres/ }).first().click()
+  await page.waitForTimeout(400)
+  await page.getByText('public', { exact: true }).first().dblclick()
+  await page.waitForTimeout(300)
+  await page.getByText('Tables', { exact: true }).first().dblclick()
+  await page.waitForTimeout(300)
+  await page.getByRole('treeitem', { name: /students/ }).first().dblclick()
+  await expect(page.getByText('＋ Insert row', { exact: true }).first()).toBeVisible({ timeout: 10_000 })
+  await page.waitForTimeout(300)
+
+  // item 1 — enter edit, Tab keeps the editor open on the next cell
+  await page.locator('.grid-row td:not(:first-child)').first().dblclick()
+  await expect(page.locator('.grid-row input').first()).toBeVisible()
+  await page.keyboard.press('Tab')
+  await page.waitForTimeout(150)
+  await expect(page.locator('.grid-row input').first()).toBeVisible() // still editing, moved on
+
+  await page.keyboard.press('Escape')
+  await page.waitForTimeout(150)
+
+  // item 2 — clicking Insert row opens an editor on the new row straight away
+  await page.getByText('＋ Insert row', { exact: true }).first().click()
+  await page.waitForTimeout(200)
+  await expect(page.locator('input:focus')).toBeVisible()
+
+  await page.keyboard.press('Escape')
+  await page.waitForTimeout(150)
+
+  // item 3 — paste multiple TSV records → appended as new inserted rows
+  await page.evaluate(() => navigator.clipboard.writeText('a\t1\nb\t2\nc\t3\nd\t4\ne\t5'))
+  await page.locator('.grid-row td:not(:first-child)').first().click()
+  await page.waitForTimeout(100)
+  await page.keyboard.press('Control+v')
+  await expect(page.getByText(/Pasted/).first()).toBeVisible({ timeout: 5000 })
+
+  expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
+})
