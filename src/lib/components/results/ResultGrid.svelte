@@ -758,6 +758,7 @@
                   class="mono"
                   value={cell.isNull ? '' : cell.text}
                   autofocus
+                  onfocus={(e) => e.currentTarget.select()}
                   style="width:100%;border:none;outline:none;background:var(--raised);color:var(--text);font-size:var(--px-12);padding:var(--px-5) var(--px-12);font-family:inherit"
                   onblur={(e) => commitEdit(e.currentTarget.value, row?.[col] ?? null)}
                   onkeydown={(e) => {
@@ -808,6 +809,7 @@
                     class="mono"
                     value={ins[col] == null ? '' : String(ins[col])}
                     autofocus
+                    onfocus={(e) => e.currentTarget.select()}
                     style="width:100%;border:none;outline:none;background:var(--raised);color:var(--text);font-size:var(--px-12);padding:var(--px-5) var(--px-12);font-family:inherit"
                     onblur={(e) => commitEdit(e.currentTarget.value, ins[col])}
                     onkeydown={(e) => {
