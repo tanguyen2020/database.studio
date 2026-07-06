@@ -187,8 +187,10 @@
     }
   }
 
-  // Ctrl+V on the grid (not while editing): anchor at the selected cell, or the
-  // insert row under edit, else append from the first column of a new row.
+  // Ctrl+V on the grid (not while editing). A MULTI-ROW clipboard is pasted as
+  // that many NEW rows appended at the end — copy N rows ⇒ paste N rows (rather
+  // than overwriting loaded rows). A single-row clipboard edits in place at the
+  // selected cell (paste a value/column of values), else appends one row.
   async function pasteFromClipboard() {
     if (!editable) return
     let text = ''
@@ -199,12 +201,14 @@
       return
     }
     if (!text) return
-    if (editingCell?.insert != null) {
-      applyPaste(text, editingCell.col, data.rows.length + editingCell.insert)
+    const multiRow = /\n/.test(text.replace(/\n+$/, ''))
+    const appendAt = data.rows.length + insertedRows.length // after any pending rows
+    if (multiRow) {
+      applyPaste(text, columns[0], appendAt) // N rows → N new rows
     } else if (selectedCell) {
       applyPaste(text, selectedCell.col, selectedCell.row)
     } else {
-      applyPaste(text, columns[0], data.rows.length) // append as new records
+      applyPaste(text, columns[0], appendAt)
     }
   }
 

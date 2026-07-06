@@ -105,14 +105,20 @@ test('editable grid: Tab moves cell, Insert row focuses, paste adds records', as
   await expect(page.getByText('PXALPHA', { exact: true }).first()).toBeVisible()
   await expect(page.getByText('PXBETA', { exact: true }).first()).toBeVisible()
 
-  // item 3b — Ctrl+V with a cell selected: multiple TSV records → appended rows
+  // item 3b — copy N rows → paste N rows: a multi-row clipboard pasted at a data
+  // cell appends that many NEW rows (does not overwrite the loaded rows).
   await page.keyboard.press('Escape')
   await page.waitForTimeout(150)
-  await page.evaluate(() => navigator.clipboard.writeText('a\t1\nb\t2\nc\t3\nd\t4\ne\t5'))
+  await page.evaluate(() =>
+    navigator.clipboard.writeText('RZERO\tv0\nRONE\tv1\nRTWO\tv2\nRTHREE\tv3\nRFOUR\tv4'),
+  )
   await page.locator('.grid-row td:not(:first-child)').first().click()
   await page.waitForTimeout(100)
   await page.keyboard.press('Control+v')
-  await expect(page.getByText(/Pasted/).first()).toBeVisible({ timeout: 5000 })
+  await expect(page.getByText(/5 new record/).first()).toBeVisible({ timeout: 5000 })
+  // all five copied rows landed as new rows (first & last visible)
+  await expect(page.getByText('RZERO', { exact: true }).first()).toBeVisible()
+  await expect(page.getByText('RFOUR', { exact: true }).first()).toBeVisible()
 
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
