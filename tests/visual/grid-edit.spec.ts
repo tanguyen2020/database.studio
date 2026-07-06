@@ -84,10 +84,17 @@ test('editable grid: Tab moves cell, Insert row focuses, paste adds records', as
   await page.keyboard.press('Escape')
   await page.waitForTimeout(150)
 
-  // item 2 — clicking Insert row opens an editor on the new row straight away
+  // item 2 — clicking Insert row opens an editor on the new row straight away,
+  // and the grid scrolls to the bottom so the new row is visible.
   await page.getByText('＋ Insert row', { exact: true }).first().click()
-  await page.waitForTimeout(200)
+  await page.waitForTimeout(300)
   await expect(page.locator('input:focus')).toBeVisible()
+  const atBottom = await page.evaluate(() => {
+    const el = document.querySelector('[role="grid"]') as HTMLElement | null
+    if (!el) return false
+    return el.scrollHeight - el.clientHeight - el.scrollTop <= 4
+  })
+  expect(atBottom, 'grid should be scrolled to the bottom after Insert row').toBe(true)
 
   await page.keyboard.press('Escape')
   await page.waitForTimeout(150)

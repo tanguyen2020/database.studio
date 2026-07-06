@@ -15,7 +15,7 @@
     observeElementRect,
     type VirtualItem,
   } from '@tanstack/virtual-core'
-  import { untrack } from 'svelte'
+  import { untrack, tick } from 'svelte'
   import { pageWindow } from '$lib/grid/paging'
   import { buildGroups, type AggFn, type GroupNode } from '$lib/grid/groupby'
   import { save as saveFileDialog } from '@tauri-apps/plugin-dialog'
@@ -181,6 +181,7 @@
     if (newRows.length) {
       insertedRows = [...insertedRows, ...newRows]
       page = Math.max(0, pageCount - 1) // reveal the appended rows
+      void scrollToBottom()
     }
     const parts: string[] = []
     if (cellsChanged) parts.push(`${cellsChanged} cell(s)`)
@@ -198,13 +199,21 @@
     deletedRows = next
   }
 
-  function addRow() {
+  // Scroll the grid container all the way down so freshly-added inserted rows
+  // (rendered after the virtual window) come fully into view.
+  async function scrollToBottom() {
+    await tick()
+    if (scrollEl) scrollEl.scrollTop = scrollEl.scrollHeight
+  }
+
+  async function addRow() {
     insertedRows.push(Object.fromEntries(columns.map((c) => [c, null])))
     insertedRows = [...insertedRows]
-    // Inserted rows only render on the last page — jump there and open the editor
-    // on the first cell so the user can start typing immediately.
+    // Inserted rows only render on the last page — jump there, scroll to the
+    // bottom so the new row is visible, then open the editor on the first cell.
     const idx = insertedRows.length - 1
     page = Math.max(0, pageCount - 1)
+    await scrollToBottom()
     if (columns.length) startEdit(idx, columns[0], idx)
   }
 
@@ -870,8 +879,14 @@
           {/each}
         </tr>
       {/each}
+      {#if virtualItems.length > 0}
+        {@const last = virtualItems[virtualItems.length - 1]}
+        <tr style="height: {Math.max(0, totalSize - last.end)}px;">
+          <td colspan={columns.length + 1}></td>
+        </tr>
+      {/if}
       {#if editable && onLastPage}
-        <!-- inserted rows (pending) — nền xanh lá nhạt (chỉ hiện ở trang cuối) -->
+        <!-- inserted rows (pending) — nền xanh lá nhạt (chỉ hiện ở trang cuối); render sau spacer nên luôn nằm ở đáy -->
         {#each insertedRows as ins, insIdx (insIdx)}
           <tr style="height:{ROW_H}px;background:var(--rgba-39-174-96-_14)">
             <td class="mono" style="padding:var(--px-3) var(--px-8);text-align:right;color:var(--success);border-bottom:var(--px-1) solid var(--border);border-right:var(--px-1) solid var(--border);position:sticky;left:0;font-size:var(--px-10_5)">＋</td>
@@ -907,12 +922,6 @@
             {/each}
           </tr>
         {/each}
-      {/if}
-      {#if virtualItems.length > 0}
-        {@const last = virtualItems[virtualItems.length - 1]}
-        <tr style="height: {Math.max(0, totalSize - last.end)}px;">
-          <td colspan={columns.length + 1}></td>
-        </tr>
       {/if}
     </tbody>
   </table>
