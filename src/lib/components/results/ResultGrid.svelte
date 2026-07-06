@@ -49,7 +49,7 @@
   let edits = $state<Map<string, unknown>>(new Map())
   let deletedRows = $state<Set<number>>(new Set())
   let insertedRows = $state<Record<string, unknown>[]>([])
-  let editingCell = $state<{ row: number; col: string; insert?: number } | null>(null)
+  let editingCell = $state<{ row: number; col: string; insert?: number; seed?: string } | null>(null)
   let previewSql = $state<string[] | null>(null)
   let applying = $state(false)
   // JSON cell viewer (badge { } → modal)
@@ -78,9 +78,17 @@
     return raw
   }
 
-  function startEdit(row: number, col: string, insert?: number) {
+  function startEdit(row: number, col: string, insert?: number, seed?: string) {
     if (!editable) return
-    editingCell = { row, col, insert }
+    editingCell = { row, col, insert, seed }
+  }
+
+  // Focus a freshly-mounted edit <input> (the `autofocus` attribute is
+  // unreliable for dynamically-inserted elements). Select the whole value unless
+  // it was seeded by type-to-replace (then keep the cursor after the typed char).
+  function focusEditor(node: HTMLInputElement) {
+    node.focus()
+    if (editingCell?.seed == null) node.select()
   }
 
   function commitEdit(value: string, original: unknown) {
@@ -504,7 +512,23 @@
     }
     if (e.key === 'Escape') {
       ctxMenu = null
+      editingCell = null
       return
+    }
+    // Navicat-style edit entry: a cell is selected (not yet editing) on an
+    // editable grid. Enter/F2 open the editor with the value selected; typing a
+    // printable character opens it seeded with that character (type-to-replace).
+    if (editable && selectedCell && !editingCell) {
+      if (e.key === 'Enter' || e.key === 'F2') {
+        e.preventDefault()
+        startEdit(selectedCell.row, selectedCell.col)
+        return
+      }
+      if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault()
+        startEdit(selectedCell.row, selectedCell.col, undefined, e.key)
+        return
+      }
     }
     // Arrow / Tab cell navigation (Tab → next column, Shift+Tab → prev).
     switch (e.key) {
@@ -738,30 +762,29 @@
             <!-- cell — dòng 436-446: padding 5px 12px, NULL badge; edit → highlight vàng -->
             <td
               style="border-bottom:var(--px-1) solid var(--border);border-right:var(--px-1) solid var(--border);padding:0;white-space:nowrap;max-width:var(--px-420);overflow:hidden;text-overflow:ellipsis;{edited ? `background:var(--rgba-240-160-32-_18);` : ''}{isCellSelected ? 'box-shadow:inset 0 0 0 var(--px-1) var(--grid-select);' : ''}"
-              onclick={(e) => {
-                e.stopPropagation()
-                // single-click edits directly on editable grids (item 4); else select
-                if (editable) startEdit(ri, col)
-                else clickCell(ri, col)
-              }}
+              onclick={(e) => { e.stopPropagation(); clickCell(ri, col) }}
               oncontextmenu={(e) => openCtx(e, ri, col)}
               ondblclick={(e) => {
                 e.stopPropagation()
-                if (!editable) { clickCell(ri, col); void copySelection() }
+                // Navicat-style: single-click selects, double-click edits (or copies
+                // on read-only grids).
+                if (editable) startEdit(ri, col)
+                else { clickCell(ri, col); void copySelection() }
               }}
               title={cell.isNull ? undefined : cell.text}
             >
               {#if isEditing}
                 <!-- inline edit — port dòng 437-439 -->
-                <!-- svelte-ignore a11y_autofocus -->
                 <input
                   class="mono"
-                  value={cell.isNull ? '' : cell.text}
-                  autofocus
-                  onfocus={(e) => e.currentTarget.select()}
+                  value={editingCell?.seed ?? (cell.isNull ? '' : cell.text)}
+                  use:focusEditor
                   style="width:100%;border:none;outline:none;background:var(--raised);color:var(--text);font-size:var(--px-12);padding:var(--px-5) var(--px-12);font-family:inherit"
                   onblur={(e) => commitEdit(e.currentTarget.value, row?.[col] ?? null)}
                   onkeydown={(e) => {
+                    // Keep keys inside the editor — don't let them bubble to the
+                    // grid (which would re-open the editor or move the cell).
+                    e.stopPropagation()
                     if (e.key === 'Enter') commitEdit(e.currentTarget.value, row?.[col] ?? null)
                     if (e.key === 'Escape') editingCell = null
                   }}
@@ -804,15 +827,14 @@
                 ondblclick={() => startEdit(insIdx, col, insIdx)}
               >
                 {#if isEditing}
-                  <!-- svelte-ignore a11y_autofocus -->
                   <input
                     class="mono"
                     value={ins[col] == null ? '' : String(ins[col])}
-                    autofocus
-                    onfocus={(e) => e.currentTarget.select()}
+                    use:focusEditor
                     style="width:100%;border:none;outline:none;background:var(--raised);color:var(--text);font-size:var(--px-12);padding:var(--px-5) var(--px-12);font-family:inherit"
                     onblur={(e) => commitEdit(e.currentTarget.value, ins[col])}
                     onkeydown={(e) => {
+                      e.stopPropagation()
                       if (e.key === 'Enter') commitEdit(e.currentTarget.value, ins[col])
                       if (e.key === 'Escape') editingCell = null
                     }}
