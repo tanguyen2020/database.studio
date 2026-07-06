@@ -113,7 +113,8 @@
       const ddl = await ipc.objectDefinition(connId, schema, 'trigger', tg.name).catch(() => '')
       routines.push({ name: tg.name, kind: 'trigger', ddl })
     }
-    return { tables, routines }
+    const sequences = (await ipc.listSequences(connId, schema).catch(() => [])).map((s) => s.name)
+    return { tables, routines, sequences }
   }
 
   async function compare() {
@@ -169,6 +170,15 @@
     else next.add(name)
     selected = next
   }
+  // Item 2 — expand a table row to see its per-column (name · datatype) diff.
+  let expandedRows = $state<Set<string>>(new Set())
+  function toggleRow(dkey: string) {
+    const next = new Set(expandedRows)
+    if (next.has(dkey)) next.delete(dkey)
+    else next.add(dkey)
+    expandedRows = next
+  }
+
   function openMigration() {
     if (!tgtConn) return
     const t = tabs.openSqlTab({ connectionId: tgtConn, title: 'Migration', query: migration })
@@ -260,24 +270,47 @@
       {#each visible as d (d.kind + ':' + d.name)}
         {@const sm = statusMeta[d.status]}
         {@const hasDdl = d.srcDdl != null || d.tgtDdl != null}
+        {@const dkey = d.kind + ':' + d.name}
+        {@const colChanges = d.columns.filter((c) => c.status !== 'identical')}
+        {@const expandable = hasDdl || d.columns.length > 0}
+        {@const isOpen = expandedRows.has(dkey)}
         <div
-          style="display:flex;align-items:stretch;border-bottom:var(--px-1) solid var(--border);cursor:{hasDdl ? 'pointer' : 'default'}"
-          onclick={() => hasDdl && (selDiff = d)}
-          onkeydown={(e) => e.key === 'Enter' && hasDdl && (selDiff = d)}
+          style="display:flex;align-items:stretch;border-bottom:var(--px-1) solid var(--border);cursor:{expandable ? 'pointer' : 'default'}"
+          onclick={() => { if (hasDdl) selDiff = d; else if (d.columns.length) toggleRow(dkey) }}
+          onkeydown={(e) => e.key === 'Enter' && (hasDdl ? (selDiff = d) : d.columns.length && toggleRow(dkey))}
           role="button"
           tabindex="0"
-          title={hasDdl ? 'Xem DDL diff' : ''}
+          title={hasDdl ? 'View DDL diff' : d.columns.length ? 'Show column diff' : ''}
         >
           <div style="flex:1;display:flex;align-items:center;gap:var(--px-8);padding:var(--px-7) var(--px-14);box-shadow:inset var(--px-3) 0 0 {sm.color}">
-            {#if d.status !== 'tgt_only'}<input type="checkbox" checked={selected.has(d.name)} onchange={() => toggleSel(d.name)} />{/if}
+            <span class="mono" style="width:var(--px-10);color:var(--muted);font-size:var(--px-9)">{d.columns.length && !hasDdl ? (isOpen ? '▾' : '▸') : ''}</span>
+            {#if d.status !== 'tgt_only'}<input type="checkbox" checked={selected.has(d.name)} onchange={() => toggleSel(d.name)} onclick={(e) => e.stopPropagation()} />{/if}
             <span class="mono" style="font-size:var(--px-8);font-weight:700;color:var(--muted);border:var(--px-1) solid var(--border2);border-radius:var(--px-3);padding:var(--px-1) var(--px-4)">{d.kind}</span>
             <span class="mono" style="font-size:var(--px-12_5);font-weight:600;color:{d.status === 'tgt_only' ? 'var(--muted)' : 'var(--text)'}">{d.status === 'tgt_only' ? '—' : d.name}</span>
+            {#if colChanges.length}<span style="font-size:var(--px-9_5);color:var(--warn)">{colChanges.length} col Δ</span>{/if}
           </div>
           <div style="flex:1;display:flex;align-items:center;gap:var(--px-8);padding:var(--px-7) var(--px-14)">
             <span class="mono" style="font-size:var(--px-12_5);font-weight:600;color:{d.status === 'src_only' ? 'var(--muted)' : 'var(--text)'}">{d.status === 'src_only' ? '—' : d.name}</span>
             <span style="margin-left:auto;font-size:var(--px-10);font-weight:700;color:var(--hex-fff);background:{sm.color};border-radius:var(--px-4);padding:var(--px-1) var(--px-7)">{sm.icon} {sm.label}</span>
           </div>
         </div>
+        {#if isOpen && !hasDdl}
+          <!-- per-column diff (name · source type → target type) -->
+          {#each (showIdentical ? d.columns : colChanges) as c (c.name)}
+            {@const csm = statusMeta[c.status]}
+            <div style="display:flex;align-items:stretch;border-bottom:var(--px-1) solid var(--border);background:var(--panel);font-size:var(--px-11_5)">
+              <div class="mono" style="flex:1;display:flex;align-items:center;gap:var(--px-8);padding:var(--px-4) var(--px-14) var(--px-4) var(--px-34);box-shadow:inset var(--px-3) 0 0 {csm.color}">
+                <span style="color:{c.status === 'tgt_only' ? 'var(--muted)' : 'var(--text2)'}">{c.status === 'tgt_only' ? '—' : c.name}</span>
+                {#if c.srcType}<span style="color:var(--muted)">{c.srcType}</span>{/if}
+              </div>
+              <div class="mono" style="flex:1;display:flex;align-items:center;gap:var(--px-8);padding:var(--px-4) var(--px-14)">
+                <span style="color:{c.status === 'src_only' ? 'var(--muted)' : 'var(--text2)'}">{c.status === 'src_only' ? '—' : c.name}</span>
+                {#if c.tgtType}<span style="color:var(--muted)">{c.tgtType}</span>{/if}
+                <span style="margin-left:auto;color:{csm.color};font-weight:700">{csm.icon}</span>
+              </div>
+            </div>
+          {/each}
+        {/if}
       {/each}
     </div>
   {:else}

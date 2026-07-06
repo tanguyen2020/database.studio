@@ -22,10 +22,11 @@ export interface CmpRoutine {
 export interface SchemaSnapshot {
   tables: CmpTable[]
   routines?: CmpRoutine[]
+  sequences?: string[]
 }
 
 export type DiffStatus = 'identical' | 'different' | 'src_only' | 'tgt_only'
-export type ObjectKind = 'table' | 'view' | 'procedure' | 'function' | 'trigger'
+export type ObjectKind = 'table' | 'view' | 'procedure' | 'function' | 'trigger' | 'sequence'
 
 export interface ColDiff {
   name: string
@@ -84,7 +85,15 @@ export function compareSchemas(src: SchemaSnapshot, tgt: SchemaSnapshot): Object
     return { ...base, status: normDdl(s!.ddl) === normDdl(t!.ddl) ? 'identical' : 'different' }
   })
 
-  return [...tableDiffs, ...routineDiffs]
+  // Sequences — compared by existence (name), no structural diff.
+  const srcS = new Set(src.sequences ?? [])
+  const tgtS = new Set(tgt.sequences ?? [])
+  const seqDiffs: ObjectDiff[] = [...new Set([...srcS, ...tgtS])].sort().map((name) => {
+    const status: DiffStatus = srcS.has(name) && !tgtS.has(name) ? 'src_only' : !srcS.has(name) && tgtS.has(name) ? 'tgt_only' : 'identical'
+    return { kind: 'sequence', name, status, columns: [] }
+  })
+
+  return [...tableDiffs, ...routineDiffs, ...seqDiffs]
 }
 
 function colDiffs(s?: CmpTable, t?: CmpTable): ColDiff[] {
@@ -122,6 +131,11 @@ export function genMigration(diffs: ObjectDiff[], system: string, selected?: Set
   const out: string[] = ['-- Migration: sync TARGET to match SOURCE', '-- Review carefully before running.', '']
 
   for (const d of diffs.filter(pick)) {
+    if (d.kind === 'sequence') {
+      if (d.status === 'src_only') out.push(`CREATE SEQUENCE ${q(d.name)};`)
+      else if (d.status === 'tgt_only') out.push(`DROP SEQUENCE IF EXISTS ${q(d.name)};`)
+      continue
+    }
     // Routines/triggers: đồng bộ bằng chính DDL nguồn (CREATE OR REPLACE) / DROP.
     if (d.kind === 'procedure' || d.kind === 'function' || d.kind === 'trigger') {
       const kw = d.kind === 'trigger' ? 'TRIGGER' : d.kind === 'procedure' ? 'PROCEDURE' : 'FUNCTION'

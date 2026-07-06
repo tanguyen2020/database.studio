@@ -47,6 +47,35 @@ test('schema compare: pick source/target + diff view + sync script', async ({ pa
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
 
+// Item 2 — a table row expands to show its per-column (name · datatype) diff.
+test('schema compare: table row expands to column-level diff', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(String(e)))
+  await blockRemoteFonts(page)
+  await page.goto(APP_URL)
+  await page.waitForSelector('#app > *', { timeout: 15_000 })
+  await page.waitForTimeout(300)
+  await page.keyboard.press('Control+p')
+  await page.waitForTimeout(150)
+  await page.getByPlaceholder('Type a command or search…').fill('compare')
+  await page.waitForTimeout(150)
+  await page.getByText('Compare schemas…').first().click()
+  await page.waitForTimeout(300)
+  await page.getByTitle('Source connection').selectOption({ label: 'Postgres (postgres)' })
+  await page.waitForTimeout(200)
+  await page.getByTitle('Target connection').selectOption({ label: 'Staging Postgres (postgres)' })
+  await page.waitForTimeout(500)
+
+  // show identical so the demo (same data both sides) lists tables, then expand one
+  await page.getByText('Show identical').first().click()
+  await page.waitForTimeout(200)
+  await page.getByText('students', { exact: true }).first().click()
+  await page.waitForTimeout(200)
+  // its columns (from list_columns demo) appear in the expansion
+  await expect(page.getByText('first_name').first()).toBeVisible()
+  expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
+})
+
 // Item 6 — compare two databases within the SAME connection (DB dropdowns appear
 // once a connection is chosen; sub-connections are attached per database).
 test('schema compare: two databases in one connection', async ({ page }) => {

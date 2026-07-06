@@ -101,6 +101,25 @@ describe('routines/triggers diff + migration (T19)', () => {
   })
 })
 
+describe('sequences diff + migration (item 2)', () => {
+  const s: SchemaSnapshot = { tables: [], sequences: ['seq_a', 'seq_shared'] }
+  const t: SchemaSnapshot = { tables: [], sequences: ['seq_shared', 'seq_b'] }
+  const diffs = compareSchemas(s, t)
+  const by = (n: string) => diffs.find((d) => d.name === n && d.kind === 'sequence')!
+
+  it('classifies sequence existence', () => {
+    expect(by('seq_a').status).toBe('src_only')
+    expect(by('seq_b').status).toBe('tgt_only')
+    expect(by('seq_shared').status).toBe('identical')
+    expect(by('seq_a').kind).toBe('sequence')
+  })
+  it('migration: CREATE for src_only, DROP for tgt_only', () => {
+    const sql = genMigration(diffs, 'postgres')
+    expect(sql).toContain('CREATE SEQUENCE "seq_a";')
+    expect(sql).toContain('DROP SEQUENCE IF EXISTS "seq_b";')
+  })
+})
+
 describe('lineDiff', () => {
   it('marks add/del/same lines (SOURCE vs TARGET)', () => {
     const d = lineDiff('a\nb\nc', 'a\nx\nc')
