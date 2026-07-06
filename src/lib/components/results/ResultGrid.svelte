@@ -803,7 +803,7 @@
         {@const isDeleted = deletedRows.has(ri)}
         <!-- row — dòng 434: zebra + selected inset bar; deleted → đỏ gạch ngang -->
         <tr
-          class="grid-row"
+          class="grid-row {isRowSelected ? 'selected' : ''}"
           onclick={(e) => clickRowNumber(e, ri)}
           style="height:{ROW_H}px;cursor:pointer;background:{isDeleted ? 'var(--rgba-224-108-117-_14)' : isRowSelected ? 'color-mix(in srgb, var(--grid-select) 62%, transparent)' : ri % 2 === 1 ? 'var(--grid-zebra)' : 'transparent'};box-shadow:inset var(--px-3) 0 0 {isRowSelected ? 'var(--grid-select)' : 'transparent'};color:{isRowSelected ? 'var(--hex-fff)' : 'inherit'};{isDeleted ? 'text-decoration:line-through;opacity:.65;' : ''}"
         >
@@ -1099,8 +1099,9 @@
 {/if}
 
 <style>
-  /* style-hover của row (dòng 434) */
-  .grid-row:hover {
+  /* style-hover của row (dòng 434) — KHÔNG áp cho row đang selected để hover
+     không xoá mất màu selection (dùng inline bg từ --grid-select). */
+  .grid-row:not(.selected):hover {
     background: var(--hover) !important;
   }
   .eg-btn {
