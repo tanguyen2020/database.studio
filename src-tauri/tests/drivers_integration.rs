@@ -1197,21 +1197,21 @@ async fn sqlite_editable_grid_apply_and_rollback() {
                 schema: None,
                 table: "t".into(),
                 values: vec![
-                    Col { name: "id".into(), value: json!(3) },
-                    Col { name: "name".into(), value: json!("c") },
-                    Col { name: "n".into(), value: json!(30) },
+                    Col { name: "id".into(), value: json!(3), col_type: None },
+                    Col { name: "name".into(), value: json!("c"), col_type: None },
+                    Col { name: "n".into(), value: json!(30), col_type: None },
                 ],
             },
             GridChange::Update {
                 schema: None,
                 table: "t".into(),
-                pk: vec![Col { name: "id".into(), value: json!(1) }],
-                set: vec![Col { name: "name".into(), value: json!("A") }],
+                pk: vec![Col { name: "id".into(), value: json!(1), col_type: None }],
+                set: vec![Col { name: "name".into(), value: json!("A"), col_type: None }],
             },
             GridChange::Delete {
                 schema: None,
                 table: "t".into(),
-                pk: vec![Col { name: "id".into(), value: json!(2) }],
+                pk: vec![Col { name: "id".into(), value: json!(2), col_type: None }],
             },
         ])
         .await
@@ -1233,13 +1233,13 @@ async fn sqlite_editable_grid_apply_and_rollback() {
             GridChange::Update {
                 schema: None,
                 table: "t".into(),
-                pk: vec![Col { name: "id".into(), value: json!(1) }],
-                set: vec![Col { name: "name".into(), value: json!("X") }],
+                pk: vec![Col { name: "id".into(), value: json!(1), col_type: None }],
+                set: vec![Col { name: "name".into(), value: json!("X"), col_type: None }],
             },
             GridChange::Insert {
                 schema: None,
                 table: "t".into(),
-                values: vec![Col { name: "khong_co_cot".into(), value: json!(1) }],
+                values: vec![Col { name: "khong_co_cot".into(), value: json!(1), col_type: None }],
             },
         ])
         .await;
@@ -1343,19 +1343,19 @@ async fn pg_editable_grid_apply_transaction() {
             GridChange::Update {
                 schema: Some("public".into()),
                 table: "grid_t".into(),
-                pk: vec![Col { name: "id".into(), value: json!(1) }],
+                pk: vec![Col { name: "id".into(), value: json!(1), col_type: None }],
                 set: vec![
-                    Col { name: "name".into(), value: json!("An") },
-                    Col { name: "active".into(), value: json!(false) },
+                    Col { name: "name".into(), value: json!("An"), col_type: None },
+                    Col { name: "active".into(), value: json!(false), col_type: None },
                 ],
             },
             GridChange::Insert {
                 schema: Some("public".into()),
                 table: "grid_t".into(),
                 values: vec![
-                    Col { name: "id".into(), value: json!(3) },
-                    Col { name: "name".into(), value: json!("Chi") },
-                    Col { name: "active".into(), value: json!(true) },
+                    Col { name: "id".into(), value: json!(3), col_type: None },
+                    Col { name: "name".into(), value: json!("Chi"), col_type: None },
+                    Col { name: "active".into(), value: json!(true), col_type: None },
                 ],
             },
         ])
@@ -1366,6 +1366,73 @@ async fn pg_editable_grid_apply_transaction() {
     let StatementOutcome::Rows { result } = out else { panic!("rows") };
     assert_eq!(result.rows[0]["name"], json!("An"));
     assert_eq!(result.rows[0]["active"], json!(false));
+}
+
+// A uuid primary key: the grid holds the PK value as a text string. Without the
+// per-column ::type cast the UPDATE/DELETE WHERE fails with Postgres error
+// "operator does not exist: uuid = text" (the bug this test guards).
+#[tokio::test]
+async fn pg_editable_grid_uuid_pk_updates_and_deletes() {
+    use database_studio_lib::drivers::grid::{Col, GridChange};
+    use serde_json::json;
+
+    let (_c, port) = start_pg().await;
+    let params = PgConnParams {
+        host: "localhost".into(),
+        port,
+        database: "testdb".into(),
+        user: "postgres".into(),
+        password: PASS.into(),
+        ssl: false,
+        ssl_ca: String::new(),
+        ssl_cert: String::new(),
+        ssl_key: String::new(),
+    };
+    let mut drv = retry("postgres", || PgDriver::connect(&params)).await;
+    drv.exec("CREATE TABLE files (id uuid PRIMARY KEY, name varchar)").await.unwrap();
+    let id1 = "019a8f69-cbe8-70cc-b784-000000000001";
+    let id2 = "019a8f69-cbe8-70cc-b784-000000000002";
+    drv.exec(&format!(
+        "INSERT INTO files VALUES ('{id1}','a.png'),('{id2}','b.png')"
+    ))
+    .await
+    .unwrap();
+
+    // UPDATE name WHERE id = <uuid as text> — cast makes uuid = $n::uuid.
+    // Also INSERT a new uuid row (text → uuid column) and DELETE by uuid.
+    let id3 = "019a8f69-cbe8-70cc-b784-000000000003";
+    let n = drv
+        .apply_changes(&[
+            GridChange::Update {
+                schema: Some("public".into()),
+                table: "files".into(),
+                pk: vec![Col { name: "id".into(), value: json!(id1), col_type: Some("uuid".into()) }],
+                set: vec![Col { name: "name".into(), value: json!("renamed.png"), col_type: Some("varchar".into()) }],
+            },
+            GridChange::Insert {
+                schema: Some("public".into()),
+                table: "files".into(),
+                values: vec![
+                    Col { name: "id".into(), value: json!(id3), col_type: Some("uuid".into()) },
+                    Col { name: "name".into(), value: json!("c.png"), col_type: Some("varchar".into()) },
+                ],
+            },
+            GridChange::Delete {
+                schema: Some("public".into()),
+                table: "files".into(),
+                pk: vec![Col { name: "id".into(), value: json!(id2), col_type: Some("uuid".into()) }],
+            },
+        ])
+        .await
+        .unwrap();
+    assert_eq!(n, 3);
+
+    let out = drv.exec("SELECT id::text AS id, name FROM files ORDER BY name").await.unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!("rows") };
+    assert_eq!(result.total, 2, "one row deleted, one inserted → still 2");
+    assert_eq!(result.rows[0]["name"], json!("c.png"));
+    assert_eq!(result.rows[0]["id"], json!(id3), "inserted uuid row present");
+    assert_eq!(result.rows[1]["name"], json!("renamed.png"), "update applied to id1");
 }
 
 #[tokio::test]

@@ -683,6 +683,9 @@ export type GridChange =
 export interface GridCol {
   name: string
   value: unknown
+  /** SQL type of the column (e.g. "uuid", "int8"). Postgres uses it to cast the
+   *  bound parameter ($1::uuid) so comparisons like `uuid = $1` don't fail. */
+  type?: string
 }
 
 export interface FilterCond {

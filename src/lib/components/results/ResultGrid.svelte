@@ -225,10 +225,11 @@
     previewSql = null
   }
 
-  /** Dựng GridChange[] từ buffer pending. */
+  /** Dựng GridChange[] từ buffer pending. Mỗi cột kèm SQL type để backend (PG)
+   *  cast tham số ($1::uuid…) tránh lỗi "operator does not exist: uuid = text". */
   function buildChanges(): GridChange[] {
     const t = editTarget!
-    const pk = (cols: string[]) => cols
+    const mk = (name: string, value: unknown) => ({ name, value, type: colTypes[name] })
     const whereCols = t.pkCols.length > 0 ? t.pkCols : columns
     const out: GridChange[] = []
     // UPDATE: gom edit theo row
@@ -245,8 +246,8 @@
         kind: 'update',
         schema: t.schema,
         table: t.table,
-        pk: pk(whereCols).map((c) => ({ name: c, value: orig?.[c] ?? null })),
-        set: cols.map((c) => ({ name: c, value: edits.get(cellKey(r, c)) })),
+        pk: whereCols.map((c) => mk(c, orig?.[c] ?? null)),
+        set: cols.map((c) => mk(c, edits.get(cellKey(r, c)))),
       })
     }
     // DELETE
@@ -256,14 +257,14 @@
         kind: 'delete',
         schema: t.schema,
         table: t.table,
-        pk: pk(whereCols).map((c) => ({ name: c, value: orig?.[c] ?? null })),
+        pk: whereCols.map((c) => mk(c, orig?.[c] ?? null)),
       })
     }
     // INSERT (bỏ cột null hoàn toàn để dùng default của DB)
     for (const ins of insertedRows) {
       const values = columns
         .filter((c) => ins[c] !== null && ins[c] !== undefined && ins[c] !== '')
-        .map((c) => ({ name: c, value: ins[c] }))
+        .map((c) => mk(c, ins[c]))
       if (values.length > 0) out.push({ kind: 'insert', schema: t.schema, table: t.table, values })
     }
     return out

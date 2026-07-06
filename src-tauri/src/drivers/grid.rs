@@ -66,10 +66,35 @@ pub enum GridChange {
     },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Col {
     pub name: String,
     pub value: Value,
+    /// SQL type of the column (e.g. "uuid", "int8"), sent by the frontend from
+    /// the result-set metadata. Postgres casts the bound param to it ($1::uuid)
+    /// so `uuid = $1` / `INSERT … VALUES ($1)` don't fail with a text mismatch.
+    #[serde(rename = "type", default)]
+    pub col_type: Option<String>,
+}
+
+/// A Postgres `::type` cast for a parameter, or "" for other systems / unsafe
+/// type names. Only the introspected type name is trusted; still sanitised so a
+/// crafted value can't inject SQL.
+fn pg_cast(system: &str, ty: &Option<String>) -> String {
+    if system != "postgres" {
+        return String::new();
+    }
+    match ty {
+        Some(t) if is_safe_type(t) => format!("::{t}"),
+        _ => String::new(),
+    }
+}
+
+fn is_safe_type(t: &str) -> bool {
+    let t = t.trim();
+    !t.is_empty()
+        && t.len() <= 64
+        && t.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | ' ' | '[' | ']'))
 }
 
 /// Câu lệnh đã tham số hóa: SQL + params theo đúng thứ tự placeholder.
@@ -102,23 +127,25 @@ pub fn build(system: &str, change: &GridChange) -> BoundStatement {
         GridChange::Update { schema, table, pk, set } => {
             let set_clause = set
                 .iter()
-                .map(|c| format!("{} = {}", quote_ident(&c.name, q), next(&c.value, &mut params, &mut n)))
+                .map(|c| {
+                    format!("{} = {}{}", quote_ident(&c.name, q), next(&c.value, &mut params, &mut n), pg_cast(system, &c.col_type))
+                })
                 .collect::<Vec<_>>()
                 .join(", ");
-            let where_clause = build_where(pk, &mut params, &mut n, ph, q);
+            let where_clause = build_where(system, pk, &mut params, &mut n, ph, q);
             format!("UPDATE {} SET {set_clause} WHERE {where_clause}", qualified(system, schema, table))
         }
         GridChange::Insert { schema, table, values } => {
             let cols = values.iter().map(|c| quote_ident(&c.name, q)).collect::<Vec<_>>().join(", ");
             let vals = values
                 .iter()
-                .map(|c| next(&c.value, &mut params, &mut n))
+                .map(|c| format!("{}{}", next(&c.value, &mut params, &mut n), pg_cast(system, &c.col_type)))
                 .collect::<Vec<_>>()
                 .join(", ");
             format!("INSERT INTO {} ({cols}) VALUES ({vals})", qualified(system, schema, table))
         }
         GridChange::Delete { schema, table, pk } => {
-            let where_clause = build_where(pk, &mut params, &mut n, ph, q);
+            let where_clause = build_where(system, pk, &mut params, &mut n, ph, q);
             format!("DELETE FROM {} WHERE {where_clause}", qualified(system, schema, table))
         }
     };
@@ -126,6 +153,7 @@ pub fn build(system: &str, change: &GridChange) -> BoundStatement {
 }
 
 fn build_where(
+    system: &str,
     cols: &[Col],
     params: &mut Vec<Value>,
     n: &mut usize,
@@ -139,7 +167,7 @@ fn build_where(
             } else {
                 *n += 1;
                 params.push(c.value.clone());
-                format!("{} = {}", quote_ident(&c.name, q), ph.render(*n))
+                format!("{} = {}{}", quote_ident(&c.name, q), ph.render(*n), pg_cast(system, &c.col_type))
             }
         })
         .collect::<Vec<_>>()
@@ -164,19 +192,19 @@ pub fn preview_sql(system: &str, change: &GridChange) -> String {
         GridChange::Update { schema, table, pk, set } => {
             let set_clause = set
                 .iter()
-                .map(|c| format!("{} = {}", quote_ident(&c.name, q), lit(&c.value)))
+                .map(|c| format!("{} = {}{}", quote_ident(&c.name, q), lit(&c.value), pg_cast(system, &c.col_type)))
                 .collect::<Vec<_>>()
                 .join(", ");
-            let where_clause = preview_where(pk, q, &lit);
+            let where_clause = preview_where(system, pk, q, &lit);
             format!("UPDATE {} SET {set_clause} WHERE {where_clause};", qualified(system, schema, table))
         }
         GridChange::Insert { schema, table, values } => {
             let cols = values.iter().map(|c| quote_ident(&c.name, q)).collect::<Vec<_>>().join(", ");
-            let vals = values.iter().map(|c| lit(&c.value)).collect::<Vec<_>>().join(", ");
+            let vals = values.iter().map(|c| format!("{}{}", lit(&c.value), pg_cast(system, &c.col_type))).collect::<Vec<_>>().join(", ");
             format!("INSERT INTO {} ({cols}) VALUES ({vals});", qualified(system, schema, table))
         }
         GridChange::Delete { schema, table, pk } => {
-            format!("DELETE FROM {} WHERE {};", qualified(system, schema, table), preview_where(pk, q, &lit))
+            format!("DELETE FROM {} WHERE {};", qualified(system, schema, table), preview_where(system, pk, q, &lit))
         }
     }
 }
@@ -205,7 +233,7 @@ pub fn ch_mutation_sql(change: &GridChange) -> String {
                 .map(|c| format!("{} = {}", quote_ident(&c.name, q), lit(&c.value)))
                 .collect::<Vec<_>>()
                 .join(", ");
-            let where_clause = preview_where(pk, q, &lit);
+            let where_clause = preview_where("clickhouse", pk, q, &lit);
             format!(
                 "ALTER TABLE {} UPDATE {set_clause} WHERE {where_clause};",
                 qualified("clickhouse", schema, table)
@@ -215,7 +243,7 @@ pub fn ch_mutation_sql(change: &GridChange) -> String {
             format!(
                 "ALTER TABLE {} DELETE WHERE {};",
                 qualified("clickhouse", schema, table),
-                preview_where(pk, q, &lit)
+                preview_where("clickhouse", pk, q, &lit)
             )
         }
         GridChange::Insert { schema, table, values } => {
@@ -226,13 +254,13 @@ pub fn ch_mutation_sql(change: &GridChange) -> String {
     }
 }
 
-fn preview_where(cols: &[Col], q: QuoteStyle, lit: &dyn Fn(&Value) -> String) -> String {
+fn preview_where(system: &str, cols: &[Col], q: QuoteStyle, lit: &dyn Fn(&Value) -> String) -> String {
     cols.iter()
         .map(|c| {
             if c.value.is_null() {
                 format!("{} IS NULL", quote_ident(&c.name, q))
             } else {
-                format!("{} = {}", quote_ident(&c.name, q), lit(&c.value))
+                format!("{} = {}{}", quote_ident(&c.name, q), lit(&c.value), pg_cast(system, &c.col_type))
             }
         })
         .collect::<Vec<_>>()
@@ -327,12 +355,16 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    fn col(name: &str, value: Value) -> Col {
+        Col { name: name.into(), value, col_type: None }
+    }
+
     fn upd() -> GridChange {
         GridChange::Update {
             schema: Some("public".into()),
             table: "users".into(),
-            pk: vec![Col { name: "id".into(), value: json!(5) }],
-            set: vec![Col { name: "name".into(), value: json!("An") }],
+            pk: vec![col("id", json!(5))],
+            set: vec![col("name", json!("An"))],
         }
     }
 
@@ -341,6 +373,42 @@ mod tests {
         let b = build("postgres", &upd());
         assert_eq!(b.sql, r#"UPDATE "public"."users" SET "name" = $1 WHERE "id" = $2"#);
         assert_eq!(b.params, vec![json!("An"), json!(5)]);
+    }
+
+    #[test]
+    fn pg_casts_typed_params_so_uuid_where_matches() {
+        // A uuid PK: the value comes from the grid as a text string; without the
+        // cast Postgres errors "operator does not exist: uuid = text".
+        let ch = GridChange::Update {
+            schema: Some("public".into()),
+            table: "files".into(),
+            pk: vec![Col { name: "id".into(), value: json!("019a8f69-cbe8-70cc"), col_type: Some("uuid".into()) }],
+            set: vec![Col { name: "name".into(), value: json!("x.png"), col_type: Some("varchar".into()) }],
+        };
+        let b = build("postgres", &ch);
+        assert_eq!(b.sql, r#"UPDATE "public"."files" SET "name" = $1::varchar WHERE "id" = $2::uuid"#);
+        // insert casts too (uuid text → uuid column)
+        let ins = build(
+            "postgres",
+            &GridChange::Insert {
+                schema: None,
+                table: "files".into(),
+                values: vec![Col { name: "id".into(), value: json!("019a…"), col_type: Some("uuid".into()) }],
+            },
+        );
+        assert_eq!(ins.sql, r#"INSERT INTO "files" ("id") VALUES ($1::uuid)"#);
+        // other engines never get the ::cast (their operators are lenient)
+        let m = build("mysql", &ch);
+        assert!(!m.sql.contains("::"), "mysql should not receive pg casts: {}", m.sql);
+    }
+
+    #[test]
+    fn pg_cast_rejects_unsafe_type_names() {
+        // A crafted type must not inject SQL — only simple type names are cast.
+        assert_eq!(pg_cast("postgres", &Some("uuid; DROP TABLE t".into())), "");
+        assert_eq!(pg_cast("postgres", &Some("int8".into())), "::int8");
+        assert_eq!(pg_cast("postgres", &Some("timestamp without time zone".into())), "::timestamp without time zone");
+        assert_eq!(pg_cast("mysql", &Some("uuid".into())), "");
     }
 
     #[test]
@@ -362,7 +430,7 @@ mod tests {
             &GridChange::Insert {
                 schema: None,
                 table: "t".into(),
-                values: vec![Col { name: "a".into(), value: json!(1) }, Col { name: "b".into(), value: json!("x") }],
+                values: vec![col("a", json!(1)), col("b", json!("x"))],
             },
         );
         assert_eq!(ins.sql, r#"INSERT INTO "t" ("a", "b") VALUES (?, ?)"#);
@@ -373,7 +441,7 @@ mod tests {
             &GridChange::Delete {
                 schema: None,
                 table: "t".into(),
-                pk: vec![Col { name: "id".into(), value: json!(9) }],
+                pk: vec![col("id", json!(9))],
             },
         );
         assert_eq!(del.sql, r#"DELETE FROM "t" WHERE "id" = $1"#);
@@ -386,7 +454,7 @@ mod tests {
             &GridChange::Delete {
                 schema: None,
                 table: "t".into(),
-                pk: vec![Col { name: "note".into(), value: json!(null) }],
+                pk: vec![col("note", json!(null))],
             },
         );
         assert_eq!(b.sql, r#"DELETE FROM "t" WHERE "note" IS NULL"#);
@@ -443,22 +511,22 @@ mod tests {
         let u = ch_mutation_sql(&GridChange::Update {
             schema: Some("analytics".into()),
             table: "events".into(),
-            pk: vec![Col { name: "id".into(), value: json!(7) }],
-            set: vec![Col { name: "status".into(), value: json!("done") }],
+            pk: vec![col("id", json!(7))],
+            set: vec![col("status", json!("done"))],
         });
         assert_eq!(u, "ALTER TABLE `analytics`.`events` UPDATE `status` = 'done' WHERE `id` = 7;");
         // DELETE → ALTER TABLE … DELETE WHERE
         let d = ch_mutation_sql(&GridChange::Delete {
             schema: None,
             table: "events".into(),
-            pk: vec![Col { name: "id".into(), value: json!(7) }],
+            pk: vec![col("id", json!(7))],
         });
         assert_eq!(d, "ALTER TABLE `events` DELETE WHERE `id` = 7;");
         // INSERT → INSERT lô (không phải mutation)
         let i = ch_mutation_sql(&GridChange::Insert {
             schema: None,
             table: "events".into(),
-            values: vec![Col { name: "a".into(), value: json!(1) }, Col { name: "b".into(), value: json!("x") }],
+            values: vec![col("a", json!(1)), col("b", json!("x"))],
         });
         assert_eq!(i, "INSERT INTO `events` (`a`, `b`) VALUES (1, 'x');");
     }
@@ -470,8 +538,8 @@ mod tests {
             &GridChange::Update {
                 schema: None,
                 table: "t".into(),
-                pk: vec![Col { name: "id".into(), value: json!(1) }],
-                set: vec![Col { name: "name".into(), value: json!("O'Brien") }],
+                pk: vec![col("id", json!(1))],
+                set: vec![col("name", json!("O'Brien"))],
             },
         );
         assert_eq!(p, r#"UPDATE "t" SET "name" = 'O''Brien' WHERE "id" = 1;"#);
