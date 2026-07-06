@@ -127,9 +127,9 @@ pub async fn admin_view(
     view: String,
 ) -> Result<QueryResultSet, AppError> {
     let system = state
-        .storage
-        .get_connection(&conn_id)
-        .map(|p| p.system.as_str().to_string())
+        .registry
+        .system_of(&conn_id)
+        .or_else(|| state.storage.get_connection(&conn_id).ok().map(|p| p.system.as_str().to_string()))
         .unwrap_or_default();
 
     // Redis không phải SQL: memory analysis qua INFO memory.
@@ -171,9 +171,9 @@ pub async fn kill_session(
     pid: i64,
 ) -> Result<(), AppError> {
     let system = state
-        .storage
-        .get_connection(&conn_id)
-        .map(|p| p.system.as_str().to_string())
+        .registry
+        .system_of(&conn_id)
+        .or_else(|| state.storage.get_connection(&conn_id).ok().map(|p| p.system.as_str().to_string()))
         .unwrap_or_default();
     let sql = kill_query(&system, pid)
         .ok_or_else(|| AppError::Driver(format!("Kill session is not supported for {system}")))?;

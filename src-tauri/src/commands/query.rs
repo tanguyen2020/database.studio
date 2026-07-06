@@ -19,11 +19,13 @@ pub async fn exec_statement(
     statement_index: Option<usize>,
 ) -> Result<ExecResponse, AppError> {
     let started = std::time::Instant::now();
+    // Resolve engine from the live connection (sub-connections/quick-connects aren't
+    // in storage) so error hints match the actual dialect.
     let system = state
-        .storage
-        .get_connection(&conn_id)
-        .map(|p| p.system.as_str().to_string())
-        .unwrap_or_else(|_| "unknown".into());
+        .registry
+        .system_of(&conn_id)
+        .or_else(|| state.storage.get_connection(&conn_id).ok().map(|p| p.system.as_str().to_string()))
+        .unwrap_or_else(|| "unknown".into());
 
     let outcome = state.registry.exec_statement(&conn_id, sql.clone()).await?;
     let duration_ms = started.elapsed().as_millis() as u64;

@@ -51,11 +51,14 @@ pub async fn exec_filtered(
     limit: u32,
     offset: u32,
 ) -> Result<ExecResponse, AppError> {
+    // Resolve the engine from the LIVE connection first — storage has no entry for
+    // attached per-database sub-connections (`{base}::{db}`) or quick-connects, and
+    // defaulting to "postgres" made MSSQL emit LIMIT (→ "Incorrect syntax near '100'").
     let system = state
-        .storage
-        .get_connection(&conn_id)
-        .map(|p| p.system.as_str().to_string())
-        .unwrap_or_else(|_| "postgres".into());
+        .registry
+        .system_of(&conn_id)
+        .or_else(|| state.storage.get_connection(&conn_id).ok().map(|p| p.system.as_str().to_string()))
+        .unwrap_or_else(|| "postgres".into());
     let stmt = grid::build_select(&system, &schema, &table, &filters, combinator_or, &sorts, limit, offset);
     let started = std::time::Instant::now();
     let out = state

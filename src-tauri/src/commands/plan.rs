@@ -18,11 +18,13 @@ pub async fn explain_plan(
     sql: String,
     actual: bool,
 ) -> Result<QueryPlan, AppError> {
+    // Live connection first (sub-connections/quick-connects aren't in storage) so
+    // the dialect-specific EXPLAIN path is chosen correctly.
     let system = state
-        .storage
-        .get_connection(&conn_id)
-        .map(|p| p.system.as_str().to_string())
-        .unwrap_or_else(|_| "unknown".into());
+        .registry
+        .system_of(&conn_id)
+        .or_else(|| state.storage.get_connection(&conn_id).ok().map(|p| p.system.as_str().to_string()))
+        .unwrap_or_else(|| "unknown".into());
 
     // Hệ không áp dụng: trả not_applicable (nút Explain disabled ở UI, không lỗi).
     if matches!(system.as_str(), "redis" | "kafka" | "nats") {
