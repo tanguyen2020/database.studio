@@ -100,31 +100,25 @@ class ExplorerStore {
   async loadSchemaChildren(connId: string, schema: string, force = false) {
     const sc = this.schema(connId, schema)
     if (sc.tables && !force) return
+    if (force) sc.tableDetails = {}
     await this.track(connId, `schema:${schema}`, async () => {
-      // Resilient: one failing introspection query (e.g. MSSQL triggers() uses
-      // STRING_AGG which errors on SQL Server < 2017) must NOT blank the whole
-      // schema — load each independently and keep what succeeds.
+      // Load each object list INDEPENDENTLY and assign as soon as it resolves:
+      //  - tables appear immediately (don't wait for slower routines/triggers),
+      //  - one failing query (e.g. MSSQL triggers on SQL Server < 2017) doesn't
+      //    blank the rest — it just falls back to [] and reports which failed.
       const failed: string[] = []
-      const safe = async <T>(label: string, p: Promise<T[]>): Promise<T[]> => {
-        try {
-          return await p
-        } catch (e) {
+      const load = <T>(label: string, assign: (v: T[]) => void, p: Promise<T[]>): Promise<void> =>
+        p.then(assign, (e) => {
           failed.push(label)
           console.error(`loadSchemaChildren ${label} failed:`, e)
-          return []
-        }
-      }
-      const [tables, routines, triggers, sequences] = await Promise.all([
-        safe('tables', ipc.listTables(connId, schema)),
-        safe('routines', ipc.listRoutines(connId, schema)),
-        safe('triggers', ipc.listTriggers(connId, schema)),
-        safe('sequences', ipc.listSequences(connId, schema)),
+          assign([])
+        })
+      await Promise.all([
+        load('tables', (v) => (sc.tables = v), ipc.listTables(connId, schema)),
+        load('routines', (v) => (sc.routines = v), ipc.listRoutines(connId, schema)),
+        load('triggers', (v) => (sc.triggers = v), ipc.listTriggers(connId, schema)),
+        load('sequences', (v) => (sc.sequences = v), ipc.listSequences(connId, schema)),
       ])
-      sc.tables = tables
-      sc.routines = routines
-      sc.triggers = triggers
-      sc.sequences = sequences
-      if (force) sc.tableDetails = {}
       if (failed.length) toasts.error(`Some objects failed to load (${failed.join(', ')})`)
     })
   }

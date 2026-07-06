@@ -265,15 +265,17 @@ impl MssqlDriver {
         let rows = self
             .client
             .query(
+                // Fast: JOIN sys.schemas (avoids a per-row SCHEMA_NAME() scalar call)
+                // + a correlated row-count from the sys.dm_db_partition_stats DMV
+                // scoped to each object — NOT a GROUP BY over ALL of sys.partitions,
+                // which is what made this slow vs Navicat's INFORMATION_SCHEMA query.
                 "SELECT o.name,
                         CASE o.type WHEN 'V' THEN 'view' ELSE 'table' END,
-                        COALESCE(p.row_count, 0)
+                        ISNULL((SELECT SUM(ps.row_count) FROM sys.dm_db_partition_stats ps
+                                WHERE ps.object_id = o.object_id AND ps.index_id IN (0, 1)), 0)
                  FROM sys.objects o
-                 LEFT JOIN (
-                   SELECT object_id, SUM(rows) AS row_count
-                   FROM sys.partitions WHERE index_id IN (0, 1) GROUP BY object_id
-                 ) p ON p.object_id = o.object_id
-                 WHERE o.type IN ('U','V') AND SCHEMA_NAME(o.schema_id) = @P1
+                 JOIN sys.schemas s ON s.schema_id = o.schema_id
+                 WHERE o.type IN ('U','V') AND s.name = @P1
                  ORDER BY o.name",
                 &[&schema],
             )
