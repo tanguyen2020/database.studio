@@ -454,45 +454,43 @@ impl MssqlDriver {
                 )
             })
             .collect();
-        let mut out = Vec::new();
-        for (name, kind) in metas {
-            let params = self.routine_params(schema, &name).await.unwrap_or_default();
-            let return_type = params
-                .iter()
-                .find(|p| p.name.is_empty())
-                .map(|p| p.data_type.clone());
-            let params: Vec<ParamInfo> = params.into_iter().filter(|p| !p.name.is_empty()).collect();
-            out.push(RoutineInfo { schema: schema.to_string(), name, kind, params, return_type });
-        }
-        Ok(out)
-    }
-
-    async fn routine_params(&mut self, schema: &str, routine: &str) -> Result<Vec<ParamInfo>, QueryError> {
-        let rows = self
+        // All parameters for the schema in ONE query (avoids N+1 per routine, which
+        // was slow and — on the single per-connection link — blocked Open Data/Alter
+        // queued behind it). Group by routine name.
+        let prows = self
             .client
             .query(
-                "SELECT COALESCE(p.name, ''), ty.name, IIF(p.is_output = 1, 'OUT', 'IN')
+                "SELECT o.name, COALESCE(p.name, ''), ty.name, IIF(p.is_output = 1, 'OUT', 'IN')
                  FROM sys.parameters p
                  JOIN sys.objects o ON o.object_id = p.object_id
                  JOIN sys.types ty ON ty.user_type_id = p.user_type_id
-                 WHERE SCHEMA_NAME(o.schema_id) = @P1 AND o.name = @P2
-                 ORDER BY p.parameter_id",
-                &[&schema, &routine],
+                 WHERE o.type IN ('P','FN','IF','TF') AND SCHEMA_NAME(o.schema_id) = @P1
+                 ORDER BY o.name, p.parameter_id",
+                &[&schema],
             )
             .await
             .map_err(|e| map_error(&e))?
             .into_first_result()
             .await
             .map_err(|e| map_error(&e))?;
-        Ok(rows
-            .iter()
-            .map(|r| ParamInfo {
-                name: r.get::<&str, _>(0).unwrap_or_default().trim_start_matches('@').to_string(),
-                data_type: r.get::<&str, _>(1).unwrap_or_default().to_string(),
-                mode: r.get::<&str, _>(2).unwrap_or("IN").to_string(),
+        let mut params_by: std::collections::HashMap<String, Vec<ParamInfo>> = std::collections::HashMap::new();
+        for r in &prows {
+            let rname = r.get::<&str, _>(0).unwrap_or_default().to_string();
+            params_by.entry(rname).or_default().push(ParamInfo {
+                name: r.get::<&str, _>(1).unwrap_or_default().trim_start_matches('@').to_string(),
+                data_type: r.get::<&str, _>(2).unwrap_or_default().to_string(),
+                mode: r.get::<&str, _>(3).unwrap_or("IN").to_string(),
                 default: None,
-            })
-            .collect())
+            });
+        }
+        let mut out = Vec::new();
+        for (name, kind) in metas {
+            let all = params_by.remove(&name).unwrap_or_default();
+            let return_type = all.iter().find(|p| p.name.is_empty()).map(|p| p.data_type.clone());
+            let params: Vec<ParamInfo> = all.into_iter().filter(|p| !p.name.is_empty()).collect();
+            out.push(RoutineInfo { schema: schema.to_string(), name, kind, params, return_type });
+        }
+        Ok(out)
     }
 
     pub async fn triggers(&mut self, schema: &str) -> Result<Vec<TriggerInfo>, QueryError> {
