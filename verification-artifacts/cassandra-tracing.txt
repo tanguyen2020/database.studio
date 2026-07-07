@@ -1,0 +1,202 @@
+# ARTIFACT: cassandra-tracing
+
+===== ALLOW FILTERING — raw trace =====
+4196us 172.17.0.2 Parsing SELECT * FROM xv_ks.t WHERE v = 30 ALLOW FILTERING
+4990us 172.17.0.2 Preparing statement
+9717us 172.17.0.2 Computing ranges to query
+10671us 172.17.0.2 Submitting range requests on 17 ranges with a concurrency of 1 (0.0 rows per range expected)
+12884us 172.17.0.2 Submitted 1 concurrent range requests
+13130us 172.17.0.2 Executing seq scan across 0 sstables for (min(-9223372036854775808), min(-9223372036854775808)]
+16317us 172.17.0.2 Read 20 live rows and 0 tombstone cells
+
+===== ALLOW FILTERING — normalized (OBS-1: inspect mode + node op) =====
+{
+  "system": "cassandra",
+  "mode": "actual",
+  "root": {
+    "operation": "SeqScan",
+    "native_op": "CQL Read",
+    "extra": {},
+    "children": [
+      {
+        "operation": "TraceEvent",
+        "native_op": "Parsing SELECT * FROM xv_ks.t WHERE v = 30 ALLOW FILTERING",
+        "actual_time_ms": 4.196,
+        "extra": {
+          "activity": "Parsing SELECT * FROM xv_ks.t WHERE v = 30 ALLOW FILTERING",
+          "source": "172.17.0.2"
+        },
+        "children": [],
+        "is_hotspot": false
+      },
+      {
+        "operation": "TraceEvent",
+        "native_op": "Preparing statement",
+        "actual_time_ms": 4.99,
+        "extra": {
+          "activity": "Preparing statement",
+          "source": "172.17.0.2"
+        },
+        "children": [],
+        "is_hotspot": false
+      },
+      {
+        "operation": "TraceEvent",
+        "native_op": "Computing ranges to query",
+        "actual_time_ms": 9.717,
+        "extra": {
+          "activity": "Computing ranges to query",
+          "source": "172.17.0.2"
+        },
+        "children": [],
+        "is_hotspot": false
+      },
+      {
+        "operation": "TraceEvent",
+        "native_op": "Submitting range requests on 17 ranges with a concurrency of 1 (0.0 rows per range expected)",
+        "actual_time_ms": 10.671,
+        "extra": {
+          "activity": "Submitting range requests on 17 ranges with a concurrency of 1 (0.0 rows per range expected)",
+          "source": "172.17.0.2"
+        },
+        "children": [],
+        "is_hotspot": false
+      },
+      {
+        "operation": "TraceEvent",
+        "native_op": "Submitted 1 concurrent range requests",
+        "actual_time_ms": 12.884,
+        "extra": {
+          "activity": "Submitted 1 concurrent range requests",
+          "source": "172.17.0.2"
+        },
+        "children": [],
+        "is_hotspot": false
+      },
+      {
+        "operation": "TraceEvent",
+        "native_op": "Executing seq scan across 0 sstables for (min(-9223372036854775808), min(-9223372036854775808)]",
+        "actual_time_ms": 13.13,
+        "extra": {
+          "activity": "Executing seq scan across 0 sstables for (min(-9223372036854775808), min(-9223372036854775808)]",
+          "source": "172.17.0.2"
+        },
+        "children": [],
+        "is_hotspot": false
+      },
+      {
+        "operation": "TraceEvent",
+        "native_op": "Read 20 live rows and 0 tombstone cells",
+        "actual_time_ms": 16.317,
+        "extra": {
+          "activity": "Read 20 live rows and 0 tombstone cells",
+          "source": "172.17.0.2"
+        },
+        "children": [],
+        "is_hotspot": false
+      }
+    ],
+    "is_hotspot": true
+  },
+  "summary": {
+    "total_time_ms": 16.317,
+    "warnings": [
+      "ALLOW FILTERING: scans all partitions (no partition key) — expensive"
+    ]
+  },
+  "raw": "4196us 172.17.0.2 Parsing SELECT * FROM xv_ks.t WHERE v = 30 ALLOW FILTERING\n4990us 172.17.0.2 Preparing statement\n9717us 172.17.0.2 Computing ranges to query\n10671us 172.17.0.2 Submitting range requests on 17 ranges with a concurrency of 1 (0.0 rows per range expected)\n12884us 172.17.0.2 Submitted 1 concurrent range requests\n13130us 172.17.0.2 Executing seq scan across 0 sstables for (min(-9223372036854775808), min(-9223372036854775808)]\n16317us 172.17.0.2 Read 20 live rows and 0 tombstone cells"
+}
+
+===== PARTITION KEY — raw trace =====
+607us 172.17.0.2 Parsing SELECT * FROM xv_ks.t WHERE pk = 5
+1137us 172.17.0.2 Preparing statement
+2393us 172.17.0.2 Executing single-partition query on t
+2598us 172.17.0.2 Acquiring sstable references
+2750us 172.17.0.2 Merging memtable contents
+3184us 172.17.0.2 Read 1 live rows and 0 tombstone cells
+
+===== PARTITION KEY — normalized =====
+{
+  "system": "cassandra",
+  "mode": "actual",
+  "root": {
+    "operation": "CqlRead",
+    "native_op": "CQL Read",
+    "extra": {},
+    "children": [
+      {
+        "operation": "TraceEvent",
+        "native_op": "Parsing SELECT * FROM xv_ks.t WHERE pk = 5",
+        "actual_time_ms": 0.607,
+        "extra": {
+          "activity": "Parsing SELECT * FROM xv_ks.t WHERE pk = 5",
+          "source": "172.17.0.2"
+        },
+        "children": [],
+        "is_hotspot": false
+      },
+      {
+        "operation": "TraceEvent",
+        "native_op": "Preparing statement",
+        "actual_time_ms": 1.137,
+        "extra": {
+          "activity": "Preparing statement",
+          "source": "172.17.0.2"
+        },
+        "children": [],
+        "is_hotspot": false
+      },
+      {
+        "operation": "TraceEvent",
+        "native_op": "Executing single-partition query on t",
+        "actual_time_ms": 2.393,
+        "extra": {
+          "activity": "Executing single-partition query on t",
+          "source": "172.17.0.2"
+        },
+        "children": [],
+        "is_hotspot": false
+      },
+      {
+        "operation": "TraceEvent",
+        "native_op": "Acquiring sstable references",
+        "actual_time_ms": 2.598,
+        "extra": {
+          "activity": "Acquiring sstable references",
+          "source": "172.17.0.2"
+        },
+        "children": [],
+        "is_hotspot": false
+      },
+      {
+        "operation": "TraceEvent",
+        "native_op": "Merging memtable contents",
+        "actual_time_ms": 2.75,
+        "extra": {
+          "activity": "Merging memtable contents",
+          "source": "172.17.0.2"
+        },
+        "children": [],
+        "is_hotspot": false
+      },
+      {
+        "operation": "TraceEvent",
+        "native_op": "Read 1 live rows and 0 tombstone cells",
+        "actual_time_ms": 3.184,
+        "extra": {
+          "activity": "Read 1 live rows and 0 tombstone cells",
+          "source": "172.17.0.2"
+        },
+        "children": [],
+        "is_hotspot": false
+      }
+    ],
+    "is_hotspot": false
+  },
+  "summary": {
+    "total_time_ms": 3.184,
+    "warnings": []
+  },
+  "raw": "607us 172.17.0.2 Parsing SELECT * FROM xv_ks.t WHERE pk = 5\n1137us 172.17.0.2 Preparing statement\n2393us 172.17.0.2 Executing single-partition query on t\n2598us 172.17.0.2 Acquiring sstable references\n2750us 172.17.0.2 Merging memtable contents\n3184us 172.17.0.2 Read 1 live rows and 0 tombstone cells"
+}
+

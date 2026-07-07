@@ -1,0 +1,174 @@
+# ARTIFACT: mariadb-scan-index-actual
+
+===== SCAN — raw =====
+{
+  "query_block": {
+    "select_id": 1,
+    "cost": 0.8258548,
+    "nested_loop": [
+      {
+        "table": {
+          "table_name": "it_mdb",
+          "access_type": "ALL",
+          "loops": 1,
+          "rows": 5000,
+          "cost": 0.8258548,
+          "filtered": 100,
+          "attached_condition": "it_mdb.`status` = 'rare'"
+        }
+      }
+    ]
+  }
+}
+
+===== SCAN — normalized =====
+{
+  "system": "mariadb",
+  "mode": "estimated",
+  "root": {
+    "operation": "NestedLoop",
+    "native_op": "nested_loop",
+    "extra": {},
+    "children": [
+      {
+        "operation": "SeqScan",
+        "native_op": "ALL access",
+        "extra": {
+          "Relation Name": "it_mdb"
+        },
+        "children": [],
+        "is_hotspot": false
+      }
+    ],
+    "is_hotspot": false
+  },
+  "summary": {
+    "warnings": []
+  },
+  "raw": "{\n  \"query_block\": {\n    \"select_id\": 1,\n    \"cost\": 0.8258548,\n    \"nested_loop\": [\n      {\n        \"table\": {\n          \"table_name\": \"it_mdb\",\n          \"access_type\": \"ALL\",\n          \"loops\": 1,\n          \"rows\": 5000,\n          \"cost\": 0.8258548,\n          \"filtered\": 100,\n          \"attached_condition\": \"it_mdb.`status` = 'rare'\"\n        }\n      }\n    ]\n  }\n}"
+}
+
+===== INDEX — raw =====
+{
+  "query_block": {
+    "select_id": 1,
+    "cost": 0.001792605,
+    "nested_loop": [
+      {
+        "table": {
+          "table_name": "it_mdb",
+          "access_type": "ref",
+          "possible_keys": ["ix_mdb_status"],
+          "key": "ix_mdb_status",
+          "key_length": "83",
+          "used_key_parts": ["status"],
+          "ref": ["const"],
+          "loops": 1,
+          "rows": 1,
+          "cost": 0.001792605,
+          "filtered": 100,
+          "attached_condition": "it_mdb.`status` = 'rare'",
+          "using_index": true
+        }
+      }
+    ]
+  }
+}
+
+===== INDEX — normalized =====
+{
+  "system": "mariadb",
+  "mode": "estimated",
+  "root": {
+    "operation": "NestedLoop",
+    "native_op": "nested_loop",
+    "extra": {},
+    "children": [
+      {
+        "operation": "IndexScan",
+        "native_op": "ref access",
+        "extra": {
+          "Relation Name": "it_mdb"
+        },
+        "children": [],
+        "is_hotspot": false
+      }
+    ],
+    "is_hotspot": false
+  },
+  "summary": {
+    "warnings": []
+  },
+  "raw": "{\n  \"query_block\": {\n    \"select_id\": 1,\n    \"cost\": 0.001792605,\n    \"nested_loop\": [\n      {\n        \"table\": {\n          \"table_name\": \"it_mdb\",\n          \"access_type\": \"ref\",\n          \"possible_keys\": [\"ix_mdb_status\"],\n          \"key\": \"ix_mdb_status\",\n          \"key_length\": \"83\",\n          \"used_key_parts\": [\"status\"],\n          \"ref\": [\"const\"],\n          \"loops\": 1,\n          \"rows\": 1,\n          \"cost\": 0.001792605,\n          \"filtered\": 100,\n          \"attached_condition\": \"it_mdb.`status` = 'rare'\",\n          \"using_index\": true\n        }\n      }\n    ]\n  }\n}"
+}
+
+===== ACTUAL (ANALYZE FORMAT=JSON) — raw =====
+{
+  "query_optimization": {
+    "r_total_time_ms": 0.053453846
+  },
+  "query_block": {
+    "select_id": 1,
+    "cost": 0.001792605,
+    "r_loops": 1,
+    "r_total_time_ms": 0.069303363,
+    "nested_loop": [
+      {
+        "table": {
+          "table_name": "it_mdb",
+          "access_type": "ref",
+          "possible_keys": ["ix_mdb_status"],
+          "key": "ix_mdb_status",
+          "key_length": "83",
+          "used_key_parts": ["status"],
+          "ref": ["const"],
+          "loops": 1,
+          "r_loops": 1,
+          "rows": 1,
+          "r_rows": 1,
+          "cost": 0.001792605,
+          "r_table_time_ms": 0.060739433,
+          "r_other_time_ms": 0.004812903,
+          "r_engine_stats": {
+            "pages_accessed": 4
+          },
+          "filtered": 100,
+          "r_total_filtered": 100,
+          "attached_condition": "it_mdb.`status` = 'rare'",
+          "r_filtered": 100,
+          "using_index": true
+        }
+      }
+    ]
+  }
+}
+
+===== ACTUAL — normalized =====
+{
+  "system": "mariadb",
+  "mode": "actual",
+  "root": {
+    "operation": "NestedLoop",
+    "native_op": "nested_loop",
+    "extra": {},
+    "children": [
+      {
+        "operation": "IndexScan",
+        "native_op": "ref access",
+        "actual_rows": 1.0,
+        "extra": {
+          "Relation Name": "it_mdb"
+        },
+        "children": [],
+        "is_hotspot": false
+      }
+    ],
+    "is_hotspot": false
+  },
+  "summary": {
+    "total_time_ms": 0.069303363,
+    "warnings": []
+  },
+  "raw": "{\n  \"query_optimization\": {\n    \"r_total_time_ms\": 0.053453846\n  },\n  \"query_block\": {\n    \"select_id\": 1,\n    \"cost\": 0.001792605,\n    \"r_loops\": 1,\n    \"r_total_time_ms\": 0.069303363,\n    \"nested_loop\": [\n      {\n        \"table\": {\n          \"table_name\": \"it_mdb\",\n          \"access_type\": \"ref\",\n          \"possible_keys\": [\"ix_mdb_status\"],\n          \"key\": \"ix_mdb_status\",\n          \"key_length\": \"83\",\n          \"used_key_parts\": [\"status\"],\n          \"ref\": [\"const\"],\n          \"loops\": 1,\n          \"r_loops\": 1,\n          \"rows\": 1,\n          \"r_rows\": 1,\n          \"cost\": 0.001792605,\n          \"r_table_time_ms\": 0.060739433,\n          \"r_other_time_ms\": 0.004812903,\n          \"r_engine_stats\": {\n            \"pages_accessed\": 4\n          },\n          \"filtered\": 100,\n          \"r_total_filtered\": 100,\n          \"attached_condition\": \"it_mdb.`status` = 'rare'\",\n          \"r_filtered\": 100,\n          \"using_index\": true\n        }\n      }\n    ]\n  }\n}"
+}
+

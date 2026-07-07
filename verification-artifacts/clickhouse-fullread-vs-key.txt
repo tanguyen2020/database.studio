@@ -1,0 +1,217 @@
+# ARTIFACT: clickhouse-fullread-vs-key
+
+===== FULL READ (WHERE v=7) — raw =====
+Expression ((Project names + Projection))
+  Expression
+    ReadFromMergeTree (default.it_ch)
+    Indexes:
+      PrimaryKey
+        Condition: true
+        Parts: 1/1
+        Granules: 6/6
+
+===== FULL READ — normalized =====
+{
+  "system": "clickhouse",
+  "mode": "estimated",
+  "root": {
+    "operation": "Expression",
+    "native_op": "Expression",
+    "extra": {
+      "detail": "Expression ((Project names + Projection))"
+    },
+    "children": [
+      {
+        "operation": "Expression",
+        "native_op": "Expression",
+        "extra": {
+          "detail": "Expression"
+        },
+        "children": [
+          {
+            "operation": "SeqScan",
+            "native_op": "ReadFromMergeTree",
+            "extra": {
+              "detail": "ReadFromMergeTree (default.it_ch)",
+              "relation": "default.it_ch"
+            },
+            "children": [],
+            "is_hotspot": false
+          },
+          {
+            "operation": "Indexes",
+            "native_op": "Indexes",
+            "extra": {
+              "detail": "Indexes:"
+            },
+            "children": [
+              {
+                "operation": "PrimaryKey",
+                "native_op": "PrimaryKey",
+                "extra": {
+                  "detail": "PrimaryKey"
+                },
+                "children": [
+                  {
+                    "operation": "Condition: true",
+                    "native_op": "Condition: true",
+                    "extra": {
+                      "detail": "Condition: true"
+                    },
+                    "children": [],
+                    "is_hotspot": false
+                  },
+                  {
+                    "operation": "Parts: 1/1",
+                    "native_op": "Parts: 1/1",
+                    "extra": {
+                      "detail": "Parts: 1/1"
+                    },
+                    "children": [],
+                    "is_hotspot": false
+                  },
+                  {
+                    "operation": "Granules: 6/6",
+                    "native_op": "Granules: 6/6",
+                    "extra": {
+                      "detail": "Granules: 6/6"
+                    },
+                    "children": [],
+                    "is_hotspot": false
+                  }
+                ],
+                "is_hotspot": false
+              }
+            ],
+            "is_hotspot": false
+          }
+        ],
+        "is_hotspot": false
+      }
+    ],
+    "is_hotspot": false
+  },
+  "summary": {
+    "warnings": []
+  },
+  "raw": "Expression ((Project names + Projection))\n  Expression\n    ReadFromMergeTree (default.it_ch)\n    Indexes:\n      PrimaryKey\n        Condition: true\n        Parts: 1/1\n        Granules: 6/6"
+}
+
+===== KEY READ (WHERE id=42) — raw =====
+Expression ((Project names + Projection))
+  Expression
+    ReadFromMergeTree (default.it_ch)
+    Indexes:
+      PrimaryKey
+        Keys: 
+          id
+        Condition: (id in [42, 42])
+        Parts: 1/1
+        Granules: 1/6
+
+===== KEY READ — normalized =====
+{
+  "system": "clickhouse",
+  "mode": "estimated",
+  "root": {
+    "operation": "Expression",
+    "native_op": "Expression",
+    "extra": {
+      "detail": "Expression ((Project names + Projection))"
+    },
+    "children": [
+      {
+        "operation": "Expression",
+        "native_op": "Expression",
+        "extra": {
+          "detail": "Expression"
+        },
+        "children": [
+          {
+            "operation": "SeqScan",
+            "native_op": "ReadFromMergeTree",
+            "extra": {
+              "detail": "ReadFromMergeTree (default.it_ch)",
+              "relation": "default.it_ch"
+            },
+            "children": [],
+            "is_hotspot": false
+          },
+          {
+            "operation": "Indexes",
+            "native_op": "Indexes",
+            "extra": {
+              "detail": "Indexes:"
+            },
+            "children": [
+              {
+                "operation": "PrimaryKey",
+                "native_op": "PrimaryKey",
+                "extra": {
+                  "detail": "PrimaryKey"
+                },
+                "children": [
+                  {
+                    "operation": "Keys",
+                    "native_op": "Keys",
+                    "extra": {
+                      "detail": "Keys:"
+                    },
+                    "children": [
+                      {
+                        "operation": "id",
+                        "native_op": "id",
+                        "extra": {
+                          "detail": "id"
+                        },
+                        "children": [],
+                        "is_hotspot": false
+                      }
+                    ],
+                    "is_hotspot": false
+                  },
+                  {
+                    "operation": "Condition",
+                    "native_op": "Condition",
+                    "extra": {
+                      "detail": "Condition: (id in [42, 42])"
+                    },
+                    "children": [],
+                    "is_hotspot": false
+                  },
+                  {
+                    "operation": "Parts: 1/1",
+                    "native_op": "Parts: 1/1",
+                    "extra": {
+                      "detail": "Parts: 1/1"
+                    },
+                    "children": [],
+                    "is_hotspot": false
+                  },
+                  {
+                    "operation": "Granules: 1/6",
+                    "native_op": "Granules: 1/6",
+                    "extra": {
+                      "detail": "Granules: 1/6"
+                    },
+                    "children": [],
+                    "is_hotspot": false
+                  }
+                ],
+                "is_hotspot": false
+              }
+            ],
+            "is_hotspot": false
+          }
+        ],
+        "is_hotspot": false
+      }
+    ],
+    "is_hotspot": false
+  },
+  "summary": {
+    "warnings": []
+  },
+  "raw": "Expression ((Project names + Projection))\n  Expression\n    ReadFromMergeTree (default.it_ch)\n    Indexes:\n      PrimaryKey\n        Keys: \n          id\n        Condition: (id in [42, 42])\n        Parts: 1/1\n        Granules: 1/6"
+}
+

@@ -1,0 +1,8 @@
+# ARTIFACT: postgres-error-paths
+
+===== EXPLAIN on missing table → typed error =====
+code=Some("42P01") msg=relation "no_such_table_xyz" does not exist
+
+===== EXPLAIN with syntax error → typed error =====
+code=Some("42601") msg=syntax error at end of input
+

@@ -61,6 +61,8 @@ pub fn run() {
             commands::redis::redis_command,
             commands::redis::redis_memory_usage,
             commands::redis::redis_flushdb,
+            commands::redis::redis_select_db,
+            commands::redis::redis_database_count,
             commands::redis::redis_subscribe,
             commands::redis::redis_unsubscribe,
             commands::redis::redis_publish,

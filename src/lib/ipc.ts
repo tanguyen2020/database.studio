@@ -94,6 +94,11 @@ export const redisGet = (connId: string, key: string) =>
 export const redisDel = (connId: string, key: string) =>
   invoke<number>('redis_del', { connId, key })
 
+export const redisSelectDb = (connId: string, db: number) =>
+  invoke<void>('redis_select_db', { connId, db })
+export const redisDatabaseCount = (connId: string) =>
+  invoke<number>('redis_database_count', { connId })
+
 /** secs > 0 → EXPIRE; secs <= 0 → PERSIST. */
 export const redisSetTtl = (connId: string, key: string, secs: number) =>
   invoke<void>('redis_set_ttl', { connId, key, secs })

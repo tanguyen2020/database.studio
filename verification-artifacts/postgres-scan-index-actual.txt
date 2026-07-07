@@ -1,0 +1,85 @@
+# ARTIFACT: postgres-scan-index-actual
+
+===== SCAN — raw engine (EXPLAIN FORMAT JSON) =====
+[{"Plan":{"Alias":"it_pg","Async Capable":false,"Filter":"(status = 'rare'::text)","Node Type":"Seq Scan","Parallel Aware":false,"Plan Rows":2,"Plan Width":4,"Relation Name":"it_pg","Startup Cost":0.0,"Total Cost":896.0}}]
+
+===== SCAN — app normalized =====
+{
+  "system": "postgres",
+  "mode": "estimated",
+  "root": {
+    "operation": "SeqScan",
+    "native_op": "Seq Scan",
+    "estimated_rows": 2.0,
+    "estimated_cost": 896.0,
+    "extra": {
+      "Filter": "(status = 'rare'::text)",
+      "Relation Name": "it_pg"
+    },
+    "children": [],
+    "is_hotspot": false
+  },
+  "summary": {
+    "total_cost": 896.0,
+    "warnings": []
+  },
+  "raw": "[{\"Plan\":{\"Alias\":\"it_pg\",\"Async Capable\":false,\"Filter\":\"(status = 'rare'::text)\",\"Node Type\":\"Seq Scan\",\"Parallel Aware\":false,\"Plan Rows\":2,\"Plan Width\":4,\"Relation Name\":\"it_pg\",\"Startup Cost\":0.0,\"Total Cost\":896.0}}]"
+}
+
+===== INDEX — raw engine =====
+[{"Plan":{"Alias":"it_pg","Async Capable":false,"Index Cond":"(status = 'rare'::text)","Index Name":"ix_pg_status","Node Type":"Index Scan","Parallel Aware":false,"Plan Rows":2,"Plan Width":4,"Relation Name":"it_pg","Scan Direction":"Forward","Startup Cost":0.29,"Total Cost":8.33}}]
+
+===== INDEX — app normalized =====
+{
+  "system": "postgres",
+  "mode": "estimated",
+  "root": {
+    "operation": "IndexScan",
+    "native_op": "Index Scan",
+    "estimated_rows": 2.0,
+    "estimated_cost": 8.33,
+    "extra": {
+      "Index Cond": "(status = 'rare'::text)",
+      "Index Name": "ix_pg_status",
+      "Relation Name": "it_pg"
+    },
+    "children": [],
+    "is_hotspot": false
+  },
+  "summary": {
+    "total_cost": 8.33,
+    "warnings": []
+  },
+  "raw": "[{\"Plan\":{\"Alias\":\"it_pg\",\"Async Capable\":false,\"Index Cond\":\"(status = 'rare'::text)\",\"Index Name\":\"ix_pg_status\",\"Node Type\":\"Index Scan\",\"Parallel Aware\":false,\"Plan Rows\":2,\"Plan Width\":4,\"Relation Name\":\"it_pg\",\"Scan Direction\":\"Forward\",\"Startup Cost\":0.29,\"Total Cost\":8.33}}]"
+}
+
+===== ACTUAL — raw engine (EXPLAIN ANALYZE) =====
+[{"Execution Time":0.069,"Plan":{"Actual Loops":1,"Actual Rows":1,"Actual Startup Time":0.042,"Actual Total Time":0.043,"Alias":"it_pg","Async Capable":false,"Index Cond":"(it_pg.status = 'rare'::text)","Index Name":"ix_pg_status","Local Dirtied Blocks":0,"Local Hit Blocks":0,"Local Read Blocks":0,"Local Written Blocks":0,"Node Type":"Index Scan","Output":["id"],"Parallel Aware":false,"Plan Rows":2,"Plan Width":4,"Relation Name":"it_pg","Rows Removed by Index Recheck":0,"Scan Direction":"Forward","Schema":"public","Shared Dirtied Blocks":0,"Shared Hit Blocks":1,"Shared Read Blocks":2,"Shared Written Blocks":0,"Startup Cost":0.29,"Temp Read Blocks":0,"Temp Written Blocks":0,"Total Cost":8.33},"Planning":{"Local Dirtied Blocks":0,"Local Hit Blocks":0,"Local Read Blocks":0,"Local Written Blocks":0,"Shared Dirtied Blocks":0,"Shared Hit Blocks":0,"Shared Read Blocks":0,"Shared Written Blocks":0,"Temp Read Blocks":0,"Temp Written Blocks":0},"Planning Time":0.034,"Triggers":[]}]
+
+===== ACTUAL — app normalized =====
+{
+  "system": "postgres",
+  "mode": "actual",
+  "root": {
+    "operation": "IndexScan",
+    "native_op": "Index Scan",
+    "estimated_rows": 2.0,
+    "actual_rows": 1.0,
+    "estimated_cost": 8.33,
+    "actual_time_ms": 0.043,
+    "extra": {
+      "Index Cond": "(it_pg.status = 'rare'::text)",
+      "Index Name": "ix_pg_status",
+      "Relation Name": "it_pg"
+    },
+    "children": [],
+    "is_hotspot": false
+  },
+  "summary": {
+    "total_cost": 8.33,
+    "total_time_ms": 0.069,
+    "warnings": []
+  },
+  "raw": "[{\"Execution Time\":0.069,\"Plan\":{\"Actual Loops\":1,\"Actual Rows\":1,\"Actual Startup Time\":0.042,\"Actual Total Time\":0.043,\"Alias\":\"it_pg\",\"Async Capable\":false,\"Index Cond\":\"(it_pg.status = 'rare'::text)\",\"Index Name\":\"ix_pg_status\",\"Local Dirtied Blocks\":0,\"Local Hit Blocks\":0,\"Local Read Blocks\":0,\"Local Written Blocks\":0,\"Node Type\":\"Index Scan\",\"Output\":[\"id\"],\"Parallel Aware\":false,\"Plan Rows\":2,\"Plan Width\":4,\"Relation Name\":\"it_pg\",\"Rows Removed by Index Recheck\":0,\"Scan Direction\":\"Forward\",\"Schema\":\"public\",\"Shared Dirtied Blocks\":0,\"Shared Hit Blocks\":1,\"Shared Read Blocks\":2,\"Shared Written Blocks\":0,\"Startup Cost\":0.29,\"Temp Read Blocks\":0,\"Temp Written Blocks\":0,\"Total Cost\":8.33},\"Planning\":{\"Local Dirtied Blocks\":0,\"Local Hit Blocks\":0,\"Local Read Blocks\":0,\"Local Written Blocks\":0,\"Shared Dirtied Blocks\":0,\"Shared Hit Blocks\":0,\"Shared Read Blocks\":0,\"Shared Written Blocks\":0,\"Temp Read Blocks\":0,\"Temp Written Blocks\":0},\"Planning Time\":0.034,\"Triggers\":[]}]"
+}
+

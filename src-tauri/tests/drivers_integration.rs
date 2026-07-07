@@ -3981,3 +3981,31 @@ async fn mysql_proc_and_func_execute_return_results() {
     assert_eq!(r2.rows[0]["b"].as_str().unwrap(), "hi", "proc result string");
     eprintln!("CHK mysql_proc_and_func_execute_return_results OK");
 }
+
+#[tokio::test]
+async fn redis_select_db_switches_and_isolates_keys() {
+    use database_studio_lib::drivers::redis::{RedisConnParams, RedisDriver};
+    let (_c, port) = start_redis("test123").await;
+    let params = RedisConnParams { host: "localhost".into(), port, password: "test123".into(), db: 0, ssl: false, ssl_ca: String::new() };
+    let mut drv = retry("redis", || RedisDriver::connect(&params)).await;
+
+    // default db0: set a key, verify present
+    drv.command(&["SET".into(), "k".into(), "v0".into()]).await.unwrap();
+    let g0 = drv.command(&["GET".into(), "k".into()]).await.unwrap();
+    assert!(g0.contains("v0"), "db0 key present, got {g0}");
+
+    // database_count for the dropdown (default 16 on stock redis)
+    assert!(drv.database_count().await.unwrap() >= 1, "database_count sane");
+
+    // switch to db1 → key from db0 is NOT visible (logical DB isolation)
+    drv.select_db(1).await.unwrap();
+    let g1 = drv.command(&["GET".into(), "k".into()]).await.unwrap();
+    assert!(!g1.contains("v0"), "db1 must not see db0 key, got {g1}");
+    drv.command(&["SET".into(), "k".into(), "v1".into()]).await.unwrap();
+
+    // switch back to db0 → original value intact
+    drv.select_db(0).await.unwrap();
+    let g0b = drv.command(&["GET".into(), "k".into()]).await.unwrap();
+    assert!(g0b.contains("v0"), "db0 value preserved, got {g0b}");
+    eprintln!("CHK redis_select_db_switches_and_isolates_keys OK");
+}

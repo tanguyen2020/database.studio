@@ -1,0 +1,64 @@
+# ARTIFACT: sqlite-scan-vs-index
+
+===== SCAN — raw engine (EXPLAIN QUERY PLAN) =====
+2|0|SCAN t
+
+===== SCAN — app normalized =====
+{
+  "system": "sqlite",
+  "mode": "estimated",
+  "root": {
+    "operation": "QueryPlan",
+    "native_op": "QUERY PLAN",
+    "extra": {},
+    "children": [
+      {
+        "operation": "SCAN t",
+        "native_op": "SCAN t",
+        "extra": {
+          "detail": "SCAN t"
+        },
+        "children": [],
+        "is_hotspot": true
+      }
+    ],
+    "is_hotspot": false
+  },
+  "summary": {
+    "warnings": [
+      "Full scan: SCAN t"
+    ]
+  },
+  "raw": "2|0|SCAN t"
+}
+
+===== INDEX — raw engine =====
+2|0|SEARCH t USING COVERING INDEX ix_status (status=?)
+
+===== INDEX — app normalized =====
+{
+  "system": "sqlite",
+  "mode": "estimated",
+  "root": {
+    "operation": "QueryPlan",
+    "native_op": "QUERY PLAN",
+    "extra": {},
+    "children": [
+      {
+        "operation": "IndexScan",
+        "native_op": "SEARCH t USING COVERING INDEX ix_status (status=?)",
+        "extra": {
+          "detail": "SEARCH t USING COVERING INDEX ix_status (status=?)"
+        },
+        "children": [],
+        "is_hotspot": false
+      }
+    ],
+    "is_hotspot": false
+  },
+  "summary": {
+    "warnings": []
+  },
+  "raw": "2|0|SEARCH t USING COVERING INDEX ix_status (status=?)"
+}
+

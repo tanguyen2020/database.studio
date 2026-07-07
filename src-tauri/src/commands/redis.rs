@@ -148,6 +148,38 @@ pub async fn redis_memory_usage(
     inner.map_err(|e| AppError::Driver(e.message))
 }
 
+/// Switch the active logical DB (SELECT n) — the key explorer then reloads.
+#[tauri::command]
+pub async fn redis_select_db(state: State<'_, AppState>, conn_id: String, db: i64) -> Result<(), AppError> {
+    let inner = state
+        .registry
+        .with_driver(&conn_id, move |driver| async move {
+            let mut d = driver.lock().await;
+            match &mut *d {
+                LiveConnection::Redis(r) => r.select_db(db).await,
+                _ => Err(not_redis()),
+            }
+        })
+        .await?;
+    inner.map_err(|e| AppError::Driver(e.message))
+}
+
+/// Number of logical databases (for the DB dropdown; default 16).
+#[tauri::command]
+pub async fn redis_database_count(state: State<'_, AppState>, conn_id: String) -> Result<i64, AppError> {
+    let inner = state
+        .registry
+        .with_driver(&conn_id, move |driver| async move {
+            let mut d = driver.lock().await;
+            match &mut *d {
+                LiveConnection::Redis(r) => r.database_count().await,
+                _ => Err(not_redis()),
+            }
+        })
+        .await?;
+    inner.map_err(|e| AppError::Driver(e.message))
+}
+
 /// FLUSHDB — xóa toàn bộ DB hiện tại (UI phải confirm gõ tên DB).
 #[tauri::command]
 pub async fn redis_flushdb(state: State<'_, AppState>, conn_id: String) -> Result<(), AppError> {

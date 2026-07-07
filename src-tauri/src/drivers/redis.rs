@@ -299,6 +299,28 @@ impl RedisDriver {
             .map_err(|e| err("MEMORY USAGE error", e))
     }
 
+    /// Switch the active logical database on this connection (Redis `SELECT n`).
+    pub async fn select_db(&mut self, db: i64) -> Result<(), QueryError> {
+        let _: () = redis::cmd("SELECT")
+            .arg(db)
+            .query_async(&mut self.conn)
+            .await
+            .map_err(|e| err(format!("SELECT {db} error"), e))?;
+        Ok(())
+    }
+
+    /// Number of logical databases (`CONFIG GET databases`; default 16 if the
+    /// server hides it, e.g. some managed Redis).
+    pub async fn database_count(&mut self) -> Result<i64, QueryError> {
+        let pairs: Vec<String> = redis::cmd("CONFIG")
+            .arg("GET")
+            .arg("databases")
+            .query_async(&mut self.conn)
+            .await
+            .unwrap_or_default();
+        Ok(pairs.get(1).and_then(|v| v.parse::<i64>().ok()).filter(|n| *n > 0).unwrap_or(16))
+    }
+
     /// FLUSHDB — xóa toàn bộ DB hiện tại.
     pub async fn flushdb(&mut self) -> Result<(), QueryError> {
         let _: () = redis::cmd("FLUSHDB")

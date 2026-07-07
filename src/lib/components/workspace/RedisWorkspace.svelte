@@ -17,7 +17,9 @@
   let { tab }: Props = $props()
 
   const profile = $derived(connections.byId(tab.connectionId))
-  const dbIndex = $derived(profile?.database?.trim() || '0')
+  // Active logical DB — a runtime dropdown (default db0), switched via SELECT n.
+  let curDb = $state(0)
+  let dbCount = $state(16)
 
   let keys = $state<RedisKeyInfo[]>([])
   let dbsize = $state(0)
@@ -95,6 +97,25 @@
     void pattern
     untrack(() => void load())
   })
+  // fetch the DB count once connected (for the dropdown range)
+  $effect(() => {
+    const cid = tab.connectionId
+    if (cid) untrack(() => void ipc.redisDatabaseCount(cid).then((n) => (dbCount = n)).catch(() => {}))
+  })
+  // Switch active DB (SELECT n) then reload the key explorer.
+  async function switchDb(e: Event) {
+    const n = Number((e.currentTarget as HTMLSelectElement).value)
+    curDb = n
+    if (!tab.connectionId) return
+    try {
+      await ipc.redisSelectDb(tab.connectionId, n)
+      selected = null
+      selectedValue = null
+      await load()
+    } catch (err) {
+      error = String(err)
+    }
+  }
 
   function toggle(path: string) {
     const next = new Set(expanded)
@@ -134,8 +155,8 @@
 
   async function flushDb() {
     if (!tab.connectionId) return
-    const ans = window.prompt(`FLUSHDB will DELETE ALL of db${dbIndex}. Type "db${dbIndex}" to confirm:`)
-    if (ans !== `db${dbIndex}`) return
+    const ans = window.prompt(`FLUSHDB will DELETE ALL of db${curDb}. Type "db${curDb}" to confirm:`)
+    if (ans !== `db${curDb}`) return
     try {
       await ipc.redisFlushDb(tab.connectionId)
       toasts.success('FLUSHDB — entire DB cleared')
@@ -319,7 +340,9 @@
     <!-- header: DB selector + SCAN count -->
     <div style="flex:none;padding:var(--px-9) var(--px-12);border-bottom:var(--px-1) solid var(--border);display:flex;align-items:center;gap:var(--px-8)">
       <span style="font-size:var(--px-12);color:var(--text2)">DB</span>
-      <span class="mono" style="font-size:var(--px-11);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-3) var(--px-9)">db{dbIndex}</span>
+      <select value={curDb} onchange={switchDb} class="mono" title="Select logical database" aria-label="Redis database" style="font-size:var(--px-11);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-3) var(--px-6);color:var(--text);cursor:pointer;outline:none">
+        {#each Array.from({ length: dbCount }, (_, i) => i) as n (n)}<option value={n}>db{n}</option>{/each}
+      </select>
       <span class="mono" style="margin-left:auto;font-size:var(--px-11);color:var(--muted)">SCAN · {dbsize} keys</span>
       <span onclick={() => tab.connectionId && tabs.openRedisPubSubTab(tab.connectionId)} onkeydown={(e) => e.key === 'Enter' && tab.connectionId && tabs.openRedisPubSubTab(tab.connectionId)} role="button" tabindex="0" title="Pub/Sub Monitor" style="flex:none;font-size:var(--px-10_5);color:var(--primary);cursor:pointer">Pub/Sub ▸</span>
       <span onclick={flushDb} onkeydown={(e) => e.key === 'Enter' && flushDb()} role="button" tabindex="0" title="FLUSHDB (clear entire DB)" style="flex:none;font-size:var(--px-10_5);color:var(--error);cursor:pointer">Flush</span>

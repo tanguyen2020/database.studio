@@ -1,0 +1,135 @@
+# ARTIFACT: mysql-scan-index
+
+===== SCAN — raw engine (EXPLAIN FORMAT=JSON) =====
+{
+  "query_block": {
+    "select_id": 1,
+    "cost_info": {
+      "query_cost": "500.25"
+    },
+    "table": {
+      "table_name": "it_my",
+      "access_type": "ALL",
+      "rows_examined_per_scan": 5000,
+      "rows_produced_per_join": 500,
+      "filtered": "10.00",
+      "cost_info": {
+        "read_cost": "450.25",
+        "eval_cost": "50.00",
+        "prefix_cost": "500.25",
+        "data_read_per_join": "50K"
+      },
+      "used_columns": [
+        "id",
+        "status"
+      ],
+      "attached_condition": "(`testdb`.`it_my`.`status` = 'rare')"
+    }
+  }
+}
+
+===== SCAN — app normalized =====
+{
+  "system": "mysql",
+  "mode": "estimated",
+  "root": {
+    "operation": "SeqScan",
+    "native_op": "ALL access",
+    "estimated_rows": 5000.0,
+    "estimated_cost": 450.25,
+    "extra": {
+      "Relation Name": "it_my"
+    },
+    "children": [],
+    "is_hotspot": false
+  },
+  "summary": {
+    "total_cost": 450.25,
+    "warnings": []
+  },
+  "raw": "{\n  \"query_block\": {\n    \"select_id\": 1,\n    \"cost_info\": {\n      \"query_cost\": \"500.25\"\n    },\n    \"table\": {\n      \"table_name\": \"it_my\",\n      \"access_type\": \"ALL\",\n      \"rows_examined_per_scan\": 5000,\n      \"rows_produced_per_join\": 500,\n      \"filtered\": \"10.00\",\n      \"cost_info\": {\n        \"read_cost\": \"450.25\",\n        \"eval_cost\": \"50.00\",\n        \"prefix_cost\": \"500.25\",\n        \"data_read_per_join\": \"50K\"\n      },\n      \"used_columns\": [\n        \"id\",\n        \"status\"\n      ],\n      \"attached_condition\": \"(`testdb`.`it_my`.`status` = 'rare')\"\n    }\n  }\n}"
+}
+
+===== INDEX — raw engine =====
+{
+  "query_block": {
+    "select_id": 1,
+    "cost_info": {
+      "query_cost": "0.97"
+    },
+    "table": {
+      "table_name": "it_my",
+      "access_type": "ref",
+      "possible_keys": [
+        "ix_my_status"
+      ],
+      "key": "ix_my_status",
+      "used_key_parts": [
+        "status"
+      ],
+      "key_length": "83",
+      "ref": [
+        "const"
+      ],
+      "rows_examined_per_scan": 1,
+      "rows_produced_per_join": 1,
+      "filtered": "100.00",
+      "using_index": true,
+      "cost_info": {
+        "read_cost": "0.88",
+        "eval_cost": "0.10",
+        "prefix_cost": "0.97",
+        "data_read_per_join": "104"
+      },
+      "used_columns": [
+        "id",
+        "status"
+      ]
+    }
+  }
+}
+
+===== INDEX — app normalized =====
+{
+  "system": "mysql",
+  "mode": "estimated",
+  "root": {
+    "operation": "IndexScan",
+    "native_op": "ref access",
+    "estimated_rows": 1.0,
+    "estimated_cost": 0.88,
+    "extra": {
+      "Relation Name": "it_my"
+    },
+    "children": [],
+    "is_hotspot": false
+  },
+  "summary": {
+    "total_cost": 0.88,
+    "warnings": []
+  },
+  "raw": "{\n  \"query_block\": {\n    \"select_id\": 1,\n    \"cost_info\": {\n      \"query_cost\": \"0.97\"\n    },\n    \"table\": {\n      \"table_name\": \"it_my\",\n      \"access_type\": \"ref\",\n      \"possible_keys\": [\n        \"ix_my_status\"\n      ],\n      \"key\": \"ix_my_status\",\n      \"used_key_parts\": [\n        \"status\"\n      ],\n      \"key_length\": \"83\",\n      \"ref\": [\n        \"const\"\n      ],\n      \"rows_examined_per_scan\": 1,\n      \"rows_produced_per_join\": 1,\n      \"filtered\": \"100.00\",\n      \"using_index\": true,\n      \"cost_info\": {\n        \"read_cost\": \"0.88\",\n        \"eval_cost\": \"0.10\",\n        \"prefix_cost\": \"0.97\",\n        \"data_read_per_join\": \"104\"\n      },\n      \"used_columns\": [\n        \"id\",\n        \"status\"\n      ]\n    }\n  }\n}"
+}
+
+===== ACTUAL-toggle path (system=mysql) — app normalized (proves estimated-only) =====
+{
+  "system": "mysql",
+  "mode": "estimated",
+  "root": {
+    "operation": "IndexScan",
+    "native_op": "ref access",
+    "estimated_rows": 1.0,
+    "estimated_cost": 0.88,
+    "extra": {
+      "Relation Name": "it_my"
+    },
+    "children": [],
+    "is_hotspot": false
+  },
+  "summary": {
+    "total_cost": 0.88,
+    "warnings": []
+  },
+  "raw": "{\n  \"query_block\": {\n    \"select_id\": 1,\n    \"cost_info\": {\n      \"query_cost\": \"0.97\"\n    },\n    \"table\": {\n      \"table_name\": \"it_my\",\n      \"access_type\": \"ref\",\n      \"possible_keys\": [\n        \"ix_my_status\"\n      ],\n      \"key\": \"ix_my_status\",\n      \"used_key_parts\": [\n        \"status\"\n      ],\n      \"key_length\": \"83\",\n      \"ref\": [\n        \"const\"\n      ],\n      \"rows_examined_per_scan\": 1,\n      \"rows_produced_per_join\": 1,\n      \"filtered\": \"100.00\",\n      \"using_index\": true,\n      \"cost_info\": {\n        \"read_cost\": \"0.88\",\n        \"eval_cost\": \"0.10\",\n        \"prefix_cost\": \"0.97\",\n        \"data_read_per_join\": \"104\"\n      },\n      \"used_columns\": [\n        \"id\",\n        \"status\"\n      ]\n    }\n  }\n}"
+}
+
