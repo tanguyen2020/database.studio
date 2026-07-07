@@ -194,6 +194,7 @@ export type TabContentType =
   | 'redis'
   | 'redis-pubsub'
   | 'nats'
+  | 'nats-subject'
   | 'kafka'
   | 'kafka-consumer'
   | 'kafka-producer'

@@ -20,6 +20,7 @@
   import RedisWorkspace from '$lib/components/workspace/RedisWorkspace.svelte'
   import RedisPubSub from '$lib/components/workspace/RedisPubSub.svelte'
   import NatsWorkspace from '$lib/components/workspace/NatsWorkspace.svelte'
+  import NatsSubjectMessages from '$lib/components/workspace/NatsSubjectMessages.svelte'
   import KafkaWorkspace from '$lib/components/workspace/KafkaWorkspace.svelte'
   import KafkaConsumer from '$lib/components/workspace/KafkaConsumer.svelte'
   import KafkaProducer from '$lib/components/workspace/KafkaProducer.svelte'
@@ -212,6 +213,8 @@
             <RedisPubSub tab={t} />
           {:else if t.contentType === 'nats'}
             <NatsWorkspace tab={t} />
+          {:else if t.contentType === 'nats-subject'}
+            <NatsSubjectMessages tab={t} />
           {:else if t.contentType === 'kafka'}
             <KafkaWorkspace tab={t} />
           {:else if t.contentType === 'kafka-consumer'}

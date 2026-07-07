@@ -372,6 +372,69 @@ impl NatsDriver {
             time: raw.time.to_string(),
         })
     }
+
+    /// Browse up to `limit` existing messages of a subject (server-side filtered,
+    /// no-wait fetch). Uses an ephemeral pull consumer so nothing is left behind.
+    pub async fn js_subject_messages(&self, stream: &str, subject: &str, limit: usize) -> Result<Vec<JsMessage>, QueryError> {
+        use async_nats::jetstream::consumer::{pull::Config as PullConfig, AckPolicy, DeliverPolicy};
+        use futures::StreamExt;
+        let js = async_nats::jetstream::new(self.client.clone());
+        let s = js.get_stream(stream).await.map_err(|e| err("Failed to get stream", e))?;
+        let consumer = s
+            .create_consumer(PullConfig {
+                filter_subject: subject.to_string(),
+                deliver_policy: DeliverPolicy::All,
+                ack_policy: AckPolicy::None,
+                ..Default::default()
+            })
+            .await
+            .map_err(|e| err("Failed to create browse consumer", e))?;
+        let mut batch = consumer
+            .fetch()
+            .max_messages(limit.max(1))
+            .messages()
+            .await
+            .map_err(|e| err("Failed to fetch messages", e))?;
+        let mut out = Vec::new();
+        while let Some(item) = batch.next().await {
+            let m = item.map_err(|e| err("Message read error", e))?;
+            let info = m.info().ok();
+            out.push(JsMessage {
+                seq: info.as_ref().map(|i| i.stream_sequence).unwrap_or(0),
+                subject: m.subject.to_string(),
+                payload: String::from_utf8_lossy(&m.payload).into_owned(),
+                time: info.map(|i| i.published.to_string()).unwrap_or_default(),
+            });
+        }
+        Ok(out)
+    }
+
+    /// Clear messages of a single subject (JetStream purge with a subject filter).
+    /// Leaves the stream and its other subjects intact.
+    pub async fn js_purge_subject(&self, stream: &str, subject: &str) -> Result<(), QueryError> {
+        let js = async_nats::jetstream::new(self.client.clone());
+        let s = js.get_stream(stream).await.map_err(|e| err("Failed to get stream", e))?;
+        s.purge().filter(subject).await.map_err(|e| err("Failed to purge subject", e))?;
+        Ok(())
+    }
+
+    /// Remove a subject from a stream's config (update stream). Refuses to remove
+    /// a subject the stream doesn't have, or the last remaining subject.
+    pub async fn js_remove_subject(&self, stream: &str, subject: &str) -> Result<(), QueryError> {
+        let js = async_nats::jetstream::new(self.client.clone());
+        let mut s = js.get_stream(stream).await.map_err(|e| err("Failed to get stream", e))?;
+        let mut cfg = s.info().await.map_err(|e| err("Failed to get stream info", e))?.config.clone();
+        let before = cfg.subjects.len();
+        cfg.subjects.retain(|x| x != subject);
+        if cfg.subjects.len() == before {
+            return Err(err("Subject not found in stream", subject));
+        }
+        if cfg.subjects.is_empty() {
+            return Err(err("Cannot remove the last subject", "delete the stream instead"));
+        }
+        js.update_stream(&cfg).await.map_err(|e| err("Failed to update stream", e))?;
+        Ok(())
+    }
 }
 
 #[derive(Debug, serde::Serialize)]

@@ -39,8 +39,43 @@ export interface ConnCache {
   error?: string
 }
 
+/** Streaming (Kafka/NATS) explorer cache — topics / JetStream streams per conn. */
+export interface StreamingCache {
+  kafkaTopics?: ipc.KafkaTopic[]
+  natsStreams?: ipc.NatsJsStream[]
+  loading: boolean
+  error?: string
+}
+
 class ExplorerStore {
   cache = $state<Record<string, ConnCache>>({})
+  streaming = $state<Record<string, StreamingCache>>({})
+
+  /** Load Kafka topics / NATS streams for the streaming explorer tree. */
+  async loadStreaming(connId: string, system: string, force = false) {
+    const cur = this.streaming[connId]
+    if (cur && (cur.kafkaTopics || cur.natsStreams) && !force) return
+    this.streaming[connId] = { ...(cur ?? {}), loading: true, error: undefined }
+    try {
+      if (system === 'kafka') {
+        const kafkaTopics = await ipc.kafkaTopics(connId)
+        this.streaming[connId] = { kafkaTopics, loading: false }
+      } else if (system === 'nats') {
+        const natsStreams = await ipc.natsJsStreams(connId)
+        this.streaming[connId] = { natsStreams, loading: false }
+      } else {
+        this.streaming[connId] = { loading: false }
+      }
+    } catch (e) {
+      this.streaming[connId] = { ...(this.streaming[connId] ?? { loading: false }), loading: false, error: String(e) }
+    }
+  }
+
+  /** Reload streaming metadata (after create/delete/purge). */
+  refreshStreaming(connId: string) {
+    const system = this.streaming[connId]?.kafkaTopics ? 'kafka' : this.streaming[connId]?.natsStreams ? 'nats' : ''
+    if (system) void this.loadStreaming(connId, system, true)
+  }
 
   private conn(connId: string): ConnCache {
     if (!this.cache[connId]) {

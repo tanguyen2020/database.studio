@@ -389,6 +389,45 @@ impl KafkaDriver {
         Ok(())
     }
 
+    /// Clear a topic's messages WITHOUT dropping the topic: delete every record
+    /// up to each partition's high watermark (KIP-107 DeleteRecords). Keeps the
+    /// topic, its partitions, config and ACLs intact — just empties it.
+    pub async fn purge_topic(&self, name: &str) -> Result<(), QueryError> {
+        let consumer = self.consumer.clone();
+        let topic = name.to_string();
+        // fetch partitions + high watermark (blocking rdkafka calls)
+        let tpl = tokio::task::spawn_blocking(move || -> Result<TopicPartitionList, String> {
+            let md = consumer.fetch_metadata(Some(&topic), META_TIMEOUT).map_err(|e| e.to_string())?;
+            let t = md
+                .topics()
+                .iter()
+                .find(|t| t.name() == topic)
+                .ok_or_else(|| format!("topic '{topic}' not found"))?;
+            if t.partitions().is_empty() {
+                return Err(format!("topic '{topic}' has no partitions"));
+            }
+            let mut tpl = TopicPartitionList::new();
+            for p in t.partitions() {
+                let (_low, high) = consumer
+                    .fetch_watermarks(&topic, p.id(), Duration::from_secs(5))
+                    .map_err(|e| e.to_string())?;
+                // DeleteRecords deletes everything BEFORE this offset → high == all.
+                tpl.add_partition_offset(&topic, p.id(), Offset::Offset(high))
+                    .map_err(|e| e.to_string())?;
+            }
+            Ok(tpl)
+        })
+        .await
+        .map_err(|e| err("spawn_blocking error", e))?
+        .map_err(|e| err("Failed to read topic watermarks", e))?;
+
+        let admin: AdminClient<DefaultClientContext> =
+            self.config.create().map_err(|e| err("Failed to create admin client", e))?;
+        let opts = AdminOptions::new().operation_timeout(Some(Duration::from_secs(30)));
+        admin.delete_records(&tpl, &opts).await.map_err(|e| err("delete_records error", e))?;
+        Ok(())
+    }
+
     /// Xóa topic (admin).
     pub async fn delete_topic(&self, name: &str) -> Result<(), QueryError> {
         let admin: AdminClient<DefaultClientContext> =

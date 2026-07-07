@@ -3630,3 +3630,133 @@ async fn sqlite_table_designer_create_alter_end_to_end() {
     assert_eq!(n(&drv, "SELECT count(*) AS n FROM sqlite_master WHERE type='index' AND name='idx_orders_note'").await, 1, "index added");
     eprintln!("CHK sqlite_table_designer_create_alter_end_to_end OK");
 }
+
+// ---------------------------------------------------------------------------
+// Streaming feature end-to-end: Kafka clear-messages (purge) + NATS subject
+// browse / purge-subject / remove-subject, on real containers.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn kafka_purge_topic_clears_messages() {
+    use database_studio_lib::drivers::kafka::{KafkaConnParams, KafkaDriver};
+    use testcontainers_modules::kafka::{Kafka, KAFKA_PORT};
+
+    let node = Kafka::default().start().await.expect("start kafka container");
+    let port = node.get_host_port_ipv4(KAFKA_PORT).await.unwrap();
+    let params = KafkaConnParams {
+        bootstrap: format!("127.0.0.1:{port}"),
+        sasl_mechanism: String::new(),
+        user: String::new(),
+        password: String::new(),
+        ssl: false,
+    };
+    let drv = retry("kafka", || KafkaDriver::connect(&params)).await;
+
+    drv.create_topic("purge_test", 1, 1).await.unwrap();
+    for _ in 0..20 {
+        if drv.topics().await.unwrap().iter().any(|t| t.name == "purge_test") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    for i in 0..5 {
+        drv.produce("purge_test", &format!("k{i}"), "v", Some(0)).await.unwrap();
+    }
+
+    // messages present (high − low >= 5)
+    let mut retained = 0i64;
+    for _ in 0..20 {
+        let t = drv.topics().await.unwrap().into_iter().find(|t| t.name == "purge_test").unwrap();
+        let p = &t.partitions[0];
+        retained = p.high - p.low;
+        if retained >= 5 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    assert!(retained >= 5, "expected >=5 messages before purge, got {retained}");
+
+    // clear messages (delete_records to high watermark)
+    drv.purge_topic("purge_test").await.unwrap();
+
+    // after purge the low watermark advances to high → 0 retained
+    let mut after = i64::MAX;
+    for _ in 0..20 {
+        let t = drv.topics().await.unwrap().into_iter().find(|t| t.name == "purge_test").unwrap();
+        let p = &t.partitions[0];
+        after = p.high - p.low;
+        if after == 0 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    assert_eq!(after, 0, "purge must clear all retained messages");
+
+    // topic itself still exists, then delete it
+    assert!(drv.topics().await.unwrap().iter().any(|t| t.name == "purge_test"), "topic kept after purge");
+    drv.delete_topic("purge_test").await.unwrap();
+    eprintln!("CHK kafka_purge_topic_clears_messages OK");
+}
+
+#[tokio::test]
+async fn nats_subject_messages_purge_and_remove() {
+    use async_nats::jetstream;
+    use database_studio_lib::drivers::nats::{NatsConnParams, NatsDriver};
+
+    let c = GenericImage::new("nats", "2.10-alpine")
+        .with_exposed_port(4222.tcp())
+        .with_cmd(vec!["-js"])
+        .start()
+        .await
+        .expect("start nats -js");
+    let port = c.get_host_port_ipv4(4222).await.unwrap();
+    let params = NatsConnParams { host: "localhost".into(), port, user: String::new(), password: String::new(), ssl: false };
+    let drv = retry("nats-js", || NatsDriver::connect(&params)).await;
+
+    let js = jetstream::new(drv.client());
+    js.create_stream(jetstream::stream::Config {
+        name: "ORDERS".into(),
+        subjects: vec!["orders.eu".into(), "orders.us".into()],
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    for i in 0..3 {
+        js.publish("orders.eu", bytes::Bytes::from(format!("eu{i}"))).await.unwrap().await.unwrap();
+    }
+    for i in 0..2 {
+        js.publish("orders.us", bytes::Bytes::from(format!("us{i}"))).await.unwrap().await.unwrap();
+    }
+
+    // retry helper: browse a subject until it reports the expected count (or times out)
+    async fn count_until(drv: &NatsDriver, subject: &str, want: usize) -> usize {
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            let n = drv.js_subject_messages("ORDERS", subject, 100).await.unwrap().len();
+            if n == want || Instant::now() >= deadline {
+                return n;
+            }
+            tokio::time::sleep(Duration::from_millis(400)).await;
+        }
+    }
+
+    // browse: only orders.eu messages, correct subject
+    let eu = drv.js_subject_messages("ORDERS", "orders.eu", 100).await.unwrap();
+    assert_eq!(count_until(&drv, "orders.eu", 3).await, 3, "3 messages on orders.eu");
+    assert!(eu.iter().all(|m| m.subject == "orders.eu"), "all messages belong to orders.eu");
+
+    // clear one subject → its messages gone, the other subject intact
+    drv.js_purge_subject("ORDERS", "orders.eu").await.unwrap();
+    assert_eq!(count_until(&drv, "orders.eu", 0).await, 0, "orders.eu cleared");
+    assert_eq!(count_until(&drv, "orders.us", 2).await, 2, "orders.us intact");
+
+    // remove a subject from the stream config
+    drv.js_remove_subject("ORDERS", "orders.us").await.unwrap();
+    let s = drv.js_streams().await.unwrap().into_iter().find(|s| s.name == "ORDERS").unwrap();
+    assert_eq!(s.subjects, vec!["orders.eu".to_string()], "orders.us removed from config");
+    // removing the last remaining subject must be refused
+    assert!(drv.js_remove_subject("ORDERS", "orders.eu").await.is_err(), "cannot remove the last subject");
+
+    drv.js_delete_stream("ORDERS").await.unwrap();
+    eprintln!("CHK nats_subject_messages_purge_and_remove OK");
+}

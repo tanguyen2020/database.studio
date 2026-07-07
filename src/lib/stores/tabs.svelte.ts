@@ -193,6 +193,37 @@ class TabsStore {
     return tab
   }
 
+  /** NATS subject messages tab — 1 tab per (stream, subject). */
+  openNatsSubject(connectionId: string, stream: string, subject: string): TabState {
+    const existing = this.tabs.find(
+      (t) =>
+        t.contentType === 'nats-subject' &&
+        t.connectionId === connectionId &&
+        (t.state as { stream?: string }).stream === stream &&
+        (t.state as { subject?: string }).subject === subject,
+    )
+    if (existing) {
+      this.activeTabId = existing.id
+      return existing
+    }
+    const profile = connections.byId(connectionId)
+    const tab: TabState = {
+      id: uuid(),
+      connectionId,
+      connectionName: profile?.name ?? '',
+      systemType: (profile?.system as SystemType) ?? 'orphan',
+      contentType: 'nats-subject',
+      title: `${subject} · messages`,
+      isPinned: false,
+      isDirty: false,
+      state: { stream, subject },
+    }
+    this.tabs.push(tab)
+    this.activeTabId = tab.id
+    this.schedulePersist()
+    return tab
+  }
+
   /** Kafka workspace tab (cluster + topic browser) — 1 tab / connection. */
   openKafkaTab(connectionId: string): TabState {
     const existing = this.tabs.find(

@@ -31,6 +31,7 @@
   import { generateScript, type DbObject, type ScriptMode } from '$lib/sql/scripts'
   import { createTemplate, type CreateKind } from '$lib/sql/create-templates'
   import { buildExportSelect } from '$lib/export/query'
+  import { kafkaTopicRows, natsStreamRows } from '$lib/stream/explorer'
   import { toSqlInsert } from '$lib/export/rows'
   import type { ColumnInfo, RoutineInfo, TableInfo } from '$lib/types'
   import { untrack, type Snippet } from 'svelte'
@@ -165,6 +166,61 @@
       cassTree = null
     }
   }
+  // Streaming (Kafka topics / NATS JetStream streams) — loaded via the explorer
+  // store so the messages tabs can trigger a refresh after purge/delete.
+  const isKafka = $derived(selected?.system === 'kafka')
+  const isNats = $derived(selected?.system === 'nats')
+  const streamCache = $derived(selected ? explorer.streaming[selected.id] : undefined)
+  const topicRows = $derived(streamCache?.kafkaTopics ? kafkaTopicRows(streamCache.kafkaTopics) : [])
+  const streamRows = $derived(streamCache?.natsStreams ? natsStreamRows(streamCache.natsStreams) : [])
+  $effect(() => {
+    const s = selected
+    if (s?.connected && (s.system === 'kafka' || s.system === 'nats')) {
+      untrack(() => void explorer.loadStreaming(s.id, s.system))
+    }
+  })
+
+  async function deleteTopic(topic: string) {
+    if (!selected || !confirm(`Delete topic "${topic}"? This drops the topic and all its data.`)) return
+    try {
+      await ipc.kafkaDeleteTopic(selected.id, topic)
+      toasts.success(`Deleted topic ${topic}`, 'kafka')
+      explorer.refreshStreaming(selected.id)
+    } catch (e) {
+      toasts.error(String(e), 'kafka')
+    }
+  }
+  async function clearTopic(topic: string) {
+    if (!selected || !confirm(`Clear all messages of topic "${topic}"? This cannot be undone.`)) return
+    try {
+      await ipc.kafkaPurgeTopic(selected.id, topic)
+      toasts.success(`Cleared messages of ${topic}`, 'kafka')
+      explorer.refreshStreaming(selected.id)
+    } catch (e) {
+      toasts.error(String(e), 'kafka')
+    }
+  }
+  async function deleteSubject(stream: string, subject: string) {
+    if (!selected || !confirm(`Remove subject "${subject}" from stream "${stream}"?`)) return
+    try {
+      await ipc.natsJsRemoveSubject(selected.id, stream, subject)
+      toasts.success(`Removed subject ${subject}`, 'nats')
+      explorer.refreshStreaming(selected.id)
+    } catch (e) {
+      toasts.error(String(e), 'nats')
+    }
+  }
+  async function clearSubject(stream: string, subject: string) {
+    if (!selected || !confirm(`Clear all messages of subject "${subject}"?`)) return
+    try {
+      await ipc.natsJsPurgeSubject(selected.id, stream, subject)
+      toasts.success(`Cleared messages of ${subject}`, 'nats')
+      explorer.refreshStreaming(selected.id)
+    } catch (e) {
+      toasts.error(String(e), 'nats')
+    }
+  }
+
   // ClickHouse Dictionaries (§3) — nạp lười khi mở folder.
   let chDicts = $state<Record<string, string[]>>({})
   async function loadChDicts(connId: string, schema: string) {
@@ -451,6 +507,8 @@
     locked?: boolean
     /** if set, the row is draggable and carries this payload for the ER canvas */
     dragData?: string
+    /** leaf rows (Kafka topic / NATS subject) act on a single click, not dbl */
+    openOnSingleClick?: boolean
     onClick?: () => void
     onDblClick?: () => void
   }
@@ -462,8 +520,10 @@
     <!-- node row — port dòng 145-151 -->
     <div
       onclick={() => {
-        // single-click SELECTS only; expansion needs a double-click (or the chevron)
+        // single-click SELECTS only; expansion needs a double-click (or the chevron).
+        // Leaf action rows (Kafka topic / NATS subject) open on a single click.
         treeSel = p.key
+        if (p.openOnSingleClick) p.onClick?.()
       }}
       ondblclick={() => {
         treeSel = p.key
@@ -656,6 +716,61 @@
         {/if}
       {:else}
         <div style="padding:var(--px-16) var(--px-12);text-align:center;font-size:var(--px-12);color:var(--muted)">Loading keyspace…</div>
+      {/if}
+    {:else if isKafka}
+      <!-- Kafka: each topic (click → messages; ctx: view/clear/delete) -->
+      {#if streamCache?.error}
+        <div style="padding:var(--px-12);font-size:var(--px-11_5);color:var(--error)">{streamCache.error}</div>
+      {:else if streamCache?.loading && !streamCache?.kafkaTopics}
+        <div style="padding:var(--px-16) var(--px-12);text-align:center;font-size:var(--px-12);color:var(--muted)">Loading topics…</div>
+      {:else if topicRows.length === 0}
+        <div style="padding:var(--px-16) var(--px-12);text-align:center;font-size:var(--px-12);color:var(--muted)">No topics</div>
+      {:else}
+        {#each topicRows as t (t.name)}
+          {#snippet topicMenu()}
+            <ContextMenu.Content class="w-52">
+              <ContextMenu.Item onclick={() => selected && tabs.openKafkaTool(selected.id, 'kafka-consumer', t.name)}>View messages</ContextMenu.Item>
+              <ContextMenu.Item onclick={() => selected && tabs.openKafkaTool(selected.id, 'kafka-producer', t.name)}>Produce message…</ContextMenu.Item>
+              <ContextMenu.Separator />
+              <ContextMenu.Item onclick={() => clearTopic(t.name)}>Clear messages</ContextMenu.Item>
+              <ContextMenu.Item onclick={() => deleteTopic(t.name)}>Delete topic</ContextMenu.Item>
+            </ContextMenu.Content>
+          {/snippet}
+          {@render row(
+            { key: `kafka:t:${t.name}`, depth: 0, glyph: '▤', color: C.table, name: t.name, meta: t.meta, openOnSingleClick: true, onClick: () => selected && tabs.openKafkaTool(selected.id, 'kafka-consumer', t.name) },
+            topicMenu,
+          )}
+        {/each}
+      {/if}
+    {:else if isNats}
+      <!-- NATS JetStream: each stream → its subjects (click subject → messages) -->
+      {#if streamCache?.error}
+        <div style="padding:var(--px-12);font-size:var(--px-11_5);color:var(--error)">{streamCache.error}</div>
+      {:else if streamCache?.loading && !streamCache?.natsStreams}
+        <div style="padding:var(--px-16) var(--px-12);text-align:center;font-size:var(--px-12);color:var(--muted)">Loading streams…</div>
+      {:else if streamRows.length === 0}
+        <div style="padding:var(--px-16) var(--px-12);text-align:center;font-size:var(--px-12);color:var(--muted)">No JetStream streams</div>
+      {:else}
+        {#each streamRows as s (s.name)}
+          {@const sKey = `nats:s:${s.name}`}
+          {@render row({ key: sKey, depth: 0, glyph: '▤', color: C.folder, name: s.name, meta: s.meta, head: true, expandable: true, onClick: () => toggle(sKey) })}
+          {#if expanded.has(sKey)}
+            {#each s.subjects as sub (sub.subject)}
+              {#snippet subjectMenu()}
+                <ContextMenu.Content class="w-52">
+                  <ContextMenu.Item onclick={() => selected && tabs.openNatsSubject(selected.id, s.name, sub.subject)}>View messages</ContextMenu.Item>
+                  <ContextMenu.Separator />
+                  <ContextMenu.Item onclick={() => clearSubject(s.name, sub.subject)}>Clear messages</ContextMenu.Item>
+                  <ContextMenu.Item onclick={() => deleteSubject(s.name, sub.subject)}>Delete subject</ContextMenu.Item>
+                </ContextMenu.Content>
+              {/snippet}
+              {@render row(
+                { key: `nats:sub:${s.name}:${sub.subject}`, depth: 1, glyph: '✉', color: C.seq, name: sub.subject, openOnSingleClick: true, onClick: () => selected && tabs.openNatsSubject(selected.id, s.name, sub.subject) },
+                subjectMenu,
+              )}
+            {/each}
+          {/if}
+        {/each}
       {/if}
     {:else}
       {#if pgMssqlMultiDb}

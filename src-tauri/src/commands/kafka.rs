@@ -101,6 +101,27 @@ pub async fn kafka_delete_topic(
     inner.map_err(|e| AppError::Driver(e.message))
 }
 
+/// Clear a topic's messages (delete records up to the high watermark) — keeps
+/// the topic itself.
+#[tauri::command]
+pub async fn kafka_purge_topic(
+    state: State<'_, AppState>,
+    conn_id: String,
+    name: String,
+) -> Result<(), AppError> {
+    let inner = state
+        .registry
+        .with_driver(&conn_id, move |driver| async move {
+            let d = driver.lock().await;
+            match &*d {
+                LiveConnection::Kafka(k) => k.purge_topic(&name).await,
+                _ => Err(not_kafka()),
+            }
+        })
+        .await?;
+    inner.map_err(|e| AppError::Driver(e.message))
+}
+
 /// List consumer groups + members.
 #[tauri::command]
 pub async fn kafka_consumer_groups(

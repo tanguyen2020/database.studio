@@ -320,6 +320,70 @@ pub async fn nats_js_peek(
     inner.map_err(|e| AppError::Driver(e.message))
 }
 
+/// JetStream: browse up to `limit` messages of a subject within a stream.
+#[tauri::command]
+pub async fn nats_js_subject_messages(
+    state: State<'_, AppState>,
+    conn_id: String,
+    stream: String,
+    subject: String,
+    limit: usize,
+) -> Result<Vec<JsMessage>, AppError> {
+    let inner = state
+        .registry
+        .with_driver(&conn_id, move |driver| async move {
+            let d = driver.lock().await;
+            match &*d {
+                LiveConnection::Nats(n) => n.js_subject_messages(&stream, &subject, limit).await,
+                _ => Err(not_nats()),
+            }
+        })
+        .await?;
+    inner.map_err(|e| AppError::Driver(e.message))
+}
+
+/// JetStream: clear a subject's messages (purge with a subject filter).
+#[tauri::command]
+pub async fn nats_js_purge_subject(
+    state: State<'_, AppState>,
+    conn_id: String,
+    stream: String,
+    subject: String,
+) -> Result<(), AppError> {
+    let inner = state
+        .registry
+        .with_driver(&conn_id, move |driver| async move {
+            let d = driver.lock().await;
+            match &*d {
+                LiveConnection::Nats(n) => n.js_purge_subject(&stream, &subject).await,
+                _ => Err(not_nats()),
+            }
+        })
+        .await?;
+    inner.map_err(|e| AppError::Driver(e.message))
+}
+
+/// JetStream: remove a subject from a stream's config.
+#[tauri::command]
+pub async fn nats_js_remove_subject(
+    state: State<'_, AppState>,
+    conn_id: String,
+    stream: String,
+    subject: String,
+) -> Result<(), AppError> {
+    let inner = state
+        .registry
+        .with_driver(&conn_id, move |driver| async move {
+            let d = driver.lock().await;
+            match &*d {
+                LiveConnection::Nats(n) => n.js_remove_subject(&stream, &subject).await,
+                _ => Err(not_nats()),
+            }
+        })
+        .await?;
+    inner.map_err(|e| AppError::Driver(e.message))
+}
+
 // ---- KV Store (T9) ----------------------------------------------------------
 
 #[tauri::command]

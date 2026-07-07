@@ -226,6 +226,12 @@ export const natsJsDeleteConsumer = (connId: string, stream: string, name: strin
   invoke<void>('nats_js_delete_consumer', { connId, stream, name })
 export const natsJsDeleteMessage = (connId: string, stream: string, seq: number) =>
   invoke<void>('nats_js_delete_message', { connId, stream, seq })
+export const natsJsSubjectMessages = (connId: string, stream: string, subject: string, limit: number) =>
+  invoke<NatsJsMessage[]>('nats_js_subject_messages', { connId, stream, subject, limit })
+export const natsJsPurgeSubject = (connId: string, stream: string, subject: string) =>
+  invoke<void>('nats_js_purge_subject', { connId, stream, subject })
+export const natsJsRemoveSubject = (connId: string, stream: string, subject: string) =>
+  invoke<void>('nats_js_remove_subject', { connId, stream, subject })
 
 // KV Store (T9)
 export const natsKvBuckets = (connId: string) => invoke<string[]>('nats_kv_buckets', { connId })
@@ -284,6 +290,8 @@ export const kafkaCreateTopic = (connId: string, name: string, partitions: numbe
   invoke<void>('kafka_create_topic', { connId, name, partitions, replication })
 export const kafkaDeleteTopic = (connId: string, name: string) =>
   invoke<void>('kafka_delete_topic', { connId, name })
+export const kafkaPurgeTopic = (connId: string, name: string) =>
+  invoke<void>('kafka_purge_topic', { connId, name })
 
 export interface KafkaMsg {
   conn_id: string

@@ -453,9 +453,21 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
       return ok('{"ok":true,"demo":"reply"}')
     case 'nats_js_streams':
       return ok([
-        { name: 'ORDERS', subjects: ['orders.>'], retention: 'Limits', storage: 'File', messages: 1240, bytes: 98304, consumers: 2 },
+        { name: 'ORDERS', subjects: ['orders.eu', 'orders.us'], retention: 'Limits', storage: 'File', messages: 1240, bytes: 98304, consumers: 2 },
         { name: 'EVENTS', subjects: ['events.*'], retention: 'WorkQueue', storage: 'Memory', messages: 57, bytes: 8192, consumers: 1 },
       ])
+    case 'nats_js_subject_messages':
+      return ok(
+        Array.from({ length: 3 }, (_, i) => ({
+          seq: i + 1,
+          subject: (args?.subject as string) ?? 'orders.eu',
+          payload: `{"id":${1000 + i}}`,
+          time: '2026-06-30T10:23:14Z',
+        })),
+      )
+    case 'nats_js_purge_subject':
+    case 'nats_js_remove_subject':
+      return ok(null)
     case 'nats_js_consumers':
       return ok([
         { name: 'order-processor', deliver_policy: 'All', ack_policy: 'Explicit', filter_subject: 'orders.new', num_pending: 12, num_ack_pending: 0 },
@@ -518,6 +530,7 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
       ])
     case 'kafka_create_topic':
     case 'kafka_delete_topic':
+    case 'kafka_purge_topic':
     case 'kafka_consume':
     case 'kafka_stop_consume':
       return ok(null)
