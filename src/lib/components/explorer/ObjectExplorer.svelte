@@ -226,8 +226,22 @@
       toasts.error(String(e), 'kafka')
     }
   }
-  async function deleteSubject(stream: string, subject: string) {
-    if (!selected || !confirm(`Remove subject "${subject}" from stream "${stream}"?`)) return
+  async function deleteSubject(stream: string, subject: string, subjectCount: number) {
+    if (!selected) return
+    // NATS requires a stream to keep ≥1 subject. When this is the only one,
+    // "remove subject" is impossible — deleting it means deleting the stream.
+    if (subjectCount <= 1) {
+      if (!confirm(`"${subject}" is the only subject of stream "${stream}". Removing it deletes the entire stream and all its messages. Continue?`)) return
+      try {
+        await ipc.natsJsDeleteStream(selected.id, stream)
+        toasts.success(`Deleted stream ${stream}`, 'nats')
+        explorer.refreshStreaming(selected.id)
+      } catch (e) {
+        toasts.error(String(e), 'nats')
+      }
+      return
+    }
+    if (!confirm(`Remove subject "${subject}" from stream "${stream}"?`)) return
     try {
       await ipc.natsJsRemoveSubject(selected.id, stream, subject)
       toasts.success(`Removed subject ${subject}`, 'nats')
@@ -820,7 +834,7 @@
                   <ContextMenu.Item onclick={() => selected && tabs.openNatsSubject(selected.id, s.name, sub.subject)}>View messages</ContextMenu.Item>
                   <ContextMenu.Separator />
                   <ContextMenu.Item onclick={() => clearSubject(s.name, sub.subject)}>Clear messages</ContextMenu.Item>
-                  <ContextMenu.Item onclick={() => deleteSubject(s.name, sub.subject)}>Delete subject</ContextMenu.Item>
+                  <ContextMenu.Item onclick={() => deleteSubject(s.name, sub.subject, s.subjects.length)}>Delete subject</ContextMenu.Item>
                 </ContextMenu.Content>
               {/snippet}
               {@render row(
