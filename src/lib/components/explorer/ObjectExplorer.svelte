@@ -33,6 +33,7 @@
   import { buildExportSelect } from '$lib/export/query'
   import { kafkaTopicRows, natsStreamRows } from '$lib/stream/explorer'
   import { toAlterStatement, type AlterKind } from '$lib/sql/alter'
+  import { objectFilterMatch } from '$lib/explorer/filter'
   import { toSqlInsert } from '$lib/export/rows'
   import type { ColumnInfo, RoutineInfo, TableInfo } from '$lib/types'
   import { untrack, type Snippet } from 'svelte'
@@ -73,12 +74,27 @@
   }
   const searching = false
 
-  // Per-folder object filter: each Tables/Views/Procedures/Functions/Triggers/
-  // Sequences folder has its own search box, keyed by the folder's tree key.
+  // Per-folder object filter (SSMS-style): the search box is hidden until the
+  // user picks "Filter…" from the folder's context menu, keyed by the folder tree
+  // key. `folderFilterOpen` = the box is shown; `folderFilters` = the query text.
   const folderFilters = $state<Record<string, string>>({})
+  const folderFilterOpen = $state<Record<string, boolean>>({})
   function folderMatch(key: string, name: string): boolean {
-    const q = (folderFilters[key] ?? '').trim().toLowerCase()
-    return !q || name.toLowerCase().includes(q)
+    return objectFilterMatch(folderFilters[key] ?? '', name)
+  }
+  /** Open the filter box for a folder (expand it first so the box is visible). */
+  function openFolderFilter(key: string) {
+    if (!expanded.has(key)) expanded = new Set([...expanded, key])
+    folderFilterOpen[key] = true
+  }
+  /** Remove Filter: clear the query and hide the box. */
+  function clearFolderFilter(key: string) {
+    folderFilters[key] = ''
+    folderFilterOpen[key] = false
+  }
+  /** Focus the filter input when it appears. */
+  function focusFilter(node: HTMLInputElement) {
+    node.focus()
   }
 
   const curDbName = $derived(cache?.databases?.find((d) => d.current)?.name ?? selected?.database ?? '')
@@ -583,18 +599,32 @@
   {/if}
 {/snippet}
 
-<!-- per-folder object filter (item 1) — small search box under a folder header -->
+<!-- per-folder object filter — a search box revealed by the folder's context-menu
+     "Filter…" (SSMS-style); hidden otherwise. -->
 {#snippet folderFilter(key: string, depth: number)}
-  <div style="display:flex;align-items:center;padding:var(--px-2) var(--px-6) var(--px-3);padding-left:calc(var(--px-6) + {depth} * var(--px-15))">
-    <input
-      value={folderFilters[key] ?? ''}
-      oninput={(e) => (folderFilters[key] = e.currentTarget.value)}
-      onclick={(e) => e.stopPropagation()}
-      placeholder="Filter…"
-      aria-label="Filter items"
-      style="width:100%;background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-5);padding:var(--px-2) var(--px-7);color:var(--text);font-size:var(--px-11);outline:none"
-    />
-  </div>
+  {#if folderFilterOpen[key]}
+    <div style="display:flex;align-items:center;gap:var(--px-4);padding:var(--px-2) var(--px-6) var(--px-3);padding-left:calc(var(--px-6) + {depth} * var(--px-15))">
+      <input
+        use:focusFilter
+        value={folderFilters[key] ?? ''}
+        oninput={(e) => (folderFilters[key] = e.currentTarget.value)}
+        onclick={(e) => e.stopPropagation()}
+        onkeydown={(e) => e.key === 'Escape' && clearFolderFilter(key)}
+        placeholder="Filter…"
+        aria-label="Filter items"
+        style="flex:1;background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-5);padding:var(--px-2) var(--px-7);color:var(--text);font-size:var(--px-11);outline:none"
+      />
+      <span onclick={() => clearFolderFilter(key)} onkeydown={(e) => e.key === 'Enter' && clearFolderFilter(key)} role="button" tabindex="0" title="Remove filter" style="cursor:pointer;color:var(--muted);font-size:var(--px-12)">×</span>
+    </div>
+  {/if}
+{/snippet}
+
+<!-- context-menu items: Filter… / Remove Filter (shared by every folder header) -->
+{#snippet filterMenuItems(key: string)}
+  <ContextMenu.Item onclick={() => openFolderFilter(key)}>Filter…</ContextMenu.Item>
+  {#if (folderFilters[key] ?? '').trim() || folderFilterOpen[key]}
+    <ContextMenu.Item onclick={() => clearFolderFilter(key)}>Remove Filter</ContextMenu.Item>
+  {/if}
 {/snippet}
 
 <!-- explorer — dòng 136 -->
@@ -886,6 +916,8 @@
             <ContextMenu.Content class="w-48">
               <ContextMenu.Item onclick={() => selected && tabs.openTableDesigner(selected.id, schema.name, '')}>New Table…</ContextMenu.Item>
               <ContextMenu.Item onclick={() => selected && importWizard.show(selected.id, schema.name)}>Import Data…</ContextMenu.Item>
+              <ContextMenu.Separator />
+              {@render filterMenuItems(tKey)}
               <ContextMenu.Item onclick={() => selected && explorer.refresh(selected.id, { kind: 'schema', schema: schema.name })}>Refresh</ContextMenu.Item>
             </ContextMenu.Content>
           {/snippet}
@@ -1078,6 +1110,8 @@
           {#snippet viewsFolderMenu()}
             <ContextMenu.Content class="w-48">
               <ContextMenu.Item onclick={() => createObject('view', schema.name)}>Create View…</ContextMenu.Item>
+              <ContextMenu.Separator />
+              {@render filterMenuItems(vKey)}
               <ContextMenu.Item onclick={() => selected && explorer.refresh(selected.id, { kind: 'schema', schema: schema.name })}>Refresh</ContextMenu.Item>
             </ContextMenu.Content>
           {/snippet}
@@ -1172,6 +1206,8 @@
             {#snippet procsFolderMenu()}
               <ContextMenu.Content class="w-48">
                 <ContextMenu.Item onclick={() => createObject('procedure', schema.name)}>Create Procedure…</ContextMenu.Item>
+                <ContextMenu.Separator />
+                {@render filterMenuItems(pKey)}
                 <ContextMenu.Item onclick={() => selected && explorer.refresh(selected.id, { kind: 'schema', schema: schema.name })}>Refresh</ContextMenu.Item>
               </ContextMenu.Content>
             {/snippet}
@@ -1212,9 +1248,19 @@
 
             {#if isMssql}
               <!-- MSSQL: tách TVF / Scalar -->
-              {#snippet createFnFolderMenu()}
+              {#snippet tvfFolderMenu()}
                 <ContextMenu.Content class="w-48">
                   <ContextMenu.Item onclick={() => createObject('function', schema.name)}>Create Function…</ContextMenu.Item>
+                  <ContextMenu.Separator />
+                  {@render filterMenuItems(tvfKey)}
+                  <ContextMenu.Item onclick={() => selected && explorer.refresh(selected.id, { kind: 'schema', schema: schema.name })}>Refresh</ContextMenu.Item>
+                </ContextMenu.Content>
+              {/snippet}
+              {#snippet scalarFolderMenu()}
+                <ContextMenu.Content class="w-48">
+                  <ContextMenu.Item onclick={() => createObject('function', schema.name)}>Create Function…</ContextMenu.Item>
+                  <ContextMenu.Separator />
+                  {@render filterMenuItems(scalarKey)}
                   <ContextMenu.Item onclick={() => selected && explorer.refresh(selected.id, { kind: 'schema', schema: schema.name })}>Refresh</ContextMenu.Item>
                 </ContextMenu.Content>
               {/snippet}
@@ -1228,7 +1274,7 @@
                 head: true,
                 expandable: true,
                 onClick: () => toggle(`f:${schema.name}:tvf`),
-              }, createFnFolderMenu)}
+              }, tvfFolderMenu)}
               {#if searching || expanded.has(`f:${schema.name}:tvf`)}
                 {@render folderFilter(tvfKey, base + 1)}
                 {#each tvfs as r (r.name)}
@@ -1256,7 +1302,7 @@
                 head: true,
                 expandable: true,
                 onClick: () => toggle(`f:${schema.name}:scalar`),
-              }, createFnFolderMenu)}
+              }, scalarFolderMenu)}
               {#if searching || expanded.has(`f:${schema.name}:scalar`)}
                 {@render folderFilter(scalarKey, base + 1)}
                 {#each scalarFns as r (r.name)}
@@ -1286,6 +1332,8 @@
               {#snippet fnsFolderMenu()}
                 <ContextMenu.Content class="w-48">
                   <ContextMenu.Item onclick={() => createObject('function', schema.name)}>Create Function…</ContextMenu.Item>
+                  <ContextMenu.Separator />
+                  {@render filterMenuItems(fnKey)}
                   <ContextMenu.Item onclick={() => selected && explorer.refresh(selected.id, { kind: 'schema', schema: schema.name })}>Refresh</ContextMenu.Item>
                 </ContextMenu.Content>
               {/snippet}
@@ -1332,6 +1380,8 @@
           {#snippet trigsFolderMenu()}
             <ContextMenu.Content class="w-48">
               <ContextMenu.Item onclick={() => createObject('trigger', schema.name)}>Create Trigger…</ContextMenu.Item>
+              <ContextMenu.Separator />
+              {@render filterMenuItems(`f:${schema.name}:triggers`)}
               <ContextMenu.Item onclick={() => selected && explorer.refresh(selected.id, { kind: 'schema', schema: schema.name })}>Refresh</ContextMenu.Item>
             </ContextMenu.Content>
           {/snippet}
@@ -1375,6 +1425,8 @@
             {#snippet seqsFolderMenu()}
               <ContextMenu.Content class="w-48">
                 <ContextMenu.Item onclick={() => createObject('sequence', schema.name)}>Create Sequence…</ContextMenu.Item>
+                <ContextMenu.Separator />
+                {@render filterMenuItems(`f:${schema.name}:seqs`)}
                 <ContextMenu.Item onclick={() => selected && explorer.refresh(selected.id, { kind: 'schema', schema: schema.name })}>Refresh</ContextMenu.Item>
               </ContextMenu.Content>
             {/snippet}
@@ -1479,12 +1531,15 @@
                       {:else if fk === 'sq'}
                         <ContextMenu.Item onclick={() => createObject('sequence', fsch.name, db.name)}>Create Sequence…</ContextMenu.Item>
                       {/if}
+                      <ContextMenu.Separator />
+                      {@render filterMenuItems(folderKey)}
                       <ContextMenu.Item onclick={() => sub && explorer.refresh(sub, { kind: 'schema', schema: fsch.name })}>Refresh</ContextMenu.Item>
                     </ContextMenu.Content>
                   {/snippet}
                   {@render row({ key: folderKey, depth: 2, glyph: glyph as string, color: C.folder, name: label as string, meta: String((items as unknown[]).length), head: true, expandable: true, onClick: () => toggle(folderKey) }, fFolderMenu)}
                   {#if expanded.has(folderKey)}
-                    {#each items as it (('name' in (it as object) ? (it as { name: string }).name : String(it)))}
+                    {@render folderFilter(folderKey, 2)}
+                    {#each (items as { name: string }[]).filter((it) => folderMatch(folderKey, it.name)) as it (('name' in (it as object) ? (it as { name: string }).name : String(it)))}
                       {@const nm = (it as { name: string }).name}
                       {#snippet fObjMenu()}
                         <ContextMenu.Content class="w-52">

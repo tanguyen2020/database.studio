@@ -350,6 +350,7 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
     case 'list_routines':
       return ok([
         { schema: 'public', name: 'add_one', kind: 'function', params: [{ name: 'x', data_type: 'int4' }], return_type: 'int4' },
+        { schema: 'public', name: 'current_load', kind: 'function', params: [], return_type: 'float8' },
         { schema: 'public', name: 'refresh_stats', kind: 'procedure', params: [] },
       ])
     case 'list_triggers':

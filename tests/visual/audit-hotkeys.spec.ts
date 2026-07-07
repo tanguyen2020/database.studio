@@ -290,7 +290,12 @@ test('per-folder filter narrows objects inside Tables', async ({ page }) => {
   // both students and courses visible before filtering
   await expect(page.getByRole('treeitem', { name: /students/ }).first()).toBeVisible()
   await expect(page.getByRole('treeitem', { name: /courses/ }).first()).toBeVisible()
-  // the Tables folder's own filter box narrows to matching tables
+  // the Tables folder's own filter box (revealed via the folder context menu)
+  // narrows to matching tables
+  await page.getByText('Tables', { exact: true }).first().click({ button: 'right' })
+  await page.waitForTimeout(150)
+  await page.getByText('Filter…', { exact: true }).first().click()
+  await page.waitForTimeout(150)
   await page.getByPlaceholder('Filter…').first().fill('students')
   await page.waitForTimeout(300)
   await expect(page.getByRole('treeitem', { name: /students/ }).first()).toBeVisible()
