@@ -35,7 +35,11 @@ pub fn returns_rows(sql: &str) -> bool {
     let verb = leading_verb(sql);
     matches!(
         verb.as_str(),
-        "SELECT" | "WITH" | "SHOW" | "EXPLAIN" | "VALUES" | "TABLE" | "PRAGMA" | "DESCRIBE" | "DESC" | "ANALYZE"
+        // CALL: MySQL/MariaDB stored procedures return result set(s); routing CALL
+        // through the rows path reads them instead of discarding them on the
+        // execute() path (which also trips a protocol/"data" error on some servers).
+        // PG CALL returns no rows → an empty result set, which is fine.
+        "SELECT" | "WITH" | "SHOW" | "EXPLAIN" | "VALUES" | "TABLE" | "PRAGMA" | "DESCRIBE" | "DESC" | "ANALYZE" | "CALL"
     ) || contains_returning(sql)
 }
 

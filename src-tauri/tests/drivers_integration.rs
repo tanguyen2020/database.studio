@@ -3941,3 +3941,43 @@ async fn sqlite_alter_view_and_trigger_end_to_end() {
     assert!(text(&drv, "SELECT sql FROM sqlite_master WHERE name='trg'").await.contains("VALUES (2)"), "alter trigger took effect");
     eprintln!("CHK sqlite_alter_view_and_trigger_end_to_end OK");
 }
+
+#[tokio::test]
+async fn mysql_proc_and_func_execute_return_results() {
+    let c = GenericImage::new("mysql", "8")
+        .with_exposed_port(3306.tcp())
+        .with_env_var("MYSQL_ROOT_PASSWORD", PASS)
+        .with_env_var("MYSQL_DATABASE", "testdb")
+        .start()
+        .await
+        .expect("start mysql");
+    let port = c.get_host_port_ipv4(3306).await.unwrap();
+    let params = MySqlConnParams {
+        host: "localhost".into(),
+        port,
+        database: "testdb".into(),
+        user: "root".into(),
+        password: PASS.into(),
+        ssl: false,
+        ssl_ca: String::new(),
+        ssl_cert: String::new(),
+        ssl_key: String::new(),
+    };
+    let mut drv = retry("mysql", || MySqlDriver::connect(&params, "mysql")).await;
+
+    // FUNCTION → executed via `SELECT func()` (the Execute dialog form)
+    drv.exec("CREATE FUNCTION addone(x int) RETURNS int DETERMINISTIC RETURN x + 1").await.unwrap();
+    let out = drv.exec("SELECT `testdb`.`addone`(41) AS n").await.unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!("function SELECT must return rows, got a non-rows outcome") };
+    let v = result.rows[0].as_object().unwrap().values().next().unwrap();
+    assert_eq!(v.as_i64().unwrap_or_else(|| v.as_f64().unwrap() as i64), 42, "function returned wrong value");
+
+    // PROCEDURE → executed via `CALL proc()`; must surface its result set (was
+    // discarded / errored before CALL was treated as row-returning).
+    drv.exec("CREATE PROCEDURE list_it() BEGIN SELECT 7 AS a, 'hi' AS b; END").await.unwrap();
+    let out2 = drv.exec("CALL `testdb`.`list_it`()").await.unwrap();
+    let StatementOutcome::Rows { result: r2 } = out2 else { panic!("CALL proc must return its result set rows") };
+    assert_eq!(r2.rows[0]["a"].as_i64().unwrap_or_else(|| r2.rows[0]["a"].as_f64().unwrap() as i64), 7, "proc result value");
+    assert_eq!(r2.rows[0]["b"].as_str().unwrap(), "hi", "proc result string");
+    eprintln!("CHK mysql_proc_and_func_execute_return_results OK");
+}
