@@ -3760,3 +3760,184 @@ async fn nats_subject_messages_purge_and_remove() {
     drv.js_delete_stream("ORDERS").await.unwrap();
     eprintln!("CHK nats_subject_messages_purge_and_remove OK");
 }
+
+// ---------------------------------------------------------------------------
+// Alter + Execute of views/procedures/functions/triggers, end-to-end on real
+// engines. Proves the "Alter…" statements the app generates (CREATE OR REPLACE /
+// CREATE OR ALTER / DROP+CREATE — see sql/alter.ts) actually modify the object,
+// and that Execute (buildCall — CALL/SELECT/EXEC) runs. Also guards the MSSQL
+// raw-batch DDL routing (CREATE OR ALTER PROCEDURE must be first in its batch).
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn pg_alter_and_execute_objects_end_to_end() {
+    let (_c, port) = start_pg().await;
+    let params = PgConnParams {
+        host: "localhost".into(),
+        port,
+        database: "testdb".into(),
+        user: "postgres".into(),
+        password: PASS.into(),
+        ssl: false,
+        ssl_ca: String::new(),
+        ssl_cert: String::new(),
+        ssl_key: String::new(),
+    };
+    let mut drv = retry("postgres", || PgDriver::connect(&params)).await;
+    async fn scalar(drv: &mut PgDriver, sql: &str) -> i64 {
+        let StatementOutcome::Rows { result } = drv.exec(sql).await.unwrap() else { panic!("rows") };
+        let v = result.rows[0].as_object().unwrap().values().next().unwrap();
+        v.as_i64().unwrap_or_else(|| v.as_f64().unwrap() as i64)
+    }
+
+    drv.exec("CREATE TABLE t (id int)").await.unwrap();
+    drv.exec("INSERT INTO t VALUES (1),(2)").await.unwrap();
+
+    // function: create → EXECUTE (SELECT) → ALTER (CREATE OR REPLACE) → EXECUTE
+    drv.exec("CREATE FUNCTION public.addone(x int) RETURNS int LANGUAGE sql AS $$ SELECT x + 1 $$").await.unwrap();
+    assert_eq!(scalar(&mut drv, "SELECT \"public\".\"addone\"(41)").await, 42, "execute function");
+    drv.exec("CREATE OR REPLACE FUNCTION public.addone(x int) RETURNS int LANGUAGE sql AS $$ SELECT x + 2 $$").await.unwrap();
+    assert_eq!(scalar(&mut drv, "SELECT \"public\".\"addone\"(41)").await, 43, "alter function took effect");
+
+    // procedure: create → EXECUTE (CALL)
+    drv.exec("CREATE PROCEDURE public.noop() LANGUAGE sql AS $$ SELECT 1 $$").await.unwrap();
+    drv.exec("CALL \"public\".\"noop\"()").await.unwrap();
+
+    // view: create → ALTER (CREATE OR REPLACE VIEW) adds a column
+    drv.exec("CREATE VIEW public.v AS SELECT id FROM t").await.unwrap();
+    assert_eq!(scalar(&mut drv, "SELECT count(*) FROM information_schema.columns WHERE table_name='v'").await, 1, "1 col before");
+    drv.exec("CREATE OR REPLACE VIEW \"public\".\"v\" AS\nSELECT id, id * 2 AS dbl FROM t").await.unwrap();
+    assert_eq!(scalar(&mut drv, "SELECT count(*) FROM information_schema.columns WHERE table_name='v'").await, 2, "alter view added a column");
+
+    // trigger: create fn + trigger → ALTER (CREATE OR REPLACE TRIGGER, PG 14+)
+    drv.exec("CREATE FUNCTION public.tf() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$").await.unwrap();
+    drv.exec("CREATE TRIGGER trg BEFORE INSERT ON t FOR EACH ROW EXECUTE FUNCTION public.tf()").await.unwrap();
+    drv.exec("CREATE OR REPLACE TRIGGER trg BEFORE INSERT ON t FOR EACH ROW EXECUTE FUNCTION public.tf()").await.unwrap();
+    assert_eq!(scalar(&mut drv, "SELECT count(*) FROM information_schema.triggers WHERE trigger_name='trg'").await, 1, "trigger present after alter");
+    eprintln!("CHK pg_alter_and_execute_objects_end_to_end OK");
+}
+
+#[tokio::test]
+async fn mssql_alter_and_execute_objects_end_to_end() {
+    let c = GenericImage::new("mcr.microsoft.com/mssql/server", "2022-latest")
+        .with_exposed_port(1433.tcp())
+        .with_env_var("ACCEPT_EULA", "Y")
+        .with_env_var("MSSQL_SA_PASSWORD", MSSQL_PASS)
+        .start()
+        .await
+        .expect("start mssql container");
+    let port = c.get_host_port_ipv4(1433).await.unwrap();
+    let params = MssqlConnParams {
+        host: "localhost".into(),
+        port,
+        database: "".into(),
+        user: "sa".into(),
+        password: MSSQL_PASS.into(),
+        ssl: false,
+        ssl_ca: String::new(),
+        auth: "sql".into(),
+    };
+    let mut drv = retry("mssql", || MssqlDriver::connect(&params)).await;
+    async fn scalar(drv: &mut MssqlDriver, sql: &str) -> i64 {
+        let StatementOutcome::Rows { result } = drv.exec(sql).await.unwrap() else { panic!("rows") };
+        let v = result.rows[0].as_object().unwrap().values().next().unwrap();
+        v.as_i64().unwrap_or_else(|| v.as_f64().unwrap() as i64)
+    }
+
+    // procedure: CREATE then CREATE OR ALTER (both DDL → routed via simple_query,
+    // which previously failed with "CREATE/ALTER PROC must be first in batch").
+    drv.exec("CREATE PROCEDURE dbo.p AS SELECT 1 AS a").await.unwrap();
+    assert_eq!(scalar(&mut drv, "EXEC dbo.p").await, 1, "execute procedure");
+    drv.exec("CREATE OR ALTER PROCEDURE dbo.p AS SELECT 2 AS a").await.unwrap();
+    assert_eq!(scalar(&mut drv, "EXEC dbo.p").await, 2, "alter procedure took effect");
+
+    // view via CREATE OR ALTER
+    drv.exec("CREATE VIEW dbo.v AS SELECT 1 AS a").await.unwrap();
+    drv.exec("CREATE OR ALTER VIEW dbo.v AS SELECT 2 AS a").await.unwrap();
+    assert_eq!(scalar(&mut drv, "SELECT a FROM dbo.v").await, 2, "alter view took effect");
+
+    // scalar function via CREATE OR ALTER
+    drv.exec("CREATE FUNCTION dbo.addone(@x int) RETURNS int AS BEGIN RETURN @x + 1 END").await.unwrap();
+    assert_eq!(scalar(&mut drv, "SELECT dbo.addone(41) AS n").await, 42, "execute function");
+    drv.exec("CREATE OR ALTER FUNCTION dbo.addone(@x int) RETURNS int AS BEGIN RETURN @x + 2 END").await.unwrap();
+    assert_eq!(scalar(&mut drv, "SELECT dbo.addone(41) AS n").await, 43, "alter function took effect");
+    eprintln!("CHK mssql_alter_and_execute_objects_end_to_end OK");
+}
+
+#[tokio::test]
+async fn mysql_alter_and_execute_objects_end_to_end() {
+    let c = GenericImage::new("mysql", "8")
+        .with_exposed_port(3306.tcp())
+        .with_env_var("MYSQL_ROOT_PASSWORD", PASS)
+        .with_env_var("MYSQL_DATABASE", "testdb")
+        .start()
+        .await
+        .expect("start mysql container");
+    let port = c.get_host_port_ipv4(3306).await.unwrap();
+    let params = MySqlConnParams {
+        host: "localhost".into(),
+        port,
+        database: "testdb".into(),
+        user: "root".into(),
+        password: PASS.into(),
+        ssl: false,
+        ssl_ca: String::new(),
+        ssl_cert: String::new(),
+        ssl_key: String::new(),
+    };
+    let mut drv = retry("mysql", || MySqlDriver::connect(&params, "mysql")).await;
+    async fn scalar(drv: &mut MySqlDriver, sql: &str) -> i64 {
+        let StatementOutcome::Rows { result } = drv.exec(sql).await.unwrap() else { panic!("rows") };
+        let v = result.rows[0].as_object().unwrap().values().next().unwrap();
+        v.as_i64().unwrap_or_else(|| v.as_f64().unwrap() as i64)
+    }
+
+    // function: create → EXECUTE (SELECT) → ALTER (DROP + CREATE) → EXECUTE
+    drv.exec("CREATE FUNCTION addone(x int) RETURNS int DETERMINISTIC RETURN x + 1").await.unwrap();
+    assert_eq!(scalar(&mut drv, "SELECT `testdb`.`addone`(41)").await, 42, "execute function");
+    drv.exec("DROP FUNCTION IF EXISTS `testdb`.`addone`").await.unwrap();
+    drv.exec("CREATE FUNCTION addone(x int) RETURNS int DETERMINISTIC RETURN x + 2").await.unwrap();
+    assert_eq!(scalar(&mut drv, "SELECT `testdb`.`addone`(41)").await, 43, "alter function took effect");
+
+    // procedure: create → EXECUTE (CALL)
+    drv.exec("CREATE PROCEDURE p() SELECT 1").await.unwrap();
+    drv.exec("CALL `testdb`.`p`()").await.unwrap();
+
+    // view: create → ALTER (CREATE OR REPLACE VIEW)
+    drv.exec("CREATE TABLE t (id int)").await.unwrap();
+    drv.exec("CREATE VIEW v AS SELECT id FROM t").await.unwrap();
+    drv.exec("CREATE OR REPLACE VIEW `v` AS SELECT id, id * 2 AS dbl FROM t").await.unwrap();
+    assert_eq!(
+        scalar(&mut drv, "SELECT count(*) FROM information_schema.columns WHERE table_schema='testdb' AND table_name='v'").await,
+        2,
+        "alter view added a column",
+    );
+    eprintln!("CHK mysql_alter_and_execute_objects_end_to_end OK");
+}
+
+#[tokio::test]
+async fn sqlite_alter_view_and_trigger_end_to_end() {
+    let drv = SqliteDriver::connect(&SqliteConnParams { path: String::new(), mode: SqliteMode::InMemory })
+        .await
+        .unwrap();
+    async fn text(drv: &SqliteDriver, sql: &str) -> String {
+        let StatementOutcome::Rows { result } = drv.exec(sql).await.unwrap() else { panic!("rows") };
+        result.rows[0].as_object().unwrap().values().next().unwrap().as_str().unwrap_or("").to_string()
+    }
+
+    drv.exec("CREATE TABLE t (id INTEGER)").await.unwrap();
+    drv.exec("CREATE TABLE log (n INTEGER)").await.unwrap();
+
+    // view: create → ALTER (DROP + CREATE, as sql/alter.ts emits for SQLite)
+    drv.exec("CREATE VIEW v AS SELECT id FROM t").await.unwrap();
+    drv.exec("DROP VIEW IF EXISTS \"v\"").await.unwrap();
+    drv.exec("CREATE VIEW v AS SELECT id, id * 2 AS dbl FROM t").await.unwrap();
+    assert!(text(&drv, "SELECT sql FROM sqlite_master WHERE name='v'").await.contains("dbl"), "alter view took effect");
+
+    // trigger: create → ALTER (DROP + CREATE)
+    drv.exec("CREATE TRIGGER trg AFTER INSERT ON t BEGIN INSERT INTO log VALUES (1); END").await.unwrap();
+    drv.exec("DROP TRIGGER IF EXISTS \"trg\"").await.unwrap();
+    drv.exec("CREATE TRIGGER trg AFTER INSERT ON t BEGIN INSERT INTO log VALUES (2); END").await.unwrap();
+    assert!(text(&drv, "SELECT sql FROM sqlite_master WHERE name='trg'").await.contains("VALUES (2)"), "alter trigger took effect");
+    eprintln!("CHK sqlite_alter_view_and_trigger_end_to_end OK");
+}

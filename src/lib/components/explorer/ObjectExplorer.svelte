@@ -32,6 +32,7 @@
   import { createTemplate, type CreateKind } from '$lib/sql/create-templates'
   import { buildExportSelect } from '$lib/export/query'
   import { kafkaTopicRows, natsStreamRows } from '$lib/stream/explorer'
+  import { toAlterStatement, type AlterKind } from '$lib/sql/alter'
   import { toSqlInsert } from '$lib/export/rows'
   import type { ColumnInfo, RoutineInfo, TableInfo } from '$lib/types'
   import { untrack, type Snippet } from 'svelte'
@@ -401,8 +402,22 @@
       toasts.error(String(e))
     }
   }
-  const alterObject = (kind: string, schema: string, name: string, cid = selected?.id) =>
-    showDefinition(kind, schema, name, cid, 'alter')
+  // Alter: fetch the real definition, then rewrite it into a RE-RUNNABLE statement
+  // (CREATE OR REPLACE / CREATE OR ALTER / DROP+CREATE per dialect) so running it
+  // actually modifies the object instead of failing "already exists".
+  async function alterObject(kind: string, schema: string, name: string, cid = selected?.id) {
+    if (!selected || !cid) return
+    try {
+      const def = await ipc.objectDefinition(cid, schema, kind, name)
+      const stmt = toAlterStatement(selected.system, kind as AlterKind, schema, name, def)
+      const database = cid !== selected.id
+        ? Object.entries(dbSubId).find(([, v]) => v === cid)?.[0]
+        : dbForSchema(schema)
+      stmtTab(`${name} · alter`, stmt, database)
+    } catch (e) {
+      toasts.error(String(e))
+    }
+  }
 
   // Sequences (PG only) — Alter/Drop skeletons opened for review.
   function alterSequence(schema: string, name: string) {

@@ -66,6 +66,23 @@ describe('splitStatements', () => {
     expect(out.map((s) => s.sql)).toEqual(['BEGIN', 'UPDATE t SET a = 1', 'COMMIT'])
   })
 
+  it('PostgreSQL dollar-quote $$…$$: ; bên trong body KHÔNG tách', () => {
+    const doc =
+      'CREATE OR REPLACE FUNCTION f() RETURNS int LANGUAGE sql AS $$ SELECT 1; SELECT 2 $$;\nSELECT 9'
+    const out = splitStatements(doc)
+    expect(out).toHaveLength(2)
+    expect(out[0].sql).toContain('SELECT 1; SELECT 2')
+    expect(out[1].sql).toBe('SELECT 9')
+  })
+
+  it('dollar-quote có tag ($func$…$func$) + plpgsql BEGIN…END', () => {
+    const doc =
+      'CREATE FUNCTION t() RETURNS trigger LANGUAGE plpgsql AS $func$ BEGIN INSERT INTO log VALUES (1); RETURN NEW; END $func$;\nSELECT 1'
+    const out = splitStatements(doc)
+    expect(out).toHaveLength(2)
+    expect(out[0].sql).toContain('INSERT INTO log VALUES (1); RETURN NEW;')
+  })
+
   it('bỏ statement rỗng, trim nhưng giữ offset đúng', () => {
     const doc = '  SELECT 1 ;  ;   SELECT 2  '
     const out = splitStatements(doc)

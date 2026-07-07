@@ -21,8 +21,11 @@ export function splitStatements(doc: string): SplitStatement[] {
   let i = 0
   let stmtStart = 0
 
-  type Mode = 'code' | 'line-comment' | 'block-comment' | 'single' | 'double' | 'backtick' | 'bracket'
+  type Mode = 'code' | 'line-comment' | 'block-comment' | 'single' | 'double' | 'backtick' | 'bracket' | 'dollar'
   let mode: Mode = 'code'
+  // PostgreSQL dollar-quoted string body ($$…$$ or $tag$…$tag$). Everything inside
+  // is opaque — semicolons there (e.g. a function body) must NOT split.
+  let dollarTag = ''
   // Depth of BEGIN…END blocks in a routine body (CREATE FUNCTION/PROCEDURE/TRIGGER/
   // EVENT). While > 0, `;` does NOT split — otherwise a compound statement gets
   // chopped at its internal semicolons and every fragment is a syntax error.
@@ -68,6 +71,16 @@ export function splitStatements(doc: string): SplitStatement[] {
           i = j
           continue
         }
+        // PostgreSQL dollar-quote opener: $tag$ (tag optional). Enter opaque mode.
+        if (ch === '$') {
+          const m = /^\$[A-Za-z_0-9]*\$/.exec(doc.slice(i))
+          if (m) {
+            dollarTag = m[0]
+            mode = 'dollar'
+            i += m[0].length
+            continue
+          }
+        }
         if (ch === '-' && next === '-') mode = 'line-comment'
         else if (ch === '/' && next === '*') mode = 'block-comment'
         else if (ch === "'") mode = 'single'
@@ -103,6 +116,14 @@ export function splitStatements(doc: string): SplitStatement[] {
         break
       case 'bracket':
         if (ch === ']') mode = 'code'
+        break
+      case 'dollar':
+        // opaque until the matching closing tag reappears
+        if (doc.startsWith(dollarTag, i)) {
+          mode = 'code'
+          i += dollarTag.length
+          continue
+        }
         break
     }
     i++

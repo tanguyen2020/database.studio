@@ -102,7 +102,9 @@ impl MssqlDriver {
     }
 
     pub async fn exec(&mut self, sql: &str) -> Result<StatementOutcome, QueryError> {
-        if util::returns_rows(sql) {
+        // EXEC/EXECUTE runs a stored procedure whose result set must surface in the
+        // grid → take the rows path (simple_query) like SELECT.
+        if util::returns_rows(sql) || is_exec(sql) {
             let mut stream = self.client.simple_query(sql).await.map_err(|e| map_error(&e))?;
             let cols_meta = stream
                 .columns()
@@ -128,10 +130,11 @@ impl MssqlDriver {
             Ok(StatementOutcome::Rows {
                 result: QueryResultSet { cols: cols_meta, rows: out_rows, total },
             })
-        } else if sql.trim_start().get(..4).map(|s| s.eq_ignore_ascii_case("set ")).unwrap_or(false) {
-            // Session options (SET SHOWPLAN_XML/NOCOUNT/…) phải chạy như raw batch
-            // để giữ trạng thái trên connection. `execute()` dùng sp_executesql →
-            // SET nằm trong scope riêng, KHÔNG persist sang statement kế tiếp.
+        } else if is_raw_batch(sql) {
+            // SET options must run as a raw batch to persist on the connection;
+            // CREATE/ALTER/DROP DDL (esp. CREATE OR ALTER PROCEDURE/FUNCTION/VIEW/
+            // TRIGGER) must be the FIRST statement of its batch — `execute()` uses
+            // sp_executesql/prepare which breaks both. simple_query runs a real batch.
             self.client
                 .simple_query(sql)
                 .await
@@ -649,6 +652,20 @@ impl MssqlDriver {
             })
             .collect())
     }
+}
+
+/// Statements that must run as a raw batch via `simple_query` (not the prepared
+/// `execute()` path): SET session options + CREATE/ALTER/DROP DDL. CREATE OR
+/// ALTER PROCEDURE/FUNCTION/VIEW/TRIGGER in particular must be first in its batch.
+fn is_raw_batch(sql: &str) -> bool {
+    let kw = sql.trim_start().split_whitespace().next().unwrap_or("").to_ascii_uppercase();
+    matches!(kw.as_str(), "SET" | "CREATE" | "ALTER" | "DROP")
+}
+
+/// EXEC/EXECUTE (run a stored procedure) — its result set must be returned.
+fn is_exec(sql: &str) -> bool {
+    let kw = sql.trim_start().split_whitespace().next().unwrap_or("").to_ascii_uppercase();
+    matches!(kw.as_str(), "EXEC" | "EXECUTE")
 }
 
 // ---------------------------------------------------------------------------
