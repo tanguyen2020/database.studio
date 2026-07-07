@@ -55,13 +55,10 @@
       <path d="M8 11 L16 6.5" />
       <path d="M8 13 L16 17.5" />
     {:else if key === 'nats'}
-      <!-- NATS cat mark: two-eared head silhouette with eye cut-outs (evenodd) -->
-      <path
-        fill={color}
-        stroke="none"
-        fill-rule="evenodd"
-        d="M3 3.5 L8.6 9 H15.4 L21 3.5 V13 C21 17.7 17 21 12 21 C7 21 3 17.7 3 13 Z M9.2 11.4 a1.1 1.1 0 1 1 0 2.2 a1.1 1.1 0 1 1 0 -2.2 Z M14.8 11.4 a1.1 1.1 0 1 1 0 2.2 a1.1 1.1 0 1 1 0 -2.2 Z"
-      />
+      <!-- radiating signal -->
+      <circle cx="12" cy="12" r="2" fill={color} stroke="none" />
+      <circle cx="12" cy="12" r="6" opacity="0.55" />
+      <circle cx="12" cy="12" r="10" opacity="0.28" />
     {:else if key === 'mariadb'}
       <ellipse cx="12" cy="5" rx="7" ry="2.6" />
       <path d="M5 5v14c0 1.4 3.1 2.6 7 2.6s7-1.2 7-2.6V5" />
