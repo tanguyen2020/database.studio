@@ -20,6 +20,12 @@
   let loaded = $state(false)
   let error = $state('')
 
+  // In-app confirm popup (window.confirm isn't reliable inside the Tauri webview).
+  let confirmState = $state<{ title: string; body: string; danger: boolean; run: () => void } | null>(null)
+  function askConfirm(title: string, body: string, run: () => void) {
+    confirmState = { title, body, danger: true, run }
+  }
+
   async function load() {
     if (!tab.connectionId) return
     loading = true
@@ -43,32 +49,41 @@
     toasts.success('Message copied', 'nats')
   }
   // Delete a single JetStream message by sequence (real removal from the stream).
-  async function deleteMsg(seq: number) {
-    if (!tab.connectionId) return
-    try {
-      await ipc.natsJsDeleteMessage(tab.connectionId, stream, seq)
-      messages = messages.filter((m) => m.seq !== seq)
-      toasts.success(`Deleted message #${seq}`, 'nats')
-    } catch (e) {
-      toasts.error(String(e), 'nats')
-    }
+  function deleteMsg(seq: number) {
+    askConfirm('Delete this message', `Delete message #${seq} from stream "${stream}"? This cannot be undone.`, async () => {
+      if (!tab.connectionId) return
+      try {
+        await ipc.natsJsDeleteMessage(tab.connectionId, stream, seq)
+        messages = messages.filter((m) => m.seq !== seq)
+        toasts.success(`Deleted message #${seq}`, 'nats')
+      } catch (e) {
+        toasts.error(String(e), 'nats')
+      }
+    })
   }
 
-  async function clearMessages() {
-    if (!tab.connectionId) return
-    if (!confirm(`Clear all messages of subject "${subject}"? This cannot be undone.`)) return
-    try {
-      await ipc.natsJsPurgeSubject(tab.connectionId, stream, subject)
-      toasts.success(`Cleared messages of ${subject}`, 'nats')
-      explorer.refreshStreaming(tab.connectionId)
-      await load()
-    } catch (e) {
-      toasts.error(String(e), 'nats')
-    }
+  function clearMessages() {
+    askConfirm('Clear messages', `Clear all messages of subject "${subject}"? This cannot be undone.`, async () => {
+      if (!tab.connectionId) return
+      try {
+        await ipc.natsJsPurgeSubject(tab.connectionId, stream, subject)
+        toasts.success(`Cleared messages of ${subject}`, 'nats')
+        explorer.refreshStreaming(tab.connectionId)
+        await load()
+      } catch (e) {
+        toasts.error(String(e), 'nats')
+      }
+    })
+  }
+
+  function runConfirm() {
+    const c = confirmState
+    confirmState = null
+    c?.run()
   }
 </script>
 
-<div style="flex:1;display:flex;flex-direction:column;min-height:0">
+<div style="flex:1;display:flex;flex-direction:column;min-height:0;position:relative">
   <div style="flex:none;display:flex;align-items:center;gap:var(--px-12);padding:var(--px-9) var(--px-14);border-bottom:var(--px-1) solid var(--border);background:var(--surface)">
     <span style="width:var(--px-3);height:var(--px-20);border-radius:var(--px-2);background:{accent}"></span>
     <div style="display:flex;flex-direction:column;line-height:1.15">
@@ -113,6 +128,30 @@
       </table>
     {/if}
   </div>
+
+  {#if confirmState}
+    <div
+      role="presentation"
+      onclick={() => (confirmState = null)}
+      style="position:absolute;inset:0;background:var(--rgba-0-0-0-_5);display:flex;align-items:center;justify-content:center;z-index:50"
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        onclick={(e) => e.stopPropagation()}
+        onkeydown={(e) => { if (e.key === 'Escape') confirmState = null; if (e.key === 'Enter') runConfirm() }}
+        tabindex="-1"
+        style="background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-14);padding:var(--px-18);min-width:var(--px-320);max-width:var(--px-420);box-shadow:0 var(--px-24) var(--px-60) var(--rgba-0-0-0-_55)"
+      >
+        <div style="font-size:var(--px-14);font-weight:600;color:var(--text);margin-bottom:var(--px-8)">{confirmState.title}</div>
+        <div style="font-size:var(--px-12_5);color:var(--text2);line-height:1.45;margin-bottom:var(--px-16)">{confirmState.body}</div>
+        <div style="display:flex;gap:var(--px-8);justify-content:flex-end">
+          <span onclick={() => (confirmState = null)} onkeydown={(e) => e.key === 'Enter' && (confirmState = null)} role="button" tabindex="0" class="eg-btn">Cancel</span>
+          <span onclick={runConfirm} onkeydown={(e) => e.key === 'Enter' && runConfirm()} role="button" tabindex="0" class="eg-btn danger">Confirm</span>
+        </div>
+      </div>
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -127,5 +166,10 @@
   }
   .eg-btn:hover {
     background: var(--hover);
+  }
+  .eg-btn.danger {
+    color: var(--hex-fff);
+    background: var(--error);
+    border-color: var(--error);
   }
 </style>

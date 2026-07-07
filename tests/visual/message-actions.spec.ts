@@ -33,10 +33,27 @@ test('nats subject messages: per-message copy + clear (delete by seq)', async ({
   const clip = await page.evaluate(() => navigator.clipboard.readText())
   expect(clip).toContain('{"id"')
 
-  // clear (delete) one message → row count drops to 2
+  // delete one message → confirm popup appears; cancel keeps all 3
   await clearBtns.first().click()
+  await page.waitForTimeout(150)
+  const dialog = page.getByRole('dialog')
+  await expect(dialog.getByText('Delete this message').first()).toBeVisible()
+  await dialog.getByRole('button', { name: 'Cancel' }).click()
+  await page.waitForTimeout(150)
+  await expect(page.locator('[title="Delete this message (by sequence)"]')).toHaveCount(3)
+
+  // delete again → Confirm this time → row count drops to 2
+  await clearBtns.first().click()
+  await page.waitForTimeout(150)
+  await page.getByRole('dialog').getByRole('button', { name: 'Confirm' }).click()
   await page.waitForTimeout(300)
   await expect(page.locator('[title="Delete this message (by sequence)"]')).toHaveCount(2)
+
+  // "Clear messages" also opens a confirm popup
+  await page.getByText('Clear messages', { exact: true }).first().click()
+  await page.waitForTimeout(150)
+  await expect(page.getByRole('dialog').getByText('Clear messages').first()).toBeVisible()
+  await page.getByRole('dialog').getByRole('button', { name: 'Cancel' }).click()
 
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
