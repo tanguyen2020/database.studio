@@ -42,7 +42,8 @@
     if (!r || !connId) return
     const args = inParams.map((p) => literal(p.data_type, vals[p.name] ?? ''))
     const sql = buildCall(system, execRoutineWizard.schema, r.kind, r.name, args)
-    tabs.openSqlTab({ connectionId: connId, title: `${r.name}()`, query: sql })
+    // Open a SQL tab AND run it immediately so the result grid shows the output.
+    tabs.openSqlTab({ connectionId: connId, title: `${r.name}()`, query: sql, autoRun: true })
     execRoutineWizard.close()
   }
 </script>
@@ -69,7 +70,7 @@
       </div>
       <div style="flex:none;display:flex;gap:var(--px-9);padding:var(--px-13) var(--px-18);border-top:var(--px-1) solid var(--border);background:var(--panel)">
         <span onclick={() => execRoutineWizard.close()} onkeydown={(e) => e.key === 'Enter' && execRoutineWizard.close()} role="button" tabindex="0" style="font-size:var(--px-12_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-8);padding:var(--px-8) var(--px-16);cursor:pointer">Cancel</span>
-        <span onclick={runIt} onkeydown={(e) => e.key === 'Enter' && runIt()} role="button" tabindex="0" style="margin-left:auto;font-size:var(--px-12_5);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-8);padding:var(--px-8) var(--px-18);cursor:pointer;font-weight:600">Open in SQL tab</span>
+        <span onclick={runIt} onkeydown={(e) => e.key === 'Enter' && runIt()} role="button" tabindex="0" style="margin-left:auto;font-size:var(--px-12_5);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-8);padding:var(--px-8) var(--px-18);cursor:pointer;font-weight:600">Execute</span>
       </div>
     </div>
   </div>

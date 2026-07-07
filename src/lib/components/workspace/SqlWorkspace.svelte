@@ -187,6 +187,17 @@
     showExecErrors()
   }
 
+  // Auto-run once when a tab is opened with autoRun (Execute routine dialog):
+  // the editor is seeded with the CALL/SELECT and executed immediately so the
+  // result grid shows the routine's output.
+  let autoRan = false
+  $effect(() => {
+    if (autoRan || !editor || !tab.state.autoRun) return
+    autoRan = true
+    tab.state.autoRun = false
+    untrack(() => void run())
+  })
+
   async function runAtCursor() {
     if (!editor || !tab.connectionId) return
     editor.clearErrors()

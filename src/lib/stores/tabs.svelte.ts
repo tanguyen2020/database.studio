@@ -59,6 +59,8 @@ class TabsStore {
     query?: string
     activate?: boolean
     pane?: 0 | 1
+    /** run the query automatically once the editor mounts (Execute routine) */
+    autoRun?: boolean
   }): TabState {
     const connId =
       opts?.connectionId !== undefined
@@ -76,7 +78,7 @@ class TabsStore {
       isPinned: false,
       isDirty: false,
       pane,
-      state: { query: opts?.query ?? '' },
+      state: { query: opts?.query ?? '', autoRun: opts?.autoRun ?? false },
     }
     this.tabs.push(tab)
     if (opts?.activate !== false) {

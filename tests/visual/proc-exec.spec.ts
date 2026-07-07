@@ -1,10 +1,11 @@
 import { expect, test } from '@playwright/test'
 import { APP_URL, blockRemoteFonts } from './helpers'
 
-// T28 — Execute a function/procedure: the dialog collects args by signature and
-// opens the CALL/SELECT in a SQL tab. (Rename SQL + call builders are unit-tested
-// in sql/routines.test.ts; rename runs against real engines in integration.)
-test('execute routine: dialog by signature → SQL tab', async ({ page }) => {
+// Execute a function/procedure: the dialog collects args by signature, and the
+// "Execute" button runs the CALL/SELECT immediately (result grid shows output).
+// (Call builders are unit-tested in sql/routines.test.ts; execution runs against
+// real engines in integration.)
+test('execute routine: dialog by signature → Execute runs and shows results', async ({ page }) => {
   const errors: string[] = []
   page.on('pageerror', (e) => errors.push(String(e)))
   await blockRemoteFonts(page)
@@ -26,12 +27,16 @@ test('execute routine: dialog by signature → SQL tab', async ({ page }) => {
   const dialog = page.getByRole('dialog')
   await expect(dialog.getByText(/Execute function add_one/)).toBeVisible()
   await dialog.locator('input').first().fill('41')
-  await dialog.getByText('Open in SQL tab').click()
-  await page.waitForTimeout(300)
+  // button is now "Execute" (was "Open in SQL tab")
+  await expect(dialog.getByText('Execute', { exact: true })).toBeVisible()
+  await dialog.getByText('Execute', { exact: true }).click()
+  await page.waitForTimeout(600)
 
-  // a SQL tab opened; its editor holds the SELECT add_one(41)
+  // a SQL tab opened holding the SELECT add_one(41) AND it auto-ran → result grid
   await expect(page.getByRole('tab', { name: /add_one/ }).first()).toBeVisible()
   await expect(page.locator('.cm-content').first()).toContainText('add_one')
+  // the result region shows the executed output (demo exec returns rows)
+  await expect(page.getByText(/Single Row/).first()).toBeVisible({ timeout: 8000 })
 
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })

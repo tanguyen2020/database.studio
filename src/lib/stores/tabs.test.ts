@@ -35,6 +35,15 @@ describe('tab store — mở/kích hoạt', () => {
     expect(t.isDirty).toBe(false)
   })
 
+  it('openSqlTab autoRun: seeds the query + flags it to run on mount', () => {
+    const t = tabs.openSqlTab({ connectionId: 'c1', query: 'SELECT public.add_one(41);', autoRun: true })
+    expect(t.state.query).toBe('SELECT public.add_one(41);')
+    expect(t.state.autoRun).toBe(true)
+    // default (no autoRun) does not flag it
+    const u = tabs.openSqlTab({ connectionId: 'c1', query: 'SELECT 1;' })
+    expect(u.state.autoRun).toBe(false)
+  })
+
   it('tab mới kế thừa connection của tab active (connection-aware)', () => {
     const a = tabs.openSqlTab({ connectionId: 'c1' })
     a.systemType = 'postgres'
