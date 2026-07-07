@@ -540,6 +540,8 @@
     /** optional inline SVG shown instead of the mono glyph (e.g. folder icon) */
     svg?: string
     color: string
+    /** optional override for the name text color (default: text/text2 by state) */
+    nameColor?: string
     name: string
     meta?: string
     head?: boolean
@@ -593,7 +595,7 @@
         style="flex:none;width:var(--px-10);text-align:center;font-size:var(--px-9);color:var(--muted);cursor:{p.expandable ? 'pointer' : 'default'}"
       >{p.expandable ? (expanded.has(p.key) ? '▾' : '▸') : ''}</span>
       <span class="mono" style="flex:none;width:var(--px-15);display:flex;align-items:center;justify-content:center;font-size:var(--px-12);color:{p.color}">{#if p.svg}{@html p.svg}{:else}{p.glyph}{/if}</span>
-      <span class="mono" style="font-size:var(--px-12_5);font-weight:{p.head ? 700 : 500};color:{sel || p.head ? 'var(--text)' : 'var(--text2)'};overflow:hidden;text-overflow:ellipsis">{p.name}</span>
+      <span class="mono" style="font-size:var(--px-12_5);font-weight:{p.head ? 700 : 500};color:{p.nameColor ?? (sel || p.head ? 'var(--text)' : 'var(--text2)')};overflow:hidden;text-overflow:ellipsis">{p.name}</span>
       {#if p.locked}<span style="font-size:var(--px-9)" title="System table — read-only">🔒</span>{/if}
       <span class="mono" style="font-size:var(--px-10);color:var(--muted);margin-left:auto">{p.meta ?? ''}</span>
     </div>
@@ -810,7 +812,7 @@
       {:else}
         {#each streamRows as s (s.name)}
           {@const sKey = `nats:s:${s.name}`}
-          {@render row({ key: sKey, depth: 0, glyph: '', svg: NATS_LOGO, color: C.folder, name: s.name, meta: s.meta, head: true, expandable: true, onClick: () => toggle(sKey) })}
+          {@render row({ key: sKey, depth: 0, glyph: '', svg: NATS_LOGO, color: C.folder, nameColor: 'var(--success)', name: s.name, meta: s.meta, head: true, expandable: true, onClick: () => toggle(sKey) })}
           {#if expanded.has(sKey)}
             {#each s.subjects as sub (sub.subject)}
               {#snippet subjectMenu()}
@@ -822,7 +824,7 @@
                 </ContextMenu.Content>
               {/snippet}
               {@render row(
-                { key: `nats:sub:${s.name}:${sub.subject}`, depth: 1, glyph: '✉', color: C.seq, name: sub.subject, openOnSingleClick: true, onClick: () => selected && tabs.openNatsSubject(selected.id, s.name, sub.subject) },
+                { key: `nats:sub:${s.name}:${sub.subject}`, depth: 1, glyph: '✉', color: 'var(--warn2)', nameColor: 'var(--warn2)', name: sub.subject, openOnSingleClick: true, onClick: () => selected && tabs.openNatsSubject(selected.id, s.name, sub.subject) },
                 subjectMenu,
               )}
             {/each}
