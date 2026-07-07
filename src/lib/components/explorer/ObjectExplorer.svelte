@@ -824,7 +824,7 @@
                 </ContextMenu.Content>
               {/snippet}
               {@render row(
-                { key: `nats:sub:${s.name}:${sub.subject}`, depth: 1, glyph: '✉', color: 'var(--warn2)', nameColor: 'var(--warn2)', name: sub.subject, openOnSingleClick: true, onClick: () => selected && tabs.openNatsSubject(selected.id, s.name, sub.subject) },
+                { key: `nats:sub:${s.name}:${sub.subject}`, depth: 1, glyph: '✉', color: C.seq, nameColor: 'var(--warn2)', name: sub.subject, openOnSingleClick: true, onClick: () => selected && tabs.openNatsSubject(selected.id, s.name, sub.subject) },
                 subjectMenu,
               )}
             {/each}
