@@ -1,0 +1,198 @@
+import { describe, expect, it } from 'vitest'
+import { buildTableDdl, buildTrigger, columnDef, type TableModel } from './table-designer'
+
+function model(o: Partial<TableModel>): TableModel {
+  return {
+    schema: 'public',
+    table: 'users',
+    columns: [
+      { name: 'id', type: 'int4', len: '', pk: true, nullable: false, dflt: '' },
+      { name: 'email', type: 'varchar', len: '255', pk: false, nullable: false, dflt: '' },
+    ],
+    indexes: [],
+    foreignKeys: [],
+    uniques: [],
+    checks: [],
+    triggers: [],
+    ...o,
+  }
+}
+
+describe('columnDef', () => {
+  it('emits type, length, NOT NULL, DEFAULT (non-PK)', () => {
+    expect(columnDef('postgres', { name: 'email', type: 'varchar', len: '255', pk: false, nullable: false, dflt: "''" })).toBe(
+      '"email" varchar(255) NOT NULL DEFAULT \'\'',
+    )
+  })
+  it('PK column omits NOT NULL (the table-level PK enforces it)', () => {
+    expect(columnDef('postgres', { name: 'id', type: 'int4', len: '', pk: true, nullable: false, dflt: '' })).toBe('"id" int4')
+  })
+})
+
+describe('buildTableDdl — new table, per dialect', () => {
+  it('postgres: table-level PK + inline UNIQUE/CHECK/FK, then CREATE INDEX', () => {
+    const { statements } = buildTableDdl(
+      'postgres',
+      model({
+        uniques: [{ name: '', columns: ['email'] }],
+        checks: [{ name: 'ck_age', expression: 'age >= 0' }],
+        foreignKeys: [{ name: '', columns: ['org_id'], refTable: 'orgs', refColumns: ['id'], onDelete: 'CASCADE' }],
+        indexes: [{ name: '', columns: ['email'], method: 'btree' }],
+      }),
+      true,
+    )
+    const create = statements[0]
+    expect(create).toContain('CREATE TABLE "public"."users"')
+    expect(create).toContain('PRIMARY KEY ("id")')
+    expect(create).toContain('CONSTRAINT "uq_users_email" UNIQUE ("email")')
+    expect(create).toContain('CONSTRAINT "ck_age" CHECK (age >= 0)')
+    expect(create).toContain('CONSTRAINT "fk_users_org_id" FOREIGN KEY ("org_id") REFERENCES "public"."orgs" ("id") ON DELETE CASCADE')
+    expect(statements[1]).toBe('CREATE INDEX "idx_users_email" ON "public"."users" USING btree ("email");')
+  })
+
+  it('mysql: backtick quoting, no schema wart, USING after cols', () => {
+    const { statements } = buildTableDdl(
+      'mysql',
+      model({
+        schema: '',
+        table: 'orders',
+        columns: [{ name: 'id', type: 'int', len: '', pk: true, nullable: false, dflt: '' }],
+        indexes: [{ name: 'ix_id', columns: ['id'], method: 'btree' }],
+      }),
+      true,
+    )
+    expect(statements[0]).toContain('CREATE TABLE `orders`')
+    expect(statements[0]).toContain('PRIMARY KEY (`id`)')
+    expect(statements[1]).toBe('CREATE INDEX `ix_id` ON `orders` (`id`) USING BTREE;')
+  })
+
+  it('mssql: bracket quoting', () => {
+    const { statements } = buildTableDdl('mssql', model({ schema: 'dbo' }), true)
+    expect(statements[0]).toContain('CREATE TABLE [dbo].[users]')
+    expect(statements[0]).toContain('PRIMARY KEY ([id])')
+  })
+
+  it('sqlite: no schema prefix for main, inline UNIQUE/CHECK', () => {
+    const { statements } = buildTableDdl(
+      'sqlite',
+      model({
+        schema: 'main',
+        columns: [{ name: 'id', type: 'INTEGER', len: '', pk: true, nullable: false, dflt: '' }],
+        uniques: [{ name: 'uq_email', columns: ['email'] }],
+      }),
+      true,
+    )
+    expect(statements[0]).toContain('CREATE TABLE "users"')
+    expect(statements[0]).not.toContain('"main"')
+    expect(statements[0]).toContain('CONSTRAINT "uq_email" UNIQUE ("email")')
+  })
+
+  it('clickhouse: ENGINE MergeTree + ORDER BY pk, skips constraints with a warning', () => {
+    const { statements, warnings } = buildTableDdl(
+      'clickhouse',
+      model({
+        schema: '',
+        table: 'events',
+        columns: [
+          { name: 'id', type: 'UInt32', len: '', pk: true, nullable: false, dflt: '' },
+          { name: 'ts', type: 'DateTime', len: '', pk: false, nullable: true, dflt: '' },
+        ],
+        foreignKeys: [{ name: '', columns: ['id'], refTable: 'x', refColumns: ['id'] }],
+      }),
+      true,
+    )
+    expect(statements[0]).toContain('ENGINE = MergeTree')
+    expect(statements[0]).toContain('ORDER BY (`id`)')
+    expect(statements[0]).not.toContain('FOREIGN KEY')
+    expect(warnings.join(' ')).toMatch(/ClickHouse has no/)
+  })
+
+  it('composite primary key becomes one table-level PRIMARY KEY', () => {
+    const { statements } = buildTableDdl(
+      'postgres',
+      model({
+        columns: [
+          { name: 'a', type: 'int4', len: '', pk: true, nullable: false, dflt: '' },
+          { name: 'b', type: 'int4', len: '', pk: true, nullable: false, dflt: '' },
+        ],
+      }),
+      true,
+    )
+    expect(statements[0]).toContain('PRIMARY KEY ("a", "b")')
+    expect((statements[0].match(/PRIMARY KEY/g) || []).length).toBe(1)
+  })
+})
+
+describe('buildTableDdl — existing table (ALTER additions)', () => {
+  const base = () =>
+    model({
+      columns: [
+        { name: 'id', type: 'int4', len: '', pk: true, nullable: false, dflt: '', existing: true },
+        { name: 'nickname', type: 'varchar', len: '50', pk: false, nullable: true, dflt: '' }, // new
+      ],
+      uniques: [
+        { name: 'uq_old', columns: ['email'], existing: true },
+        { name: 'uq_nick', columns: ['nickname'] }, // new
+      ],
+      checks: [{ name: 'ck_len', expression: 'length(nickname) > 0' }],
+      foreignKeys: [{ name: 'fk_org', columns: ['org_id'], refTable: 'orgs', refColumns: ['id'] }],
+      indexes: [{ name: 'ix_nick', columns: ['nickname'] }],
+    })
+
+  it('postgres: only NEW items → ADD COLUMN / ADD CONSTRAINT / CREATE INDEX', () => {
+    const { statements } = buildTableDdl('postgres', base(), false)
+    const joined = statements.join('\n')
+    expect(joined).toContain('ALTER TABLE "public"."users" ADD COLUMN "nickname" varchar(50)')
+    expect(joined).toContain('ALTER TABLE "public"."users" ADD CONSTRAINT "uq_nick" UNIQUE ("nickname")')
+    expect(joined).toContain('ALTER TABLE "public"."users" ADD CONSTRAINT "ck_len" CHECK (length(nickname) > 0)')
+    expect(joined).toContain('ALTER TABLE "public"."users" ADD CONSTRAINT "fk_org" FOREIGN KEY ("org_id") REFERENCES "public"."orgs" ("id")')
+    expect(joined).toContain('CREATE INDEX "ix_nick" ON "public"."users" ("nickname");')
+    // seeded (existing) items are never re-emitted
+    expect(joined).not.toContain('uq_old')
+    expect(joined).not.toContain('"id" int4') // existing column not re-added
+  })
+
+  it('mssql: ADD (no COLUMN keyword)', () => {
+    const { statements } = buildTableDdl('mssql', model({ schema: 'dbo', columns: [{ name: 'note', type: 'nvarchar', len: '100', pk: false, nullable: true, dflt: '' }] }), false)
+    expect(statements[0]).toBe('ALTER TABLE [dbo].[users] ADD [note] nvarchar(100);')
+  })
+
+  it('sqlite: UNIQUE degrades to a UNIQUE INDEX; CHECK/FK warn (cannot ALTER-ADD)', () => {
+    const { statements, warnings } = buildTableDdl('sqlite', { ...base(), schema: 'main' }, false)
+    const joined = statements.join('\n')
+    expect(joined).toContain('CREATE UNIQUE INDEX "uq_nick" ON "users" ("nickname");')
+    expect(joined).not.toContain('ADD CONSTRAINT')
+    expect(warnings.join(' ')).toMatch(/cannot ADD a CHECK/)
+    expect(warnings.join(' ')).toMatch(/cannot ADD a FOREIGN KEY/)
+  })
+})
+
+describe('buildTrigger — per dialect', () => {
+  it('postgres: EXECUTE FUNCTION, appends () if missing', () => {
+    const { sql } = buildTrigger('postgres', 'public', 'users', { name: 'aud', timing: 'BEFORE', event: 'INSERT', body: 'audit_fn' })
+    expect(sql).toBe('CREATE TRIGGER "aud" BEFORE INSERT ON "public"."users"\nFOR EACH ROW EXECUTE FUNCTION audit_fn();')
+  })
+  it('postgres: no body → warning, no sql', () => {
+    const r = buildTrigger('postgres', 'public', 'users', { name: 'aud', timing: 'BEFORE', event: 'INSERT', body: '' })
+    expect(r.sql).toBeUndefined()
+    expect(r.warning).toMatch(/PostgreSQL needs a function/)
+  })
+  it('mysql: FOR EACH ROW <body>', () => {
+    const { sql } = buildTrigger('mysql', '', 'users', { name: 'aud', timing: 'AFTER', event: 'UPDATE', body: 'SET NEW.updated = NOW()' })
+    expect(sql).toBe('CREATE TRIGGER `aud` AFTER UPDATE ON `users`\nFOR EACH ROW SET NEW.updated = NOW();')
+  })
+  it('mssql: ON table AFTER event AS body; BEFORE downgraded to AFTER with a warning', () => {
+    const { sql, warning } = buildTrigger('mssql', 'dbo', 'users', { name: 'aud', timing: 'BEFORE', event: 'DELETE', body: 'SELECT 1' })
+    expect(sql).toBe('CREATE TRIGGER [aud] ON [dbo].[users]\nAFTER DELETE\nAS\nSELECT 1;')
+    expect(warning).toMatch(/no BEFORE triggers/)
+  })
+  it('sqlite: wraps body in BEGIN … END and terminates it', () => {
+    const { sql } = buildTrigger('sqlite', 'main', 'users', { name: 'aud', timing: 'AFTER', event: 'INSERT', body: 'UPDATE t SET n = n + 1' })
+    expect(sql).toBe('CREATE TRIGGER "aud" AFTER INSERT ON "users"\nBEGIN\n  UPDATE t SET n = n + 1;\nEND;')
+  })
+  it('clickhouse: warns (no triggers)', () => {
+    const r = buildTrigger('clickhouse', '', 'events', { name: 'x', timing: 'AFTER', event: 'INSERT', body: 'y' })
+    expect(r.sql).toBeUndefined()
+    expect(r.warning).toMatch(/not supported/)
+  })
+})
