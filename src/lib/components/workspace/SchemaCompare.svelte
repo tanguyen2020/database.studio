@@ -5,6 +5,8 @@
   import * as ipc from '$lib/ipc'
   import { connections } from '$lib/stores/connections.svelte'
   import { tabs } from '$lib/stores/tabs.svelte'
+  import { toasts } from '$lib/stores/toast.svelte'
+  import { splitStatements } from '$lib/sql/statements'
   import {
     compareSchemas,
     diffCounts,
@@ -185,6 +187,40 @@
     if (tgtDb) { t.state.database = tgtDb; tabs.schedulePersist() } // run against the chosen target DB
   }
 
+  // Execute the migration directly against the TARGET (per-dialect: `migration`
+  // is generated from the source system, which equals the target's — compare is
+  // same-system). Runs each statement in order, stops on the first error.
+  let executing = $state(false)
+  const hasSql = (s: string) => s.split('\n').some((l) => l.trim() && !l.trim().startsWith('--'))
+  async function execMigration() {
+    if (!tgtConn || !migration.trim()) return
+    if (!confirm(`Execute this migration against TARGET (${tgtProfile?.name}${tgtDb ? ` · ${tgtDb}` : ''})? This modifies the target database.`)) return
+    executing = true
+    try {
+      const tid = await resolveId(tgtConn, tgtDb)
+      const stmts = splitStatements(migration).map((s) => s.sql).filter(hasSql)
+      if (stmts.length === 0) {
+        toasts.error('Nothing to execute')
+        return
+      }
+      let done = 0
+      for (const sql of stmts) {
+        const res = await ipc.execStatement(tid, sql, 0)
+        if (!res.ok) {
+          toasts.error(res.error?.message ?? 'Migration statement failed', tgtProfile?.system)
+          break
+        }
+        done++
+      }
+      toasts.success(`Executed ${done}/${stmts.length} statement(s) on ${tgtProfile?.name}`, tgtProfile?.system)
+      await compare() // re-diff to show convergence
+    } catch (e) {
+      toasts.error(String(e), tgtProfile?.system)
+    } finally {
+      executing = false
+    }
+  }
+
   // T19 — side-by-side DDL diff panel (routine/trigger) + prev/next điều hướng.
   let selDiff = $state<ObjectDiff | null>(null)
   const ddlDiffs = $derived(visible.filter((d) => d.srcDdl != null || d.tgtDdl != null))
@@ -316,7 +352,8 @@
   {:else}
     <div style="flex:none;display:flex;align-items:center;gap:var(--px-10);padding:var(--px-8) var(--px-14);border-bottom:var(--px-1) solid var(--border)">
       <span style="font-size:var(--px-11_5);color:var(--muted)">Migration to sync TARGET ({tgtProfile?.name}) to SOURCE — {selected.size} object(s) selected</span>
-      <span onclick={openMigration} onkeydown={(e) => e.key === 'Enter' && openMigration()} role="button" tabindex="0" style="margin-left:auto;font-size:var(--px-11_5);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-6);padding:var(--px-5) var(--px-12);cursor:pointer;font-weight:600">Open in editor</span>
+      <span onclick={openMigration} onkeydown={(e) => e.key === 'Enter' && openMigration()} role="button" tabindex="0" style="margin-left:auto;font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-12);cursor:pointer;font-weight:600">Open in editor</span>
+      <span onclick={execMigration} onkeydown={(e) => e.key === 'Enter' && execMigration()} role="button" tabindex="0" title="Run this migration on the target database" style="font-size:var(--px-11_5);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-6);padding:var(--px-5) var(--px-14);cursor:pointer;font-weight:600;opacity:{executing ? 0.6 : 1}">{executing ? 'Executing…' : 'Execute'}</span>
     </div>
     <div style="flex:1;overflow:auto;background:var(--bg)">
       <pre class="mono" style="margin:0;padding:var(--px-16) var(--px-18);font-size:var(--px-12_5);line-height:1.6;white-space:pre;color:var(--text)">{migration}</pre>

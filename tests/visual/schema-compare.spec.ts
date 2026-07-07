@@ -39,10 +39,17 @@ test('schema compare: pick source/target + diff view + sync script', async ({ pa
   await page.getByRole('dialog').getByText('×').first().click()
   await page.waitForTimeout(150)
 
-  // Sync Script mode shows migration pre
+  // Sync Script mode shows migration pre + an Execute button (task 5)
   await page.getByText('Sync Script', { exact: true }).first().click()
   await page.waitForTimeout(200)
   await expect(page.getByText(/Migration: sync TARGET/).first()).toBeVisible()
+  const execBtn = page.getByText('Execute', { exact: true }).first()
+  await expect(execBtn).toBeVisible()
+  // clicking Execute runs the migration on the target (demo exec ok → toast).
+  page.once('dialog', (d) => d.accept())
+  await execBtn.click()
+  await page.waitForTimeout(400)
+  await expect(page.getByText(/Executed|Nothing to execute/).first()).toBeVisible({ timeout: 5000 })
 
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
