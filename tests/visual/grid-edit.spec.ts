@@ -122,3 +122,41 @@ test('editable grid: Tab moves cell, Insert row focuses, paste adds records', as
 
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
+
+// Copy N rows (via row selection + Ctrl+C) then Ctrl+V → N new rows appear.
+// Guards the report "paste only shows 1 record" after copying several.
+test('editable grid: copy N rows then paste yields N rows', async ({ page, context }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(String(e)))
+  await context.grantPermissions(['clipboard-read', 'clipboard-write'])
+  await blockRemoteFonts(page)
+  await page.goto(APP_URL)
+  await page.waitForSelector('#app > *', { timeout: 15_000 })
+  await page.waitForTimeout(400)
+
+  await page.getByRole('button', { name: /Postgres/ }).first().click()
+  await page.waitForTimeout(400)
+  await page.getByText('public', { exact: true }).first().dblclick()
+  await page.waitForTimeout(300)
+  await page.getByText('Tables', { exact: true }).first().dblclick()
+  await page.waitForTimeout(300)
+  await page.getByRole('treeitem', { name: /students/ }).first().dblclick()
+  await expect(page.getByText('＋ Insert row', { exact: true }).first()).toBeVisible({ timeout: 10_000 })
+  await page.waitForTimeout(300)
+
+  // select the first 3 rows via the No. gutter (Ctrl+click to add) and copy
+  const gutters = page.locator('.grid-row td:first-child')
+  await gutters.nth(0).click()
+  await gutters.nth(1).click({ modifiers: ['Control'] })
+  await gutters.nth(2).click({ modifiers: ['Control'] })
+  await page.keyboard.press('Control+c')
+  await page.waitForTimeout(150)
+  const clip = await page.evaluate(() => navigator.clipboard.readText())
+  expect(clip.split('\n').length, `clipboard should hold 3 rows, got: ${JSON.stringify(clip)}`).toBe(3)
+
+  // paste (native paste event) → 3 new rows appended, not 1
+  await page.keyboard.press('Control+v')
+  await expect(page.getByText(/3 new record/).first()).toBeVisible({ timeout: 5000 })
+
+  expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
+})

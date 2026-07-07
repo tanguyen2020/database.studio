@@ -187,28 +187,42 @@
     }
   }
 
-  // Ctrl+V on the grid (not while editing). A MULTI-ROW clipboard is pasted as
-  // that many NEW rows appended at the end — copy N rows ⇒ paste N rows (rather
-  // than overwriting loaded rows). A single-row clipboard edits in place at the
-  // selected cell (paste a value/column of values), else appends one row.
-  async function pasteFromClipboard() {
-    if (!editable) return
-    let text = ''
-    try {
-      text = await navigator.clipboard.readText()
-    } catch {
-      toasts.error('Clipboard read blocked')
-      return
-    }
-    if (!text) return
-    const multiRow = /\n/.test(text.replace(/\n+$/, ''))
+  // Route pasted clipboard text. A MULTI-ROW clipboard is pasted as that many NEW
+  // rows appended at the end — copy N rows ⇒ paste N rows (rather than overwriting
+  // loaded rows). A single-row clipboard edits in place at the selected cell
+  // (paste a value / column of values), else appends one row.
+  function pasteText(text: string) {
+    if (!editable || !text) return
+    const norm = text.replace(/\r\n?/g, '\n') // normalise CRLF / lone CR first
+    const multiRow = /\n/.test(norm.replace(/\n+$/, ''))
     const appendAt = data.rows.length + insertedRows.length // after any pending rows
     if (multiRow) {
-      applyPaste(text, columns[0], appendAt) // N rows → N new rows
+      applyPaste(norm, columns[0], appendAt) // N rows → N new rows
     } else if (selectedCell) {
-      applyPaste(text, selectedCell.col, selectedCell.row)
+      applyPaste(norm, selectedCell.col, selectedCell.row)
     } else {
-      applyPaste(text, columns[0], appendAt)
+      applyPaste(norm, columns[0], appendAt)
+    }
+  }
+
+  // Native paste on the focused grid (Ctrl+V, not while editing). Uses the paste
+  // event's clipboardData — synchronous and reliable in the desktop WebView,
+  // where navigator.clipboard.readText() can misbehave.
+  function onGridPaste(e: ClipboardEvent) {
+    if (editingCell) return // the cell editor's own onpaste handles that
+    const text = e.clipboardData?.getData('text') ?? ''
+    if (!text) return
+    e.preventDefault()
+    pasteText(text)
+  }
+
+  // Context-menu "Paste" (no paste event to read) → read the clipboard async.
+  async function pasteFromClipboard() {
+    if (!editable) return
+    try {
+      pasteText(await navigator.clipboard.readText())
+    } catch {
+      toasts.error('Clipboard read blocked')
     }
   }
 
@@ -216,7 +230,8 @@
   // input; a multi-value clipboard (tabs/newlines) is spread across cells/rows —
   // this is what makes pasting a record into a freshly-inserted row work.
   function onCellPaste(e: ClipboardEvent, startColName: string, startAbsRow: number) {
-    const text = e.clipboardData?.getData('text') ?? ''
+    const raw = e.clipboardData?.getData('text') ?? ''
+    const text = raw.replace(/\r\n?/g, '\n')
     if (!text || !/[\t\n]/.test(text.replace(/\n$/, ''))) return // single value → native
     e.preventDefault()
     applyPaste(text, startColName, startAbsRow)
@@ -599,11 +614,8 @@
       void copySelection()
       return
     }
-    if ((e.ctrlKey || e.metaKey) && e.key === 'v' && editable) {
-      e.preventDefault()
-      void pasteFromClipboard()
-      return
-    }
+    // Ctrl+V is handled by the grid's native `paste` event (onGridPaste) —
+    // clipboardData is reliable where navigator.clipboard.readText() is not.
     if (e.key === 'Escape') {
       ctxMenu = null
       editingCell = null
@@ -779,6 +791,7 @@
   role="grid"
   aria-rowcount={rowCount}
   onkeydown={onKeydown}
+  onpaste={onGridPaste}
 >
   {#if groupResult}
     <!-- Group By view (T27): collapsible group tree + subtotals + grand total -->
