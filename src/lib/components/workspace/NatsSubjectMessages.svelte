@@ -95,8 +95,8 @@
   <div style="flex:none;display:flex;align-items:center;gap:var(--px-12);padding:var(--px-9) var(--px-14);border-bottom:var(--px-1) solid var(--border);background:var(--surface)">
     <span style="width:var(--px-3);height:var(--px-20);border-radius:var(--px-2);background:{accent}"></span>
     <div style="display:flex;flex-direction:column;line-height:1.15">
-      <span class="mono" style="font-size:var(--px-13);font-weight:600;color:var(--text)">{subject}</span>
-      <span class="mono" style="font-size:var(--px-10);color:var(--muted)">stream {stream}</span>
+      <span class="mono" style="font-size:var(--px-13);font-weight:600;color:var(--warn2)">{subject}</span>
+      <span class="mono" style="font-size:var(--px-10);color:{accent}">stream <span style="font-weight:600">{stream}</span></span>
     </div>
     <div style="margin-left:auto;display:flex;gap:var(--px-8);align-items:center">
       <span style="font-size:var(--px-11);color:var(--muted)">{messages.length} message(s)</span>

@@ -266,7 +266,7 @@
           {#each jsStreams as s (s.name)}
             <tr onclick={() => selectStream(s.name)} onkeydown={(e) => e.key === 'Enter' && selectStream(s.name)} role="button" tabindex="0" style="cursor:pointer;background:{jsSel === s.name ? 'var(--hover)' : 'transparent'}">
               <td style="padding:var(--px-6) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:#27AE60;font-weight:600">{s.name}</td>
-              <td style="padding:var(--px-6) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:var(--text2)">{s.subjects.join(', ')}</td>
+              <td style="padding:var(--px-6) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:var(--warn2)">{s.subjects.join(', ')}</td>
               <td style="padding:var(--px-6) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:var(--muted)">{s.retention}</td>
               <td style="padding:var(--px-6) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:var(--muted)">{s.storage}</td>
               <td style="padding:var(--px-6) var(--px-10);border-bottom:var(--px-1) solid var(--border)">{s.messages.toLocaleString()}</td>
@@ -304,7 +304,7 @@
         </div>
         {#if peekResult}
           <div class="mono" style="font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-8) var(--px-10)">
-            <div style="color:var(--muted)">#{peekResult.seq} · {peekResult.subject} · {peekResult.time}</div>
+            <div style="color:var(--muted)">#{peekResult.seq} · <span style="color:var(--warn2);font-weight:600">{peekResult.subject}</span> · {peekResult.time}</div>
             <div style="color:var(--text2);white-space:pre-wrap;word-break:break-word;margin-top:var(--px-4)">{peekResult.payload}</div>
           </div>
         {/if}
@@ -377,7 +377,7 @@
       {#each messages as m, i (i)}
         <div style="display:flex;gap:var(--px-12);padding:var(--px-7) var(--px-16);border-bottom:var(--px-1) solid var(--border);align-items:baseline">
           <span class="mono" style="flex:none;font-size:var(--px-10_5);color:var(--muted);width:var(--px-84)">{m.ts}</span>
-          <span class="mono" style="flex:none;font-size:var(--px-11_5);color:#27AE60;font-weight:600;width:var(--px-150);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{m.subject}</span>
+          <span class="mono" style="flex:none;font-size:var(--px-11_5);color:var(--warn2);font-weight:600;width:var(--px-150);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{m.subject}</span>
           <span class="mono" style="flex:1;min-width:0;font-size:var(--px-11_5);color:var(--text2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{m.payload}</span>
         </div>
       {/each}
