@@ -3425,3 +3425,208 @@ async fn mssql_admin_extra_views() {
     assert!(matches!(out, StatementOutcome::Rows { .. }), "query_store catalog view phải truy được khi QS bật");
     eprintln!("CHK MSSQL agent_jobs + availability_groups + query_store OK");
 }
+
+// ---------------------------------------------------------------------------
+// Table Designer end-to-end — the exact DDL buildTableDdl(system, model, isNew)
+// emits (see src/lib/sql/table-designer.test.ts) runs on real engines. Covers a
+// new table (columns + table-level PK + inline UNIQUE/CHECK/FK + CREATE INDEX +
+// CREATE TRIGGER) and the ALTER-add path, verified via each engine's catalog.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn pg_table_designer_create_alter_end_to_end() {
+    let (_c, port) = start_pg().await;
+    let params = PgConnParams {
+        host: "localhost".into(),
+        port,
+        database: "testdb".into(),
+        user: "postgres".into(),
+        password: PASS.into(),
+        ssl: false,
+        ssl_ca: String::new(),
+        ssl_cert: String::new(),
+        ssl_key: String::new(),
+    };
+    let mut drv = retry("postgres", || PgDriver::connect(&params)).await;
+
+    async fn n(drv: &mut PgDriver, sql: &str) -> i64 {
+        let StatementOutcome::Rows { result } = drv.exec(sql).await.unwrap() else { panic!("rows") };
+        let v = &result.rows[0]["n"];
+        v.as_i64().unwrap_or_else(|| v.as_f64().unwrap() as i64)
+    }
+
+    drv.exec("CREATE TABLE \"public\".\"customers\" (\"id\" int4 PRIMARY KEY)").await.unwrap();
+    drv.exec("CREATE FUNCTION orders_bi() RETURNS trigger AS $$ BEGIN RETURN NEW; END; $$ LANGUAGE plpgsql").await.unwrap();
+
+    // new table (isNew = true)
+    drv.exec("CREATE TABLE \"public\".\"orders\" (\n  \"id\" int4,\n  \"customer_id\" int4 NOT NULL,\n  \"email\" varchar(255) NOT NULL,\n  \"total\" numeric,\n  PRIMARY KEY (\"id\"),\n  CONSTRAINT \"uq_orders_email\" UNIQUE (\"email\"),\n  CONSTRAINT \"ck_total\" CHECK (total >= 0),\n  CONSTRAINT \"fk_orders_customer_id\" FOREIGN KEY (\"customer_id\") REFERENCES \"public\".\"customers\" (\"id\") ON DELETE CASCADE\n);").await.unwrap();
+    drv.exec("CREATE INDEX \"idx_orders_email\" ON \"public\".\"orders\" USING btree (\"email\");").await.unwrap();
+    drv.exec("CREATE TRIGGER \"trg_orders\" BEFORE INSERT ON \"public\".\"orders\"\nFOR EACH ROW EXECUTE FUNCTION orders_bi();").await.unwrap();
+
+    assert_eq!(n(&mut drv, "SELECT count(*) AS n FROM information_schema.columns WHERE table_schema='public' AND table_name='orders'").await, 4, "columns");
+    assert_eq!(n(&mut drv, "SELECT count(*) AS n FROM information_schema.table_constraints WHERE constraint_name='uq_orders_email' AND constraint_type='UNIQUE'").await, 1, "unique");
+    assert_eq!(n(&mut drv, "SELECT count(*) AS n FROM pg_constraint WHERE conname='ck_total' AND contype='c'").await, 1, "check");
+    assert_eq!(n(&mut drv, "SELECT count(*) AS n FROM information_schema.table_constraints WHERE constraint_name='fk_orders_customer_id' AND constraint_type='FOREIGN KEY'").await, 1, "fk");
+    assert_eq!(n(&mut drv, "SELECT count(*) AS n FROM pg_indexes WHERE indexname='idx_orders_email'").await, 1, "index");
+    assert_eq!(n(&mut drv, "SELECT count(*) AS n FROM information_schema.triggers WHERE trigger_name='trg_orders'").await, 1, "trigger");
+
+    // ALTER additions (isNew = false) on the now-existing table
+    drv.exec("ALTER TABLE \"public\".\"orders\" ADD COLUMN \"note\" text;").await.unwrap();
+    drv.exec("ALTER TABLE \"public\".\"orders\" ADD CONSTRAINT \"uq_orders_note\" UNIQUE (\"note\");").await.unwrap();
+    drv.exec("ALTER TABLE \"public\".\"orders\" ADD CONSTRAINT \"ck_note\" CHECK (length(note) >= 0);").await.unwrap();
+    drv.exec("CREATE INDEX \"idx_orders_note\" ON \"public\".\"orders\" (\"note\");").await.unwrap();
+
+    assert_eq!(n(&mut drv, "SELECT count(*) AS n FROM information_schema.columns WHERE table_name='orders' AND column_name='note'").await, 1, "note added");
+    assert_eq!(n(&mut drv, "SELECT count(*) AS n FROM information_schema.table_constraints WHERE constraint_name='uq_orders_note'").await, 1, "unique added");
+    assert_eq!(n(&mut drv, "SELECT count(*) AS n FROM pg_constraint WHERE conname='ck_note'").await, 1, "check added");
+    assert_eq!(n(&mut drv, "SELECT count(*) AS n FROM pg_indexes WHERE indexname='idx_orders_note'").await, 1, "index added");
+    eprintln!("CHK pg_table_designer_create_alter_end_to_end OK");
+}
+
+#[tokio::test]
+async fn mysql_table_designer_create_alter_end_to_end() {
+    let c = GenericImage::new("mysql", "8")
+        .with_exposed_port(3306.tcp())
+        .with_env_var("MYSQL_ROOT_PASSWORD", PASS)
+        .with_env_var("MYSQL_DATABASE", "testdb")
+        .start()
+        .await
+        .expect("start mysql container");
+    let port = c.get_host_port_ipv4(3306).await.unwrap();
+    let params = MySqlConnParams {
+        host: "localhost".into(),
+        port,
+        database: "testdb".into(),
+        user: "root".into(),
+        password: PASS.into(),
+        ssl: false,
+        ssl_ca: String::new(),
+        ssl_cert: String::new(),
+        ssl_key: String::new(),
+    };
+    let mut drv = retry("mysql", || MySqlDriver::connect(&params, "mysql")).await;
+
+    async fn n(drv: &mut MySqlDriver, sql: &str) -> i64 {
+        let StatementOutcome::Rows { result } = drv.exec(sql).await.unwrap() else { panic!("rows") };
+        let v = &result.rows[0]["n"];
+        v.as_i64().unwrap_or_else(|| v.as_f64().unwrap() as i64)
+    }
+
+    drv.exec("CREATE TABLE `customers` (`id` int PRIMARY KEY)").await.unwrap();
+
+    drv.exec("CREATE TABLE `orders` (\n  `id` int,\n  `customer_id` int NOT NULL,\n  `email` varchar(255) NOT NULL,\n  `total` decimal,\n  PRIMARY KEY (`id`),\n  CONSTRAINT `uq_orders_email` UNIQUE (`email`),\n  CONSTRAINT `ck_total` CHECK (total >= 0),\n  CONSTRAINT `fk_orders_customer_id` FOREIGN KEY (`customer_id`) REFERENCES `customers` (`id`) ON DELETE CASCADE\n);").await.unwrap();
+    drv.exec("CREATE INDEX `idx_orders_email` ON `orders` (`email`) USING BTREE;").await.unwrap();
+    drv.exec("CREATE TRIGGER `trg_orders` BEFORE INSERT ON `orders`\nFOR EACH ROW SET @x = 1;").await.unwrap();
+
+    assert_eq!(n(&mut drv, "SELECT count(*) AS n FROM information_schema.columns WHERE table_schema='testdb' AND table_name='orders'").await, 4, "columns");
+    assert_eq!(n(&mut drv, "SELECT count(*) AS n FROM information_schema.table_constraints WHERE table_schema='testdb' AND constraint_name='uq_orders_email' AND constraint_type='UNIQUE'").await, 1, "unique");
+    assert_eq!(n(&mut drv, "SELECT count(*) AS n FROM information_schema.table_constraints WHERE table_schema='testdb' AND constraint_name='ck_total' AND constraint_type='CHECK'").await, 1, "check");
+    assert_eq!(n(&mut drv, "SELECT count(*) AS n FROM information_schema.table_constraints WHERE table_schema='testdb' AND constraint_name='fk_orders_customer_id' AND constraint_type='FOREIGN KEY'").await, 1, "fk");
+    assert!(n(&mut drv, "SELECT count(*) AS n FROM information_schema.statistics WHERE table_schema='testdb' AND index_name='idx_orders_email'").await >= 1, "index");
+    assert_eq!(n(&mut drv, "SELECT count(*) AS n FROM information_schema.triggers WHERE trigger_schema='testdb' AND trigger_name='trg_orders'").await, 1, "trigger");
+
+    drv.exec("ALTER TABLE `orders` ADD COLUMN `note` varchar(50);").await.unwrap();
+    drv.exec("ALTER TABLE `orders` ADD CONSTRAINT `uq_orders_note` UNIQUE (`note`);").await.unwrap();
+    drv.exec("ALTER TABLE `orders` ADD CONSTRAINT `ck_note` CHECK (char_length(note) >= 0);").await.unwrap();
+    drv.exec("CREATE INDEX `idx_orders_note` ON `orders` (`note`);").await.unwrap();
+
+    assert_eq!(n(&mut drv, "SELECT count(*) AS n FROM information_schema.columns WHERE table_schema='testdb' AND table_name='orders' AND column_name='note'").await, 1, "note added");
+    assert_eq!(n(&mut drv, "SELECT count(*) AS n FROM information_schema.table_constraints WHERE table_schema='testdb' AND constraint_name='uq_orders_note'").await, 1, "unique added");
+    assert_eq!(n(&mut drv, "SELECT count(*) AS n FROM information_schema.table_constraints WHERE table_schema='testdb' AND constraint_name='ck_note' AND constraint_type='CHECK'").await, 1, "check added");
+    assert!(n(&mut drv, "SELECT count(*) AS n FROM information_schema.statistics WHERE table_schema='testdb' AND index_name='idx_orders_note'").await >= 1, "index added");
+    eprintln!("CHK mysql_table_designer_create_alter_end_to_end OK");
+}
+
+#[tokio::test]
+async fn mssql_table_designer_create_alter_end_to_end() {
+    let c = GenericImage::new("mcr.microsoft.com/mssql/server", "2022-latest")
+        .with_exposed_port(1433.tcp())
+        .with_env_var("ACCEPT_EULA", "Y")
+        .with_env_var("MSSQL_SA_PASSWORD", MSSQL_PASS)
+        .start()
+        .await
+        .expect("start mssql container");
+    let port = c.get_host_port_ipv4(1433).await.unwrap();
+    let params = MssqlConnParams {
+        host: "localhost".into(),
+        port,
+        database: "".into(),
+        user: "sa".into(),
+        password: MSSQL_PASS.into(),
+        ssl: false,
+        ssl_ca: String::new(),
+        auth: "sql".into(),
+    };
+    let mut drv = retry("mssql", || MssqlDriver::connect(&params)).await;
+
+    async fn n(drv: &mut MssqlDriver, sql: &str) -> i64 {
+        let StatementOutcome::Rows { result } = drv.exec(sql).await.unwrap() else { panic!("rows") };
+        let v = &result.rows[0]["n"];
+        v.as_i64().unwrap_or_else(|| v.as_f64().unwrap() as i64)
+    }
+
+    drv.exec("CREATE TABLE [dbo].[customers] ([id] int PRIMARY KEY)").await.unwrap();
+
+    // new table (CREATE TRIGGER on MSSQL needs its own batch → covered by the unit test)
+    drv.exec("CREATE TABLE [dbo].[orders] (\n  [id] int,\n  [customer_id] int NOT NULL,\n  [email] nvarchar(255) NOT NULL,\n  [total] decimal,\n  PRIMARY KEY ([id]),\n  CONSTRAINT [uq_orders_email] UNIQUE ([email]),\n  CONSTRAINT [ck_total] CHECK (total >= 0),\n  CONSTRAINT [fk_orders_customer_id] FOREIGN KEY ([customer_id]) REFERENCES [dbo].[customers] ([id]) ON DELETE CASCADE\n);").await.unwrap();
+    drv.exec("CREATE INDEX [idx_orders_email] ON [dbo].[orders] ([email]);").await.unwrap();
+
+    assert_eq!(n(&mut drv, "SELECT COUNT(*) AS n FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='orders'").await, 4, "columns");
+    assert_eq!(n(&mut drv, "SELECT COUNT(*) AS n FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS WHERE CONSTRAINT_NAME='uq_orders_email' AND CONSTRAINT_TYPE='UNIQUE'").await, 1, "unique");
+    assert_eq!(n(&mut drv, "SELECT COUNT(*) AS n FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS WHERE CONSTRAINT_NAME='ck_total' AND CONSTRAINT_TYPE='CHECK'").await, 1, "check");
+    assert_eq!(n(&mut drv, "SELECT COUNT(*) AS n FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS WHERE CONSTRAINT_NAME='fk_orders_customer_id' AND CONSTRAINT_TYPE='FOREIGN KEY'").await, 1, "fk");
+    assert_eq!(n(&mut drv, "SELECT COUNT(*) AS n FROM sys.indexes WHERE name='idx_orders_email'").await, 1, "index");
+
+    drv.exec("ALTER TABLE [dbo].[orders] ADD [note] nvarchar(50);").await.unwrap();
+    drv.exec("ALTER TABLE [dbo].[orders] ADD CONSTRAINT [uq_orders_note] UNIQUE ([note]);").await.unwrap();
+    drv.exec("ALTER TABLE [dbo].[orders] ADD CONSTRAINT [ck_note] CHECK (LEN(note) >= 0);").await.unwrap();
+    drv.exec("CREATE INDEX [idx_orders_note] ON [dbo].[orders] ([note]);").await.unwrap();
+
+    assert_eq!(n(&mut drv, "SELECT COUNT(*) AS n FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='orders' AND COLUMN_NAME='note'").await, 1, "note added");
+    assert_eq!(n(&mut drv, "SELECT COUNT(*) AS n FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS WHERE CONSTRAINT_NAME='uq_orders_note'").await, 1, "unique added");
+    assert_eq!(n(&mut drv, "SELECT COUNT(*) AS n FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS WHERE CONSTRAINT_NAME='ck_note' AND CONSTRAINT_TYPE='CHECK'").await, 1, "check added");
+    assert_eq!(n(&mut drv, "SELECT COUNT(*) AS n FROM sys.indexes WHERE name='idx_orders_note'").await, 1, "index added");
+    eprintln!("CHK mssql_table_designer_create_alter_end_to_end OK");
+}
+
+#[tokio::test]
+async fn sqlite_table_designer_create_alter_end_to_end() {
+    let drv = SqliteDriver::connect(&SqliteConnParams { path: String::new(), mode: SqliteMode::InMemory })
+        .await
+        .unwrap();
+
+    async fn n(drv: &SqliteDriver, sql: &str) -> i64 {
+        let StatementOutcome::Rows { result } = drv.exec(sql).await.unwrap() else { panic!("rows") };
+        let v = &result.rows[0]["n"];
+        v.as_i64().unwrap_or_else(|| v.as_f64().unwrap() as i64)
+    }
+
+    drv.exec("CREATE TABLE \"customers\" (\"id\" INTEGER PRIMARY KEY)").await.unwrap();
+    drv.exec("CREATE TABLE \"orders_log\" (\"n\" INTEGER)").await.unwrap();
+
+    // new table (isNew = true) — inline PK/UNIQUE/CHECK/FK
+    drv.exec("CREATE TABLE \"orders\" (\n  \"id\" INTEGER,\n  \"customer_id\" INTEGER NOT NULL,\n  \"email\" TEXT NOT NULL,\n  \"total\" NUMERIC,\n  PRIMARY KEY (\"id\"),\n  CONSTRAINT \"uq_orders_email\" UNIQUE (\"email\"),\n  CONSTRAINT \"ck_total\" CHECK (total >= 0),\n  CONSTRAINT \"fk_orders_customer_id\" FOREIGN KEY (\"customer_id\") REFERENCES \"customers\" (\"id\") ON DELETE CASCADE\n);").await.unwrap();
+    drv.exec("CREATE INDEX \"idx_orders_email\" ON \"orders\" (\"email\");").await.unwrap();
+    drv.exec("CREATE TRIGGER \"trg_orders\" BEFORE INSERT ON \"orders\"\nBEGIN\n  INSERT INTO orders_log VALUES (1);\nEND;").await.unwrap();
+
+    assert_eq!(n(&drv, "SELECT count(*) AS n FROM sqlite_master WHERE type='table' AND name='orders'").await, 1, "table");
+    assert_eq!(n(&drv, "SELECT count(*) AS n FROM pragma_table_info('orders')").await, 4, "columns");
+    assert_eq!(n(&drv, "SELECT count(*) AS n FROM sqlite_master WHERE type='index' AND name='idx_orders_email'").await, 1, "index");
+    assert_eq!(n(&drv, "SELECT count(*) AS n FROM sqlite_master WHERE type='trigger' AND name='trg_orders'").await, 1, "trigger");
+    // the stored CREATE carries the named UNIQUE/CHECK/FK constraints
+    let StatementOutcome::Rows { result } = drv.exec("SELECT sql FROM sqlite_master WHERE name='orders'").await.unwrap() else { panic!("rows") };
+    let create_sql = result.rows[0]["sql"].as_str().unwrap();
+    assert!(create_sql.contains("uq_orders_email"), "unique in DDL");
+    assert!(create_sql.contains("ck_total"), "check in DDL");
+    assert!(create_sql.contains("fk_orders_customer_id"), "fk in DDL");
+
+    // ALTER additions (isNew = false): ADD COLUMN + UNIQUE degrades to a UNIQUE INDEX
+    drv.exec("ALTER TABLE \"orders\" ADD COLUMN \"note\" TEXT;").await.unwrap();
+    drv.exec("CREATE UNIQUE INDEX \"uq_orders_note\" ON \"orders\" (\"note\");").await.unwrap();
+    drv.exec("CREATE INDEX \"idx_orders_note\" ON \"orders\" (\"note\");").await.unwrap();
+
+    assert_eq!(n(&drv, "SELECT count(*) AS n FROM pragma_table_info('orders') WHERE name='note'").await, 1, "note added");
+    assert_eq!(n(&drv, "SELECT count(*) AS n FROM sqlite_master WHERE type='index' AND name='uq_orders_note'").await, 1, "unique index added");
+    assert_eq!(n(&drv, "SELECT count(*) AS n FROM sqlite_master WHERE type='index' AND name='idx_orders_note'").await, 1, "index added");
+    eprintln!("CHK sqlite_table_designer_create_alter_end_to_end OK");
+}
