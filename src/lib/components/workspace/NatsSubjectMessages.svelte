@@ -16,6 +16,12 @@
   const accent = $derived(systemMeta('nats').accent)
 
   let messages = $state<ipc.NatsJsMessage[]>([])
+  // Newest first: sort by timestamp desc, tie-break on sequence desc.
+  const timeKey = (m: ipc.NatsJsMessage) => {
+    const t = new Date(m.time).getTime()
+    return Number.isNaN(t) ? m.seq : t
+  }
+  const sortedMessages = $derived([...messages].sort((a, b) => timeKey(b) - timeKey(a) || b.seq - a.seq))
   let loading = $state(false)
   let loaded = $state(false)
   let error = $state('')
@@ -107,15 +113,14 @@
     {:else}
       <table style="border-collapse:collapse;width:100%;font-size:var(--px-12)">
         <thead><tr>
-          {#each [['Seq', 'width:var(--px-90)'], ['Subject', 'width:var(--px-200)'], ['Time', 'width:var(--px-180)'], ['Payload', ''], ['', 'width:var(--px-70)']] as [h, extra] (h)}
+          {#each [['Seq', 'width:var(--px-90)'], ['Time', 'width:var(--px-180)'], ['Payload', ''], ['', 'width:var(--px-70)']] as [h, extra] (h)}
             <th style="position:sticky;top:0;background:var(--header);border-bottom:var(--px-1) solid var(--border2);padding:var(--px-7) var(--px-12);text-align:left;color:var(--text2);font-weight:600;{extra}">{h}</th>
           {/each}
         </tr></thead>
         <tbody>
-          {#each messages as m (m.seq)}
+          {#each sortedMessages as m (m.seq)}
             <tr>
               <td class="mono" style="border-bottom:var(--px-1) solid var(--border);padding:var(--px-6) var(--px-12);color:var(--muted)">{m.seq}</td>
-              <td class="mono" style="border-bottom:var(--px-1) solid var(--border);padding:var(--px-6) var(--px-12);color:var(--syntax-type)">{m.subject}</td>
               <td class="mono" style="border-bottom:var(--px-1) solid var(--border);padding:var(--px-6) var(--px-12);color:var(--muted)">{m.time}</td>
               <td class="mono" style="border-bottom:var(--px-1) solid var(--border);padding:var(--px-6) var(--px-12);color:var(--text);white-space:pre-wrap;word-break:break-all">{m.payload}</td>
               <td style="border-bottom:var(--px-1) solid var(--border);padding:var(--px-6) var(--px-8);white-space:nowrap">
