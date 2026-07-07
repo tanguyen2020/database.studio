@@ -292,13 +292,20 @@ pub async fn run_test_bounded(
             },
         };
         let endpoint = Endpoint { host: "127.0.0.1".into(), port: tunnel.local_port };
-        let result = tokio::select! {
+        let mut result = tokio::select! {
             biased;
             _ = token.cancelled() => err_result("Cancelled".into()),
             _ = tokio::time::sleep(timeout) => err_result("Connection timed out".into()),
             r = LiveConnection::test(profile, &endpoint, password) => post_process(r),
         };
         tunnel.shutdown().await;
+        // Kafka over SSH tunnel commonly fails because librdkafka dials the
+        // broker's advertised.listeners directly (bypassing the tunnel).
+        if !result.ok && profile.system.as_str() == "kafka" {
+            if let Some(e) = result.error.as_mut() {
+                e.push_str(" — Kafka over SSH: the broker's advertised.listeners must be reachable from this machine (a plain host:port SSH forward doesn't cover the addresses librdkafka reconnects to).");
+            }
+        }
         result
     } else {
         let endpoint = Endpoint { host: profile.host.clone(), port: profile.port };

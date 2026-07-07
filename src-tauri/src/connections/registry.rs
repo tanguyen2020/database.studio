@@ -100,7 +100,23 @@ impl Registry {
 
         let driver = LiveConnection::connect(&profile, &endpoint, &password)
             .await
-            .map_err(|e| AppError::Driver(e.message))?;
+            .map_err(|e| {
+                let mut msg = e.message;
+                // Kafka over an SSH tunnel: the bootstrap connection is forwarded,
+                // but librdkafka then dials the broker's advertised.listeners
+                // DIRECTLY (bypassing the tunnel). If that address isn't reachable
+                // from this machine, connect/metadata fails. Make the cause explicit.
+                if profile.system.as_str() == "kafka" && profile.ssh.enabled {
+                    msg.push_str(
+                        "\n\nKafka over SSH tunnel: the broker's advertised.listeners must be reachable from THIS machine. \
+                         librdkafka forwards the bootstrap connection through the tunnel, then reconnects to each broker's \
+                         advertised address directly — a plain host:port SSH forward can't cover those. Set the broker's \
+                         advertised.listeners to an address that resolves through the tunnel (e.g. 127.0.0.1:<forwarded-port>), \
+                         or connect without the tunnel.",
+                    );
+                }
+                AppError::Driver(msg)
+            })?;
         let latency = started.elapsed().as_millis() as u64;
 
         let entry = LiveEntry {
