@@ -21,4 +21,10 @@ describe('filterByName', () => {
     expect(filterByName('ORDER', items).map((i) => i.name)).toEqual(['sp_list_orders'])
     expect(filterByName('zzz', items)).toHaveLength(0)
   })
+  it('clearing the query (→ "") restores the full list after a filter', () => {
+    const filtered = filterByName('user', items)
+    expect(filtered).toHaveLength(2)
+    // "clear" = empty query → every item matches again
+    expect(filterByName('', items)).toEqual(items)
+  })
 })

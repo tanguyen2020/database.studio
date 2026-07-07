@@ -87,11 +87,17 @@
     if (!expanded.has(key)) expanded = new Set([...expanded, key])
     folderFilterOpen[key] = true
   }
-  /** Remove Filter: clear the query and hide the box. */
+  /** Clear the query but keep the box open (list restored, ready to re-filter). */
+  function clearFolderFilterText(key: string) {
+    folderFilters[key] = ''
+  }
+  /** Clear Filter: clear the query AND hide the box (never leaves a hidden active
+   *  filter, since folderMatch keys off the query text). */
   function clearFolderFilter(key: string) {
     folderFilters[key] = ''
     folderFilterOpen[key] = false
   }
+  const hasFolderFilter = (key: string) => (folderFilters[key] ?? '').trim() !== ''
   /** Focus the filter input when it appears. */
   function focusFilter(node: HTMLInputElement) {
     node.focus()
@@ -614,16 +620,19 @@
         aria-label="Filter items"
         style="flex:1;background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-5);padding:var(--px-2) var(--px-7);color:var(--text);font-size:var(--px-11);outline:none"
       />
-      <span onclick={() => clearFolderFilter(key)} onkeydown={(e) => e.key === 'Enter' && clearFolderFilter(key)} role="button" tabindex="0" title="Remove filter" style="cursor:pointer;color:var(--muted);font-size:var(--px-12)">×</span>
+      <!-- × clears the query text (list restored) but keeps the box open -->
+      <span onclick={() => clearFolderFilterText(key)} onkeydown={(e) => e.key === 'Enter' && clearFolderFilterText(key)} role="button" tabindex="0" title="Clear filter text" aria-label="Clear filter text" style="cursor:pointer;color:var(--muted);font-size:var(--px-13);line-height:1">×</span>
+      <!-- Clear Filter removes the filter entirely (clears text + closes the box) -->
+      <span onclick={() => clearFolderFilter(key)} onkeydown={(e) => e.key === 'Enter' && clearFolderFilter(key)} role="button" tabindex="0" title="Clear filter" aria-label="Clear filter" style="cursor:pointer;color:var(--muted);font-size:var(--px-11);white-space:nowrap">Clear</span>
     </div>
   {/if}
 {/snippet}
 
-<!-- context-menu items: Filter… / Remove Filter (shared by every folder header) -->
+<!-- context-menu items: Filter… / Clear Filter (shared by every folder header) -->
 {#snippet filterMenuItems(key: string)}
   <ContextMenu.Item onclick={() => openFolderFilter(key)}>Filter…</ContextMenu.Item>
-  {#if (folderFilters[key] ?? '').trim() || folderFilterOpen[key]}
-    <ContextMenu.Item onclick={() => clearFolderFilter(key)}>Remove Filter</ContextMenu.Item>
+  {#if hasFolderFilter(key) || folderFilterOpen[key]}
+    <ContextMenu.Item onclick={() => clearFolderFilter(key)}>Clear Filter</ContextMenu.Item>
   {/if}
 {/snippet}
 

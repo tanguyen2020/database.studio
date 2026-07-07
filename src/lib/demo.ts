@@ -260,6 +260,7 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
         { name: 'courses', kind: 'table', row_estimate: 214, locked: false, engine: 'ReplacingMergeTree' },
         { name: 'enrollments', kind: 'table', row_estimate: 12480, locked: false, engine: 'MergeTree' },
         { name: 'vw_active_students', kind: 'view', row_estimate: null, locked: false, engine: 'MaterializedView' },
+        { name: 'vw_recent_enrollments', kind: 'view', row_estimate: null, locked: false, engine: 'View' },
       ])
     case 'list_columns':
       return ok([
@@ -352,9 +353,13 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
         { schema: 'public', name: 'add_one', kind: 'function', params: [{ name: 'x', data_type: 'int4' }], return_type: 'int4' },
         { schema: 'public', name: 'current_load', kind: 'function', params: [], return_type: 'float8' },
         { schema: 'public', name: 'refresh_stats', kind: 'procedure', params: [] },
+        { schema: 'public', name: 'recompute_ranks', kind: 'procedure', params: [] },
       ])
     case 'list_triggers':
-      return ok([{ schema: 'public', name: 'trg_audit', table: 'students', event: 'BEFORE INSERT' }])
+      return ok([
+        { schema: 'public', name: 'trg_audit', table: 'students', event: 'BEFORE INSERT' },
+        { schema: 'public', name: 'trg_updated_at', table: 'courses', event: 'BEFORE UPDATE' },
+      ])
     case 'list_sequences':
       return ok([])
     case 'exec_statement':
