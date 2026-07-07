@@ -27,6 +27,10 @@ test('nats subject messages: per-message copy + clear (delete by seq)', async ({
   await expect(copyBtns).toHaveCount(3)
   await expect(clearBtns).toHaveCount(3)
 
+  // newest-first: top row shows the latest time, prettified (no 'T'/'Z')
+  const firstTime = page.locator('tbody tr').first().locator('td').nth(1)
+  await expect(firstTime).toHaveText('2026-06-30 10:22:14')
+
   // copy first message → clipboard holds its payload
   await copyBtns.first().click()
   await page.waitForTimeout(150)

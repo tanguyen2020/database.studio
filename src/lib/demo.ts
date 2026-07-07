@@ -471,7 +471,7 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
           seq: i + 1,
           subject: (args?.subject as string) ?? 'orders.eu',
           payload: `{"id":${1000 + i}}`,
-          time: '2026-06-30T10:23:14Z',
+          time: `2026-06-30T10:2${i}:14Z`,
         })),
       )
     case 'nats_js_purge_subject':

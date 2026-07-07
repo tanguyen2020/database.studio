@@ -369,7 +369,19 @@ impl NatsDriver {
             seq: raw.sequence,
             subject: raw.subject.to_string(),
             payload: String::from_utf8_lossy(&raw.payload).into_owned(),
-            time: raw.time.to_string(),
+            // Server-stored publish time as ISO-8601 UTC (parseable by JS Date).
+            time: {
+                let t = raw.time;
+                format!(
+                    "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+                    t.year(),
+                    u8::from(t.month()),
+                    t.day(),
+                    t.hour(),
+                    t.minute(),
+                    t.second()
+                )
+            },
         })
     }
 
@@ -403,7 +415,21 @@ impl NatsDriver {
                 seq: info.as_ref().map(|i| i.stream_sequence).unwrap_or(0),
                 subject: m.subject.to_string(),
                 payload: String::from_utf8_lossy(&m.payload).into_owned(),
-                time: info.map(|i| i.published.to_string()).unwrap_or_default(),
+                // Server-stored publish time as ISO-8601 UTC (parseable by JS Date).
+                time: info
+                    .map(|i| {
+                        let t = i.published;
+                        format!(
+                            "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+                            t.year(),
+                            u8::from(t.month()),
+                            t.day(),
+                            t.hour(),
+                            t.minute(),
+                            t.second()
+                        )
+                    })
+                    .unwrap_or_default(),
             });
         }
         Ok(out)
