@@ -34,6 +34,11 @@
     return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${String(d.getMilliseconds()).padStart(3, '0')}`
   }
 
+  async function copyMsg(text: string) {
+    await navigator.clipboard.writeText(text)
+    toasts.success('Message copied')
+  }
+
   onMount(async () => {
     if (!IS_TAURI) return
     const { listen } = await import('@tauri-apps/api/event')
@@ -107,6 +112,8 @@
           <span class="mono" style="flex:none;font-size:var(--px-10_5);color:var(--muted);width:var(--px-96)">{m.ts}</span>
           <span class="mono" style="flex:none;font-size:var(--px-11_5);color:#D82C20;font-weight:600;width:var(--px-150);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{m.channel}</span>
           <span class="mono" style="flex:1;min-width:0;font-size:var(--px-11_5);color:var(--text2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{m.payload}</span>
+          <span onclick={() => copyMsg(m.payload)} onkeydown={(e) => e.key === 'Enter' && copyMsg(m.payload)} role="button" tabindex="0" title="Copy message" style="flex:none;cursor:pointer;color:var(--muted);font-size:var(--px-12)">⧉</span>
+          <span onclick={() => (messages = messages.filter((_, j) => j !== i))} onkeydown={(e) => e.key === 'Enter' && (messages = messages.filter((_, j) => j !== i))} role="button" tabindex="0" title="Clear this message" style="flex:none;cursor:pointer;color:var(--muted);font-size:var(--px-13)">×</span>
         </div>
       {/each}
     {/if}

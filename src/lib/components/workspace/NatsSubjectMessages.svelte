@@ -38,6 +38,22 @@
     if (!loaded && tab.connectionId) void load()
   })
 
+  async function copyMsg(text: string) {
+    await navigator.clipboard.writeText(text)
+    toasts.success('Message copied', 'nats')
+  }
+  // Delete a single JetStream message by sequence (real removal from the stream).
+  async function deleteMsg(seq: number) {
+    if (!tab.connectionId) return
+    try {
+      await ipc.natsJsDeleteMessage(tab.connectionId, stream, seq)
+      messages = messages.filter((m) => m.seq !== seq)
+      toasts.success(`Deleted message #${seq}`, 'nats')
+    } catch (e) {
+      toasts.error(String(e), 'nats')
+    }
+  }
+
   async function clearMessages() {
     if (!tab.connectionId) return
     if (!confirm(`Clear all messages of subject "${subject}"? This cannot be undone.`)) return
@@ -76,7 +92,7 @@
     {:else}
       <table style="border-collapse:collapse;width:100%;font-size:var(--px-12)">
         <thead><tr>
-          {#each [['Seq', 'width:var(--px-90)'], ['Subject', 'width:var(--px-200)'], ['Time', 'width:var(--px-180)'], ['Payload', '']] as [h, extra] (h)}
+          {#each [['Seq', 'width:var(--px-90)'], ['Subject', 'width:var(--px-200)'], ['Time', 'width:var(--px-180)'], ['Payload', ''], ['', 'width:var(--px-70)']] as [h, extra] (h)}
             <th style="position:sticky;top:0;background:var(--header);border-bottom:var(--px-1) solid var(--border2);padding:var(--px-7) var(--px-12);text-align:left;color:var(--text2);font-weight:600;{extra}">{h}</th>
           {/each}
         </tr></thead>
@@ -87,6 +103,10 @@
               <td class="mono" style="border-bottom:var(--px-1) solid var(--border);padding:var(--px-6) var(--px-12);color:var(--syntax-type)">{m.subject}</td>
               <td class="mono" style="border-bottom:var(--px-1) solid var(--border);padding:var(--px-6) var(--px-12);color:var(--muted)">{m.time}</td>
               <td class="mono" style="border-bottom:var(--px-1) solid var(--border);padding:var(--px-6) var(--px-12);color:var(--text);white-space:pre-wrap;word-break:break-all">{m.payload}</td>
+              <td style="border-bottom:var(--px-1) solid var(--border);padding:var(--px-6) var(--px-8);white-space:nowrap">
+                <span onclick={() => copyMsg(m.payload)} onkeydown={(e) => e.key === 'Enter' && copyMsg(m.payload)} role="button" tabindex="0" title="Copy message" style="cursor:pointer;color:var(--muted)">⧉</span>
+                <span onclick={() => deleteMsg(m.seq)} onkeydown={(e) => e.key === 'Enter' && deleteMsg(m.seq)} role="button" tabindex="0" title="Delete this message (by sequence)" style="cursor:pointer;color:var(--error);font-size:var(--px-13);margin-left:var(--px-6)">×</span>
+              </td>
             </tr>
           {/each}
         </tbody>

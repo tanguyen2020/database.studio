@@ -44,6 +44,15 @@
     return v
   }
 
+  async function copyMsg(m: ipc.KafkaMsg) {
+    await navigator.clipboard.writeText(decodeVal(m.value))
+    toasts.success('Message copied')
+  }
+  // Clear a single message from the view (Kafka can't delete one record from a topic).
+  function clearOne(m: ipc.KafkaMsg) {
+    messages = messages.filter((x) => !(x.partition === m.partition && x.offset === m.offset))
+  }
+
   const filtered = $derived(
     messages.filter((m) => {
       if (valFilter && !m.value.toLowerCase().includes(valFilter.toLowerCase())) return false
@@ -135,7 +144,7 @@
     {:else}
       <table class="mono" style="border-collapse:collapse;width:100%;font-size:var(--px-12)">
         <thead><tr>
-          {#each ['Partition', 'Offset', 'Time', 'Key', 'Value'] as h (h)}
+          {#each ['Partition', 'Offset', 'Time', 'Key', 'Value', ''] as h (h)}
             <th style="position:sticky;top:0;background:var(--header);border-bottom:var(--px-1) solid var(--border2);padding:var(--px-6) var(--px-12);text-align:left;color:var(--text2);font-weight:600;white-space:nowrap">{h}</th>
           {/each}
         </tr></thead>
@@ -147,6 +156,10 @@
               <td style="padding:var(--px-5) var(--px-12);border-bottom:var(--px-1) solid var(--border);color:var(--muted)">{fmtTs(m.timestamp)}</td>
               <td style="padding:var(--px-5) var(--px-12);border-bottom:var(--px-1) solid var(--border);color:#61afef">{m.key}</td>
               <td style="padding:var(--px-5) var(--px-12);border-bottom:var(--px-1) solid var(--border);color:#98c379;max-width:var(--px-420);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{decodeVal(m.value)}</td>
+              <td style="padding:var(--px-5) var(--px-8);border-bottom:var(--px-1) solid var(--border);white-space:nowrap">
+                <span onclick={() => copyMsg(m)} onkeydown={(e) => e.key === 'Enter' && copyMsg(m)} role="button" tabindex="0" title="Copy message" style="cursor:pointer;color:var(--muted)">⧉</span>
+                <span onclick={() => clearOne(m)} onkeydown={(e) => e.key === 'Enter' && clearOne(m)} role="button" tabindex="0" title="Clear this message" style="cursor:pointer;color:var(--muted);font-size:var(--px-13);margin-left:var(--px-6)">×</span>
+              </td>
             </tr>
           {/each}
         </tbody>
