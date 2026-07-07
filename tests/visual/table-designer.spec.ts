@@ -74,3 +74,40 @@ test('table designer: attribute tabs + index in DDL + Ctrl+S saves', async ({ pa
 
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
+
+// Task 4: designing an EXISTING table lets you drop objects across tabs — the ×
+// on an existing column marks it dropped (strikethrough) and the Scripts preview
+// emits an ALTER … DROP COLUMN.
+test('table designer: existing table can drop a column (ALTER DROP COLUMN)', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(String(e)))
+  await blockRemoteFonts(page)
+  await page.goto(APP_URL)
+  await page.waitForSelector('#app > *', { timeout: 15_000 })
+  await page.waitForTimeout(300)
+
+  await page.getByRole('button', { name: /Postgres/ }).first().click()
+  await page.waitForTimeout(500)
+  await page.getByText('public', { exact: true }).first().dblclick()
+  await page.waitForTimeout(200)
+  await page.getByText('Tables', { exact: true }).first().dblclick()
+  await page.waitForTimeout(200)
+  await page.getByRole('treeitem', { name: /students/ }).first().click({ button: 'right' })
+  await page.waitForTimeout(150)
+  await page.getByText('Design Table', { exact: true }).first().click()
+  await page.waitForTimeout(400)
+
+  // Fields tab shows the existing columns (seeded). Drop one via its × (→ ↺).
+  const dropBtn = page.locator('[title="Drop column"]').first()
+  await expect(dropBtn).toBeVisible()
+  await dropBtn.click()
+  await page.waitForTimeout(150)
+  await expect(page.locator('[title="Restore column"]').first()).toBeVisible()
+
+  // Scripts preview now contains an ALTER … DROP COLUMN
+  await page.getByText('Scripts', { exact: true }).first().click()
+  await page.waitForTimeout(200)
+  await expect(page.getByText(/DROP COLUMN/).first()).toBeVisible()
+
+  expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
+})

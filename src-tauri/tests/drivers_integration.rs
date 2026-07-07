@@ -4009,3 +4009,51 @@ async fn redis_select_db_switches_and_isolates_keys() {
     assert!(g0b.contains("v0"), "db0 value preserved, got {g0b}");
     eprintln!("CHK redis_select_db_switches_and_isolates_keys OK");
 }
+
+// Task 4 — Design Table edit/delete across tabs: the DROP + ALTER COLUMN DDL that
+// buildTableDdl emits for an existing table runs on real PostgreSQL.
+#[tokio::test]
+async fn pg_table_designer_edit_and_drop_objects_end_to_end() {
+    let (_c, port) = start_pg().await;
+    let params = PgConnParams {
+        host: "localhost".into(), port, database: "testdb".into(), user: "postgres".into(),
+        password: PASS.into(), ssl: false, ssl_ca: String::new(), ssl_cert: String::new(), ssl_key: String::new(),
+    };
+    let mut drv = retry("postgres", || PgDriver::connect(&params)).await;
+    async fn n(drv: &mut PgDriver, sql: &str) -> i64 {
+        let StatementOutcome::Rows { result } = drv.exec(sql).await.unwrap() else { panic!("rows") };
+        let v = &result.rows[0]["n"];
+        v.as_i64().unwrap_or_else(|| v.as_f64().unwrap() as i64)
+    }
+
+    drv.exec("CREATE TABLE parent (id int PRIMARY KEY)").await.unwrap();
+    drv.exec("CREATE TABLE td (id int PRIMARY KEY, price int NOT NULL, old_col text, email text, org_id int)").await.unwrap();
+    drv.exec("CREATE INDEX ix_old ON td (old_col)").await.unwrap();
+    drv.exec("ALTER TABLE td ADD CONSTRAINT uq_email UNIQUE (email)").await.unwrap();
+    drv.exec("ALTER TABLE td ADD CONSTRAINT ck_price CHECK (price >= 0)").await.unwrap();
+    drv.exec("ALTER TABLE td ADD CONSTRAINT fk_org FOREIGN KEY (org_id) REFERENCES parent (id)").await.unwrap();
+
+    // pre-conditions
+    assert_eq!(n(&mut drv, "SELECT count(*) AS n FROM information_schema.columns WHERE table_name='td' AND column_name='old_col'").await, 1, "old_col present");
+    assert_eq!(n(&mut drv, "SELECT count(*) AS n FROM pg_indexes WHERE indexname='ix_old'").await, 1, "ix_old present");
+
+    // --- DROP statements exactly as buildTableDdl(existing) emits ---
+    drv.exec("DROP TRIGGER IF EXISTS \"whatever\" ON \"public\".\"td\";").await.ok(); // no-op tolerant
+    drv.exec("ALTER TABLE \"public\".\"td\" DROP CONSTRAINT \"fk_org\";").await.unwrap();
+    drv.exec("ALTER TABLE \"public\".\"td\" DROP CONSTRAINT \"ck_price\";").await.unwrap();
+    drv.exec("ALTER TABLE \"public\".\"td\" DROP CONSTRAINT \"uq_email\";").await.unwrap();
+    drv.exec("DROP INDEX IF EXISTS \"public\".\"ix_old\";").await.unwrap();
+    drv.exec("ALTER TABLE \"public\".\"td\" DROP COLUMN \"old_col\";").await.unwrap();
+    // --- ALTER COLUMN (edit existing) exactly as alterColumn() emits for PG ---
+    drv.exec("ALTER TABLE \"public\".\"td\" ALTER COLUMN \"price\" TYPE numeric(10,2);").await.unwrap();
+    drv.exec("ALTER TABLE \"public\".\"td\" ALTER COLUMN \"price\" DROP NOT NULL;").await.unwrap();
+
+    // verify drops + edit landed
+    assert_eq!(n(&mut drv, "SELECT count(*) AS n FROM information_schema.columns WHERE table_name='td' AND column_name='old_col'").await, 0, "old_col dropped");
+    assert_eq!(n(&mut drv, "SELECT count(*) AS n FROM pg_indexes WHERE indexname='ix_old'").await, 0, "ix_old dropped");
+    assert_eq!(n(&mut drv, "SELECT count(*) AS n FROM information_schema.table_constraints WHERE constraint_name IN ('uq_email','ck_price','fk_org')").await, 0, "constraints dropped");
+    let StatementOutcome::Rows { result } = drv.exec("SELECT data_type AS n, is_nullable FROM information_schema.columns WHERE table_name='td' AND column_name='price'").await.unwrap() else { panic!("rows") };
+    assert_eq!(result.rows[0]["n"].as_str().unwrap(), "numeric", "price altered to numeric");
+    assert_eq!(result.rows[0]["is_nullable"].as_str().unwrap(), "YES", "price now nullable");
+    eprintln!("CHK pg_table_designer_edit_and_drop_objects_end_to_end OK");
+}

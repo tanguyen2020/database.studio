@@ -15,7 +15,7 @@
 // rest warn); ClickHouse has no FK/CHECK/UNIQUE/trigger and uses ENGINE/ORDER BY.
 
 import { quoteIdent } from './dialect'
-import { genCreateIndex } from './indexes'
+import { genCreateIndex, genDropIndex, genDropForeignKey } from './indexes'
 
 export interface DesignColumn {
   name: string
@@ -26,6 +26,10 @@ export interface DesignColumn {
   dflt: string
   /** seeded from the live table (already exists) → not re-created */
   existing?: boolean
+  /** marked for removal (existing objects only) → DROP on save */
+  dropped?: boolean
+  /** seeded original definition, to detect an edit of an existing column */
+  orig?: { type: string; len: string; nullable: boolean; dflt: string }
 }
 
 export interface DesignIndex {
@@ -34,6 +38,7 @@ export interface DesignIndex {
   /** access method: PG btree/hash/gin…, MySQL BTREE/HASH; ignored elsewhere */
   method?: string
   existing?: boolean
+  dropped?: boolean
 }
 
 export interface DesignForeignKey {
@@ -44,18 +49,21 @@ export interface DesignForeignKey {
   onDelete?: string
   onUpdate?: string
   existing?: boolean
+  dropped?: boolean
 }
 
 export interface DesignUnique {
   name: string
   columns: string[]
   existing?: boolean
+  dropped?: boolean
 }
 
 export interface DesignCheck {
   name: string
   expression: string
   existing?: boolean
+  dropped?: boolean
 }
 
 export interface DesignTrigger {
@@ -66,7 +74,10 @@ export interface DesignTrigger {
   event: string
   /** PG: function to EXECUTE (e.g. `audit()`); others: the trigger body */
   body: string
+  /** the trigger's table (needed for DROP TRIGGER … ON <table> on MySQL) */
+  table?: string
   existing?: boolean
+  dropped?: boolean
 }
 
 export interface TableModel {
@@ -122,6 +133,48 @@ function fkClause(system: string, schema: string, fk: DesignForeignKey, name: st
   if (fk.onDelete && fk.onDelete.trim()) s += ` ON DELETE ${fk.onDelete.trim()}`
   if (fk.onUpdate && fk.onUpdate.trim()) s += ` ON UPDATE ${fk.onUpdate.trim()}`
   return s
+}
+
+/** Did an existing column's definition change vs its seeded original? */
+export function columnChanged(c: DesignColumn): boolean {
+  if (!c.existing || !c.orig) return false
+  return c.type !== c.orig.type || c.len !== c.orig.len || c.nullable !== c.orig.nullable || c.dflt !== c.orig.dflt
+}
+
+/** ALTER an existing column's type/nullability/default per dialect. */
+export function alterColumn(system: string, schema: string, table: string, c: DesignColumn): { statements: string[]; warnings: string[] } {
+  const q = (n: string) => quoteIdent(system, n)
+  const t = target(system, schema, table)
+  const col = q(c.name)
+  let typ = (c.type || 'varchar').trim()
+  if (c.len.trim()) typ += `(${c.len.trim()})`
+  const out: string[] = []
+  const warns: string[] = []
+  switch (system) {
+    case 'postgres':
+      out.push(`ALTER TABLE ${t} ALTER COLUMN ${col} TYPE ${typ};`)
+      out.push(`ALTER TABLE ${t} ALTER COLUMN ${col} ${c.nullable ? 'DROP NOT NULL' : 'SET NOT NULL'};`)
+      out.push(c.dflt.trim() ? `ALTER TABLE ${t} ALTER COLUMN ${col} SET DEFAULT ${c.dflt.trim()};` : `ALTER TABLE ${t} ALTER COLUMN ${col} DROP DEFAULT;`)
+      break
+    case 'mysql':
+    case 'mariadb': {
+      let def = `${col} ${typ}`
+      if (!c.nullable) def += ' NOT NULL'
+      if (c.dflt.trim()) def += ` DEFAULT ${c.dflt.trim()}`
+      out.push(`ALTER TABLE ${t} MODIFY COLUMN ${def};`)
+      break
+    }
+    case 'mssql':
+      out.push(`ALTER TABLE ${t} ALTER COLUMN ${col} ${typ} ${c.nullable ? 'NULL' : 'NOT NULL'};`)
+      if (c.dflt.trim()) warns.push(`SQL Server: set the DEFAULT for ${c.name} via a separate DROP/ADD CONSTRAINT.`)
+      break
+    case 'sqlite':
+      warns.push(`SQLite cannot ALTER a column (${c.name}) — recreate the table to change its type/nullability.`)
+      break
+    default:
+      warns.push(`Altering a column is not supported for ${system}.`)
+  }
+  return { statements: out, warnings: warns }
 }
 
 /** CREATE TRIGGER for the given dialect. Returns the SQL and/or a warning. */
@@ -192,8 +245,51 @@ export function buildTableDdl(system: string, model: TableModel, isNew: boolean)
     }
     statements.push(create + ';')
   } else {
-    // ALTER path — only items the user ADDED (no `existing` flag).
-    const newCols = model.columns.filter((c) => !c.existing && c.name.trim())
+    // ALTER path. Drops first (existing objects the user removed), then edits of
+    // existing columns, then additions of new objects.
+
+    // ---- DROP existing objects marked for removal (across every tab) ----
+    model.triggers.forEach((tr) => {
+      if (!(tr.existing && tr.dropped) || !tr.name.trim()) return
+      if (isCh) return
+      if (system === 'postgres') statements.push(`DROP TRIGGER IF EXISTS ${q(tr.name)} ON ${tr.table ? target(system, sch, tr.table) : t};`)
+      else if (system === 'mssql') statements.push(`DROP TRIGGER ${q(tr.name)};`)
+      else statements.push(`DROP TRIGGER IF EXISTS ${q(tr.name)};`)
+    })
+    model.foreignKeys.forEach((f) => {
+      if (!(f.existing && f.dropped) || !f.name.trim() || isCh) return
+      if (isSqlite) warnings.push(`SQLite cannot DROP a FOREIGN KEY (${f.name}) — recreate the table.`)
+      else statements.push(genDropForeignKey(system, sch, tbl, f.name))
+    })
+    model.checks.forEach((c) => {
+      if (!(c.existing && c.dropped) || !c.name.trim() || isCh) return
+      if (isSqlite) warnings.push(`SQLite cannot DROP a CHECK (${c.name}) — recreate the table.`)
+      else if (system === 'mysql') statements.push(`ALTER TABLE ${t} DROP CHECK ${q(c.name)};`)
+      else statements.push(`ALTER TABLE ${t} DROP CONSTRAINT ${q(c.name)};`)
+    })
+    model.uniques.forEach((u) => {
+      if (!(u.existing && u.dropped) || !u.name.trim() || isCh) return
+      if (isSqlite) statements.push(`DROP INDEX IF EXISTS ${q(u.name)};`)
+      else if (system === 'mysql' || system === 'mariadb') statements.push(`ALTER TABLE ${t} DROP INDEX ${q(u.name)};`)
+      else statements.push(`ALTER TABLE ${t} DROP CONSTRAINT ${q(u.name)};`)
+    })
+    model.columns.forEach((c) => {
+      if (!(c.existing && c.dropped) || !c.name.trim()) return
+      statements.push(`ALTER TABLE ${t} DROP COLUMN ${q(c.name)};`)
+    })
+
+    // ---- EDIT existing columns whose definition changed ----
+    if (!isCh) {
+      model.columns.forEach((c) => {
+        if (!c.existing || c.dropped || !columnChanged(c)) return
+        const r = alterColumn(system, sch, tbl, c)
+        statements.push(...r.statements)
+        warnings.push(...r.warnings)
+      })
+    }
+
+    // ---- ADD new columns (not dropped) ----
+    const newCols = model.columns.filter((c) => !c.existing && !c.dropped && c.name.trim())
     for (const c of newCols) {
       const addKw = system === 'mssql' ? 'ADD' : 'ADD COLUMN'
       statements.push(`ALTER TABLE ${t} ${addKw} ${columnDef(system, c)};`)
@@ -204,25 +300,29 @@ export function buildTableDdl(system: string, model: TableModel, isNew: boolean)
       }
     } else {
       model.uniques.forEach((u, i) => {
-        if (u.existing || !u.columns.length) return
+        if (u.existing || u.dropped || !u.columns.length) return
         if (isSqlite) statements.push(`CREATE UNIQUE INDEX ${q(uqName(u, i))} ON ${t} (${u.columns.map(q).join(', ')});`)
         else statements.push(`ALTER TABLE ${t} ADD CONSTRAINT ${q(uqName(u, i))} UNIQUE (${u.columns.map(q).join(', ')});`)
       })
       model.checks.forEach((c, i) => {
-        if (c.existing || !c.expression.trim()) return
+        if (c.existing || c.dropped || !c.expression.trim()) return
         if (isSqlite) warnings.push(`SQLite cannot ADD a CHECK to an existing table (${ckName(c, i)}) — recreate the table.`)
         else statements.push(`ALTER TABLE ${t} ADD CONSTRAINT ${q(ckName(c, i))} CHECK (${c.expression.trim()});`)
       })
       model.foreignKeys.forEach((f, i) => {
-        if (f.existing || !f.columns.length || !f.refTable) return
+        if (f.existing || f.dropped || !f.columns.length || !f.refTable) return
         if (isSqlite) warnings.push(`SQLite cannot ADD a FOREIGN KEY to an existing table (${fkName(f, i)}) — recreate the table.`)
         else statements.push(`ALTER TABLE ${t} ADD ${fkClause(system, sch, f, fkName(f, i))};`)
       })
     }
   }
 
-  // Indexes (both modes): CREATE INDEX per new index.
+  // Indexes: CREATE new indexes; DROP existing ones marked dropped (ALTER mode).
   model.indexes.forEach((ix, i) => {
+    if (ix.dropped) {
+      if (!isNew && ix.existing && ix.name.trim() && !isCh) statements.push(genDropIndex(system, sch, tbl, ix.name))
+      return
+    }
     if (ix.existing || !ix.columns.length) return
     if (isCh) {
       warnings.push(`ClickHouse data-skipping indexes are not generated by the designer (${idxName(ix, i)}).`)
@@ -231,9 +331,9 @@ export function buildTableDdl(system: string, model: TableModel, isNew: boolean)
     statements.push(genCreateIndex(system, sch, tbl, { name: idxName(ix, i), columns: ix.columns, unique: false, method: ix.method }))
   })
 
-  // Triggers (both modes).
+  // Triggers: CREATE new triggers (dropped-existing handled in the ALTER block).
   model.triggers.forEach((tr) => {
-    if (tr.existing || !tr.name.trim()) return
+    if (tr.existing || tr.dropped || !tr.name.trim()) return
     const { sql, warning } = buildTrigger(system, sch, tbl, tr)
     if (sql) statements.push(sql)
     if (warning) warnings.push(warning)

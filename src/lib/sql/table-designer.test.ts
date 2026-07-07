@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildTableDdl, buildTrigger, columnDef, type TableModel } from './table-designer'
+import { alterColumn, buildTableDdl, buildTrigger, columnChanged, columnDef, type TableModel } from './table-designer'
 
 function model(o: Partial<TableModel>): TableModel {
   return {
@@ -194,5 +194,87 @@ describe('buildTrigger — per dialect', () => {
     const r = buildTrigger('clickhouse', '', 'events', { name: 'x', timing: 'AFTER', event: 'INSERT', body: 'y' })
     expect(r.sql).toBeUndefined()
     expect(r.warning).toMatch(/not supported/)
+  })
+})
+
+describe('buildTableDdl — DROP existing objects (edit/delete across tabs)', () => {
+  const existing = () =>
+    model({
+      columns: [
+        { name: 'id', type: 'int4', len: '', pk: true, nullable: false, dflt: '', existing: true },
+        { name: 'old_col', type: 'text', len: '', pk: false, nullable: true, dflt: '', existing: true, dropped: true },
+      ],
+      indexes: [{ name: 'ix_old', columns: ['old_col'], existing: true, dropped: true }],
+      foreignKeys: [{ name: 'fk_old', columns: ['org_id'], refTable: 'orgs', refColumns: ['id'], existing: true, dropped: true }],
+      uniques: [{ name: 'uq_old', columns: ['email'], existing: true, dropped: true }],
+      checks: [{ name: 'ck_old', expression: 'x > 0', existing: true, dropped: true }],
+      triggers: [{ name: 'trg_old', timing: 'BEFORE', event: 'INSERT', body: '', table: 'users', existing: true, dropped: true }],
+    })
+
+  it('postgres: drops column/index/fk/unique/check/trigger', () => {
+    const j = buildTableDdl('postgres', existing(), false).statements.join('\n')
+    expect(j).toContain('ALTER TABLE "public"."users" DROP COLUMN "old_col";')
+    expect(j).toContain('DROP INDEX IF EXISTS "public"."ix_old";')
+    expect(j).toContain('ALTER TABLE "public"."users" DROP CONSTRAINT "fk_old";')
+    expect(j).toContain('ALTER TABLE "public"."users" DROP CONSTRAINT "uq_old";')
+    expect(j).toContain('ALTER TABLE "public"."users" DROP CONSTRAINT "ck_old";')
+    expect(j).toContain('DROP TRIGGER IF EXISTS "trg_old" ON "public"."users";')
+  })
+
+  it('mysql: DROP INDEX for unique, DROP CHECK, DROP FOREIGN KEY, DROP TRIGGER', () => {
+    const j = buildTableDdl('mysql', { ...existing(), schema: '' }, false).statements.join('\n')
+    expect(j).toContain('ALTER TABLE `users` DROP INDEX `uq_old`;')
+    expect(j).toContain('ALTER TABLE `users` DROP CHECK `ck_old`;')
+    expect(j).toContain('ALTER TABLE `users` DROP FOREIGN KEY `fk_old`;')
+    expect(j).toContain('DROP TRIGGER IF EXISTS `trg_old`;')
+    expect(j).toContain('ALTER TABLE `users` DROP COLUMN `old_col`;')
+  })
+
+  it('sqlite: DROP COLUMN + DROP unique index; CHECK/FK drop warn', () => {
+    const { statements, warnings } = buildTableDdl('sqlite', { ...existing(), schema: 'main' }, false)
+    const j = statements.join('\n')
+    expect(j).toContain('ALTER TABLE "users" DROP COLUMN "old_col";')
+    expect(j).toContain('DROP INDEX IF EXISTS "uq_old";')
+    expect(warnings.join(' ')).toMatch(/cannot DROP a CHECK/)
+    expect(warnings.join(' ')).toMatch(/cannot DROP a FOREIGN KEY/)
+  })
+})
+
+describe('columnChanged + alterColumn (edit existing column)', () => {
+  const changed = { name: 'price', type: 'numeric', len: '10,2', pk: false, nullable: false, dflt: '0', existing: true, orig: { type: 'int4', len: '', nullable: true, dflt: '' } }
+  it('columnChanged detects a real edit vs an untouched existing column', () => {
+    expect(columnChanged(changed)).toBe(true)
+    expect(columnChanged({ ...changed, type: 'int4', len: '', nullable: true, dflt: '' })).toBe(false)
+    expect(columnChanged({ ...changed, existing: false })).toBe(false)
+  })
+  it('postgres alter: TYPE + SET NOT NULL + SET DEFAULT', () => {
+    const { statements } = alterColumn('postgres', 'public', 'products', changed)
+    expect(statements[0]).toBe('ALTER TABLE "public"."products" ALTER COLUMN "price" TYPE numeric(10,2);')
+    expect(statements[1]).toBe('ALTER TABLE "public"."products" ALTER COLUMN "price" SET NOT NULL;')
+    expect(statements[2]).toBe('ALTER TABLE "public"."products" ALTER COLUMN "price" SET DEFAULT 0;')
+  })
+  it('mysql alter: MODIFY COLUMN one-liner', () => {
+    const { statements } = alterColumn('mysql', '', 'products', changed)
+    expect(statements[0]).toBe('ALTER TABLE `products` MODIFY COLUMN `price` numeric(10,2) NOT NULL DEFAULT 0;')
+  })
+  it('mssql alter: ALTER COLUMN with NULL/NOT NULL', () => {
+    const { statements } = alterColumn('mssql', 'dbo', 'products', changed)
+    expect(statements[0]).toBe('ALTER TABLE [dbo].[products] ALTER COLUMN [price] numeric(10,2) NOT NULL;')
+  })
+  it('sqlite alter: warns (no column alter)', () => {
+    const { statements, warnings } = alterColumn('sqlite', 'main', 'products', changed)
+    expect(statements).toHaveLength(0)
+    expect(warnings.join(' ')).toMatch(/SQLite cannot ALTER a column/)
+  })
+  it('buildTableDdl (existing PG) emits alter for a changed column', () => {
+    const m = model({
+      columns: [
+        { name: 'id', type: 'int4', len: '', pk: true, nullable: false, dflt: '', existing: true },
+        { name: 'price', type: 'numeric', len: '10,2', pk: false, nullable: false, dflt: '', existing: true, orig: { type: 'int4', len: '', nullable: true, dflt: '' } },
+      ],
+    })
+    const j = buildTableDdl('postgres', m, false).statements.join('\n')
+    expect(j).toContain('ALTER COLUMN "price" TYPE numeric(10,2)')
+    expect(j).toContain('ALTER COLUMN "price" SET NOT NULL')
   })
 })
