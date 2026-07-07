@@ -189,6 +189,9 @@
       cassTree = null
     }
   }
+  // NATS mark (blue tile + white "N" + chat-bubble tail) served from an asset
+  // file, used as the stream-node icon in the explorer instead of the ▤ glyph.
+  const NATS_LOGO = '<img src="/assets/db-nats.svg" width="14" height="14" style="display:block" alt="nats" />'
   // Streaming (Kafka topics / NATS JetStream streams) — loaded via the explorer
   // store so the messages tabs can trigger a refresh after purge/delete.
   const isKafka = $derived(selected?.system === 'kafka')
@@ -807,7 +810,7 @@
       {:else}
         {#each streamRows as s (s.name)}
           {@const sKey = `nats:s:${s.name}`}
-          {@render row({ key: sKey, depth: 0, glyph: '▤', color: C.folder, name: s.name, meta: s.meta, head: true, expandable: true, onClick: () => toggle(sKey) })}
+          {@render row({ key: sKey, depth: 0, glyph: '', svg: NATS_LOGO, color: C.folder, name: s.name, meta: s.meta, head: true, expandable: true, onClick: () => toggle(sKey) })}
           {#if expanded.has(sKey)}
             {#each s.subjects as sub (sub.subject)}
               {#snippet subjectMenu()}
