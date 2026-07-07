@@ -367,7 +367,7 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
           ],
           rows: [
             { id: 1, first_name: 'An', gpa: 3.9 },
-            { id: 2, first_name: 'Bình', gpa: 3.7 },
+            { id: 2, first_name: 'Binh', gpa: 3.7 },
             { id: 3, first_name: 'Chi', gpa: null },
           ],
           total: 3,
@@ -734,7 +734,7 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
         summary: {
           total_cost: 512.4,
           total_time_ms: actual ? 8.2 : undefined,
-          warnings: ['Seq Scan trên enrollments (~50000 rows)'],
+          warnings: ['Seq Scan on enrollments (~50000 rows)'],
         },
         raw: '[{"Plan":{"Node Type":"Hash Join","Total Cost":512.4,"Plan Rows":214}}]',
       })

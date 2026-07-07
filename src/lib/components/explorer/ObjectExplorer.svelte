@@ -440,10 +440,10 @@
       sql = `DROP VIEW IF EXISTS ${qual};`
     } else if (kind === 'trigger') {
       const on = table ? ` ON ${schema && sys !== 'sqlite' ? `${q(schema)}.${q(table)}` : q(table)}` : ''
-      sql = `-- Kiểm tra bảng đích trước khi chạy\nDROP TRIGGER IF EXISTS ${q(name)}${on};`
+      sql = `-- Check the target table before running\nDROP TRIGGER IF EXISTS ${q(name)}${on};`
     } else {
       const kw = kind === 'procedure' ? 'PROCEDURE' : 'FUNCTION'
-      sql = `-- PG có thể cần chữ ký tham số: DROP ${kw} ${qual}(...)\nDROP ${kw} IF EXISTS ${qual};`
+      sql = `-- PostgreSQL may need the argument signature: DROP ${kw} ${qual}(...)\nDROP ${kw} IF EXISTS ${qual};`
     }
     stmtTab(`Drop ${name}`, sql)
   }

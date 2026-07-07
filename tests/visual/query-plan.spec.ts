@@ -24,7 +24,7 @@ test('query plan: Explain opens normalized tree + hotspot + summary', async ({ p
   await expect(page.getByText('HashJoin').first()).toBeVisible()
   await expect(page.getByText('SeqScan').first()).toBeVisible()
   await expect(page.getByText('HOTSPOT').first()).toBeVisible()
-  await expect(page.getByText(/Seq Scan trên enrollments/).first()).toBeVisible()
+  await expect(page.getByText(/Seq Scan on enrollments/).first()).toBeVisible()
 
   // View raw toggles to raw JSON
   await page.getByRole('button', { name: 'View raw' }).first().click()

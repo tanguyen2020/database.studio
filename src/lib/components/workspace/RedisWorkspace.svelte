@@ -278,7 +278,7 @@
 {#snippet delCell(id: string, del?: (id: string) => void)}
   {#if del}
     <td style="border-bottom:var(--px-1) solid var(--border);text-align:center;width:var(--px-38)">
-      <span onclick={() => del(id)} onkeydown={(e) => e.key === 'Enter' && del(id)} role="button" tabindex="0" title="Xóa" style="cursor:pointer;color:var(--muted);font-size:var(--px-13)">×</span>
+      <span onclick={() => del(id)} onkeydown={(e) => e.key === 'Enter' && del(id)} role="button" tabindex="0" title="Delete" style="cursor:pointer;color:var(--muted);font-size:var(--px-13)">×</span>
     </td>
   {/if}
 {/snippet}

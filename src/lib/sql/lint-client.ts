@@ -62,7 +62,7 @@ export function schemaLints(doc: string, knownTables: string[]): Diagnostic[] {
       from: start,
       to: start + raw.length,
       severity: 'warning',
-      message: `Không thấy bảng "${bare}" trong schema cache${suggestion ? ` — ý bạn là "${suggestion}"?` : ''}`,
+      message: `Table "${bare}" not found in the schema cache${suggestion ? ` — did you mean "${suggestion}"?` : ''}`,
       source: 'schema.unknown_table',
     })
   }
