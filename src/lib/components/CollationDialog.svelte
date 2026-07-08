@@ -41,7 +41,9 @@
 
   const affected = $derived(tablesToConvert(auditRows, target))
   const present = $derived(distinctCollations(auditRows))
+  const statements = $derived(buildUnifyStatements(system, collationWizard.database, target, affected))
   const sql = $derived(buildUnifySql(system, collationWizard.database, target, affected))
+  const pct = $derived(statements.length ? Math.round((progress / statements.length) * 100) : 0)
 
   $effect(() => {
     if (collationWizard.open) untrack(() => void init())
@@ -97,7 +99,7 @@
   async function run() {
     const connId = collationWizard.connId
     if (!connId) return
-    const stmts = buildUnifyStatements(system, collationWizard.database, target, affected)
+    const stmts = statements
     if (!stmts.length) return
     running = true
     cancelFlag = false
@@ -160,7 +162,10 @@
         <div style="font-size:var(--px-12);color:var(--text2)">Migration preview (tables/columns only — procedures/views/triggers untouched)</div>
         <pre class="selectable mono" style="max-height:var(--px-240);overflow:auto;border-radius:var(--px-8);background:var(--panel);border:var(--px-1) solid var(--border);padding:var(--px-12);font-size:var(--px-11_5);line-height:1.5;margin:0">{sql}</pre>
         {#if running}
-          <div style="font-size:var(--px-12);color:var(--text2)">Running… statement {progress}</div>
+          <div style="font-size:var(--px-12);color:var(--text2)">Running… {progress} / {statements.length} statement(s) ({pct}%)</div>
+          <div style="height:var(--px-10);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);overflow:hidden">
+            <div style="height:100%;width:{pct}%;background:var(--primary);transition:width .15s"></div>
+          </div>
         {/if}
         {#if result !== null}
           <pre class="selectable mono" style="font-size:var(--px-12);color:{result.startsWith('✓') ? 'var(--success)' : 'var(--error)'};padding:var(--px-8);white-space:pre-wrap;margin:0">{result}</pre>
