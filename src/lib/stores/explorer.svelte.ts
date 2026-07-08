@@ -71,6 +71,12 @@ class ExplorerStore {
   // database), `base` is the owning sidebar connection used to match the selection.
   selectedSchema = $state<{ connId: string; base: string; system: string; schema: string } | null>(null)
 
+  // The database the current tree selection points at, for binding a NEW Query
+  // Editor tab (sidebar "New query console"). Resolved from the selection's name
+  // alone — no sub-connection needed — so it works on single-click of any node.
+  // `base` is the owning sidebar connection used to match the selection.
+  selectedDatabase = $state<{ base: string; database: string } | null>(null)
+
   /** Load Kafka topics / NATS streams for the streaming explorer tree. */
   async loadStreaming(connId: string, system: string, force = false) {
     const cur = this.streaming[connId]

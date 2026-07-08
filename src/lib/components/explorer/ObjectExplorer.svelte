@@ -101,6 +101,33 @@
   $effect(() => {
     explorer.selectedSchema = erTarget
   })
+  // The database a NEW Query Editor tab should bind to, from the current tree
+  // selection. Unlike `erTarget` this resolves the database NAME even for a
+  // not-yet-expanded foreign database — New Query doesn't need the sub-connection
+  // (SqlWorkspace attaches its own per-tab connection at run time). For PG/MSSQL a
+  // schema node maps to the connection's current database; MySQL/MariaDB/ClickHouse
+  // treat the schema itself as the database; a foreign-DB node carries its name.
+  const dbTarget = $derived.by(() => {
+    const t = treeSel
+    if (!selected || !t) return null
+    if (t.startsWith('s:')) {
+      const schema = t.slice(2)
+      const db = dbForSchema(schema) ?? (isClickhouse ? schema : curDbName || selected.database)
+      return db ? { base: selected.id, database: db } : null
+    }
+    if (t === 'curdb') {
+      const db = curDbName || selected.database
+      return db ? { base: selected.id, database: db } : null
+    }
+    const mSub = t.match(/^fdb:(.+):s:(.+)$/)
+    if (mSub) return { base: selected.id, database: mSub[1] }
+    const mDb = t.match(/^fdb:([^:]+)$/)
+    if (mDb) return { base: selected.id, database: mDb[1] }
+    return null
+  })
+  $effect(() => {
+    explorer.selectedDatabase = dbTarget
+  })
   // Top filter — DATABASE names only (item 1). Object filtering is per-folder.
   let dbFilter = $state('')
   const dbFiltering = $derived(!!dbFilter.trim())
