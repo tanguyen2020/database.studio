@@ -5,7 +5,7 @@
 import * as ipc from '$lib/ipc'
 import type { SplitStatement } from '$lib/sql/statements'
 import type { QueryError, QueryResultSet } from '$lib/types'
-import { connections } from './connections.svelte'
+import { connections, baseConnId as baseOf } from './connections.svelte'
 import { toasts } from './toast.svelte'
 
 export interface SubResult {
@@ -41,6 +41,9 @@ export interface TabExecution {
   lastRowCount: number | null
   /** epoch ms khi bắt đầu chạy (cho hiển thị "running Ns" — T11) */
   startedAt: number
+  /** connection id this tab last executed against (base or `{base}::{db}` sub-id) —
+   *  used to cancel the right in-flight query when the tab is closed (item 6). */
+  connId: string
 }
 
 /** Table name heuristic for the sub-tab label (`#N orders · X rows`). */
@@ -62,18 +65,28 @@ class ResultsStore {
     delete this.byTab[tabId]
   }
 
+  /** Cancel a tab's in-flight query (if any) and drop its execution state. Called
+   *  when a tab is closed so a running query on that tab is stopped, not orphaned
+   *  (item 6 — "closing a tab ends its running task"). */
+  cancelAndClear(tabId: string) {
+    const exec = this.byTab[tabId]
+    if (exec?.running && exec.connId) {
+      void ipc.cancelQuery(exec.connId).catch(() => {})
+    }
+    delete this.byTab[tabId]
+  }
+
   /**
    * Runs statements sequentially against the tab's connection.
    * Stops at the first error (default behavior per spec).
    */
   async run(tabId: string, connId: string, statements: SplitStatement[]): Promise<void> {
     if (statements.length === 0) return
-    // `connId` may be an internal per-database sub-connection (`{baseId}::{db}`,
-    // opened via attach_database when the Query Editor's database dropdown points
-    // at another database). The frontend profile registry only knows the base
-    // connection, so resolve the base for the profile/connected checks while still
-    // executing against the sub-connection id (the backend registry has it live).
-    const baseId = connId.includes('::') ? connId.slice(0, connId.indexOf('::')) : connId
+    // `connId` may be a per-tab connection (`{base}#tab-{id}`, item 6) and/or a
+    // per-database sub-connection (`{base}::{db}`, attach_database). Strip both
+    // suffixes to find the base profile; still execute against the full `connId`
+    // (the backend registry has that connection live).
+    const baseId = baseOf(connId)
     const profile = connections.byId(baseId)
     if (!profile) {
       toasts.error('Tab has no connection')
@@ -95,6 +108,7 @@ class ResultsStore {
       totalMs: 0,
       lastRowCount: null,
       startedAt: Date.now(),
+      connId,
     }
     this.byTab[tabId] = seed
     // Re-acquire the $state proxy: subsequent mutations (subResults.push,

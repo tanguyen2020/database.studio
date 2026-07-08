@@ -149,6 +149,18 @@ export interface IndexInfo {
   primary: boolean
 }
 
+export interface PartitionInfo {
+  name: string
+  /** RANGE | LIST | HASH | KEY | EXPRESSION | PARTITION KEY | '' */
+  method: string
+  /** parent partition key/expression, same for every partition of the table */
+  key?: string
+  /** this partition's bound/value (FOR VALUES …, boundary, partition value) */
+  expression?: string
+  rows?: number
+  position?: number
+}
+
 export interface ConstraintInfo {
   name: string
   kind: string
@@ -192,6 +204,7 @@ export type TabContentType =
   | 'history'
   | 'saved'
   | 'redis'
+  | 'redis-key'
   | 'redis-pubsub'
   | 'nats'
   | 'nats-subject'

@@ -22,6 +22,7 @@
   import { tags as t } from '@lezer/highlight'
   import {
     autocompletion,
+    acceptCompletion,
     closeBrackets,
     closeBracketsKeymap,
     completionKeymap,
@@ -40,6 +41,8 @@
     /** schema-aware autocomplete (Phase 2): { table: [cols] } từ explorer cache */
     schema?: Record<string, string[]>
     defaultSchema?: string
+    /** async completion cho `alias.`/`table.` — lazy-load cột của bảng trong FROM/JOIN */
+    columnSource?: CompletionSource
     /** lint tầng 1 — advisory, debounce 400ms do linter đảm nhiệm, KHÔNG chặn Run */
     lintSource?: (doc: string) => Promise<Diagnostic[]>
     onChange?: (doc: string) => void
@@ -57,6 +60,7 @@
     readOnly = false,
     schema,
     defaultSchema,
+    columnSource,
     lintSource,
     onChange,
     onRun,
@@ -88,8 +92,12 @@
 
   function langExt(sys: string) {
     const base = sql({ dialect: dialectFor(sys), schema, defaultSchema })
-    // merge function completions vào language data (không thay keyword/schema source)
-    return [base, base.language.data.of({ autocomplete: fnSource(sys) })]
+    // merge function completions vào language data (không thay keyword/schema source).
+    // columnSource (nếu có) xử lý `alias.`/`table.` — lazy-load cột của bảng thật
+    // referenced trong FROM/JOIN (built-in chỉ resolve alias khi cột đã nạp sẵn).
+    const exts = [base, base.language.data.of({ autocomplete: fnSource(sys) })]
+    if (columnSource) exts.push(base.language.data.of({ autocomplete: columnSource }))
+    return exts
   }
 
   function dialectFor(sys: string) {
@@ -226,6 +234,15 @@
               onCancel?.()
               return false // let Esc also close panels etc.
             },
+          },
+          // When the completion popup is open, Tab and Enter both accept the
+          // highlighted suggestion. acceptCompletion returns false when no
+          // completion is active, so Tab then falls through to indentWithTab
+          // (normal indentation) — accepting a suggestion never re-indents or
+          // shifts the line, leaving the query's left/right alignment intact.
+          {
+            key: 'Tab',
+            run: acceptCompletion,
           },
           ...closeBracketsKeymap,
           ...completionKeymap,

@@ -179,7 +179,10 @@ impl MySqlDriver {
 
     pub async fn schemas(&mut self) -> Result<Vec<SchemaInfo>, QueryError> {
         let rows = sqlx::query(
-            "SELECT SCHEMA_NAME, SCHEMA_NAME = DATABASE()
+            // CONVERT both operands to utf8mb4 so the `=` shares one collation and
+            // doesn't hit "Illegal mix of collations" (information_schema columns may be
+            // utf8mb3 or utf8mb4 depending on the server; the connection is utf8mb4).
+            "SELECT SCHEMA_NAME, CONVERT(SCHEMA_NAME USING utf8mb4) = CONVERT(DATABASE() USING utf8mb4)
              FROM information_schema.SCHEMATA
              WHERE SCHEMA_NAME NOT IN ('mysql','information_schema','performance_schema','sys')
              ORDER BY SCHEMA_NAME",
@@ -202,7 +205,7 @@ impl MySqlDriver {
                     CASE TABLE_TYPE WHEN 'VIEW' THEN 'view' ELSE 'table' END,
                     COALESCE(TABLE_ROWS, 0)
              FROM information_schema.TABLES
-             WHERE TABLE_SCHEMA = ?
+             WHERE CONVERT(TABLE_SCHEMA USING utf8mb4) = CONVERT(? USING utf8mb4)
              ORDER BY TABLE_NAME",
         )
         .bind(schema)
@@ -227,11 +230,14 @@ impl MySqlDriver {
             "SELECT c.COLUMN_NAME, c.COLUMN_TYPE, c.IS_NULLABLE = 'YES', c.COLUMN_DEFAULT,
                     c.COLUMN_KEY = 'PRI',
                     EXISTS(SELECT 1 FROM information_schema.KEY_COLUMN_USAGE k
-                           WHERE k.TABLE_SCHEMA = c.TABLE_SCHEMA AND k.TABLE_NAME = c.TABLE_NAME
-                             AND k.COLUMN_NAME = c.COLUMN_NAME AND k.REFERENCED_TABLE_NAME IS NOT NULL),
+                           WHERE CONVERT(k.TABLE_SCHEMA USING utf8mb4) = CONVERT(c.TABLE_SCHEMA USING utf8mb4)
+                             AND CONVERT(k.TABLE_NAME USING utf8mb4) = CONVERT(c.TABLE_NAME USING utf8mb4)
+                             AND CONVERT(k.COLUMN_NAME USING utf8mb4) = CONVERT(c.COLUMN_NAME USING utf8mb4)
+                             AND k.REFERENCED_TABLE_NAME IS NOT NULL),
                     c.ORDINAL_POSITION
              FROM information_schema.COLUMNS c
-             WHERE c.TABLE_SCHEMA = ? AND c.TABLE_NAME = ?
+             WHERE CONVERT(c.TABLE_SCHEMA USING utf8mb4) = CONVERT(? USING utf8mb4)
+               AND CONVERT(c.TABLE_NAME USING utf8mb4) = CONVERT(? USING utf8mb4)
              ORDER BY c.ORDINAL_POSITION",
         )
         .bind(schema)
@@ -257,7 +263,8 @@ impl MySqlDriver {
         let rows = sqlx::query(
             "SELECT INDEX_NAME, INDEX_TYPE, NON_UNIQUE, COLUMN_NAME
              FROM information_schema.STATISTICS
-             WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?
+             WHERE CONVERT(TABLE_SCHEMA USING utf8mb4) = CONVERT(? USING utf8mb4)
+               AND CONVERT(TABLE_NAME USING utf8mb4) = CONVERT(? USING utf8mb4)
              ORDER BY INDEX_NAME, SEQ_IN_INDEX",
         )
         .bind(schema)
@@ -290,7 +297,8 @@ impl MySqlDriver {
                     CASE CONSTRAINT_TYPE WHEN 'PRIMARY KEY' THEN 'PK' WHEN 'FOREIGN KEY' THEN 'FK'
                                          WHEN 'UNIQUE' THEN 'UNIQUE' ELSE CONSTRAINT_TYPE END
              FROM information_schema.TABLE_CONSTRAINTS
-             WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?
+             WHERE CONVERT(TABLE_SCHEMA USING utf8mb4) = CONVERT(? USING utf8mb4)
+               AND CONVERT(TABLE_NAME USING utf8mb4) = CONVERT(? USING utf8mb4)
              ORDER BY CONSTRAINT_NAME",
         )
         .bind(schema)
@@ -305,10 +313,15 @@ impl MySqlDriver {
     }
 
     pub async fn routines(&mut self, schema: &str) -> Result<Vec<RoutineInfo>, QueryError> {
+        // information_schema.ROUTINES columns can carry a different collation than the
+        // connection (e.g. utf8mb4_general_ci vs utf8mb4_0900_ai_ci), so `col = ?` raises
+        // "Illegal mix of collations". CONVERT both to utf8mb4 → one shared collation.
+        // (CONVERT — not COLLATE — because the column may be utf8mb3, where a utf8mb4
+        // collation name is rejected outright.)
         let rows = sqlx::query(
             "SELECT r.ROUTINE_NAME, LOWER(r.ROUTINE_TYPE), COALESCE(r.DTD_IDENTIFIER, '')
              FROM information_schema.ROUTINES r
-             WHERE r.ROUTINE_SCHEMA = ?
+             WHERE CONVERT(r.ROUTINE_SCHEMA USING utf8mb4) = CONVERT(? USING utf8mb4)
              ORDER BY r.ROUTINE_NAME",
         )
         .bind(schema)
@@ -334,9 +347,12 @@ impl MySqlDriver {
 
     async fn routine_params(&mut self, schema: &str, routine: &str) -> Result<Vec<ParamInfo>, QueryError> {
         let rows = sqlx::query(
+            // CONVERT both operands to utf8mb4 to avoid the "Illegal mix of collations"
+            // error against information_schema.PARAMETERS (see routines()).
             "SELECT COALESCE(PARAMETER_NAME, ''), COALESCE(DTD_IDENTIFIER, ''), COALESCE(PARAMETER_MODE, 'IN')
              FROM information_schema.PARAMETERS
-             WHERE SPECIFIC_SCHEMA = ? AND SPECIFIC_NAME = ? AND ORDINAL_POSITION > 0
+             WHERE CONVERT(SPECIFIC_SCHEMA USING utf8mb4) = CONVERT(? USING utf8mb4)
+               AND CONVERT(SPECIFIC_NAME USING utf8mb4) = CONVERT(? USING utf8mb4) AND ORDINAL_POSITION > 0
              ORDER BY ORDINAL_POSITION",
         )
         .bind(schema)
@@ -357,9 +373,11 @@ impl MySqlDriver {
 
     pub async fn triggers(&mut self, schema: &str) -> Result<Vec<TriggerInfo>, QueryError> {
         let rows = sqlx::query(
+            // CONVERT both operands to utf8mb4 to avoid the "Illegal mix of collations"
+            // error against information_schema.TRIGGERS (see routines()).
             "SELECT TRIGGER_NAME, EVENT_OBJECT_TABLE, CONCAT(ACTION_TIMING, ' ', EVENT_MANIPULATION)
              FROM information_schema.TRIGGERS
-             WHERE TRIGGER_SCHEMA = ?
+             WHERE CONVERT(TRIGGER_SCHEMA USING utf8mb4) = CONVERT(? USING utf8mb4)
              ORDER BY TRIGGER_NAME",
         )
         .bind(schema)
@@ -386,7 +404,7 @@ impl MySqlDriver {
         let rows = sqlx::query(
             "SELECT TABLE_NAME, INDEX_NAME, COLUMN_NAME, SEQ_IN_INDEX, NON_UNIQUE, INDEX_TYPE
              FROM information_schema.STATISTICS
-             WHERE TABLE_SCHEMA = ?
+             WHERE CONVERT(TABLE_SCHEMA USING utf8mb4) = CONVERT(? USING utf8mb4)
              ORDER BY TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX",
         )
         .bind(schema)
@@ -424,7 +442,7 @@ impl MySqlDriver {
         let rows = sqlx::query(
             "SELECT CONSTRAINT_NAME, TABLE_NAME, COLUMN_NAME, REFERENCED_TABLE_NAME, REFERENCED_COLUMN_NAME
              FROM information_schema.KEY_COLUMN_USAGE
-             WHERE TABLE_SCHEMA = ? AND REFERENCED_TABLE_NAME IS NOT NULL
+             WHERE CONVERT(TABLE_SCHEMA USING utf8mb4) = CONVERT(? USING utf8mb4) AND REFERENCED_TABLE_NAME IS NOT NULL
              ORDER BY TABLE_NAME, CONSTRAINT_NAME",
         )
         .bind(schema)
@@ -439,6 +457,41 @@ impl MySqlDriver {
                 from_column: text(r, 2),
                 to_table: text(r, 3),
                 to_column: text(r, 4),
+            })
+            .collect())
+    }
+
+    /// Partitions from `information_schema.PARTITIONS`. Sub-partition rows are
+    /// folded into their parent partition (rows summed, one row per partition).
+    pub async fn partitions(
+        &mut self,
+        schema: &str,
+        table: &str,
+    ) -> Result<Vec<PartitionInfo>, QueryError> {
+        let rows = sqlx::query(
+            "SELECT PARTITION_NAME, PARTITION_METHOD, PARTITION_EXPRESSION,
+                    MAX(PARTITION_DESCRIPTION), SUM(TABLE_ROWS), MIN(PARTITION_ORDINAL_POSITION)
+             FROM information_schema.PARTITIONS
+             WHERE CONVERT(TABLE_SCHEMA USING utf8mb4) = CONVERT(? USING utf8mb4)
+               AND CONVERT(TABLE_NAME USING utf8mb4) = CONVERT(? USING utf8mb4)
+               AND PARTITION_NAME IS NOT NULL
+             GROUP BY PARTITION_NAME, PARTITION_METHOD, PARTITION_EXPRESSION
+             ORDER BY MIN(PARTITION_ORDINAL_POSITION)",
+        )
+        .bind(schema)
+        .bind(table)
+        .fetch_all(&mut self.conn)
+        .await
+        .map_err(|e| map_error(self.system, &e))?;
+        Ok(rows
+            .iter()
+            .map(|r| PartitionInfo {
+                name: text(r, 0),
+                method: text(r, 1),
+                key: text_opt(r, 2),
+                expression: text_opt(r, 3),
+                rows: r.try_get::<i64, _>(4).ok(),
+                position: r.try_get::<i64, _>(5).ok(),
             })
             .collect())
     }

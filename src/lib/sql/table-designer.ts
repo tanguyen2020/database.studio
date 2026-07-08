@@ -16,6 +16,7 @@
 
 import { quoteIdent } from './dialect'
 import { genCreateIndex, genDropIndex, genDropForeignKey } from './indexes'
+import { buildPartitionCreate, buildAddPartition, buildConvertToPartitioned, type PartitionSpec } from './partitions'
 
 export interface DesignColumn {
   name: string
@@ -29,7 +30,7 @@ export interface DesignColumn {
   /** marked for removal (existing objects only) → DROP on save */
   dropped?: boolean
   /** seeded original definition, to detect an edit of an existing column */
-  orig?: { type: string; len: string; nullable: boolean; dflt: string }
+  orig?: { name: string; type: string; len: string; nullable: boolean; dflt: string }
 }
 
 export interface DesignIndex {
@@ -39,6 +40,8 @@ export interface DesignIndex {
   method?: string
   existing?: boolean
   dropped?: boolean
+  /** seeded original, to detect an edit of an existing index (→ drop + recreate) */
+  orig?: { columns: string[]; method?: string }
 }
 
 export interface DesignForeignKey {
@@ -50,6 +53,7 @@ export interface DesignForeignKey {
   onUpdate?: string
   existing?: boolean
   dropped?: boolean
+  orig?: { columns: string[]; refTable: string; refColumns: string[]; onDelete?: string; onUpdate?: string }
 }
 
 export interface DesignUnique {
@@ -57,6 +61,7 @@ export interface DesignUnique {
   columns: string[]
   existing?: boolean
   dropped?: boolean
+  orig?: { columns: string[] }
 }
 
 export interface DesignCheck {
@@ -89,6 +94,8 @@ export interface TableModel {
   uniques: DesignUnique[]
   checks: DesignCheck[]
   triggers: DesignTrigger[]
+  /** optional declarative partitioning (new tables only) */
+  partition?: PartitionSpec
 }
 
 export interface BuildResult {
@@ -139,6 +146,39 @@ function fkClause(system: string, schema: string, fk: DesignForeignKey, name: st
 export function columnChanged(c: DesignColumn): boolean {
   if (!c.existing || !c.orig) return false
   return c.type !== c.orig.type || c.len !== c.orig.len || c.nullable !== c.orig.nullable || c.dflt !== c.orig.dflt
+}
+
+/** Existing column renamed vs its seeded original name. */
+export function columnRenamed(c: DesignColumn): boolean {
+  return !!(c.existing && c.orig && c.orig.name && c.name.trim() && c.name !== c.orig.name)
+}
+
+/** ALTER … RENAME COLUMN old → new, per dialect. */
+export function renameColumn(system: string, schema: string, table: string, oldName: string, newName: string): string {
+  const q = (n: string) => quoteIdent(system, n)
+  const t = target(system, schema, table)
+  if (system === 'mssql') return `EXEC sp_rename '${schema ? `${schema}.` : ''}${table}.${oldName}', '${newName}', 'COLUMN';`
+  return `ALTER TABLE ${t} RENAME COLUMN ${q(oldName)} TO ${q(newName)};`
+}
+
+const csv = (a: string[]) => a.join(',')
+/** Existing index/unique/FK edited vs its seeded original → needs drop + recreate. */
+export function indexChanged(ix: DesignIndex): boolean {
+  return !!(ix.existing && ix.orig && (csv(ix.columns) !== csv(ix.orig.columns) || (ix.method ?? '') !== (ix.orig.method ?? '')))
+}
+export function uniqueChanged(u: DesignUnique): boolean {
+  return !!(u.existing && u.orig && csv(u.columns) !== csv(u.orig.columns))
+}
+export function fkChanged(f: DesignForeignKey): boolean {
+  return !!(
+    f.existing &&
+    f.orig &&
+    (csv(f.columns) !== csv(f.orig.columns) ||
+      f.refTable !== f.orig.refTable ||
+      csv(f.refColumns) !== csv(f.orig.refColumns) ||
+      (f.onDelete ?? '') !== (f.orig.onDelete ?? '') ||
+      (f.onUpdate ?? '') !== (f.orig.onUpdate ?? ''))
+  )
 }
 
 /** ALTER an existing column's type/nullability/default per dialect. */
@@ -238,12 +278,33 @@ export function buildTableDdl(system: string, model: TableModel, isNew: boolean)
     } else if (model.uniques.length || model.checks.length || model.foreignKeys.length) {
       warnings.push('ClickHouse has no UNIQUE/CHECK/FOREIGN KEY constraints — they were skipped.')
     }
+    // Declarative partitioning (PARTITION BY / partition function+scheme).
+    const spec = model.partition
+    const wantPart = !!spec && spec.columns.some((c) => c.trim())
+    let pc: ReturnType<typeof buildPartitionCreate> | null = null
+    if (wantPart) {
+      // MSSQL types its partition function from the key column's type.
+      const keyCol = model.columns.find((c) => c.name === spec!.columns[0])
+      const keyType = keyCol ? `${(keyCol.type || 'int').trim()}${keyCol.len.trim() ? `(${keyCol.len.trim()})` : ''}` : 'int'
+      pc = buildPartitionCreate(system, sch, tbl, spec!, keyType)
+      warnings.push(...pc.warnings)
+      if ((system === 'postgres' || system === 'mssql') && pkCols.length) {
+        warnings.push('The partition key column(s) must be part of the PRIMARY KEY on this engine.')
+      }
+      statements.push(...pc.pre) // MSSQL: CREATE PARTITION FUNCTION + SCHEME first
+    }
+
     let create = `CREATE TABLE ${t} (\n${lines.join(',\n')}\n)`
     if (isCh) {
       const ck = model.columns.filter((c) => c.pk).map((c) => q(c.name || 'column'))
-      create += `\nENGINE = MergeTree\nORDER BY ${ck.length ? `(${ck.join(', ')})` : 'tuple()'}`
+      create += `\nENGINE = MergeTree`
+      if (pc?.clause) create += `\n${pc.clause}` // PARTITION BY expr (before ORDER BY)
+      create += `\nORDER BY ${ck.length ? `(${ck.join(', ')})` : 'tuple()'}`
+    } else if (pc?.clause) {
+      create += `\n${pc.clause}` // PG/MySQL: PARTITION BY … · MSSQL: ON scheme(col)
     }
     statements.push(create + ';')
+    if (pc) statements.push(...pc.post) // PG: CREATE TABLE … PARTITION OF … children
   } else {
     // ALTER path. Drops first (existing objects the user removed), then edits of
     // existing columns, then additions of new objects.
@@ -278,13 +339,17 @@ export function buildTableDdl(system: string, model: TableModel, isNew: boolean)
       statements.push(`ALTER TABLE ${t} DROP COLUMN ${q(c.name)};`)
     })
 
-    // ---- EDIT existing columns whose definition changed ----
+    // ---- EDIT existing columns: rename first (so later ALTERs use the new name),
+    //      then type/nullability/default changes ----
     if (!isCh) {
       model.columns.forEach((c) => {
-        if (!c.existing || c.dropped || !columnChanged(c)) return
-        const r = alterColumn(system, sch, tbl, c)
-        statements.push(...r.statements)
-        warnings.push(...r.warnings)
+        if (!c.existing || c.dropped) return
+        if (columnRenamed(c)) statements.push(renameColumn(system, sch, tbl, c.orig!.name, c.name))
+        if (columnChanged(c)) {
+          const r = alterColumn(system, sch, tbl, c)
+          statements.push(...r.statements)
+          warnings.push(...r.warnings)
+        }
       })
     }
 
@@ -300,9 +365,17 @@ export function buildTableDdl(system: string, model: TableModel, isNew: boolean)
       }
     } else {
       model.uniques.forEach((u, i) => {
-        if (u.existing || u.dropped || !u.columns.length) return
-        if (isSqlite) statements.push(`CREATE UNIQUE INDEX ${q(uqName(u, i))} ON ${t} (${u.columns.map(q).join(', ')});`)
-        else statements.push(`ALTER TABLE ${t} ADD CONSTRAINT ${q(uqName(u, i))} UNIQUE (${u.columns.map(q).join(', ')});`)
+        if (u.dropped || !u.columns.length) return
+        if (u.existing && !uniqueChanged(u)) return // unchanged existing → leave as-is
+        const nm = u.existing ? u.name : uqName(u, i)
+        if (u.existing) {
+          // edited existing unique → drop the old one first, then re-add
+          if (isSqlite) statements.push(`DROP INDEX IF EXISTS ${q(nm)};`)
+          else if (system === 'mysql' || system === 'mariadb') statements.push(`ALTER TABLE ${t} DROP INDEX ${q(nm)};`)
+          else statements.push(`ALTER TABLE ${t} DROP CONSTRAINT ${q(nm)};`)
+        }
+        if (isSqlite) statements.push(`CREATE UNIQUE INDEX ${q(nm)} ON ${t} (${u.columns.map(q).join(', ')});`)
+        else statements.push(`ALTER TABLE ${t} ADD CONSTRAINT ${q(nm)} UNIQUE (${u.columns.map(q).join(', ')});`)
       })
       model.checks.forEach((c, i) => {
         if (c.existing || c.dropped || !c.expression.trim()) return
@@ -310,25 +383,56 @@ export function buildTableDdl(system: string, model: TableModel, isNew: boolean)
         else statements.push(`ALTER TABLE ${t} ADD CONSTRAINT ${q(ckName(c, i))} CHECK (${c.expression.trim()});`)
       })
       model.foreignKeys.forEach((f, i) => {
-        if (f.existing || f.dropped || !f.columns.length || !f.refTable) return
-        if (isSqlite) warnings.push(`SQLite cannot ADD a FOREIGN KEY to an existing table (${fkName(f, i)}) — recreate the table.`)
-        else statements.push(`ALTER TABLE ${t} ADD ${fkClause(system, sch, f, fkName(f, i))};`)
+        if (f.dropped || !f.columns.length || !f.refTable) return
+        if (f.existing && !fkChanged(f)) return // unchanged existing → leave as-is
+        const nm = f.existing ? f.name : fkName(f, i)
+        if (isSqlite) {
+          warnings.push(`SQLite cannot ${f.existing ? 'modify' : 'ADD'} a FOREIGN KEY (${nm}) on an existing table — recreate the table.`)
+          return
+        }
+        if (f.existing) statements.push(genDropForeignKey(system, sch, tbl, nm)) // edited existing → drop first
+        statements.push(`ALTER TABLE ${t} ADD ${fkClause(system, sch, f, nm)};`)
       })
+    }
+
+    // Partitioning on an existing table: either CONVERT a non-partitioned table
+    // (engine-specific), or ADD partitions to an already-partitioned one.
+    if (model.partition) {
+      if (model.partition.convert) {
+        const keyCol = model.columns.find((c) => c.name === model.partition!.columns[0])
+        const keyType = keyCol ? `${(keyCol.type || 'int').trim()}${keyCol.len.trim() ? `(${keyCol.len.trim()})` : ''}` : 'int'
+        const conv = buildConvertToPartitioned(system, sch, tbl, model.partition, keyType)
+        statements.push(...conv.pre, ...conv.post)
+        warnings.push(...conv.warnings)
+      } else {
+        // Existing partitions are seeded with `existing` and never re-added; only
+        // user-added rows emit ADD-partition DDL.
+        for (const def of model.partition.partitions ?? []) {
+          if (def.existing || !def.name.trim() || !def.bound.trim()) continue
+          const { sql, warning } = buildAddPartition(system, sch, tbl, model.partition.strategy, def)
+          if (sql) statements.push(sql)
+          if (warning) warnings.push(warning)
+        }
+      }
     }
   }
 
-  // Indexes: CREATE new indexes; DROP existing ones marked dropped (ALTER mode).
+  // Indexes: CREATE new indexes; edited existing → drop + recreate; DROP the ones
+  // marked dropped (ALTER mode).
   model.indexes.forEach((ix, i) => {
     if (ix.dropped) {
       if (!isNew && ix.existing && ix.name.trim() && !isCh) statements.push(genDropIndex(system, sch, tbl, ix.name))
       return
     }
-    if (ix.existing || !ix.columns.length) return
+    if (ix.existing && !indexChanged(ix)) return // unchanged existing → leave as-is
+    if (!ix.columns.length) return
     if (isCh) {
       warnings.push(`ClickHouse data-skipping indexes are not generated by the designer (${idxName(ix, i)}).`)
       return
     }
-    statements.push(genCreateIndex(system, sch, tbl, { name: idxName(ix, i), columns: ix.columns, unique: false, method: ix.method }))
+    const nm = ix.existing ? ix.name : idxName(ix, i)
+    if (ix.existing) statements.push(genDropIndex(system, sch, tbl, nm)) // edited existing → drop first
+    statements.push(genCreateIndex(system, sch, tbl, { name: nm, columns: ix.columns, unique: false, method: ix.method }))
   })
 
   // Triggers: CREATE new triggers (dropped-existing handled in the ALTER block).

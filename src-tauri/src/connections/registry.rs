@@ -89,7 +89,12 @@ impl Registry {
 
         let started = std::time::Instant::now();
         let (endpoint, tunnel) = if profile.ssh.enabled {
-            let tunnel = open_tunnel(&profile.ssh, &ssh_password, &profile.host, profile.port).await?;
+            // Kafka: run the tunnel as a metadata-rewriting proxy so librdkafka's
+            // post-bootstrap reconnects (to advertised.listeners) loop back
+            // through this tunnel instead of dialing an unreachable address.
+            let kafka = profile.system.as_str() == "kafka";
+            let tunnel =
+                open_tunnel(&profile.ssh, &ssh_password, &profile.host, profile.port, kafka).await?;
             (
                 Endpoint { host: "127.0.0.1".into(), port: tunnel.local_port },
                 Some(tunnel),
@@ -108,11 +113,11 @@ impl Registry {
                 // from this machine, connect/metadata fails. Make the cause explicit.
                 if profile.system.as_str() == "kafka" && profile.ssh.enabled {
                     msg.push_str(
-                        "\n\nKafka over SSH tunnel: the broker's advertised.listeners must be reachable from THIS machine. \
-                         librdkafka forwards the bootstrap connection through the tunnel, then reconnects to each broker's \
-                         advertised address directly — a plain host:port SSH forward can't cover those. Set the broker's \
-                         advertised.listeners to an address that resolves through the tunnel (e.g. 127.0.0.1:<forwarded-port>), \
-                         or connect without the tunnel.",
+                        "\n\nKafka over SSH tunnel: this app already rewrites the broker's advertised.listeners to route \
+                         through the tunnel, so no server-side advertised.listeners change is needed. A failure here usually \
+                         means one of: (1) the SSH server itself can't reach the broker at the host:port you entered — verify \
+                         with `nc -zv <host> <port>` ON the SSH server; (2) the broker needs SASL/SSL that isn't configured; \
+                         or (3) it's a multi-broker cluster (the rewrite currently supports a single broker).",
                     );
                 }
                 AppError::Driver(msg)

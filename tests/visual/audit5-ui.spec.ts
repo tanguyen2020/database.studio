@@ -15,17 +15,16 @@ test('query editor database dropdown selects a database', async ({ page }) => {
   await page.getByTitle('New SQL tab (Ctrl+T)').first().click()
   await page.waitForTimeout(300)
 
-  // the database chip is visible next to the connection dropdown
-  const dbChip = page.getByTitle('Database').first()
+  // the database combobox is visible next to the connection dropdown
+  const dbChip = page.getByTitle('Database', { exact: true }).first()
   await expect(dbChip).toBeVisible()
   await dbChip.click()
   await page.waitForTimeout(150)
-  // demo list_databases → app / analytics / postgres. Scope to the dropdown menu
-  // row (.wk-drop-row is unique to the open menu) — a plain text match would also
-  // hit the sidebar "Analytics" connection group behind the menu backdrop.
-  await page.locator('.wk-drop-row').filter({ hasText: 'analytics' }).click()
+  // demo list_databases → app / analytics / postgres. Pick via the combobox option
+  // (role=option is unique to the open menu, unlike the sidebar text).
+  await page.getByRole('option', { name: 'analytics' }).first().click()
   await page.waitForTimeout(150)
-  await expect(dbChip).toContainText('analytics')
+  await expect(dbChip).toHaveValue('analytics')
 
   // Running against the picked database must NOT report "Tab has no connection":
   // the run resolves through an attached sub-connection (base::analytics).

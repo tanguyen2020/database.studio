@@ -64,8 +64,8 @@ test('MySQL New Query selects the schema database in the tab', async ({ page }) 
   await page.waitForTimeout(200)
   await page.getByText('New Query', { exact: true }).first().click()
   await page.waitForTimeout(300)
-  // the Query Editor database chip shows the schema (== database for MySQL)
-  await expect(page.getByTitle('Database').first()).toContainText('public')
+  // the Query Editor database combobox shows the schema (== database for MySQL)
+  await expect(page.getByTitle('Database', { exact: true }).first()).toHaveValue('public')
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
 
@@ -180,6 +180,15 @@ test('MySQL function menu has Execute, Alter, Drop', async ({ page }) => {
   await expect(page.getByText('Execute…', { exact: true }).first()).toBeVisible()
   await expect(page.getByText('Alter…', { exact: true }).first()).toBeVisible()
   await expect(page.getByText('Drop', { exact: true }).first()).toBeVisible()
+
+  // item 3: Execute opens a SQL tab bound to the routine's database (MySQL: the
+  // schema IS the database) so the CALL/SELECT runs against the right DB.
+  await page.getByText('Execute…', { exact: true }).first().click()
+  await page.waitForTimeout(200)
+  const dialog = page.getByRole('dialog')
+  await dialog.getByText('Execute', { exact: true }).click()
+  await page.waitForTimeout(400)
+  await expect(page.getByTitle('Database', { exact: true }).first()).toHaveValue('public')
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
 

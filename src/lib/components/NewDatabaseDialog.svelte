@@ -50,9 +50,9 @@
 </script>
 
 {#if dlgOpen}
+  <!-- backdrop click does NOT close (avoid losing input); use × / Cancel / Escape -->
   <div
-    onclick={() => !busy && newDatabaseWizard.close()}
-    onkeydown={() => {}}
+    onkeydown={(e) => e.key === 'Escape' && !busy && newDatabaseWizard.close()}
     role="presentation"
     style="position:fixed;inset:0;background:var(--rgba-0-0-0-_5);display:flex;align-items:center;justify-content:center;z-index:56"
   >

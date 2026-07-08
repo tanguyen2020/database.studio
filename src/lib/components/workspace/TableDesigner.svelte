@@ -11,6 +11,11 @@
   import { toasts } from '$lib/stores/toast.svelte'
   import { systemMeta } from '$lib/systems'
   import { designerTypes } from '$lib/sql/ddl'
+  import { defaultColumnType } from '$lib/sql/datatypes'
+  import TypeSelect from '$lib/components/TypeSelect.svelte'
+  import SearchSelect from '$lib/components/SearchSelect.svelte'
+  import MultiSelect from '$lib/components/MultiSelect.svelte'
+  import { highlightSql, sqlTokenColor } from '$lib/format/sql'
   import {
     buildTableDdl,
     type DesignColumn,
@@ -21,6 +26,18 @@
     type DesignTrigger,
     type TableModel,
   } from '$lib/sql/table-designer'
+  import {
+    supportsPartitioning,
+    canConvertToPartitioned,
+    parsePartitionMethod,
+    partitionKeyColumns,
+    buildPartitionCreate,
+    buildAddPartition,
+    buildConvertToPartitioned,
+    type PartStrategy,
+    type PartitionDef,
+    type PartitionSpec,
+  } from '$lib/sql/partitions'
   import type { TabState } from '$lib/types'
 
   interface Props {
@@ -49,22 +66,146 @@
   let checks = $state<DesignCheck[]>([])
   let triggers = $state<DesignTrigger[]>([])
   let mode = $state<'table' | 'scripts'>('table')
-  let activeTab = $state<'fields' | 'indexes' | 'foreign-keys' | 'uniques' | 'checks' | 'triggers'>('fields')
+  type DesignerTab = 'fields' | 'indexes' | 'foreign-keys' | 'uniques' | 'checks' | 'triggers' | 'partitions'
+  let activeTab = $state<DesignerTab>('fields')
   let execMsg = $state('')
   let seeded = $state(false)
 
-  const TABS = [
+  // ---- partitioning (supported engines; new tables create, existing tables add) -
+  const canPartition = $derived(supportsPartitioning(system))
+  // Existing table already partitioned (seeded) → strategy/key are read-only; the
+  // user can only ADD partitions. New table → full create controls.
+  let partSeededExisting = $state(false)
+  const partLocked = $derived(!isNew && partSeededExisting)
+  let partEnabled = $state(false)
+  let partStrategy = $state<PartStrategy>('RANGE')
+  let partColumns = $state('') // comma-separated key column(s)/expression
+  let partColumnsMode = $state(false) // MySQL RANGE COLUMNS / LIST COLUMNS
+  let partHashCount = $state(4)
+  // Row model carries structured RANGE bounds (from/to for PG) alongside the raw
+  // `bound`, so the UI can offer separate fields but the builder still gets a string.
+  interface PartRow extends PartitionDef {
+    from?: string
+    to?: string
+  }
+  let partDefs = $state<PartRow[]>([{ name: '', bound: '', from: '', to: '' }])
+  const addPartDef = () => (partDefs = [...partDefs, { name: '', bound: '', from: '', to: '' }])
+  const removePartDef = (i: number) => (partDefs = partDefs.filter((_, j) => j !== i))
+
+  // Compose a new row's bound string from its structured fields. PG RANGE uses
+  // FROM (…) TO (…); everything else uses the single `bound` field. Returns '' when
+  // incomplete so the builder skips the row.
+  function effectiveBound(p: PartRow): string {
+    if (p.existing) return p.bound
+    if (partStrategy === 'RANGE' && system === 'postgres') {
+      const f = (p.from ?? '').trim()
+      const to = (p.to ?? '').trim()
+      return f && to ? `FROM (${f}) TO (${to})` : ''
+    }
+    return p.bound.trim()
+  }
+
+  // Converting an EXISTING non-partitioned table (user enabled partitioning on a
+  // table that wasn't seeded as partitioned).
+  const partConvert = $derived(!isNew && !partSeededExisting && partEnabled)
+  // Whether the "Partition this table" toggle can be enabled: new tables always,
+  // existing tables only when the engine supports converting (not already partitioned).
+  const canEnablePart = $derived(isNew || (!partSeededExisting && canConvertToPartitioned(system)))
+
+  // The partition spec fed to the DDL builder (model + inline preview share it).
+  function partSpec(): PartitionSpec | undefined {
+    if (!(canPartition && partEnabled && partColumns.trim())) return undefined
+    return {
+      strategy: partStrategy,
+      columns: splitCols(partColumns),
+      columnsMode: partColumnsMode,
+      hashCount: partHashCount,
+      convert: partConvert,
+      partitions: partDefs
+        .map((p) => ({ name: p.name, bound: effectiveBound(p), existing: p.existing }))
+        .filter((p) => p.existing || (p.name.trim() && p.bound.trim())),
+    }
+  }
+
+  // MSSQL types its partition function from the key column's declared type.
+  function partKeyType(): string {
+    const kc = cols.find((c) => c.name === splitCols(partColumns)[0])
+    return kc ? `${(kc.type || 'int').trim()}${kc.len.trim() ? `(${kc.len.trim()})` : ''}` : 'int'
+  }
+
+  // Live, partition-only script + warnings shown inside the tab (script + UI
+  // together): new-table CREATE, existing-table CONVERT, or ADD for new rows.
+  const partBuild = $derived.by<{ script: string; warnings: string[] }>(() => {
+    const spec = partSpec()
+    if (!spec) return { script: '', warnings: [] }
+    if (isNew) {
+      if (system === 'clickhouse') return { script: '', warnings: [] }
+      const pc = buildPartitionCreate(system, schema || '', name || 'new_table', spec, partKeyType())
+      const lines = [...pc.pre]
+      if (pc.clause) lines.push(`-- on CREATE TABLE: ${pc.clause}`)
+      lines.push(...pc.post)
+      return { script: lines.join('\n'), warnings: pc.warnings }
+    }
+    if (spec.convert) {
+      const conv = buildConvertToPartitioned(system, schema, name, spec, partKeyType())
+      return { script: [...conv.pre, ...conv.post].join('\n'), warnings: conv.warnings }
+    }
+    const out: string[] = []
+    const warns: string[] = []
+    for (const p of spec.partitions ?? []) {
+      if (p.existing) continue
+      const { sql, warning } = buildAddPartition(system, schema, name, spec.strategy, p)
+      if (sql) out.push(sql)
+      if (warning) warns.push(warning)
+    }
+    return { script: out.join('\n'), warnings: warns }
+  })
+  const partScript = $derived(partBuild.script)
+
+  const TABS = $derived<[DesignerTab, string][]>([
     ['fields', 'Fields'],
     ['indexes', 'Indexes'],
     ['foreign-keys', 'Foreign Keys'],
     ['uniques', 'Uniques'],
     ['checks', 'Checks'],
     ['triggers', 'Triggers'],
-  ] as const
+    ...(canPartition ? ([['partitions', 'Partitioning']] as [DesignerTab, string][]) : []),
+  ])
 
   function blankCol(): DesignColumn {
-    return { name: '', type: types[0] ?? 'varchar', len: '', pk: false, nullable: true, dflt: '' }
+    return { name: '', type: defaultColumnType(system), len: '', pk: false, nullable: true, dflt: '' }
   }
+
+  // ---- dropdown data (item: columns/ref-table/ref-column/method/actions are pickers) --
+  // Column names in THIS table — options for index / unique / FK columns.
+  const colNames = $derived(cols.filter((c) => !c.dropped && c.name.trim()).map((c) => c.name))
+  // Tables in the schema (FK "Ref. table") + the ref table's columns (loaded lazily).
+  let schemaTables = $state<string[]>([])
+  let refColsCache = $state<Record<string, string[]>>({})
+  async function loadRefCols(tbl: string) {
+    if (!tbl || refColsCache[tbl] || !tab.connectionId) return
+    try {
+      const cs = await ipc.listColumns(tab.connectionId, st.schema ?? '', tbl)
+      refColsCache = { ...refColsCache, [tbl]: cs.map((c) => c.name) }
+    } catch {
+      refColsCache = { ...refColsCache, [tbl]: [] }
+    }
+  }
+  const refTableOptions = $derived([{ value: null as string | null, label: '—' }, ...schemaTables.map((t) => ({ value: t as string | null, label: t }))])
+  // FK referential actions — SQL standard.
+  const FK_ACTIONS = ['CASCADE', 'SET NULL', 'RESTRICT', 'NO ACTION', 'SET DEFAULT']
+  const fkActionOptions = [{ value: null as string | null, label: '— (default)' }, ...FK_ACTIONS.map((a) => ({ value: a as string | null, label: a }))]
+  // Index access methods per dialect (SQL standard).
+  function indexMethods(sys: string): string[] {
+    switch (sys) {
+      case 'postgres': return ['btree', 'hash', 'gist', 'gin', 'brin', 'spgist']
+      case 'mysql': case 'mariadb': return ['BTREE', 'HASH', 'FULLTEXT', 'SPATIAL']
+      case 'mssql': return ['NONCLUSTERED', 'CLUSTERED']
+      default: return ['btree']
+    }
+  }
+  const idxMethodOptions = $derived([{ value: null as string | null, label: '— (default)' }, ...indexMethods(system).map((m) => ({ value: m as string | null, label: m }))])
+
   const splitCols = (s: string) => s.split(',').map((x) => x.trim()).filter(Boolean)
 
   const model = $derived<TableModel>({
@@ -76,6 +217,7 @@
     uniques,
     checks,
     triggers,
+    partition: partSpec(),
   })
   const build = $derived(buildTableDdl(system, model, isNew))
   const ddlText = $derived(build.statements.join('\n\n'))
@@ -90,6 +232,15 @@
     seeded = true
     const cid = tab.connectionId
     const sch = st.schema ?? ''
+    // tables in the schema for the FK "Ref. table" dropdown (new + existing tables)
+    if (cid) {
+      try {
+        const tbls = await ipc.listTables(cid, sch)
+        schemaTables = tbls.filter((t) => t.kind !== 'view').map((t) => t.name)
+      } catch {
+        /* keep */
+      }
+    }
     if (cid && st.table) {
       try {
         const existing = await ipc.listColumns(cid, sch, st.table)
@@ -101,15 +252,15 @@
           nullable: c.nullable,
           dflt: c.default ?? '',
           existing: true,
-          orig: { type: c.data_type, len: '', nullable: c.nullable, dflt: c.default ?? '' },
+          orig: { name: c.name, type: c.data_type, len: '', nullable: c.nullable, dflt: c.default ?? '' },
         }))
       } catch {
         cols = []
       }
       try {
         const ix = await ipc.listIndexes(cid, sch, st.table)
-        indexes = ix.filter((i) => !i.primary && !i.unique).map((i) => ({ name: i.name, columns: i.columns, method: i.method, existing: true }))
-        uniques = ix.filter((i) => i.unique && !i.primary).map((i) => ({ name: i.name, columns: i.columns, existing: true }))
+        indexes = ix.filter((i) => !i.primary && !i.unique).map((i) => ({ name: i.name, columns: [...i.columns], method: i.method, existing: true, orig: { columns: [...i.columns], method: i.method } }))
+        uniques = ix.filter((i) => i.unique && !i.primary).map((i) => ({ name: i.name, columns: [...i.columns], existing: true, orig: { columns: [...i.columns] } }))
       } catch {
         /* keep empty */
       }
@@ -118,7 +269,7 @@
         checks = cons.filter((c) => /check/i.test(c.kind)).map((c) => ({ name: c.name, expression: c.definition ?? '', existing: true }))
         // uniques declared as constraints (not seen as unique indexes above)
         for (const c of cons.filter((c) => /unique/i.test(c.kind))) {
-          if (!uniques.some((u) => u.name === c.name)) uniques.push({ name: c.name, columns: [], existing: true })
+          if (!uniques.some((u) => u.name === c.name)) uniques.push({ name: c.name, columns: [], existing: true, orig: { columns: [] } })
         }
         uniques = [...uniques]
       } catch {
@@ -128,7 +279,8 @@
         const allFk = await ipc.listForeignKeys(cid, sch)
         fks = allFk
           .filter((f) => f.from_table === st.table)
-          .map((f) => ({ name: f.name, columns: [f.from_column], refTable: f.to_table, refColumns: [f.to_column], existing: true }))
+          .map((f) => ({ name: f.name, columns: [f.from_column], refTable: f.to_table, refColumns: [f.to_column], existing: true, orig: { columns: [f.from_column], refTable: f.to_table, refColumns: [f.to_column], onDelete: '', onUpdate: '' } }))
+        for (const f of fks) if (f.refTable) void loadRefCols(f.refTable)
       } catch {
         /* keep */
       }
@@ -138,9 +290,33 @@
       } catch {
         /* keep */
       }
+      if (supportsPartitioning(system)) {
+        try {
+          const parts = await ipc.listPartitions(cid, sch, st.table)
+          if (parts.length) {
+            const { strategy, columnsMode } = parsePartitionMethod(parts[0].method)
+            partStrategy = strategy
+            partColumnsMode = columnsMode
+            partColumns = partitionKeyColumns(parts[0].key ?? '')
+            // Existing partitions are read-only; strip PG's "FOR VALUES " prefix so
+            // the bound field matches what a new partition row expects.
+            partDefs = parts.map((p) => ({
+              name: p.name,
+              bound: (p.expression ?? '').replace(/^FOR VALUES\s+/i, ''),
+              from: '',
+              to: '',
+              existing: true,
+            }))
+            partEnabled = true
+            partSeededExisting = true
+          }
+        } catch {
+          /* keep — not partitioned / not supported */
+        }
+      }
     }
     if (cols.length === 0) {
-      cols = [{ name: 'id', type: types[0] ?? 'int4', len: '', pk: true, nullable: false, dflt: '' }]
+      cols = [{ name: 'id', type: defaultColumnType(system), len: '', pk: true, nullable: false, dflt: '' }]
     }
   }
 
@@ -255,8 +431,10 @@
             {#each cols as col, i (i)}
               <tr style={col.dropped ? 'opacity:0.5;text-decoration:line-through' : ''}>
                 <td style="border-bottom:var(--px-1) solid var(--border);padding:0"><input bind:value={col.name} class="mono" style="width:100%;border:none;background:transparent;color:var(--text);font-size:var(--px-12_5);padding:var(--px-7) var(--px-12);outline:none" /></td>
-                <td style="border-bottom:var(--px-1) solid var(--border);padding:0">
-                  <input bind:value={col.type} list="ds-types" class="mono" style="width:100%;border:none;background:transparent;color:var(--syntax-type);font-size:var(--px-12);padding:var(--px-7) var(--px-10);outline:none" />
+                <td style="border-bottom:var(--px-1) solid var(--border);padding:0;position:relative">
+                  <!-- searchable type dropdown showing the full per-engine catalog
+                       (custom combobox — reliable in WebView2, unlike <datalist>). -->
+                  <TypeSelect bind:value={col.type} options={types} placeholder="type…" />
                 </td>
                 <td style="border-bottom:var(--px-1) solid var(--border);padding:0"><input bind:value={col.len} class="mono" style="width:100%;border:none;background:transparent;color:var(--text2);font-size:var(--px-12);padding:var(--px-7) var(--px-12);outline:none" /></td>
                 <td style="border-bottom:var(--px-1) solid var(--border);text-align:center"><span onclick={() => (col.pk = !col.pk)} onkeydown={(e) => e.key === 'Enter' && (col.pk = !col.pk)} role="button" tabindex="0" style="display:inline-flex;width:var(--px-18);height:var(--px-18);border:var(--px-1) solid var(--border2);border-radius:var(--px-5);align-items:center;justify-content:center;cursor:pointer;background:{col.pk ? 'var(--primary)' : 'transparent'};color:var(--hex-fff);font-size:var(--px-11)">{col.pk ? '✓' : ''}</span></td>
@@ -267,22 +445,21 @@
             {/each}
           </tbody>
         </table>
-        <datalist id="ds-types">{#each types as t (t)}<option value={t}></option>{/each}</datalist>
         <div onclick={addCol} onkeydown={(e) => e.key === 'Enter' && addCol()} role="button" tabindex="0" style="display:flex;align-items:center;gap:var(--px-8);padding:var(--px-10) var(--px-14);color:var(--text2);font-size:var(--px-12_5);cursor:pointer;font-weight:600">＋ Add column</div>
 
       {:else if activeTab === 'indexes'}
         <table style="border-collapse:collapse;width:100%;font-size:var(--px-12_5)">
           <thead><tr>
-            {#each [['Index name', ''], ['Columns (comma-separated)', ''], ['Method', 'width:var(--px-120)'], ['', 'width:var(--px-42)']] as [h, extra] (h + extra)}
+            {#each [['Index name', ''], ['Columns', ''], ['Method', 'width:var(--px-160)'], ['', 'width:var(--px-42)']] as [h, extra] (h + extra)}
               <th style="position:sticky;top:0;background:var(--header);border-bottom:var(--px-1) solid var(--border2);padding:var(--px-8) var(--px-12);text-align:left;color:var(--text2);font-weight:600;{extra}">{h}</th>
             {/each}
           </tr></thead>
           <tbody>
             {#each indexes as ix, i (i)}
               <tr style={ix.dropped ? "opacity:0.5;text-decoration:line-through" : ""}>
-                <td style="border-bottom:var(--px-1) solid var(--border);padding:0"><input value={ix.name} oninput={(e) => (ix.name = e.currentTarget.value)} disabled={ix.existing} placeholder={`idx_${name}_…`} class="mono" style="width:100%;border:none;background:transparent;color:var(--text);font-size:var(--px-12_5);padding:var(--px-7) var(--px-12);outline:none" /></td>
-                <td style="border-bottom:var(--px-1) solid var(--border);padding:0"><input value={ix.columns.join(', ')} oninput={(e) => (ix.columns = splitCols(e.currentTarget.value))} disabled={ix.existing} class="mono" style="width:100%;border:none;background:transparent;color:var(--text2);font-size:var(--px-12);padding:var(--px-7) var(--px-12);outline:none" /></td>
-                <td style="border-bottom:var(--px-1) solid var(--border);padding:0"><input value={ix.method ?? ''} oninput={(e) => (ix.method = e.currentTarget.value)} disabled={ix.existing} placeholder="btree" class="mono" style="width:100%;border:none;background:transparent;color:var(--text2);font-size:var(--px-12);padding:var(--px-7) var(--px-12);outline:none" /></td>
+                <td style="border-bottom:var(--px-1) solid var(--border);padding:0"><input bind:value={ix.name} placeholder={`idx_${name}_…`} class="mono" style="width:100%;border:none;background:transparent;color:var(--text);font-size:var(--px-12_5);padding:var(--px-7) var(--px-12);outline:none" /></td>
+                <td style="border-bottom:var(--px-1) solid var(--border);padding:0;position:relative"><MultiSelect bind:values={ix.columns} options={colNames} placeholder="columns…" /></td>
+                <td style="border-bottom:var(--px-1) solid var(--border);padding:0;position:relative"><SearchSelect value={ix.method ?? null} options={idxMethodOptions} title="Index method" onChange={(v) => (ix.method = v ?? '')} /></td>
                 <td style="border-bottom:var(--px-1) solid var(--border);text-align:center"><span onclick={() => delIndex(i)} onkeydown={(e) => e.key === 'Enter' && delIndex(i)} role="button" tabindex="0" title={ix.existing ? (ix.dropped ? 'Restore' : 'Drop') : 'Remove'} style="cursor:pointer;color:{ix.dropped ? 'var(--success)' : 'var(--muted)'};font-size:var(--px-14)">{ix.dropped ? '↺' : '×'}</span></td>
               </tr>
             {/each}
@@ -293,22 +470,19 @@
       {:else if activeTab === 'foreign-keys'}
         <table style="border-collapse:collapse;width:100%;font-size:var(--px-12_5)">
           <thead><tr>
-            {#each [['Name', ''], ['Columns', ''], ['Ref. table', ''], ['Ref. columns', ''], ['ON DELETE', 'width:var(--px-110)'], ['', 'width:var(--px-42)']] as [h, extra] (h + extra)}
+            {#each [['Name', ''], ['Columns', ''], ['Ref. table', ''], ['Ref. columns', ''], ['ON DELETE', 'width:var(--px-140)'], ['ON UPDATE', 'width:var(--px-140)'], ['', 'width:var(--px-42)']] as [h, extra] (h + extra)}
               <th style="position:sticky;top:0;background:var(--header);border-bottom:var(--px-1) solid var(--border2);padding:var(--px-8) var(--px-12);text-align:left;color:var(--text2);font-weight:600;{extra}">{h}</th>
             {/each}
           </tr></thead>
           <tbody>
             {#each fks as fk, i (i)}
               <tr style={fk.dropped ? "opacity:0.5;text-decoration:line-through" : ""}>
-                <td style="border-bottom:var(--px-1) solid var(--border);padding:0"><input value={fk.name} oninput={(e) => (fk.name = e.currentTarget.value)} disabled={fk.existing} placeholder={`fk_${name}_…`} class="mono" style="width:100%;border:none;background:transparent;color:var(--text);font-size:var(--px-12);padding:var(--px-7) var(--px-12);outline:none" /></td>
-                <td style="border-bottom:var(--px-1) solid var(--border);padding:0"><input value={fk.columns.join(', ')} oninput={(e) => (fk.columns = splitCols(e.currentTarget.value))} disabled={fk.existing} class="mono" style="width:100%;border:none;background:transparent;color:var(--text2);font-size:var(--px-12);padding:var(--px-7) var(--px-12);outline:none" /></td>
-                <td style="border-bottom:var(--px-1) solid var(--border);padding:0"><input value={fk.refTable} oninput={(e) => (fk.refTable = e.currentTarget.value)} disabled={fk.existing} class="mono" style="width:100%;border:none;background:transparent;color:var(--text2);font-size:var(--px-12);padding:var(--px-7) var(--px-12);outline:none" /></td>
-                <td style="border-bottom:var(--px-1) solid var(--border);padding:0"><input value={fk.refColumns.join(', ')} oninput={(e) => (fk.refColumns = splitCols(e.currentTarget.value))} disabled={fk.existing} class="mono" style="width:100%;border:none;background:transparent;color:var(--text2);font-size:var(--px-12);padding:var(--px-7) var(--px-12);outline:none" /></td>
-                <td style="border-bottom:var(--px-1) solid var(--border);padding:0">
-                  <select value={fk.onDelete ?? ''} onchange={(e) => (fk.onDelete = e.currentTarget.value)} disabled={fk.existing} class="mono" style="width:100%;border:none;background:transparent;color:var(--text2);font-size:var(--px-12);padding:var(--px-7) var(--px-8);outline:none;cursor:pointer">
-                    {#each ['', 'CASCADE', 'SET NULL', 'RESTRICT', 'NO ACTION', 'SET DEFAULT'] as o (o)}<option value={o}>{o || '—'}</option>{/each}
-                  </select>
-                </td>
+                <td style="border-bottom:var(--px-1) solid var(--border);padding:0"><input bind:value={fk.name} placeholder={`fk_${name}_…`} class="mono" style="width:100%;border:none;background:transparent;color:var(--text);font-size:var(--px-12);padding:var(--px-7) var(--px-12);outline:none" /></td>
+                <td style="border-bottom:var(--px-1) solid var(--border);padding:0;position:relative"><MultiSelect bind:values={fk.columns} options={colNames} placeholder="columns…" /></td>
+                <td style="border-bottom:var(--px-1) solid var(--border);padding:0;position:relative"><SearchSelect value={fk.refTable || null} options={refTableOptions} title="Referenced table" onChange={(v) => { fk.refTable = v ?? ''; if (v) void loadRefCols(v) }} /></td>
+                <td style="border-bottom:var(--px-1) solid var(--border);padding:0;position:relative"><MultiSelect bind:values={fk.refColumns} options={refColsCache[fk.refTable] ?? []} placeholder="ref columns…" /></td>
+                <td style="border-bottom:var(--px-1) solid var(--border);padding:0;position:relative"><SearchSelect value={fk.onDelete || null} options={fkActionOptions} title="ON DELETE" onChange={(v) => (fk.onDelete = v ?? '')} /></td>
+                <td style="border-bottom:var(--px-1) solid var(--border);padding:0;position:relative"><SearchSelect value={fk.onUpdate || null} options={fkActionOptions} title="ON UPDATE" onChange={(v) => (fk.onUpdate = v ?? '')} /></td>
                 <td style="border-bottom:var(--px-1) solid var(--border);text-align:center"><span onclick={() => delFk(i)} onkeydown={(e) => e.key === 'Enter' && delFk(i)} role="button" tabindex="0" title={fk.existing ? (fk.dropped ? 'Restore' : 'Drop') : 'Remove'} style="cursor:pointer;color:{fk.dropped ? 'var(--success)' : 'var(--muted)'};font-size:var(--px-14)">{fk.dropped ? '↺' : '×'}</span></td>
               </tr>
             {/each}
@@ -319,15 +493,15 @@
       {:else if activeTab === 'uniques'}
         <table style="border-collapse:collapse;width:100%;font-size:var(--px-12_5)">
           <thead><tr>
-            {#each [['Constraint name', ''], ['Columns (comma-separated)', ''], ['', 'width:var(--px-42)']] as [h, extra] (h + extra)}
+            {#each [['Constraint name', ''], ['Columns', ''], ['', 'width:var(--px-42)']] as [h, extra] (h + extra)}
               <th style="position:sticky;top:0;background:var(--header);border-bottom:var(--px-1) solid var(--border2);padding:var(--px-8) var(--px-12);text-align:left;color:var(--text2);font-weight:600;{extra}">{h}</th>
             {/each}
           </tr></thead>
           <tbody>
             {#each uniques as u, i (i)}
               <tr style={u.dropped ? "opacity:0.5;text-decoration:line-through" : ""}>
-                <td style="border-bottom:var(--px-1) solid var(--border);padding:0"><input value={u.name} oninput={(e) => (u.name = e.currentTarget.value)} disabled={u.existing} placeholder={`uq_${name}_…`} class="mono" style="width:100%;border:none;background:transparent;color:var(--text);font-size:var(--px-12_5);padding:var(--px-7) var(--px-12);outline:none" /></td>
-                <td style="border-bottom:var(--px-1) solid var(--border);padding:0"><input value={u.columns.join(', ')} oninput={(e) => (u.columns = splitCols(e.currentTarget.value))} disabled={u.existing} class="mono" style="width:100%;border:none;background:transparent;color:var(--text2);font-size:var(--px-12);padding:var(--px-7) var(--px-12);outline:none" /></td>
+                <td style="border-bottom:var(--px-1) solid var(--border);padding:0"><input bind:value={u.name} placeholder={`uq_${name}_…`} class="mono" style="width:100%;border:none;background:transparent;color:var(--text);font-size:var(--px-12_5);padding:var(--px-7) var(--px-12);outline:none" /></td>
+                <td style="border-bottom:var(--px-1) solid var(--border);padding:0;position:relative"><MultiSelect bind:values={u.columns} options={colNames} placeholder="columns…" /></td>
                 <td style="border-bottom:var(--px-1) solid var(--border);text-align:center"><span onclick={() => delUnique(i)} onkeydown={(e) => e.key === 'Enter' && delUnique(i)} role="button" tabindex="0" title={u.existing ? (u.dropped ? 'Restore' : 'Drop') : 'Remove'} style="cursor:pointer;color:{u.dropped ? 'var(--success)' : 'var(--muted)'};font-size:var(--px-14)">{u.dropped ? '↺' : '×'}</span></td>
               </tr>
             {/each}
@@ -354,7 +528,7 @@
         </table>
         <div onclick={addCheck} onkeydown={(e) => e.key === 'Enter' && addCheck()} role="button" tabindex="0" style="padding:var(--px-10) var(--px-14);color:var(--text2);font-size:var(--px-12_5);cursor:pointer;font-weight:600">＋ Add check</div>
 
-      {:else}
+      {:else if activeTab === 'triggers'}
         <!-- triggers -->
         <table style="border-collapse:collapse;width:100%;font-size:var(--px-12_5)">
           <thead><tr>
@@ -383,6 +557,103 @@
           </tbody>
         </table>
         <div onclick={addTrigger} onkeydown={(e) => e.key === 'Enter' && addTrigger()} role="button" tabindex="0" style="padding:var(--px-10) var(--px-14);color:var(--text2);font-size:var(--px-12_5);cursor:pointer;font-weight:600">＋ Add trigger</div>
+
+      {:else}
+        <!-- partitioning — new tables: create; existing partitioned tables: show
+             current partitioning (read-only) + ADD partitions. -->
+        <div style="padding:var(--px-14) var(--px-18);display:flex;flex-direction:column;gap:var(--px-12);max-width:var(--px-640)">
+          <label class="mono" style="display:flex;align-items:center;gap:var(--px-8);font-size:var(--px-13);color:var(--text);cursor:{canEnablePart && !partLocked ? 'pointer' : 'default'};opacity:{canEnablePart || partLocked ? 1 : 0.85}">
+            <input type="checkbox" bind:checked={partEnabled} disabled={partLocked || !canEnablePart} /> Partition this table
+          </label>
+          {#if !isNew && !partEnabled}
+            {#if canConvertToPartitioned(system)}
+              <div class="mono" style="font-size:var(--px-12);color:var(--muted);line-height:1.5">
+                This table is not partitioned. Turn on to partition it —
+                {#if system === 'mysql' || system === 'mariadb'}MySQL/MariaDB alter it in place (<code>ALTER TABLE … PARTITION BY …</code>).{:else if system === 'postgres'}PostgreSQL recreates it (rename + create partitioned + copy + drop) — review the script.{:else}SQL Server creates a partition function + scheme and a clustered index on it.{/if}
+              </div>
+            {:else}
+              <div class="mono" style="font-size:var(--px-12);color:var(--muted);line-height:1.5">
+                This table is not partitioned. {system === 'clickhouse' ? 'ClickHouse cannot change PARTITION BY on an existing table' : 'Partitioning an existing table requires recreating it'} — use <b>New Table</b> with the Partitioning tab, then migrate the data.
+              </div>
+            {/if}
+          {:else if partEnabled}
+            {#if partLocked}
+              <div class="mono" style="font-size:var(--px-11);color:var(--muted)">Current partitioning (read-only) — you can add new partitions below.</div>
+            {:else if partConvert}
+              <div class="mono" style="font-size:var(--px-11);color:var(--warn)">⚠ Converting an existing table to partitioned. Review the script below before saving.</div>
+            {/if}
+            <div style="display:flex;align-items:center;gap:var(--px-10);flex-wrap:wrap">
+              <span class="mono" style="font-size:var(--px-12);color:var(--text2)">Strategy</span>
+              <select bind:value={partStrategy} disabled={system === 'clickhouse' || partLocked} class="mono" style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-8);color:var(--text);font-size:var(--px-12);cursor:pointer">
+                {#each ['RANGE', 'LIST', 'HASH'] as s (s)}<option value={s}>{s}</option>{/each}
+              </select>
+              {#if system === 'mysql' || system === 'mariadb'}
+                <label class="mono" style="display:flex;align-items:center;gap:var(--px-6);font-size:var(--px-12);color:var(--text2);cursor:pointer">
+                  <input type="checkbox" bind:checked={partColumnsMode} disabled={partLocked} /> COLUMNS mode
+                </label>
+              {/if}
+            </div>
+            <div style="display:flex;flex-direction:column;gap:var(--px-4)">
+              <span class="mono" style="font-size:var(--px-12);color:var(--text2)">{system === 'clickhouse' ? 'Partition expression' : 'Key column(s) / expression'}</span>
+              <input bind:value={partColumns} disabled={partLocked} placeholder={system === 'clickhouse' ? 'toYYYYMM(created_at)' : 'created_at'} class="mono" style="border:var(--px-1) solid var(--border);background:var(--panel);border-radius:var(--px-6);color:var(--text);font-size:var(--px-12_5);padding:var(--px-7) var(--px-11);outline:none" />
+            </div>
+            {#if partStrategy === 'HASH' && system !== 'clickhouse' && !partLocked}
+              <div style="display:flex;align-items:center;gap:var(--px-8)">
+                <span class="mono" style="font-size:var(--px-12);color:var(--text2)">Number of partitions</span>
+                <input type="number" min="1" bind:value={partHashCount} class="mono" style="width:var(--px-80);border:var(--px-1) solid var(--border);background:var(--panel);border-radius:var(--px-6);color:var(--text);font-size:var(--px-12_5);padding:var(--px-5) var(--px-9);outline:none" />
+              </div>
+            {:else if system !== 'clickhouse'}
+              <div style="display:flex;flex-direction:column;gap:var(--px-6)">
+                <span class="mono" style="font-size:var(--px-12);color:var(--text2)">{partLocked ? 'Partitions' : 'Initial partitions'}</span>
+                <table style="border-collapse:collapse;width:100%;font-size:var(--px-12_5)">
+                  <thead><tr>
+                    {#each [['Partition name', 'width:var(--px-200)'], [partStrategy === 'LIST' ? 'IN values' : partStrategy === 'RANGE' && system === 'postgres' ? 'Bounds — From / To' : 'Upper bound (LESS THAN)', ''], ['', 'width:var(--px-42)']] as [h, extra] (h + extra)}
+                      <th style="background:var(--header);border-bottom:var(--px-1) solid var(--border2);padding:var(--px-7) var(--px-12);text-align:left;color:var(--text2);font-weight:600;{extra}">{h}</th>
+                    {/each}
+                  </tr></thead>
+                  <tbody>
+                    {#each partDefs as p, i (i)}
+                      <tr style={p.existing ? 'opacity:0.7' : ''}>
+                        <td style="border-bottom:var(--px-1) solid var(--border);padding:0"><input bind:value={p.name} disabled={p.existing} placeholder={`${name}_p${i}`} class="mono" style="width:100%;border:none;background:transparent;color:var(--text);font-size:var(--px-12_5);padding:var(--px-7) var(--px-12);outline:none" /></td>
+                        <td style="border-bottom:var(--px-1) solid var(--border);padding:0">
+                          {#if !p.existing && partStrategy === 'RANGE' && system === 'postgres'}
+                            <!-- structured RANGE bounds: FROM (…) TO (…) built for you -->
+                            <div style="display:flex;align-items:center;gap:var(--px-2)">
+                              <input bind:value={p.from} placeholder="'2024-01-01'" class="mono" style="width:50%;border:none;background:transparent;color:var(--text2);font-size:var(--px-12);padding:var(--px-7) var(--px-8);outline:none" />
+                              <span class="mono" style="color:var(--muted);font-size:var(--px-10)">→</span>
+                              <input bind:value={p.to} placeholder="'2025-01-01'" class="mono" style="width:50%;border:none;background:transparent;color:var(--text2);font-size:var(--px-12);padding:var(--px-7) var(--px-8);outline:none" />
+                            </div>
+                          {:else}
+                            <input bind:value={p.bound} disabled={p.existing} placeholder={partStrategy === 'LIST' ? "1, 2, 3" : "2025"} class="mono" style="width:100%;border:none;background:transparent;color:var(--text2);font-size:var(--px-12);padding:var(--px-7) var(--px-12);outline:none" />
+                          {/if}
+                        </td>
+                        <td style="border-bottom:var(--px-1) solid var(--border);text-align:center">{#if !p.existing}<span onclick={() => removePartDef(i)} onkeydown={(e) => e.key === 'Enter' && removePartDef(i)} role="button" tabindex="0" title="Remove" style="cursor:pointer;color:var(--muted);font-size:var(--px-14)">×</span>{:else}<span class="mono" style="color:var(--muted);font-size:var(--px-10)" title="Existing partition">●</span>{/if}</td>
+                      </tr>
+                    {/each}
+                  </tbody>
+                </table>
+                {#if partStrategy !== 'HASH'}
+                  <div onclick={addPartDef} onkeydown={(e) => e.key === 'Enter' && addPartDef()} role="button" tabindex="0" style="color:var(--text2);font-size:var(--px-12_5);cursor:pointer;font-weight:600">＋ Add partition</div>
+                {/if}
+              </div>
+            {/if}
+            <div class="mono" style="font-size:var(--px-11);color:var(--muted);line-height:1.5">
+              {#if partLocked}Adding a partition{system === 'postgres' ? ' creates a child table (CREATE TABLE … PARTITION OF)' : system === 'mssql' ? ' on SQL Server needs a manual SPLIT RANGE script' : system === 'clickhouse' ? ' is automatic on INSERT for ClickHouse' : ' runs ALTER TABLE … ADD PARTITION'}.{:else if system === 'clickhouse'}ClickHouse partitions by an expression on a MergeTree engine.{:else if system === 'mssql'}SQL Server creates a partition function + scheme; the partition column must be part of the primary key.{:else if system === 'postgres'}PostgreSQL creates child tables (PARTITION OF); the partition key must be part of the primary key.{:else}MySQL/MariaDB emit an inline PARTITION BY clause.{/if}
+            </div>
+
+            <!-- live partition script (script + UI side by side): updates as you edit
+                 the rows above; this is exactly what runs on Save. -->
+            {#if partScript}
+              <div style="display:flex;flex-direction:column;gap:var(--px-4)">
+                <span class="mono" style="font-size:var(--px-11);text-transform:uppercase;letter-spacing:.06em;color:var(--muted)">{partLocked ? 'Add-partition script' : partConvert ? 'Convert-to-partitioned script' : 'Partition script'}</span>
+                <pre class="mono" style="margin:0;padding:var(--px-10) var(--px-12);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-8);font-size:var(--px-12);line-height:1.55;white-space:pre-wrap;overflow-x:auto;color:var(--text)">{#each highlightSql(partScript) as tk}<span style="color:{sqlTokenColor(tk.kind)}">{tk.text}</span>{/each}</pre>
+              </div>
+            {/if}
+            {#each partBuild.warnings as w (w)}
+              <div class="mono" style="font-size:var(--px-11);color:var(--warn);line-height:1.4">⚠ {w}</div>
+            {/each}
+          {/if}
+        </div>
       {/if}
     </div>
   {:else}
@@ -392,7 +663,8 @@
           {#each build.warnings as w (w)}<div>⚠ {w}</div>{/each}
         </div>
       {/if}
-      <pre class="mono" style="margin:0;padding:var(--px-16) var(--px-18);font-size:var(--px-12_5);line-height:1.6;white-space:pre-wrap;color:var(--text)">{ddlText || '-- add a column or object, then Save (Ctrl/Cmd+S)'}</pre>
+      <!-- syntax-coloured DDL preview (keywords / strings / comments) for readability -->
+      <pre class="mono" style="margin:0;padding:var(--px-16) var(--px-18);font-size:var(--px-12_5);line-height:1.6;white-space:pre-wrap;color:var(--text)">{#if ddlText}{#each highlightSql(ddlText) as tk}<span style="color:{sqlTokenColor(tk.kind)}">{tk.text}</span>{/each}{:else}<span style="color:var(--syntax-comment)">-- add a column or object, then Save (Ctrl/Cmd+S)</span>{/if}</pre>
     </div>
   {/if}
 </div>

@@ -7,6 +7,15 @@ import { toasts } from './toast.svelte'
 /** Runtime-only fields stripped when exporting a profile to JSON. */
 const RUNTIME_KEYS = ['has_password', 'connected', 'latency_ms', 'ephemeral'] as const
 
+/** The base profile id inside any derived connection id: strips a per-tab suffix
+ *  (`#tab-…`, item 6) then a per-database suffix (`::db`, attach_database). A base
+ *  profile id has neither, so this returns it unchanged. */
+export function baseConnId(id: string): string {
+  const noTab = id.includes('#') ? id.slice(0, id.indexOf('#')) : id
+  const dc = noTab.indexOf('::')
+  return dc > 0 ? noTab.slice(0, dc) : noTab
+}
+
 class ConnectionsStore {
   profiles = $state<ProfilePublic[]>([])
   /** selected connection in the sidebar — drives toolbar gating + explorer */
@@ -14,6 +23,9 @@ class ConnectionsStore {
   filter = $state('')
   /** ids with a connect() in flight (spinner on the row) */
   connecting = $state<Set<string>>(new Set())
+  /** last connect failure per id (cleared on connecting/success) — shown inline
+   *  in the Explorer so a failed Open Connection is visible, not just a toast (item 5) */
+  connectErrors = $state<Record<string, string>>({})
   loaded = $state(false)
 
   get selected(): ProfilePublic | null {
@@ -24,21 +36,21 @@ class ConnectionsStore {
     if (!id) return null
     const direct = this.profiles.find((p) => p.id === id)
     if (direct) return direct
-    // Internal per-database sub-connections (`{baseId}::{db}`, from attach_database)
-    // are not stored as their own profiles — resolve them to the base connection so
-    // tabs opened on another database (Table Designer, ER, Index Manager…) keep a
-    // valid profile/system instead of falling back to "orphan".
-    const sep = id.indexOf('::')
-    if (sep > 0) return this.profiles.find((p) => p.id === id.slice(0, sep)) ?? null
-    return null
+    // Derived ids — per-database sub-connections (`{base}::{db}`, attach_database) and
+    // per-tab connections (`{base}#tab-{id}`, item 6) — aren't stored as their own
+    // profiles; resolve to the base so dependent tabs keep a valid profile/system.
+    const base = baseConnId(id)
+    return base !== id ? (this.profiles.find((p) => p.id === base) ?? null) : null
   }
 
-  /** The database a (possibly sub-)connection id points at: the part after `::`
-   *  for an attached sub-connection, else the base profile's own database. */
+  /** The database a (possibly derived) connection id points at: the part after `::`
+   *  for an attached sub-connection, else the base profile's own database. Per-tab
+   *  connections (`{base}#tab-{id}`) carry no db in the id → base profile's db. */
   databaseOf(id: string | null | undefined): string {
     if (!id) return ''
-    const sep = id.indexOf('::')
-    if (sep > 0) return id.slice(sep + 2)
+    const core = id.includes('#') ? id.slice(0, id.indexOf('#')) : id
+    const sep = core.indexOf('::')
+    if (sep > 0) return core.slice(sep + 2)
     return this.byId(id)?.database ?? ''
   }
 
@@ -149,12 +161,16 @@ class ConnectionsStore {
     const profile = this.byId(id)
     if (!profile || profile.connected) return !!profile?.connected
     this.connecting = new Set([...this.connecting, id])
+    delete this.connectErrors[id]
     try {
       const latency = await ipc.connect(id)
       profile.connected = true
       profile.latency_ms = latency
       return true
     } catch (e) {
+      // Persist the failure so the Explorer can show a clear "cannot connect"
+      // message (item 5), in addition to the transient toast.
+      this.connectErrors[id] = String(e)
       toasts.error(`${profile.name}: ${e}`, profile.system)
       return false
     } finally {
@@ -168,6 +184,7 @@ class ConnectionsStore {
     const profile = this.byId(id)
     try {
       await ipc.disconnect(id)
+      delete this.connectErrors[id]
       if (profile) {
         profile.connected = false
         profile.latency_ms = undefined

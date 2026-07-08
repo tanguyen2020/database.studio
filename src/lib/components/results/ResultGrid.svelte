@@ -382,6 +382,26 @@
   const columns = $derived(data.cols.map(([name]) => name))
   const colTypes = $derived(Object.fromEntries(data.cols.map(([name, type]) => [name, type])))
 
+  // Duplicate column names (e.g. `SELECT a.id, b.id`) used to crash the tab: the
+  // keyed {#each} threw on the repeated key. Now the grid renders (keyed by index),
+  // but because a row is a name-keyed object, same-named columns share one value —
+  // so warn the user once per result instead of silently merging.
+  let dupWarnedFor = ''
+  $effect(() => {
+    const names = data.cols.map(([n]) => n)
+    const dups = [...new Set(names.filter((n, i) => names.indexOf(n) !== i))]
+    const key = dups.join('')
+    if (dups.length && key !== dupWarnedFor) {
+      dupWarnedFor = key
+      toasts.show(
+        `Duplicate column name${dups.length > 1 ? 's' : ''} in result: ${dups.join(', ')} — ` +
+          `only one value per name is shown. Alias them (e.g. a.id AS a_id) to see both.`,
+      )
+    } else if (!dups.length) {
+      dupWarnedFor = ''
+    }
+  })
+
   // TanStack column/row model
   const table: Table<Record<string, unknown>> = $derived.by(() => {
     const defs: TanColumnDef<Record<string, unknown>>[] = data.cols.map(([name]) => ({
@@ -818,7 +838,7 @@
       {:else if gr.row}
         {@const drow = gr.row}
         <div class="mono" style="display:flex;gap:var(--px-14);padding:var(--px-2) var(--px-12);padding-left:calc(var(--px-12) + {gr.depth} * var(--px-16));font-size:var(--px-11);color:var(--text2);border-bottom:var(--px-1) solid var(--border);white-space:nowrap;overflow:hidden">
-          {#each columns as c (c)}<span style="min-width:var(--px-70);max-width:var(--px-220);overflow:hidden;text-overflow:ellipsis">{display(drow[c], c).text}</span>{/each}
+          {#each columns as c, ci (ci)}<span style="min-width:var(--px-70);max-width:var(--px-220);overflow:hidden;text-overflow:ellipsis">{display(drow[c], c).text}</span>{/each}
         </div>
       {/if}
     {/each}
@@ -831,7 +851,7 @@
       <tr>
         <!-- No. gutter (AUDIT-5 item 2): row number + click to select (shift/ctrl multi) -->
         <th style="background:var(--header);border-bottom:var(--px-1) solid var(--border2);border-right:var(--px-1) solid var(--border);padding:var(--px-6) var(--px-8);text-align:right;font-weight:600;color:var(--muted);white-space:nowrap;position:sticky;left:0;z-index:11">#</th>
-        {#each data.cols as [name, type] (name)}
+        {#each data.cols as [name, type], ci (ci)}
           <th style="background:var(--header);border-bottom:var(--px-1) solid var(--border2);border-right:var(--px-1) solid var(--border);padding:var(--px-6) var(--px-12);text-align:left;font-weight:600;color:var(--text2);white-space:nowrap">
             {name}
             <span style="color:var(--muted);font-weight:400;font-size:var(--px-10)">{type}</span>
@@ -860,7 +880,7 @@
             title="Click to select · Shift/Ctrl for multiple · right-click for menu"
             class="mono"
             style="padding:var(--px-3) var(--px-8);text-align:right;color:{isRowSelected ? 'var(--hex-fff)' : 'var(--muted)'};border-bottom:var(--px-1) solid var(--border);border-right:var(--px-1) solid var(--border);background:{isRowSelected ? 'var(--grid-select)' : 'var(--header)'};position:sticky;left:0;font-size:var(--px-10_5);user-select:none">{ri + 1}</td>
-          {#each columns as col (col)}
+          {#each columns as col, ci (ci)}
             {@const edited = edits.has(cellKey(ri, col))}
             {@const rawVal = edited ? edits.get(cellKey(ri, col)) : row?.[col]}
             {@const cell = display(rawVal, col)}
@@ -938,7 +958,7 @@
         {#each insertedRows as ins, insIdx (insIdx)}
           <tr style="height:{ROW_H}px;background:var(--rgba-39-174-96-_14)">
             <td class="mono" style="padding:var(--px-3) var(--px-8);text-align:right;color:var(--success);border-bottom:var(--px-1) solid var(--border);border-right:var(--px-1) solid var(--border);position:sticky;left:0;font-size:var(--px-10_5)">＋</td>
-            {#each columns as col (col)}
+            {#each columns as col, ci (ci)}
               {@const isEditing = editingCell?.insert === insIdx && editingCell?.col === col}
               <td
                 style="border-bottom:var(--px-1) solid var(--border);border-right:var(--px-1) solid var(--border);padding:0;white-space:nowrap"
@@ -997,7 +1017,7 @@
       <div style="position:absolute;bottom:calc(100% + var(--px-4));left:var(--px-8);z-index:62;min-width:var(--px-220);background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-8);box-shadow:0 var(--px-12) var(--px-30) var(--rgba-0-0-0-_5);padding:var(--px-8)">
         <div style="font-size:var(--px-10);text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:var(--px-4)">Group by columns</div>
         <div style="max-height:var(--px-150);overflow:auto;display:flex;flex-direction:column;gap:var(--px-2)">
-          {#each columns as c (c)}
+          {#each columns as c, ci (ci)}
             <label class="mono" style="display:flex;align-items:center;gap:var(--px-6);font-size:var(--px-11_5);cursor:pointer;color:var(--text2)">
               <input type="checkbox" checked={groupBy.includes(c)} onchange={() => toggleGroupCol(c)} /> {c}
             </label>
@@ -1010,7 +1030,7 @@
           {#if groupFn !== 'count'}
             <select bind:value={groupCol} class="mono" style="flex:1;background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-4);padding:0 var(--px-4);color:var(--text)">
               <option value="">column…</option>
-              {#each columns as c (c)}<option value={c}>{c}</option>{/each}
+              {#each columns as c, ci (ci)}<option value={c}>{c}</option>{/each}
             </select>
           {/if}
         </div>

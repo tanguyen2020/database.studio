@@ -2,9 +2,12 @@
   // NATS JetStream subject messages — browse existing messages of a subject within
   // a stream (server-side filtered fetch), with Clear (purge subject) + Refresh.
   import * as ipc from '$lib/ipc'
+  import { highlightJson, jsonTokenColor } from '$lib/format/json'
   import { systemMeta } from '$lib/systems'
   import { toasts } from '$lib/stores/toast.svelte'
   import { explorer } from '$lib/stores/explorer.svelte'
+  import { natsAddWizard } from '$lib/stores/natsAdd.svelte'
+  import { autofocus } from '$lib/actions/autofocus'
   import type { TabState } from '$lib/types'
 
   interface Props {
@@ -16,14 +19,33 @@
   const accent = $derived(systemMeta('nats').accent)
 
   let messages = $state<ipc.NatsJsMessage[]>([])
-  // Newest first: sort by timestamp desc, tie-break on sequence desc.
+  // Server-side pagination (items 2 + 4): each page is a separate fetch. We page
+  // NEWEST-first — the server tells us the total count + last sequence, and each
+  // page fetches a bounded sequence window (never the whole subject at once).
+  const PAGE_SIZES = [50, 100, 200, 500]
+  let pageSize = $state(100)
+  let page = $state(1) // 1 = newest page
+  let total = $state(0) // total retained messages for this subject (from server)
+  let lastSeq = $state(0) // last stream sequence carrying this subject
+  const totalPages = $derived(Math.max(1, Math.ceil(total / pageSize)))
+  // Display newest-first: sort descending by time, tie-break on sequence desc.
   const timeKey = (m: ipc.NatsJsMessage) => {
     const t = new Date(m.time).getTime()
     return Number.isNaN(t) ? m.seq : t
   }
-  const sortedMessages = $derived([...messages].sort((a, b) => timeKey(b) - timeKey(a) || b.seq - a.seq))
-  // Show the exact server-stored (UTC) clock, just prettified: "YYYY-MM-DD HH:mm:ss".
-  const fmtTime = (t: string) => t.replace('T', ' ').replace(/\.\d+/, '').replace(/Z$/, '')
+  const rows = $derived([...messages].sort((a, b) => timeKey(b) - timeKey(a) || b.seq - a.seq))
+  // Show the Key column only when at least one message carries a Nats-Msg-Id header.
+  const hasKey = $derived(messages.some((m) => m.key))
+  // Show the time in the viewer's LOCAL timezone: the backend emits an ISO datetime
+  // with the server's UTC offset, so `new Date()` parses the true instant and the
+  // local getters render it as local wall clock (YYYY-MM-DD HH:MM:SS). Falls back to
+  // the raw string (offset stripped) if the value isn't a valid date.
+  const fmtTime = (t: string) => {
+    const d = new Date(t)
+    if (Number.isNaN(d.getTime())) return t.replace('T', ' ').replace(/\.\d+/, '').replace(/(Z|[+-]\d{2}:?\d{2})$/, '')
+    const p = (n: number) => String(n).padStart(2, '0')
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
+  }
   let loading = $state(false)
   let loaded = $state(false)
   let error = $state('')
@@ -34,12 +56,24 @@
     confirmState = { title, body, danger: true, run }
   }
 
-  async function load() {
+  // Fetch page `p` (1 = newest) as a bounded sequence window from the server.
+  // Newest-first: page 1 covers the highest sequences, page N the oldest.
+  async function load(p = page) {
     if (!tab.connectionId) return
     loading = true
     error = ''
     try {
-      messages = await ipc.natsJsSubjectMessages(tab.connectionId, stream, subject, 200)
+      if (total === 0 || lastSeq === 0) {
+        messages = []
+      } else {
+        const firstSeq = Math.max(1, lastSeq - total + 1)
+        const high = lastSeq - (p - 1) * pageSize
+        const low = Math.max(firstSeq, high - pageSize + 1)
+        const limit = Math.max(1, high - low + 1)
+        const rowsIn = await ipc.natsJsSubjectMessages(tab.connectionId, stream, subject, limit, low)
+        messages = rowsIn.filter((m) => m.seq <= high)
+      }
+      page = p
       loaded = true
     } catch (e) {
       error = String(e)
@@ -48,13 +82,64 @@
     }
   }
 
+  // Re-read the subject's total/last-seq, then load the newest page. Used on open,
+  // refresh, purge, and page-size change.
+  async function reload() {
+    if (!tab.connectionId) return
+    loading = true
+    error = ''
+    try {
+      const stats = await ipc.natsJsSubjectStats(tab.connectionId, stream, subject)
+      total = stats.total
+      lastSeq = stats.last_seq
+    } catch (e) {
+      error = String(e)
+      total = 0
+      lastSeq = 0
+    } finally {
+      loading = false
+    }
+    await load(1)
+  }
+
+  function nextPage() {
+    if (page < totalPages) void load(page + 1)
+  }
+  function prevPage() {
+    if (page > 1) void load(page - 1)
+  }
+  function changePageSize(n: number) {
+    pageSize = n
+    void load(1)
+  }
+
   $effect(() => {
-    if (!loaded && tab.connectionId) void load()
+    if (!loaded && tab.connectionId) void reload()
+  })
+  // reload when the sidebar purges this subject's messages (Explorer → Clear messages)
+  $effect(() => {
+    void explorer.natsMsgTick[`${tab.connectionId}:${stream}:${subject}`]
+    if (loaded && tab.connectionId) void reload()
   })
 
   async function copyMsg(text: string) {
     await navigator.clipboard.writeText(text)
     toasts.success('Message copied', 'nats')
+  }
+
+  // JSON viewer popup — pretty-prints the payload (falls back to raw text when it
+  // isn't valid JSON) so the full message is readable, not just the row preview.
+  let viewState = $state<{ seq: number; subject: string; text: string; isJson: boolean } | null>(null)
+  function viewJson(m: ipc.NatsJsMessage) {
+    let text = m.payload
+    let isJson = false
+    try {
+      text = JSON.stringify(JSON.parse(m.payload), null, 2)
+      isJson = true
+    } catch {
+      // not JSON — show the raw payload
+    }
+    viewState = { seq: m.seq, subject: m.subject, text, isJson }
   }
   // Delete a single JetStream message by sequence (real removal from the stream).
   function deleteMsg(seq: number) {
@@ -63,11 +148,18 @@
       try {
         await ipc.natsJsDeleteMessage(tab.connectionId, stream, seq)
         messages = messages.filter((m) => m.seq !== seq)
+        total = Math.max(0, total - 1)
         toasts.success(`Deleted message #${seq}`, 'nats')
       } catch (e) {
         toasts.error(String(e), 'nats')
       }
     })
+  }
+
+  // Add a message to this subject — opens the shared publish dialog (subject prefilled).
+  function addMessage() {
+    if (!tab.connectionId) return
+    natsAddWizard.show(tab.connectionId, stream, subject, false)
   }
 
   function clearMessages() {
@@ -77,7 +169,7 @@
         await ipc.natsJsPurgeSubject(tab.connectionId, stream, subject)
         toasts.success(`Cleared messages of ${subject}`, 'nats')
         explorer.refreshStreaming(tab.connectionId)
-        await load()
+        await reload()
       } catch (e) {
         toasts.error(String(e), 'nats')
       }
@@ -99,8 +191,9 @@
       <span class="mono" style="font-size:var(--px-10);color:{accent}">stream <span style="font-weight:600">{stream}</span></span>
     </div>
     <div style="margin-left:auto;display:flex;gap:var(--px-8);align-items:center">
-      <span style="font-size:var(--px-11);color:var(--muted)">{messages.length} message(s)</span>
-      <span onclick={load} onkeydown={(e) => e.key === 'Enter' && load()} role="button" tabindex="0" class="eg-btn">⟳ Refresh</span>
+      <span style="font-size:var(--px-11);color:var(--muted)">{total} record{total === 1 ? '' : 's'}</span>
+      <span onclick={addMessage} onkeydown={(e) => e.key === 'Enter' && addMessage()} role="button" tabindex="0" class="eg-btn">＋ Add</span>
+      <span onclick={() => reload()} onkeydown={(e) => e.key === 'Enter' && reload()} role="button" tabindex="0" class="eg-btn">⟳ Refresh</span>
       <span onclick={clearMessages} onkeydown={(e) => e.key === 'Enter' && clearMessages()} role="button" tabindex="0" class="eg-btn" style="color:var(--error)">Clear messages</span>
     </div>
   </div>
@@ -113,20 +206,26 @@
     {:else if messages.length === 0}
       <div style="padding:var(--px-20);color:var(--muted);font-size:var(--px-12)">No messages retained for this subject.</div>
     {:else}
-      <table style="border-collapse:collapse;width:100%;font-size:var(--px-12)">
+      <table style="border-collapse:collapse;width:100%;font-size:var(--px-12);table-layout:fixed">
         <thead><tr>
-          {#each [['Seq', 'width:var(--px-90)'], ['Time', 'width:var(--px-180)'], ['Payload', ''], ['', 'width:var(--px-70)']] as [h, extra] (h)}
+          {#each [['Seq', 'width:var(--px-90)'], ['Time', 'width:var(--px-180)'], ['Subject', 'width:var(--px-160)'], ...(hasKey ? [['Key', 'width:var(--px-140)']] : []), ['Payload', ''], ['', 'width:var(--px-90)']] as [h, extra] (h)}
             <th style="position:sticky;top:0;background:var(--header);border-bottom:var(--px-1) solid var(--border2);padding:var(--px-7) var(--px-12);text-align:left;color:var(--text2);font-weight:600;{extra}">{h}</th>
           {/each}
         </tr></thead>
         <tbody>
-          {#each sortedMessages as m (m.seq)}
+          {#each rows as m (m.seq)}
             <tr>
               <td class="mono" style="border-bottom:var(--px-1) solid var(--border);padding:var(--px-6) var(--px-12);color:var(--muted)">{m.seq}</td>
               <td class="mono" style="border-bottom:var(--px-1) solid var(--border);padding:var(--px-6) var(--px-12);font-weight:700;color:var(--warn2)">{fmtTime(m.time)}</td>
-              <td class="mono" style="border-bottom:var(--px-1) solid var(--border);padding:var(--px-6) var(--px-12);color:var(--text);white-space:pre-wrap;word-break:break-all">{m.payload}</td>
+              <td class="mono" style="border-bottom:var(--px-1) solid var(--border);padding:var(--px-6) var(--px-12);color:var(--warn2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title={m.subject}>{m.subject}</td>
+              {#if hasKey}
+                <td class="mono" style="border-bottom:var(--px-1) solid var(--border);padding:var(--px-6) var(--px-12);color:var(--text2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title={m.key}>{m.key || '—'}</td>
+              {/if}
+              <!-- single-line preview trimmed to the column; hover shows the full text, Copy grabs all of it -->
+              <td class="mono" style="border-bottom:var(--px-1) solid var(--border);padding:var(--px-6) var(--px-12);color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title={m.payload}>{m.payload}</td>
               <td style="border-bottom:var(--px-1) solid var(--border);padding:var(--px-6) var(--px-8);white-space:nowrap">
-                <span onclick={() => copyMsg(m.payload)} onkeydown={(e) => e.key === 'Enter' && copyMsg(m.payload)} role="button" tabindex="0" title="Copy message" style="cursor:pointer;color:var(--muted)">⧉</span>
+                <span onclick={() => viewJson(m)} onkeydown={(e) => e.key === 'Enter' && viewJson(m)} role="button" tabindex="0" title="View payload as JSON" style="cursor:pointer;color:var(--muted);margin-right:var(--px-6)">⛶</span>
+                <span onclick={() => copyMsg(m.payload)} onkeydown={(e) => e.key === 'Enter' && copyMsg(m.payload)} role="button" tabindex="0" title="Copy full payload" style="cursor:pointer;color:var(--muted)">⧉</span>
                 <span onclick={() => deleteMsg(m.seq)} onkeydown={(e) => e.key === 'Enter' && deleteMsg(m.seq)} role="button" tabindex="0" title="Delete this message (by sequence)" style="cursor:pointer;color:var(--error);font-size:var(--px-13);margin-left:var(--px-6)">×</span>
               </td>
             </tr>
@@ -136,10 +235,49 @@
     {/if}
   </div>
 
+  <!-- pagination footer: Prev/Next each fetch a fresh page from the server -->
+  {#if !error && (loaded || loading)}
+    <div style="flex:none;display:flex;align-items:center;gap:var(--px-10);padding:var(--px-6) var(--px-14);border-top:var(--px-1) solid var(--border);background:var(--surface);font-size:var(--px-11_5)">
+      <span style="color:var(--text2)">Page {page} / {totalPages}</span>
+      <span style="color:var(--muted)">·</span>
+      <span style="color:var(--muted)">{total} record{total === 1 ? '' : 's'}</span>
+      <span style="color:var(--muted)">·</span>
+      <label style="display:flex;align-items:center;gap:var(--px-5);color:var(--muted)">
+        Page size
+        <select
+          value={pageSize}
+          onchange={(e) => changePageSize(Number(e.currentTarget.value))}
+          style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-5);padding:var(--px-2) var(--px-6);color:var(--text);font-size:var(--px-11_5)"
+        >
+          {#each PAGE_SIZES as n (n)}
+            <option value={n}>{n}</option>
+          {/each}
+        </select>
+      </label>
+      <div style="margin-left:auto;display:flex;gap:var(--px-6);align-items:center">
+        <span
+          onclick={prevPage}
+          onkeydown={(e) => e.key === 'Enter' && prevPage()}
+          role="button"
+          tabindex="0"
+          class="eg-btn"
+          style="opacity:{page <= 1 || loading ? 0.45 : 1};cursor:{page <= 1 || loading ? 'not-allowed' : 'pointer'}"
+        >◀ Prev</span>
+        <span
+          onclick={nextPage}
+          onkeydown={(e) => e.key === 'Enter' && nextPage()}
+          role="button"
+          tabindex="0"
+          class="eg-btn"
+          style="opacity:{page >= totalPages || loading ? 0.45 : 1};cursor:{page >= totalPages || loading ? 'not-allowed' : 'pointer'}"
+        >Next ▶</span>
+      </div>
+    </div>
+  {/if}
+
   {#if confirmState}
     <div
       role="presentation"
-      onclick={() => (confirmState = null)}
       style="position:absolute;inset:0;background:var(--rgba-0-0-0-_5);display:flex;align-items:center;justify-content:center;z-index:50"
     >
       <div
@@ -153,9 +291,36 @@
         <div style="font-size:var(--px-14);font-weight:600;color:var(--text);margin-bottom:var(--px-8)">{confirmState.title}</div>
         <div style="font-size:var(--px-12_5);color:var(--text2);line-height:1.45;margin-bottom:var(--px-16)">{confirmState.body}</div>
         <div style="display:flex;gap:var(--px-8);justify-content:flex-end">
-          <span onclick={() => (confirmState = null)} onkeydown={(e) => e.key === 'Enter' && (confirmState = null)} role="button" tabindex="0" class="eg-btn">Cancel</span>
+          <span use:autofocus onclick={() => (confirmState = null)} onkeydown={(e) => e.key === 'Enter' && (confirmState = null)} role="button" tabindex="0" class="eg-btn">Cancel</span>
           <span onclick={runConfirm} onkeydown={(e) => e.key === 'Enter' && runConfirm()} role="button" tabindex="0" class="eg-btn danger">Confirm</span>
         </div>
+      </div>
+    </div>
+  {/if}
+
+  {#if viewState}
+    <div
+      role="presentation"
+      style="position:absolute;inset:0;background:var(--rgba-0-0-0-_5);display:flex;align-items:center;justify-content:center;z-index:50;padding:var(--px-20)"
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        onclick={(e) => e.stopPropagation()}
+        onkeydown={(e) => e.key === 'Escape' && (viewState = null)}
+        tabindex="-1"
+        style="background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-14);padding:var(--px-18);width:min(var(--px-720), 100%);max-height:100%;display:flex;flex-direction:column;box-shadow:0 var(--px-24) var(--px-60) var(--rgba-0-0-0-_55)"
+      >
+        <div style="display:flex;align-items:center;gap:var(--px-8);margin-bottom:var(--px-10)">
+          <span style="font-size:var(--px-14);font-weight:600;color:var(--text)">Message #{viewState.seq}</span>
+          <span class="mono" style="font-size:var(--px-11);color:var(--warn2)">{viewState.subject}</span>
+          {#if !viewState.isJson}<span style="font-size:var(--px-10_5);color:var(--muted)">(not JSON — raw payload)</span>{/if}
+          <span style="margin-left:auto;display:flex;gap:var(--px-8)">
+            <span onclick={() => viewState && copyMsg(viewState.text)} onkeydown={(e) => e.key === 'Enter' && viewState && copyMsg(viewState.text)} role="button" tabindex="0" class="eg-btn">Copy</span>
+            <span onclick={() => (viewState = null)} onkeydown={(e) => e.key === 'Enter' && (viewState = null)} role="button" tabindex="0" class="eg-btn">Close</span>
+          </span>
+        </div>
+        <pre class="mono" style="flex:1;overflow:auto;margin:0;background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-8);padding:var(--px-12);font-size:var(--px-12);line-height:1.5;color:var(--text);white-space:pre-wrap;word-break:break-word">{#if viewState.isJson}{#each highlightJson(viewState.text) as tok}<span style="color:{jsonTokenColor(tok.kind)}">{tok.text}</span>{/each}{:else}{viewState.text}{/if}</pre>
       </div>
     </div>
   {/if}

@@ -528,6 +528,46 @@ impl PgDriver {
             })
             .collect())
     }
+
+    /// Declarative partitions of a table (empty when it isn't partitioned).
+    /// Lists the direct child partitions with their bounds via `pg_inherits`.
+    pub async fn partitions(
+        &mut self,
+        schema: &str,
+        table: &str,
+    ) -> Result<Vec<PartitionInfo>, QueryError> {
+        let rows = sqlx::query(
+            "SELECT child.relname AS name,
+                    CASE pt.partstrat WHEN 'r' THEN 'RANGE' WHEN 'l' THEN 'LIST'
+                                      WHEN 'h' THEN 'HASH' ELSE '' END AS method,
+                    pg_get_partkeydef(parent.oid) AS key,
+                    pg_get_expr(child.relpartbound, child.oid) AS bound,
+                    child.reltuples::bigint AS rows
+             FROM pg_catalog.pg_class parent
+             JOIN pg_catalog.pg_namespace n ON n.oid = parent.relnamespace
+             JOIN pg_catalog.pg_partitioned_table pt ON pt.partrelid = parent.oid
+             JOIN pg_catalog.pg_inherits inh ON inh.inhparent = parent.oid
+             JOIN pg_catalog.pg_class child ON child.oid = inh.inhrelid
+             WHERE n.nspname = $1 AND parent.relname = $2
+             ORDER BY child.relname",
+        )
+        .bind(schema)
+        .bind(table)
+        .fetch_all(&mut self.conn)
+        .await
+        .map_err(|e| map_error("postgres", &e))?;
+        Ok(rows
+            .iter()
+            .map(|r| PartitionInfo {
+                name: r.get(0),
+                method: r.get(1),
+                key: r.try_get(2).ok(),
+                expression: r.try_get(3).ok(),
+                rows: r.try_get::<i64, _>(4).ok(),
+                position: None,
+            })
+            .collect())
+    }
 }
 
 // Monomorphic helpers with a *named* connection lifetime. Calling sqlx

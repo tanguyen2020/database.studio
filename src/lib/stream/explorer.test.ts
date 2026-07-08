@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { kafkaTopicRows, natsStreamRows, topicMessageCount } from './explorer'
+import { kafkaTopicRows, natsStreamRows, topicMessageCount, filterStreamRows } from './explorer'
 import type { KafkaTopic, NatsJsStream } from '$lib/ipc'
 
 const topic = (name: string, internal: boolean, parts: [number, number][]): KafkaTopic => ({
@@ -54,5 +54,31 @@ describe('natsStreamRows', () => {
     const orders = rows.find((r) => r.name === 'ORDERS')!
     expect(orders.subjects.map((s) => s.subject)).toEqual(['orders.eu', 'orders.us'])
     expect(orders.meta).toBe('2 subj · 42 msg')
+  })
+})
+
+describe('filterStreamRows', () => {
+  const rows = natsStreamRows([
+    { name: 'ORDERS', subjects: ['orders.eu', 'orders.us'], retention: 'Limits', storage: 'File', messages: 42, bytes: 0, consumers: 0 },
+    { name: 'AUDIT', subjects: ['audit.login', 'audit.logout'], retention: 'Limits', storage: 'File', messages: 3, bytes: 0, consumers: 0 },
+  ])
+
+  it('blank query returns rows unchanged', () => {
+    expect(filterStreamRows('', rows)).toBe(rows)
+    expect(filterStreamRows('   ', rows)).toBe(rows)
+  })
+
+  it('matches by stream name (keeps all subjects), case-insensitive', () => {
+    const out = filterStreamRows('order', rows)
+    expect(out.map((s) => s.name)).toEqual(['ORDERS'])
+    expect(out[0].subjects.map((s) => s.subject)).toEqual(['orders.eu', 'orders.us'])
+  })
+
+  it('does not match on subject names', () => {
+    expect(filterStreamRows('logout', rows)).toEqual([])
+  })
+
+  it('drops streams with no name match', () => {
+    expect(filterStreamRows('nomatch', rows)).toEqual([])
   })
 })

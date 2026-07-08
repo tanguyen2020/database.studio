@@ -52,12 +52,12 @@
   const isNats = $derived(draft?.system === 'nats')
   const isKafka = $derived(draft?.system === 'kafka')
   const isCassandra = $derived(draft?.system === 'cassandra')
-  const hostLabel = $derived(isKafka ? 'Bootstrap servers' : isCassandra ? 'Contact points' : 'Host')
+  const hostLabel = $derived(isKafka ? 'Host / Bootstrap' : isCassandra ? 'Contact points' : 'Host')
   const hostPlaceholder = $derived(
     isSqlite
       ? '/data/local.db'
       : isKafka
-        ? 'broker1:9092,broker2:9092'
+        ? '192.168.1.10  (or broker1:9092,broker2:9092)'
         : isCassandra
           ? '10.0.5.1,10.0.5.2'
           : 'localhost',
@@ -286,8 +286,11 @@
               </div>
             {/if}
 
-            <!-- host + port — port dòng 2196-2201 (SQLite: Host = file path; Kafka: bootstrap full-width) -->
-            <div style="grid-column:1/3;display:grid;grid-template-columns:{isKafka ? '1fr' : '2fr 1fr'};gap:var(--px-14)">
+            <!-- host + port — port dòng 2196-2201 (SQLite: Host = file path).
+                 Kafka: Host (IP) + Port like the other systems — the backend joins
+                 them into `host:port`; a full bootstrap list (host:port,host:port)
+                 typed in Host is still honored (used verbatim, Port ignored). -->
+            <div style="grid-column:1/3;display:grid;grid-template-columns:2fr 1fr;gap:var(--px-14)">
               <div>
                 <div class="cm-label">{hostLabel}</div>
                 {#if isSqlite}
@@ -303,16 +306,14 @@
                   <input class="cm-input mono" bind:value={draft.host} placeholder={hostPlaceholder} />
                 {/if}
               </div>
-              {#if !isKafka}
-                <div>
-                  <div class="cm-label">Port</div>
-                  {#if isSqlite}
-                    <input class="cm-input mono" value="" disabled />
-                  {:else}
-                    <input class="cm-input mono" type="number" bind:value={draft.port} />
-                  {/if}
-                </div>
-              {/if}
+              <div>
+                <div class="cm-label">Port</div>
+                {#if isSqlite}
+                  <input class="cm-input mono" value="" disabled />
+                {:else}
+                  <input class="cm-input mono" type="number" bind:value={draft.port} />
+                {/if}
+              </div>
             </div>
 
             <!-- database — port dòng 2205-2207 (Redis: DB index 0–15; NATS/Kafka: ẩn) -->

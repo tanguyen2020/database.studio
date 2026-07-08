@@ -7,6 +7,7 @@
   import ResultPanel from '$lib/components/results/ResultPanel.svelte'
   import SystemBadge from '$lib/components/SystemBadge.svelte'
   import SystemIcon from '$lib/components/SystemIcon.svelte'
+  import SearchSelect from '$lib/components/SearchSelect.svelte'
   import { systemMeta } from '$lib/systems'
   import { connections } from '$lib/stores/connections.svelte'
   import { results } from '$lib/stores/results.svelte'
@@ -22,8 +23,12 @@
   import { mapErrorToDocument } from '$lib/sql/errors'
   import { lintSql, schemaLints, toCmDiagnostics } from '$lib/sql/lint-client'
   import { splitStatements, statementAtOffset, offsetToLineCol } from '$lib/sql/statements'
+  import { parseTableRefs, resolveRef } from '$lib/sql/aliases'
+  import { dangerousStatements, type DangerStmt } from '$lib/sql/danger'
+  import { autofocus } from '$lib/actions/autofocus'
   import type { TabState } from '$lib/types'
   import type { Diagnostic } from '@codemirror/lint'
+  import type { CompletionSource } from '@codemirror/autocomplete'
   import { untrack } from 'svelte'
 
   interface Props {
@@ -45,8 +50,8 @@
   // "database" is a schema (list_schemas). Selecting one that differs from the
   // connection's own DB attaches an internal sub-connection at run time, so the
   // connection dropdown keeps showing the base profile.
-  let dbDropOpen = $state(false)
   let dbList = $state<string[]>([])
+  const dbOptions = $derived(dbList.map((d) => ({ value: d, label: d })))
   const supportsDbSwitch = $derived(
     !isOrphan && ['postgres', 'mysql', 'mariadb', 'mssql', 'clickhouse'].includes(tab.systemType),
   )
@@ -74,19 +79,21 @@
   function pickDatabase(db: string) {
     tab.state.database = db
     tabs.schedulePersist()
-    dbDropOpen = false
   }
 
   /** Effective connection to run against: the base connection, or an attached
    *  sub-connection when the tab points at a different database. */
   async function resolveRunConn(): Promise<string | null> {
     if (!tab.connectionId) return null
-    const db = currentDb
-    if (!db || !supportsDbSwitch || db === (profile?.database ?? '')) return tab.connectionId
+    // Item 6: each Query Editor tab runs on its OWN dedicated connection so a hung
+    // query here can't block other tabs or the Explorer. Pass the tab's chosen
+    // database (empty → the connection's own DB); the backend opens/reuses a
+    // per-tab connection keyed by tab id.
+    const db = supportsDbSwitch && currentDb && currentDb !== (profile?.database ?? '') ? currentDb : ''
     try {
-      return await ipc.attachDatabase(tab.connectionId, db)
+      return await ipc.openTabConnection(tab.connectionId, tab.id, db)
     } catch (e) {
-      toasts.error(`Cannot open database "${db}": ${e}`)
+      toasts.error(`Cannot open a connection for this tab: ${e}`)
       return tab.connectionId
     }
   }
@@ -95,31 +102,77 @@
   // must target the same database, not always the base connection.
   let runConnId = $state<string | null>(null)
 
+  // ---- destructive-statement guard --------------------------------------------
+  // A DELETE with no WHERE clause, or a TRUNCATE, wipes a whole table. Before
+  // running one we pop an in-app confirm. Applies to relational SQL dialects.
+  const RELATIONAL = ['postgres', 'mysql', 'mariadb', 'mssql', 'sqlite', 'clickhouse']
+  let dangerPrompt = $state<{ items: DangerStmt[]; resolve: (ok: boolean) => void } | null>(null)
+
+  /** Resolve true if it's safe to run, false if the user cancels. Only prompts
+   *  for relational systems when the batch contains a destructive statement. */
+  function confirmDangerous(statements: { sql: string }[]): Promise<boolean> {
+    if (!RELATIONAL.includes(tab.systemType)) return Promise.resolve(true)
+    const items = dangerousStatements(statements)
+    if (items.length === 0) return Promise.resolve(true)
+    return new Promise<boolean>((resolve) => {
+      dangerPrompt = { items, resolve }
+    })
+  }
+
+  function answerDanger(ok: boolean) {
+    dangerPrompt?.resolve(ok)
+    dangerPrompt = null
+  }
+
   // initial buffer from persisted tab state (component remounts per tab via {#key})
   // svelte-ignore state_referenced_locally
   const initialQuery = (tab.state.query as string) ?? ''
   let savedQuery = initialQuery
 
-  // ---- autocomplete schema (phase-2 §1): nạp schema + bảng của connection ----
+  // ---- autocomplete schema (phase-2 §1): suggest tables of the ACTIVE database.
+  // When a database is picked in the toolbar dropdown, introspect a sub-connection
+  // attached to that database so completions reflect ITS tables — not the base
+  // connection's own DB. `acConnId` is that connection id (base id when no switch).
   // untrack: loadSchemas() ghi explorer.cache đồng bộ (conn()/track()) → nếu để
   // trong vùng track của effect sẽ read+write cùng $state → effect_update_depth.
+  let acConnId = $state<string | null>(null)
   $effect(() => {
     const p = profile
-    if (p?.connected) {
-      untrack(() => {
-        void explorer.loadSchemas(p.id).then(() => {
-          const schemas = explorer.cache[p.id]?.schemas ?? []
-          const def = schemas.find((s) => s.is_default) ?? schemas[0]
-          if (def) void explorer.loadSchemaChildren(p.id, def.name)
-        })
-      })
+    const db = currentDb
+    const switchable = supportsDbSwitch
+    if (!p?.connected) {
+      acConnId = null
+      return
     }
+    untrack(() => {
+      void (async () => {
+        let cid = p.id
+        if (switchable && db && db !== (p.database ?? '')) {
+          try {
+            cid = await ipc.attachDatabase(p.id, db)
+          } catch {
+            cid = p.id
+          }
+        }
+        acConnId = cid
+        await explorer.loadSchemas(cid)
+        const schemas = explorer.cache[cid]?.schemas ?? []
+        // Load the tables the completion needs: the default schema, plus — for
+        // MySQL/MariaDB/ClickHouse where a "database" IS a schema — the picked one.
+        const targets = new Set<string>()
+        const def = schemas.find((s) => s.is_default) ?? schemas[0]
+        if (def) targets.add(def.name)
+        if (db && schemas.some((s) => s.name === db)) targets.add(db)
+        for (const name of targets) await explorer.loadSchemaChildren(cid, name)
+      })()
+    })
   })
 
   /** { table: [cols], schema.table: [cols] } cho lang-sql completion */
   const completionSchema = $derived.by(() => {
-    if (!profile) return undefined
-    const cache = explorer.cache[profile.id]
+    const cid = acConnId
+    if (!cid) return undefined
+    const cache = explorer.cache[cid]
     if (!cache) return undefined
     const out: Record<string, string[]> = {}
     for (const [schemaName, sc] of Object.entries(cache.bySchema)) {
@@ -133,17 +186,61 @@
   })
 
   const defaultSchema = $derived.by(() => {
-    if (!profile) return undefined
-    const schemas = explorer.cache[profile.id]?.schemas ?? []
+    const cid = acConnId
+    if (!cid) return undefined
+    const schemas = explorer.cache[cid]?.schemas ?? []
     return (schemas.find((s) => s.is_default) ?? schemas[0])?.name
   })
 
   const knownTables = $derived.by(() => {
-    if (!profile) return []
-    const cache = explorer.cache[profile.id]
+    const cid = acConnId
+    if (!cid) return []
+    const cache = explorer.cache[cid]
     if (!cache) return []
     return Object.values(cache.bySchema).flatMap((sc) => (sc.tables ?? []).map((t) => t.name))
   })
+
+  /** Find the schema that owns `table` (prefer the default), searching loaded
+   *  table lists in the completion connection's cache. */
+  function schemaOfTable(cid: string, table: string): string | undefined {
+    const cache = explorer.cache[cid]
+    if (!cache) return undefined
+    const t = table.toLowerCase()
+    const def = defaultSchema
+    if (def && cache.bySchema[def]?.tables?.some((x) => x.name.toLowerCase() === t)) return def
+    for (const [name, sc] of Object.entries(cache.bySchema)) {
+      if (sc.tables?.some((x) => x.name.toLowerCase() === t)) return name
+    }
+    return def
+  }
+
+  // Completion for `alias.` / `table.` — resolves the prefix against the current
+  // statement's FROM/JOIN clauses, lazily loads that table's columns (the built-in
+  // schema completion can't, because columns are loaded on demand), then suggests
+  // its columns. Complements lang-sql's keyword/table completion.
+  const columnSource: CompletionSource = async (ctx) => {
+    const cid = acConnId
+    if (!cid) return null
+    const before = ctx.matchBefore(/[a-zA-Z_][\w$]*\.[\w$]*$/)
+    if (!before) return null
+    const dot = before.text.lastIndexOf('.')
+    const prefix = before.text.slice(0, dot)
+    const doc = ctx.state.doc.toString()
+    const stmt = statementAtOffset(doc, ctx.pos)
+    const refs = parseTableRefs(stmt?.sql ?? doc)
+    const ref = resolveRef(refs, prefix)
+    if (!ref) return null
+    const schema = ref.schema ?? schemaOfTable(cid, ref.table)
+    if (!schema) return null
+    await explorer.loadTableDetail(cid, schema, ref.table)
+    const cols = explorer.cache[cid]?.bySchema[schema]?.tableDetails[ref.table]?.columns ?? []
+    if (cols.length === 0) return null
+    return {
+      from: before.from + dot + 1,
+      options: cols.map((c) => ({ label: c.name, type: 'property', detail: c.data_type })),
+      validFor: /^[\w$]*$/,
+    }
+  }
 
   // ---- lint tầng 1 (phase-2 §2b): backend parse-only + schema-aware client ----
   async function lintDoc(doc: string): Promise<Diagnostic[]> {
@@ -180,6 +277,7 @@
       toasts.show('No statement to run')
       return
     }
+    if (!(await confirmDangerous(statements))) return
     const cid = await resolveRunConn()
     if (!cid) return
     runConnId = cid
@@ -204,6 +302,7 @@
     const doc = editor.getDoc()
     const stmt = statementAtOffset(doc, editor.getCursorOffset())
     if (!stmt) return
+    if (!(await confirmDangerous([stmt]))) return
     const cid = await resolveRunConn()
     if (!cid) return
     runConnId = cid
@@ -424,43 +523,18 @@
       {/if}
     </div>
 
-    <!-- database dropdown (AUDIT-5 items 1 + 10) — pick a DB within the connection -->
+    <!-- database dropdown (AUDIT-5 items 1 + 10) — searchable combobox to pick a
+         DB within the connection (type to filter when there are many). -->
     {#if supportsDbSwitch && profile?.connected}
-      <div style="position:relative">
-        <div
-          onclick={() => (dbDropOpen = !dbDropOpen)}
-          onkeydown={(e) => e.key === 'Enter' && (dbDropOpen = !dbDropOpen)}
-          role="button"
-          tabindex="0"
+      <div style="display:flex;align-items:center;gap:var(--px-6)">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" style="flex:none;color:var(--muted)"><ellipse cx="12" cy="5" rx="8" ry="3"></ellipse><path d="M4 5v14c0 1.66 3.58 3 8 3s8-1.34 8-3V5"></path><path d="M4 12c0 1.66 3.58 3 8 3s8-1.34 8-3"></path></svg>
+        <SearchSelect
+          value={currentDb || null}
+          options={dbOptions}
+          placeholder="(database)"
           title="Database"
-          style="display:flex;align-items:center;gap:var(--px-6);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-7);padding:var(--px-4) var(--px-9);cursor:pointer"
-        >
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" style="flex:none;color:var(--muted)"><ellipse cx="12" cy="5" rx="8" ry="3"></ellipse><path d="M4 5v14c0 1.66 3.58 3 8 3s8-1.34 8-3V5"></path><path d="M4 12c0 1.66 3.58 3 8 3s8-1.34 8-3"></path></svg>
-          <span style="font-size:var(--px-12);font-weight:600;max-width:var(--px-160);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{currentDb || '(database)'}</span>
-          <span style="color:var(--muted);font-size:var(--px-9)">▾</span>
-        </div>
-        {#if dbDropOpen}
-          <div onclick={() => (dbDropOpen = false)} onkeydown={(e) => e.key === 'Escape' && (dbDropOpen = false)} role="presentation" style="position:fixed;inset:0;z-index:39"></div>
-          <div style="position:absolute;top:var(--px-34);left:0;z-index:40;min-width:var(--px-200);max-height:var(--px-300);overflow:auto;background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-10);box-shadow:0 var(--px-16) var(--px-40) var(--rgba-0-0-0-_45);padding:var(--px-5)">
-            <div style="font-size:var(--px-10);font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);padding:var(--px-6) var(--px-9) var(--px-4)">Database</div>
-            {#if dbList.length === 0}
-              <div style="padding:var(--px-6) var(--px-9);font-size:var(--px-11_5);color:var(--muted)">No databases</div>
-            {/if}
-            {#each dbList as db (db)}
-              <div
-                onclick={() => pickDatabase(db)}
-                onkeydown={(e) => e.key === 'Enter' && pickDatabase(db)}
-                role="button"
-                tabindex="0"
-                class="wk-drop-row"
-                style="display:flex;align-items:center;gap:var(--px-9);padding:var(--px-6) var(--px-9);border-radius:var(--px-7);cursor:pointer;background:{db === currentDb ? 'var(--hover)' : 'transparent'}"
-              >
-                <span class="mono" style="font-size:var(--px-12_5);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{db}</span>
-                <span style="margin-left:auto;flex:none;color:var(--primary);font-size:var(--px-12)">{db === currentDb ? '✓' : ''}</span>
-              </div>
-            {/each}
-          </div>
-        {/if}
+          onChange={(v) => v && pickDatabase(v)}
+        />
       </div>
     {/if}
 
@@ -517,6 +591,7 @@
       system={tab.systemType}
       schema={completionSchema}
       {defaultSchema}
+      {columnSource}
       lintSource={lintDoc}
       {onChange}
       onRun={run}
@@ -550,6 +625,43 @@
   </div>
 </div>
 
+{#if dangerPrompt}
+  <!-- Destructive-statement confirm. Backdrop click does NOT confirm/close;
+       use Cancel / Run anyway / Escape. -->
+  <div
+    onkeydown={(e) => { if (e.key === 'Escape') answerDanger(false) }}
+    role="presentation"
+    style="position:fixed;inset:0;background:var(--rgba-0-0-0-_5);display:flex;align-items:center;justify-content:center;z-index:90"
+  >
+    <div
+      role="dialog"
+      aria-modal="true"
+      tabindex="-1"
+      style="background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-14);padding:var(--px-18);min-width:var(--px-360);max-width:var(--px-520);box-shadow:0 var(--px-24) var(--px-60) var(--rgba-0-0-0-_55)"
+    >
+      <div style="display:flex;align-items:center;gap:var(--px-8);margin-bottom:var(--px-8)">
+        <span style="color:var(--error);font-size:var(--px-16)">⚠</span>
+        <span style="font-size:var(--px-14);font-weight:600;color:var(--text)">Delete all rows without a filter?</span>
+      </div>
+      <div style="font-size:var(--px-12_5);color:var(--text2);line-height:1.45;margin-bottom:var(--px-10)">
+        {dangerPrompt.items.length === 1 ? 'This statement' : `${dangerPrompt.items.length} statements`} will remove every row from the target
+        {dangerPrompt.items.length === 1 ? 'table' : 'tables'}. This cannot be undone.
+      </div>
+      <div style="max-height:var(--px-200);overflow:auto;background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-8);padding:var(--px-8);margin-bottom:var(--px-16)">
+        {#each dangerPrompt.items as d (d.index)}
+          <div class="mono" style="font-size:var(--px-11_5);color:var(--text);white-space:pre-wrap;word-break:break-word;padding:var(--px-2) 0">
+            <span style="color:var(--error);font-weight:700">{d.kind === 'truncate' ? 'TRUNCATE' : 'DELETE (no WHERE)'}</span> · {d.sql}
+          </div>
+        {/each}
+      </div>
+      <div style="display:flex;gap:var(--px-8);justify-content:flex-end">
+        <span use:autofocus onclick={() => answerDanger(false)} onkeydown={(e) => e.key === 'Enter' && answerDanger(false)} role="button" tabindex="0" class="cfm-btn">Cancel</span>
+        <span onclick={() => answerDanger(true)} onkeydown={(e) => e.key === 'Enter' && answerDanger(true)} role="button" tabindex="0" class="cfm-btn danger">Run anyway</span>
+      </div>
+    </div>
+  </div>
+{/if}
+
 <style>
   /* nút toolbar editor — dòng 255 */
   .wk-tbtn {
@@ -575,5 +687,23 @@
     padding: var(--px-2) var(--px-6);
     font-size: var(--px-11_5);
     color: var(--text);
+  }
+  .cfm-btn {
+    font-size: var(--px-12);
+    color: var(--text2);
+    background: var(--panel);
+    border: var(--px-1) solid var(--border);
+    border-radius: var(--px-6);
+    padding: var(--px-5) var(--px-14);
+    cursor: pointer;
+  }
+  .cfm-btn:hover {
+    background: var(--hover);
+  }
+  .cfm-btn.danger {
+    color: var(--hex-fff);
+    background: var(--error);
+    border-color: var(--error);
+    font-weight: 600;
   }
 </style>

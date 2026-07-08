@@ -50,7 +50,6 @@
 
 {#if pending}
   <div
-    onclick={cancel}
     onkeydown={(e) => e.key === 'Escape' && cancel()}
     role="presentation"
     style="position:fixed;inset:0;background:var(--rgba-0-0-0-_5);display:flex;align-items:center;justify-content:center;z-index:58"

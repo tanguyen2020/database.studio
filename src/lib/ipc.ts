@@ -12,6 +12,7 @@ import type {
   ConstraintInfo,
   ExecResponse,
   IndexInfo,
+  PartitionInfo,
   ProfileDraft,
   ProfilePublic,
   RoutineInfo,
@@ -207,6 +208,8 @@ export interface NatsJsMessage {
   subject: string
   payload: string
   time: string
+  /** Message key = the `Nats-Msg-Id` header if the publisher set one (empty otherwise). */
+  key: string
 }
 
 export const natsJsStreams = (connId: string) =>
@@ -231,12 +234,22 @@ export const natsJsDeleteConsumer = (connId: string, stream: string, name: strin
   invoke<void>('nats_js_delete_consumer', { connId, stream, name })
 export const natsJsDeleteMessage = (connId: string, stream: string, seq: number) =>
   invoke<void>('nats_js_delete_message', { connId, stream, seq })
-export const natsJsSubjectMessages = (connId: string, stream: string, subject: string, limit: number) =>
-  invoke<NatsJsMessage[]>('nats_js_subject_messages', { connId, stream, subject, limit })
+export const natsJsSubjectMessages = (
+  connId: string,
+  stream: string,
+  subject: string,
+  limit: number,
+  startSeq?: number,
+) => invoke<NatsJsMessage[]>('nats_js_subject_messages', { connId, stream, subject, limit, startSeq: startSeq ?? null })
+export const natsJsSubjectStats = (connId: string, stream: string, subject: string) =>
+  invoke<{ total: number; last_seq: number }>('nats_js_subject_stats', { connId, stream, subject })
 export const natsJsPurgeSubject = (connId: string, stream: string, subject: string) =>
   invoke<void>('nats_js_purge_subject', { connId, stream, subject })
 export const natsJsRemoveSubject = (connId: string, stream: string, subject: string) =>
   invoke<void>('nats_js_remove_subject', { connId, stream, subject })
+/** Add a subject to a stream and publish an initial message to it. */
+export const natsJsAddSubject = (connId: string, stream: string, subject: string, payload: string) =>
+  invoke<void>('nats_js_add_subject', { connId, stream, subject, payload })
 
 // KV Store (T9)
 export const natsKvBuckets = (connId: string) => invoke<string[]>('nats_kv_buckets', { connId })
@@ -595,6 +608,13 @@ export const openDatabase = (connId: string, database: string) =>
 export const attachDatabase = (connId: string, database: string) =>
   invoke<string>('attach_database', { connId, database })
 
+// Per-tab dedicated connection (item 6): each Query Editor tab runs on its own
+// physical connection so a hung query can't block other tabs / the Explorer.
+export const openTabConnection = (connId: string, tabId: string, database: string) =>
+  invoke<string>('open_tab_connection', { connId, tabId, database })
+export const closeTabConnection = (connId: string) =>
+  invoke<void>('close_tab_connection', { connId })
+
 // ---- streaming export (T24) — Tauri-only; bounded-memory stream to a file ----
 /** Stream a query to `path` in `format` (csv|json|sql). `onProgress` gets rows
  *  written so far; cancel via `cancelExport(exportId)`. Returns total rows. */
@@ -631,6 +651,9 @@ export const listIndexes = (connId: string, schema: string, table: string) =>
 
 export const listConstraints = (connId: string, schema: string, table: string) =>
   invoke<ConstraintInfo[]>('list_constraints', { connId, schema, table })
+
+export const listPartitions = (connId: string, schema: string, table: string) =>
+  invoke<PartitionInfo[]>('list_partitions', { connId, schema, table })
 
 export const listRoutines = (connId: string, schema: string) =>
   invoke<RoutineInfo[]>('list_routines', { connId, schema })

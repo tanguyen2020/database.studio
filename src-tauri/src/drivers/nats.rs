@@ -369,33 +369,36 @@ impl NatsDriver {
             seq: raw.sequence,
             subject: raw.subject.to_string(),
             payload: String::from_utf8_lossy(&raw.payload).into_owned(),
-            // Server-stored publish time as ISO-8601 UTC (parseable by JS Date).
-            time: {
-                let t = raw.time;
-                format!(
-                    "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
-                    t.year(),
-                    u8::from(t.month()),
-                    t.day(),
-                    t.hour(),
-                    t.minute(),
-                    t.second()
-                )
-            },
+            key: header_key(Some(&raw.headers)),
+            // Server-stored publish time as ISO-8601, preserving the server's own
+            // UTC offset (parseable by JS Date).
+            time: iso_with_offset(raw.time),
         })
     }
 
     /// Browse up to `limit` existing messages of a subject (server-side filtered,
     /// no-wait fetch). Uses an ephemeral pull consumer so nothing is left behind.
-    pub async fn js_subject_messages(&self, stream: &str, subject: &str, limit: usize) -> Result<Vec<JsMessage>, QueryError> {
+    pub async fn js_subject_messages(
+        &self,
+        stream: &str,
+        subject: &str,
+        limit: usize,
+        start_seq: Option<u64>,
+    ) -> Result<Vec<JsMessage>, QueryError> {
         use async_nats::jetstream::consumer::{pull::Config as PullConfig, AckPolicy, DeliverPolicy};
         use futures::StreamExt;
         let js = async_nats::jetstream::new(self.client.clone());
         let s = js.get_stream(stream).await.map_err(|e| err("Failed to get stream", e))?;
+        // Server-side pagination: start at a given stream sequence (Next fetches the
+        // next page from the server, never loading the whole subject at once).
+        let deliver_policy = match start_seq {
+            Some(seq) if seq > 1 => DeliverPolicy::ByStartSequence { start_sequence: seq },
+            _ => DeliverPolicy::All,
+        };
         let consumer = s
             .create_consumer(PullConfig {
                 filter_subject: subject.to_string(),
-                deliver_policy: DeliverPolicy::All,
+                deliver_policy,
                 ack_policy: AckPolicy::None,
                 ..Default::default()
             })
@@ -411,28 +414,42 @@ impl NatsDriver {
         while let Some(item) = batch.next().await {
             let m = item.map_err(|e| err("Message read error", e))?;
             let info = m.info().ok();
+            let key = header_key(m.headers.as_ref());
             out.push(JsMessage {
                 seq: info.as_ref().map(|i| i.stream_sequence).unwrap_or(0),
                 subject: m.subject.to_string(),
                 payload: String::from_utf8_lossy(&m.payload).into_owned(),
-                // Server-stored publish time as ISO-8601 UTC (parseable by JS Date).
-                time: info
-                    .map(|i| {
-                        let t = i.published;
-                        format!(
-                            "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
-                            t.year(),
-                            u8::from(t.month()),
-                            t.day(),
-                            t.hour(),
-                            t.minute(),
-                            t.second()
-                        )
-                    })
-                    .unwrap_or_default(),
+                key,
+                // Server-stored publish time as ISO-8601, preserving the server's own
+                // UTC offset (parseable by JS Date).
+                time: info.map(|i| iso_with_offset(i.published)).unwrap_or_default(),
             });
         }
         Ok(out)
+    }
+
+    /// Total retained messages + last stream sequence for a subject. Powers the
+    /// message browser's pagination footer (total records + page count) and lets
+    /// the client page newest-first from the last sequence backwards.
+    pub async fn js_subject_stats(&self, stream: &str, subject: &str) -> Result<SubjectStats, QueryError> {
+        use futures::TryStreamExt;
+        let js = async_nats::jetstream::new(self.client.clone());
+        let s = js.get_stream(stream).await.map_err(|e| err("Failed to get stream", e))?;
+        // Per-subject message count (server aggregates it; no full scan).
+        let mut total: u64 = 0;
+        let mut subjects = s
+            .info_with_subjects(subject)
+            .await
+            .map_err(|e| err("Failed to get subject counts", e))?;
+        while let Some((_subj, count)) = subjects.try_next().await.map_err(|e| err("Failed to read subject counts", e))? {
+            total += count as u64;
+        }
+        // Last stream sequence carrying this subject (0 when the subject is empty).
+        let last_seq = match s.get_last_raw_message_by_subject(subject).await {
+            Ok(m) => m.sequence,
+            Err(_) => 0,
+        };
+        Ok(SubjectStats { total, last_seq })
     }
 
     /// Clear messages of a single subject (JetStream purge with a subject filter).
@@ -444,8 +461,10 @@ impl NatsDriver {
         Ok(())
     }
 
-    /// Remove a subject from a stream's config (update stream). Refuses to remove
-    /// a subject the stream doesn't have, or the last remaining subject.
+    /// Delete a subject entirely: purge its messages, then drop it from the stream's
+    /// config (update stream). The stream itself is always kept. Refuses to remove a
+    /// subject the stream doesn't have, or the last remaining subject (a stream must
+    /// keep ≥1 subject — the stream is never deleted here).
     pub async fn js_remove_subject(&self, stream: &str, subject: &str) -> Result<(), QueryError> {
         let js = async_nats::jetstream::new(self.client.clone());
         let mut s = js.get_stream(stream).await.map_err(|e| err("Failed to get stream", e))?;
@@ -456,9 +475,40 @@ impl NatsDriver {
             return Err(err("Subject not found in stream", subject));
         }
         if cfg.subjects.is_empty() {
-            return Err(err("Cannot remove the last subject", "delete the stream instead"));
+            return Err(err(
+                "Cannot delete the only subject of a stream",
+                "a stream must keep at least one subject — delete the stream itself instead",
+            ));
         }
+        // Clear the subject's retained messages first, then remove it from config.
+        s.purge().filter(subject).await.map_err(|e| err("Failed to purge subject", e))?;
         js.update_stream(&cfg).await.map_err(|e| err("Failed to update stream", e))?;
+        Ok(())
+    }
+
+    /// JetStream: add a subject to a stream and publish an initial message to it.
+    /// If the stream doesn't yet capture the subject it is added to the stream config
+    /// (a wildcard entry may already cover it → the config update is best-effort), then
+    /// the payload is published through JetStream so the subject has a stored message.
+    /// NATS timestamps the message on the server; the client cannot set the publish time.
+    pub async fn js_add_subject(&self, stream: &str, subject: &str, payload: &str) -> Result<(), QueryError> {
+        if subject.trim().is_empty() {
+            return Err(err("Subject is required", "empty subject"));
+        }
+        let js = async_nats::jetstream::new(self.client.clone());
+        let mut s = js.get_stream(stream).await.map_err(|e| err("Failed to get stream", e))?;
+        let mut cfg = s.info().await.map_err(|e| err("Failed to get stream info", e))?.config.clone();
+        if !cfg.subjects.iter().any(|x| x == subject) {
+            cfg.subjects.push(subject.to_string());
+            // Best-effort: a pre-existing wildcard may already cover the subject, in which
+            // case adding it verbatim is rejected as overlapping — ignore and still publish.
+            let _ = js.update_stream(&cfg).await;
+        }
+        let ack = js
+            .publish(subject.to_string(), payload.to_string().into())
+            .await
+            .map_err(|e| err("Failed to publish", e))?;
+        ack.await.map_err(|e| err("Publish not acknowledged (subject not captured by the stream?)", e))?;
         Ok(())
     }
 }
@@ -485,11 +535,53 @@ pub struct JsConsumer {
 }
 
 #[derive(Debug, serde::Serialize)]
+pub struct SubjectStats {
+    pub total: u64,
+    pub last_seq: u64,
+}
+
+#[derive(Debug, serde::Serialize)]
 pub struct JsMessage {
     pub seq: u64,
     pub subject: String,
     pub payload: String,
     pub time: String,
+    /// Message key = the `Nats-Msg-Id` header if the publisher set one (empty otherwise).
+    pub key: String,
+}
+
+/// Format a server timestamp as ISO-8601 keeping the server's own UTC offset
+/// (e.g. `2026-06-30T10:23:14Z` or `2026-06-30T17:23:14+07:00`). The datetime's
+/// components are already expressed in its offset, so the frontend can render the
+/// server's wall clock verbatim while the string stays parseable by JS `Date`.
+fn iso_with_offset(t: time::OffsetDateTime) -> String {
+    let secs = t.offset().whole_seconds();
+    let tz = if secs == 0 {
+        "Z".to_string()
+    } else {
+        let (h, m, _) = t.offset().as_hms();
+        format!("{}{:02}:{:02}", if secs < 0 { '-' } else { '+' }, (h as i32).abs(), (m as i32).abs())
+    };
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}{}",
+        t.year(),
+        u8::from(t.month()),
+        t.day(),
+        t.hour(),
+        t.minute(),
+        t.second(),
+        tz
+    )
+}
+
+/// Extract the `Nats-Msg-Id` header (used as a message key/dedup id) if present.
+/// Must use the standard `NATS_MESSAGE_ID` header name — a plain `&str` lookup
+/// builds a *custom* header name that won't match the server's standard variant.
+fn header_key(headers: Option<&async_nats::HeaderMap>) -> String {
+    headers
+        .and_then(|h| h.get(async_nats::header::NATS_MESSAGE_ID))
+        .map(|v| v.as_str().to_string())
+        .unwrap_or_default()
 }
 
 #[derive(Debug, serde::Serialize)]

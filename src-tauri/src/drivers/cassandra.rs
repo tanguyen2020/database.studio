@@ -24,7 +24,9 @@ use scylla::value::CqlValue;
 use serde::Serialize;
 use serde_json::{json, Map, Value};
 
-use crate::drivers::types::{ColumnDef, QueryResultSet, StatementOutcome, TestResult};
+use crate::drivers::types::{
+    ColumnDef, PartitionInfo, QueryResultSet, StatementOutcome, TestResult,
+};
 use crate::error::QueryError;
 
 const DEFAULT_PAGE_SIZE: i32 = 500;
@@ -595,6 +597,38 @@ impl CassandraDriver {
             (rank, c.position.max(0))
         });
         Ok(cols)
+    }
+
+    /// Cassandra has no range/list partitions — data is distributed by the
+    /// partition key. Report that key composition as a single info row so the
+    /// Explorer's Partitions node is consistent across engines.
+    pub async fn partitions(
+        &self,
+        keyspace: &str,
+        table: &str,
+    ) -> Result<Vec<PartitionInfo>, QueryError> {
+        let cols = self.columns_of(keyspace, table).await?;
+        let pk: Vec<String> = cols
+            .iter()
+            .filter(|c| c.kind == "partition_key")
+            .map(|c| c.name.clone())
+            .collect();
+        if pk.is_empty() {
+            return Ok(Vec::new());
+        }
+        let key = if pk.len() == 1 {
+            pk[0].clone()
+        } else {
+            format!("({})", pk.join(", "))
+        };
+        Ok(vec![PartitionInfo {
+            name: format!("Partition key: {key}"),
+            method: "PARTITION KEY".to_string(),
+            key: Some(key),
+            expression: None,
+            rows: None,
+            position: None,
+        }])
     }
 
     /// Whole keyspace tree: tables (+cols), MVs, UDTs, functions/aggregates, indexes.

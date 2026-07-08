@@ -71,6 +71,8 @@ redis = { version = "0.27", default-features = false, features = [
 
 # NATS (Phase 3) — async client + JetStream (dùng rustls như phần còn lại của repo).
 async-nats = { version = "0.38", default-features = false, features = ["ring"] }
+# used to format NATS JetStream message timestamps while preserving the server's UTC offset
+time = "0.3"
 bytes = "1"
 
 # Kafka (Phase 4) — rdkafka bọc librdkafka. Build từ source qua CMake (VS ships cmake).

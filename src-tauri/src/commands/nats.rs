@@ -5,7 +5,7 @@
 use futures::StreamExt;
 use tauri::{AppHandle, Emitter, State};
 
-use crate::drivers::nats::{JsConsumer, JsMessage, JsStream, ObjInfo};
+use crate::drivers::nats::{JsConsumer, JsMessage, JsStream, ObjInfo, SubjectStats};
 use crate::drivers::LiveConnection;
 use crate::error::{AppError, QueryError};
 use crate::state::AppState;
@@ -328,13 +328,35 @@ pub async fn nats_js_subject_messages(
     stream: String,
     subject: String,
     limit: usize,
+    start_seq: Option<u64>,
 ) -> Result<Vec<JsMessage>, AppError> {
     let inner = state
         .registry
         .with_driver(&conn_id, move |driver| async move {
             let d = driver.lock().await;
             match &*d {
-                LiveConnection::Nats(n) => n.js_subject_messages(&stream, &subject, limit).await,
+                LiveConnection::Nats(n) => n.js_subject_messages(&stream, &subject, limit, start_seq).await,
+                _ => Err(not_nats()),
+            }
+        })
+        .await?;
+    inner.map_err(|e| AppError::Driver(e.message))
+}
+
+/// JetStream: total retained messages + last sequence for a subject (pagination).
+#[tauri::command]
+pub async fn nats_js_subject_stats(
+    state: State<'_, AppState>,
+    conn_id: String,
+    stream: String,
+    subject: String,
+) -> Result<SubjectStats, AppError> {
+    let inner = state
+        .registry
+        .with_driver(&conn_id, move |driver| async move {
+            let d = driver.lock().await;
+            match &*d {
+                LiveConnection::Nats(n) => n.js_subject_stats(&stream, &subject).await,
                 _ => Err(not_nats()),
             }
         })
@@ -377,6 +399,28 @@ pub async fn nats_js_remove_subject(
             let d = driver.lock().await;
             match &*d {
                 LiveConnection::Nats(n) => n.js_remove_subject(&stream, &subject).await,
+                _ => Err(not_nats()),
+            }
+        })
+        .await?;
+    inner.map_err(|e| AppError::Driver(e.message))
+}
+
+/// JetStream: add a subject to a stream and publish an initial message to it.
+#[tauri::command]
+pub async fn nats_js_add_subject(
+    state: State<'_, AppState>,
+    conn_id: String,
+    stream: String,
+    subject: String,
+    payload: String,
+) -> Result<(), AppError> {
+    let inner = state
+        .registry
+        .with_driver(&conn_id, move |driver| async move {
+            let d = driver.lock().await;
+            match &*d {
+                LiveConnection::Nats(n) => n.js_add_subject(&stream, &subject, &payload).await,
                 _ => Err(not_nats()),
             }
         })

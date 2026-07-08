@@ -18,6 +18,7 @@
   import SqlWorkspace from '$lib/components/workspace/SqlWorkspace.svelte'
   import TableViewerTab from '$lib/components/workspace/TableViewerTab.svelte'
   import RedisWorkspace from '$lib/components/workspace/RedisWorkspace.svelte'
+  import RedisKeyView from '$lib/components/workspace/RedisKeyView.svelte'
   import RedisPubSub from '$lib/components/workspace/RedisPubSub.svelte'
   import NatsWorkspace from '$lib/components/workspace/NatsWorkspace.svelte'
   import NatsSubjectMessages from '$lib/components/workspace/NatsSubjectMessages.svelte'
@@ -44,7 +45,9 @@
   import GenerateTestDataDialog from '$lib/components/GenerateTestDataDialog.svelte'
   import ExecuteRoutineDialog from '$lib/components/ExecuteRoutineDialog.svelte'
   import ClickHouseCreateDialog from '$lib/components/ClickHouseCreateDialog.svelte'
+  import AddPartitionDialog from '$lib/components/AddPartitionDialog.svelte'
   import NewDatabaseDialog from '$lib/components/NewDatabaseDialog.svelte'
+  import NatsAddMessageDialog from '$lib/components/NatsAddMessageDialog.svelte'
   import Settings from '$lib/components/Settings.svelte'
   import { palette } from '$lib/stores/palette.svelte'
   import { settings } from '$lib/stores/settings.svelte'
@@ -210,6 +213,8 @@
             <SavedQueriesTab />
           {:else if t.contentType === 'redis'}
             <RedisWorkspace tab={t} />
+          {:else if t.contentType === 'redis-key'}
+            <RedisKeyView tab={t} />
           {:else if t.contentType === 'redis-pubsub'}
             <RedisPubSub tab={t} />
           {:else if t.contentType === 'nats'}
@@ -331,6 +336,8 @@
 <GenerateTestDataDialog />
 <ExecuteRoutineDialog />
 <ClickHouseCreateDialog />
+<AddPartitionDialog />
 <NewDatabaseDialog />
+<NatsAddMessageDialog />
 <Settings />
 <Toasts />

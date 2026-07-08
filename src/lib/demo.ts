@@ -252,6 +252,13 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
       // current database ('app' in the demo list) → same connection; else sub-id
       return ok(db === 'app' ? cid : `${cid}::${db}`)
     }
+    case 'open_tab_connection': {
+      const cid = String(args?.connId ?? '')
+      const tabId = String(args?.tabId ?? '')
+      return ok(`${cid}#tab-${tabId}`)
+    }
+    case 'close_tab_connection':
+      return ok(null)
     case 'list_schemas':
       return ok([{ name: 'public', is_default: true }])
     case 'list_tables':
@@ -348,6 +355,17 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
       ])
     case 'list_constraints':
       return ok([{ name: 'students_pkey', kind: 'PRIMARY KEY', definition: 'PRIMARY KEY (id)' }])
+    case 'list_partitions':
+      // Only the demo 'enrollments' table is partitioned (RANGE by year).
+      return ok(
+        (args?.table as string) === 'enrollments'
+          ? [
+              { name: 'enrollments_2023', method: 'RANGE', key: 'RANGE (enrolled_on)', expression: "FOR VALUES FROM ('2023-01-01') TO ('2024-01-01')", rows: 4120, position: 1 },
+              { name: 'enrollments_2024', method: 'RANGE', key: 'RANGE (enrolled_on)', expression: "FOR VALUES FROM ('2024-01-01') TO ('2025-01-01')", rows: 5230, position: 2 },
+              { name: 'enrollments_2025', method: 'RANGE', key: 'RANGE (enrolled_on)', expression: "FOR VALUES FROM ('2025-01-01') TO ('2026-01-01')", rows: 3130, position: 3 },
+            ]
+          : [],
+      )
     case 'list_routines':
       return ok([
         { schema: 'public', name: 'add_one', kind: 'function', params: [{ name: 'x', data_type: 'int4' }], return_type: 'int4' },
@@ -365,13 +383,13 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
     case 'exec_statement': {
       // Collation unification (MySQL/MariaDB) — feed the audit dialog demo data.
       const stmtSql = String(args?.sql ?? '')
-      if (/information_schema.SCHEMATA/i.test(stmtSql) && /DEFAULT_COLLATION_NAME/i.test(stmtSql)) {
+      if (/information_schema\.SCHEMATA/i.test(stmtSql) && /DEFAULT_COLLATION_NAME/i.test(stmtSql)) {
         return ok({ ok: true, result: { cols: [['charset', 'text'], ['collation', 'text']], rows: [{ charset: 'utf8mb4', collation: 'utf8mb4_0900_ai_ci' }], total: 1 }, duration_ms: 3 })
       }
-      if (/information_schema.COLLATIONS/i.test(stmtSql)) {
+      if (/information_schema\.COLLATIONS/i.test(stmtSql)) {
         return ok({ ok: true, result: { cols: [['name', 'text'], ['is_default', 'text']], rows: [{ name: 'utf8mb4_0900_ai_ci', is_default: 'Yes' }, { name: 'utf8mb4_general_ci', is_default: '' }, { name: 'utf8mb4_unicode_ci', is_default: '' }], total: 3 }, duration_ms: 3 })
       }
-      if (/GROUP_CONCAT(DISTINCT c.COLLATION_NAME/i.test(stmtSql)) {
+      if (/GROUP_CONCAT\(DISTINCT c\.COLLATION_NAME/i.test(stmtSql)) {
         return ok({
           ok: true,
           result: {
@@ -488,17 +506,34 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
         { name: 'ORDERS', subjects: ['orders.eu', 'orders.us'], retention: 'Limits', storage: 'File', messages: 1240, bytes: 98304, consumers: 2 },
         { name: 'EVENTS', subjects: ['events.*'], retention: 'WorkQueue', storage: 'Memory', messages: 57, bytes: 8192, consumers: 1 },
       ])
-    case 'nats_js_subject_messages':
-      return ok(
-        Array.from({ length: 3 }, (_, i) => ({
-          seq: i + 1,
-          subject: (args?.subject as string) ?? 'orders.eu',
+    case 'nats_js_subject_messages': {
+      // Simulate server-side pagination: a subject with 250 retained messages;
+      // return only the page starting at `startSeq` (ascending), bounded by `limit`.
+      // Time increases monotonically with sequence (1s apart) so newest-by-time
+      // equals highest-sequence.
+      const TOTAL = 250
+      const base = Date.UTC(2026, 5, 30, 10, 0, 0)
+      const limit = Math.max(1, Number(args?.limit ?? 100))
+      const startSeq = Math.max(1, Number(args?.startSeq ?? 1))
+      const subj = (args?.subject as string) ?? 'orders.eu'
+      const out = []
+      for (let seq = startSeq; seq < startSeq + limit && seq <= TOTAL; seq++) {
+        const i = seq - 1
+        out.push({
+          seq,
+          subject: subj,
           payload: `{"id":${1000 + i}}`,
-          time: `2026-06-30T10:2${i}:14Z`,
-        })),
-      )
+          time: new Date(base + seq * 1000).toISOString(),
+          key: `msg-${1000 + i}`,
+        })
+      }
+      return ok(out)
+    }
+    case 'nats_js_subject_stats':
+      return ok({ total: 250, last_seq: 250 })
     case 'nats_js_purge_subject':
     case 'nats_js_remove_subject':
+    case 'nats_js_add_subject':
       return ok(null)
     case 'nats_js_consumers':
       return ok([
@@ -506,7 +541,7 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
         { name: 'audit', deliver_policy: 'New', ack_policy: 'None', filter_subject: '', num_pending: 0, num_ack_pending: 0 },
       ])
     case 'nats_js_peek':
-      return ok({ seq: (args?.seq as number) ?? 1, subject: 'orders.new', payload: '{"id":1001,"total":42.5}', time: '2026-06-30T10:23:14Z' })
+      return ok({ seq: (args?.seq as number) ?? 1, subject: 'orders.new', payload: '{"id":1001,"total":42.5}', time: '2026-06-30T10:23:14Z', key: 'msg-1001' })
     case 'nats_js_create_stream':
     case 'nats_js_delete_stream':
     case 'nats_js_purge_stream':

@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
 use rdkafka::client::DefaultClientContext;
 use rdkafka::config::ClientConfig;
-use rdkafka::consumer::{BaseConsumer, Consumer};
+use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::message::{Headers, Message};
 use rdkafka::producer::{FutureProducer, FutureRecord};
 use rdkafka::{Offset, TopicPartitionList};
@@ -186,17 +186,22 @@ impl KafkaDriver {
     /// subscribe consumer-group). Dùng BaseConsumer + poll trong OS thread riêng
     /// (StreamConsumer async close deadlock nếu ngừng poll — rdkafka gotcha).
     /// from: "earliest" | "latest" | "offset". partition None = tất cả partitions.
-    pub fn browse_consumer(
+    pub fn browse_consumer<C: ConsumerContext + 'static>(
         &self,
         topic: &str,
         from: &str,
         offset: i64,
         partition: Option<i32>,
-    ) -> Result<BaseConsumer, QueryError> {
+        context: C,
+    ) -> Result<BaseConsumer<C>, QueryError> {
         let mut cfg = self.config.clone();
         cfg.set("group.id", format!("dbstudio-browse-{}", uuid::Uuid::new_v4()));
         cfg.set("enable.auto.commit", "false");
-        let consumer: BaseConsumer = cfg.create().map_err(|e| err("Failed to create BaseConsumer", e))?;
+        // Emit a PartitionEOF when a partition is drained so the UI can tell
+        // "reached end (topic empty / all read)" apart from "can't fetch".
+        cfg.set("enable.partition.eof", "true");
+        let consumer: BaseConsumer<C> =
+            cfg.create_with_context(context).map_err(|e| err("Failed to create BaseConsumer", e))?;
 
         let partitions: Vec<i32> = match partition {
             Some(p) => vec![p],

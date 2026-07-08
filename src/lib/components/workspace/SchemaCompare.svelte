@@ -7,13 +7,20 @@
   import { tabs } from '$lib/stores/tabs.svelte'
   import { toasts } from '$lib/stores/toast.svelte'
   import { splitStatements } from '$lib/sql/statements'
+  import { highlightSql, sqlTokenColor } from '$lib/format/sql'
+  import SearchSelect from '$lib/components/SearchSelect.svelte'
   import {
     compareSchemas,
     diffCounts,
     genMigration,
     lineDiff,
+    objectKey,
+    columnKey,
+    type CmpIndex,
     type CmpRoutine,
+    type CmpTable,
     type ObjectDiff,
+    type ObjectKind,
     type SchemaSnapshot,
   } from '$lib/compare/diff'
   import type { TabState } from '$lib/types'
@@ -23,7 +30,11 @@
   }
   let { tab }: Props = $props()
 
-  const options = $derived(connections.profiles.filter((p) => p.connected))
+  // Every relational connection is selectable (item 2) — not only already-open ones;
+  // a picked-but-closed connection is opened on demand in compare(). Non-relational
+  // systems (Redis/Kafka/NATS) have no schema to compare, so they're excluded.
+  const RELATIONAL = ['postgres', 'mysql', 'mariadb', 'mssql', 'sqlite', 'clickhouse']
+  const options = $derived(connections.profiles.filter((p) => RELATIONAL.includes(p.system)))
   type CmpState = { srcConn?: string | null; tgtConn?: string | null; srcDb?: string | null; tgtDb?: string | null; presetTick?: number }
   const st0 = untrack(() => tab.state) as CmpState
   let srcConn = $state<string | null>(st0.srcConn ?? null)
@@ -45,6 +56,20 @@
   let tgtDb = $state<string | null>(st0.tgtDb ?? null)
   let srcDbs = $state<string[]>([])
   let tgtDbs = $state<string[]>([])
+
+  // Searchable dropdown option lists (connections + databases).
+  const connOptions = $derived([
+    { value: null as string | null, label: '—' },
+    ...options.map((o) => ({ value: o.id as string | null, label: `${o.name} (${o.system})` })),
+  ])
+  const srcDbOptions = $derived([
+    { value: null as string | null, label: srcProfile?.database || '(current)' },
+    ...srcDbs.map((d) => ({ value: d as string | null, label: d })),
+  ])
+  const tgtDbOptions = $derived([
+    { value: null as string | null, label: tgtProfile?.database || '(current)' },
+    ...tgtDbs.map((d) => ({ value: d as string | null, label: d })),
+  ])
 
   // Re-apply a new preset when the singleton tab is reopened (openSchemaCompare
   // bumps presetTick) — e.g. "Compare Databases…" from a database node.
@@ -90,19 +115,27 @@
   }
 
   async function snapshot(connId: string): Promise<SchemaSnapshot> {
-    const schemas = await ipc.listSchemas(connId)
+    const schemas = await ipc.listSchemas(connId).catch(() => [])
     const schema = schemas.find((s) => s.is_default)?.name ?? schemas[0]?.name ?? 'public'
-    const tbls = await ipc.listTables(connId, schema)
-    const tables = []
+    const tbls = await ipc.listTables(connId, schema).catch(() => [])
+    const tables: CmpTable[] = []
+    const indexes: CmpIndex[] = []
+    // Per-table introspection is best-effort: a failure on one object must not wipe
+    // the whole comparison (why some engines showed nothing before).
     for (const t of tbls.filter((x) => x.kind !== 'system')) {
-      const cols = await ipc.listColumns(connId, schema, t.name)
+      const cols = await ipc.listColumns(connId, schema, t.name).catch(() => [])
       tables.push({
         name: t.name,
         kind: (t.kind === 'view' ? 'view' : 'table') as 'table' | 'view',
         columns: cols.map((c) => ({ name: c.name, type: c.data_type, nullable: c.nullable, pk: c.is_pk })),
       })
+      if (t.kind !== 'view') {
+        // secondary indexes (skip the primary key — that's part of the table itself)
+        const ix = await ipc.listIndexes(connId, schema, t.name).catch(() => [])
+        for (const i of ix) if (!i.primary) indexes.push({ name: i.name, table: t.name, columns: i.columns, unique: i.unique })
+      }
     }
-    // T19 — procedures/functions/triggers: so theo text DDL thật.
+    // procedures / functions / triggers — compared by real DDL text.
     const routines: CmpRoutine[] = []
     const rs = await ipc.listRoutines(connId, schema).catch(() => [])
     for (const r of rs) {
@@ -113,10 +146,19 @@
     const tgs = await ipc.listTriggers(connId, schema).catch(() => [])
     for (const tg of tgs) {
       const ddl = await ipc.objectDefinition(connId, schema, 'trigger', tg.name).catch(() => '')
-      routines.push({ name: tg.name, kind: 'trigger', ddl })
+      routines.push({ name: tg.name, kind: 'trigger', ddl, table: tg.table })
     }
     const sequences = (await ipc.listSequences(connId, schema).catch(() => [])).map((s) => s.name)
-    return { tables, routines, sequences }
+    return { tables, routines, sequences, indexes }
+  }
+
+  /** Open a picked connection if it isn't already connected (item 2 — pick any
+   *  relational connection, connect on demand). Returns false if it can't connect. */
+  async function ensureConnected(id: string): Promise<boolean> {
+    const p = connections.byId(id)
+    if (!p) return false
+    if (p.connected) return true
+    return await connections.connect(id)
   }
 
   async function compare() {
@@ -133,10 +175,19 @@
     }
     loading = true
     try {
+      if (!(await ensureConnected(srcConn)) || !(await ensureConnected(tgtConn))) {
+        warn = 'Could not connect to the selected source/target connection.'
+        return
+      }
       const [srcId, tgtId] = await Promise.all([resolveId(srcConn, srcDb), resolveId(tgtConn, tgtDb)])
       const [s, t] = await Promise.all([snapshot(srcId), snapshot(tgtId)])
       diffs = compareSchemas(s, t)
-      selected = new Set(diffs.filter((d) => d.status !== 'identical').map((d) => d.name))
+      // pre-select every non-identical object AND every changed column
+      const keys = diffs.filter((d) => d.status !== 'identical').map(objectKey)
+      for (const d of diffs) {
+        for (const c of d.columns) if (c.status !== 'identical') keys.push(columnKey(d.name, c.name))
+      }
+      selected = new Set(keys)
     } catch (e) {
       warn = String(e)
     } finally {
@@ -153,13 +204,86 @@
   })
 
   const counts = $derived(diffCounts(diffs))
-  const visible = $derived(
-    diffs.filter((d) => {
-      if (!showIdentical && d.status === 'identical') return false
-      if (filter === 'all') return true
-      return d.status === filter
-    }),
+  // A diff row passes the current show-identical + status filter.
+  function vis(d: ObjectDiff): boolean {
+    if (!showIdentical && d.status === 'identical') return false
+    return filter === 'all' || d.status === filter
+  }
+  // Indexes + triggers nest UNDER their owning table (idxTable); they are NOT shown
+  // as their own top-level groups. Views/procedures/functions/sequences are schema-
+  // level (no parent table) → their own groups.
+  const indexDiffs = $derived(diffs.filter((d) => d.kind === 'index'))
+  const triggerDiffs = $derived(diffs.filter((d) => d.kind === 'trigger'))
+  const tableIndexes = (table: string) => indexDiffs.filter((d) => d.idxTable === table)
+  const tableTriggers = (table: string) => triggerDiffs.filter((d) => d.idxTable === table)
+  // A table shows if it itself changed OR any of its indexes/triggers changed.
+  function tableVisible(t: ObjectDiff): boolean {
+    return vis(t) || tableIndexes(t.name).some(vis) || tableTriggers(t.name).some(vis)
+  }
+  const KIND_GROUPS: { kind: ObjectKind; label: string }[] = [
+    { kind: 'table', label: 'Tables' },
+    { kind: 'view', label: 'Views' },
+    { kind: 'procedure', label: 'Stored Procedures' },
+    { kind: 'function', label: 'Functions' },
+    { kind: 'sequence', label: 'Sequences' },
+  ]
+  // Per-type colour + glyph (matches the Object Explorer) so each object kind is easy
+  // to tell apart at a glance. `column` is used for the nested Columns.
+  const KIND_COLOR: Record<string, string> = {
+    table: 'var(--hex-5b9bd5)', // blue
+    view: 'var(--hex-b48ead)', // purple
+    procedure: 'var(--hex-e8923a)', // orange
+    function: 'var(--hex-e8c547)', // yellow
+    trigger: 'var(--hex-e06c75)', // red
+    index: 'var(--hex-56b6c2)', // cyan (was muted grey → now distinct)
+    column: 'var(--hex-98c379)', // green (was muted → now distinct)
+    sequence: 'var(--hex-d19a66)', // amber
+  }
+  const KIND_GLYPH: Record<string, string> = {
+    table: '▦',
+    view: '◫',
+    procedure: '⚙',
+    function: 'ƒ',
+    trigger: '⚡',
+    sequence: '#',
+    index: '⌗',
+    column: '▸',
+  }
+  const kindColor = (k: string) => KIND_COLOR[k] ?? 'var(--text2)'
+  const kindGlyph = (k: string) => KIND_GLYPH[k] ?? '•'
+  const grouped = $derived(
+    KIND_GROUPS.map((g) => ({
+      ...g,
+      items: diffs.filter((d) => d.kind === g.kind && (g.kind === 'table' ? tableVisible(d) : vis(d))),
+    })).filter((g) => g.items.length > 0),
   )
+  let collapsedGroups = $state<Set<ObjectKind>>(new Set())
+  function toggleGroupOpen(kind: ObjectKind) {
+    const next = new Set(collapsedGroups)
+    if (next.has(kind)) next.delete(kind)
+    else next.add(kind)
+    collapsedGroups = next
+  }
+  function groupAllSelected(items: ObjectDiff[]): boolean {
+    return items.length > 0 && items.every((d) => selected.has(objectKey(d)))
+  }
+  function toggleGroup(items: ObjectDiff[]) {
+    toggleKeys(items.map(objectKey))
+  }
+  // Select-all over an arbitrary list of selection keys (folder headers: columns,
+  // indexes, triggers of a table) — "check nhanh".
+  function keysAllSelected(keys: string[]): boolean {
+    return keys.length > 0 && keys.every((k) => selected.has(k))
+  }
+  function toggleKeys(keys: string[]) {
+    const all = keysAllSelected(keys)
+    const next = new Set(selected)
+    for (const k of keys) {
+      if (all) next.delete(k)
+      else next.add(k)
+    }
+    selected = next
+  }
   const migration = $derived(srcProfile ? genMigration(diffs, srcProfile.system, selected) : '')
 
   function swap() {
@@ -172,13 +296,15 @@
     else next.add(name)
     selected = next
   }
-  // Item 2 — expand a table row to see its per-column (name · datatype) diff.
-  let expandedRows = $state<Set<string>>(new Set())
-  function toggleRow(dkey: string) {
-    const next = new Set(expandedRows)
-    if (next.has(dkey)) next.delete(dkey)
-    else next.add(dkey)
-    expandedRows = next
+  // Auto-expanded tree: a key present here is COLLAPSED (default = everything open),
+  // so tables + their Columns/Indexes/Triggers folders show without manual clicking.
+  let collapsedRows = $state<Set<string>>(new Set())
+  const isRowOpen = (key: string) => !collapsedRows.has(key)
+  function toggleRow(key: string) {
+    const next = new Set(collapsedRows)
+    if (next.has(key)) next.delete(key)
+    else next.add(key)
+    collapsedRows = next
   }
 
   function openMigration() {
@@ -223,7 +349,7 @@
 
   // T19 — side-by-side DDL diff panel (routine/trigger) + prev/next điều hướng.
   let selDiff = $state<ObjectDiff | null>(null)
-  const ddlDiffs = $derived(visible.filter((d) => d.srcDdl != null || d.tgtDdl != null))
+  const ddlDiffs = $derived(diffs.filter((d) => (d.srcDdl != null || d.tgtDdl != null) && vis(d)))
   const ddlLines = $derived(selDiff ? lineDiff(selDiff.tgtDdl ?? '', selDiff.srcDdl ?? '') : [])
   function stepDiff(delta: number) {
     if (!ddlDiffs.length) return
@@ -246,27 +372,15 @@
     <span style="font-size:var(--px-11_5);font-weight:700">Structure</span>
     <span style="font-size:var(--px-10_5);color:var(--muted);border:var(--px-1) solid var(--border);border-radius:var(--px-5);padding:var(--px-2) var(--px-7)">tables · views · columns — data is not compared</span>
     <span style="font-size:var(--px-11);color:var(--muted);font-weight:600">SOURCE</span>
-    <select bind:value={srcConn} title="Source connection" style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-7);padding:var(--px-5) var(--px-10);font-size:var(--px-12_5);color:var(--text);outline:none;cursor:pointer">
-      <option value={null}>—</option>
-      {#each options as o (o.id)}<option value={o.id}>{o.name} ({o.system})</option>{/each}
-    </select>
+    <SearchSelect bind:value={srcConn} options={connOptions} title="Source connection" placeholder="— pick connection —" />
     {#if srcDbs.length}
-      <select bind:value={srcDb} title="Source database" style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-7);padding:var(--px-5) var(--px-10);font-size:var(--px-12);color:var(--text);outline:none;cursor:pointer">
-        <option value={null}>{srcProfile?.database || '(current)'}</option>
-        {#each srcDbs as d (d)}<option value={d}>{d}</option>{/each}
-      </select>
+      <SearchSelect bind:value={srcDb} options={srcDbOptions} title="Source database" />
     {/if}
     <span onclick={swap} onkeydown={(e) => e.key === 'Enter' && swap()} role="button" tabindex="0" title="Swap" style="cursor:pointer;color:var(--text2);font-size:var(--px-15)">⇄</span>
     <span style="font-size:var(--px-11);color:var(--muted);font-weight:600">TARGET</span>
-    <select bind:value={tgtConn} title="Target connection" style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-7);padding:var(--px-5) var(--px-10);font-size:var(--px-12_5);color:var(--text);outline:none;cursor:pointer">
-      <option value={null}>—</option>
-      {#each options as o (o.id)}<option value={o.id}>{o.name} ({o.system})</option>{/each}
-    </select>
+    <SearchSelect bind:value={tgtConn} options={connOptions} title="Target connection" placeholder="— pick connection —" />
     {#if tgtDbs.length}
-      <select bind:value={tgtDb} title="Target database" style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-7);padding:var(--px-5) var(--px-10);font-size:var(--px-12);color:var(--text);outline:none;cursor:pointer">
-        <option value={null}>{tgtProfile?.database || '(current)'}</option>
-        {#each tgtDbs as d (d)}<option value={d}>{d}</option>{/each}
-      </select>
+      <SearchSelect bind:value={tgtDb} options={tgtDbOptions} title="Target database" />
     {/if}
     <div style="display:flex;background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-7);overflow:hidden;margin-left:var(--px-8)">
       <span onclick={() => (mode = 'diff')} onkeydown={(e) => e.key === 'Enter' && (mode = 'diff')} role="button" tabindex="0" style="padding:var(--px-5) var(--px-13);font-size:var(--px-12);font-weight:600;cursor:pointer;background:{mode === 'diff' ? 'var(--primary)' : 'transparent'};color:{mode === 'diff' ? 'var(--hex-fff)' : 'var(--text2)'}">Diff</span>
@@ -294,57 +408,156 @@
         <option value="src_only">Src only</option>
         <option value="tgt_only">Tgt only</option>
       </select>
-      <label style="margin-left:auto;display:flex;align-items:center;gap:var(--px-6);font-size:var(--px-11_5);color:var(--text2);cursor:pointer">
-        <input type="checkbox" bind:checked={showIdentical} /> Show identical
-      </label>
+      <div style="margin-left:auto;display:flex;align-items:center;gap:var(--px-10)">
+        <label style="display:flex;align-items:center;gap:var(--px-6);font-size:var(--px-11_5);color:var(--text2);cursor:pointer">
+          <input type="checkbox" bind:checked={showIdentical} /> Show identical
+        </label>
+        <span onclick={() => compare()} onkeydown={(e) => e.key === 'Enter' && compare()} role="button" tabindex="0" title="Re-run the comparison (re-read both schemas)" style="font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-11);cursor:pointer;font-weight:600;color:var(--text2);opacity:{loading ? 0.6 : 1};pointer-events:{loading ? 'none' : 'auto'}">⟳ Refresh</span>
+        <!-- item 1/2 — Execute (and Open in editor) are available in the Diff view too,
+             acting on the selected objects' migration, same as the Sync Script view. -->
+        <span onclick={openMigration} onkeydown={(e) => e.key === 'Enter' && openMigration()} role="button" tabindex="0" title="Open the migration in a SQL editor tab" style="font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-11);cursor:pointer;font-weight:600;opacity:{selected.size ? 1 : 0.5};pointer-events:{selected.size ? 'auto' : 'none'}">Open script</span>
+        <span onclick={execMigration} onkeydown={(e) => e.key === 'Enter' && execMigration()} role="button" tabindex="0" title="Run this migration on the target now" style="font-size:var(--px-11_5);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-6);padding:var(--px-4) var(--px-13);cursor:pointer;font-weight:600;opacity:{executing || !selected.size ? 0.6 : 1};pointer-events:{executing || !selected.size ? 'none' : 'auto'}">{executing ? 'Executing…' : 'Execute'}</span>
+      </div>
     </div>
     <div style="flex:1;overflow:auto;min-height:0">
       <div style="display:flex;font-size:var(--px-10);color:var(--muted);font-weight:700;text-transform:uppercase;border-bottom:var(--px-1) solid var(--border2);position:sticky;top:0;background:var(--header)">
         <span style="flex:1;padding:var(--px-7) var(--px-14)">Origin · {srcProfile?.name}</span>
         <span style="flex:1;padding:var(--px-7) var(--px-14)">Target · {tgtProfile?.name}</span>
       </div>
-      {#each visible as d (d.kind + ':' + d.name)}
-        {@const sm = statusMeta[d.status]}
-        {@const hasDdl = d.srcDdl != null || d.tgtDdl != null}
-        {@const dkey = d.kind + ':' + d.name}
-        {@const colChanges = d.columns.filter((c) => c.status !== 'identical')}
-        {@const expandable = hasDdl || d.columns.length > 0}
-        {@const isOpen = expandedRows.has(dkey)}
+      <!-- a folder header under a table (Columns / Indexes / Triggers) with a
+           select-all checkbox for its items ("check nhanh") + per-type colour -->
+      {#snippet folderRow(fkey: string, label: string, kind: string, keys: string[])}
+        {@const fopen = isRowOpen(fkey)}
         <div
-          style="display:flex;align-items:stretch;border-bottom:var(--px-1) solid var(--border);cursor:{expandable ? 'pointer' : 'default'}"
-          onclick={() => { if (hasDdl) selDiff = d; else if (d.columns.length) toggleRow(dkey) }}
-          onkeydown={(e) => e.key === 'Enter' && (hasDdl ? (selDiff = d) : d.columns.length && toggleRow(dkey))}
+          onclick={() => toggleRow(fkey)}
+          onkeydown={(e) => e.key === 'Enter' && toggleRow(fkey)}
           role="button"
           tabindex="0"
-          title={hasDdl ? 'View DDL diff' : d.columns.length ? 'Show column diff' : ''}
+          style="display:flex;align-items:center;gap:var(--px-8);padding:var(--px-5) var(--px-14) var(--px-5) var(--px-40);background:var(--header);border-top:var(--px-1) solid var(--border2);border-bottom:var(--px-1) solid var(--border2);box-shadow:inset var(--px-3) 0 0 {kindColor(kind)};cursor:pointer"
         >
-          <div style="flex:1;display:flex;align-items:center;gap:var(--px-8);padding:var(--px-7) var(--px-14);box-shadow:inset var(--px-3) 0 0 {sm.color}">
-            <span class="mono" style="width:var(--px-10);color:var(--muted);font-size:var(--px-9)">{d.columns.length && !hasDdl ? (isOpen ? '▾' : '▸') : ''}</span>
-            {#if d.status !== 'tgt_only'}<input type="checkbox" checked={selected.has(d.name)} onchange={() => toggleSel(d.name)} onclick={(e) => e.stopPropagation()} />{/if}
-            <span class="mono" style="font-size:var(--px-8);font-weight:700;color:var(--muted);border:var(--px-1) solid var(--border2);border-radius:var(--px-3);padding:var(--px-1) var(--px-4)">{d.kind}</span>
-            <span class="mono" style="font-size:var(--px-12_5);font-weight:600;color:{d.status === 'tgt_only' ? 'var(--muted)' : 'var(--text)'}">{d.status === 'tgt_only' ? '—' : d.name}</span>
-            {#if colChanges.length}<span style="font-size:var(--px-9_5);color:var(--warn)">{colChanges.length} col Δ</span>{/if}
+          <span class="mono" style="width:var(--px-10);color:{kindColor(kind)};font-size:var(--px-9)">{fopen ? '▾' : '▸'}</span>
+          <input type="checkbox" title="Select all in {label}" checked={keysAllSelected(keys)} onchange={() => toggleKeys(keys)} onclick={(e) => e.stopPropagation()} />
+          <span class="mono" style="font-size:var(--px-12);color:{kindColor(kind)}">{kindGlyph(kind)}</span>
+          <span style="font-size:var(--px-11);font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:{kindColor(kind)}">{label}</span>
+          <span class="mono" style="font-size:var(--px-9_5);font-weight:700;color:{kindColor(kind)};opacity:.75">{keys.length}</span>
+        </div>
+      {/snippet}
+      <!-- a nested index/trigger row shown UNDER its table folder (checkbox + status;
+           a trigger is clickable → side-by-side DDL diff) -->
+      {#snippet nestedObj(d: ObjectDiff)}
+        {@const sm = statusMeta[d.status]}
+        {@const hasDdl = d.srcDdl != null || d.tgtDdl != null}
+        {@const nk = objectKey(d)}
+        <div
+          style="display:flex;align-items:stretch;border-bottom:var(--px-1) solid var(--border);background:var(--panel);cursor:{hasDdl ? 'pointer' : 'default'}"
+          onclick={() => { if (hasDdl) selDiff = d }}
+          onkeydown={(e) => e.key === 'Enter' && hasDdl && (selDiff = d)}
+          role="button"
+          tabindex="0"
+          title={hasDdl ? 'View DDL diff' : ''}
+        >
+          <div style="flex:1;display:flex;align-items:center;gap:var(--px-8);padding:var(--px-4) var(--px-14) var(--px-4) var(--px-80);box-shadow:inset var(--px-3) 0 0 {sm.color};font-size:var(--px-11_5)">
+            <input type="checkbox" checked={selected.has(nk)} onchange={() => toggleSel(nk)} onclick={(e) => e.stopPropagation()} />
+            <span class="mono" style="font-size:var(--px-10);color:{kindColor(d.kind)}">{kindGlyph(d.kind)}</span>
+            <span class="mono" style="color:{d.status === 'tgt_only' ? 'var(--muted)' : 'var(--text2)'}">{d.status === 'tgt_only' ? '—' : d.name}</span>
           </div>
-          <div style="flex:1;display:flex;align-items:center;gap:var(--px-8);padding:var(--px-7) var(--px-14)">
-            <span class="mono" style="font-size:var(--px-12_5);font-weight:600;color:{d.status === 'src_only' ? 'var(--muted)' : 'var(--text)'}">{d.status === 'src_only' ? '—' : d.name}</span>
-            <span style="margin-left:auto;font-size:var(--px-10);font-weight:700;color:var(--hex-fff);background:{sm.color};border-radius:var(--px-4);padding:var(--px-1) var(--px-7)">{sm.icon} {sm.label}</span>
+          <div style="flex:1;display:flex;align-items:center;gap:var(--px-8);padding:var(--px-4) var(--px-14);font-size:var(--px-11_5)">
+            <span class="mono" style="color:{d.status === 'src_only' ? 'var(--muted)' : 'var(--text2)'}">{d.status === 'src_only' ? '—' : d.name}</span>
+            <span style="margin-left:auto;font-size:var(--px-9_5);font-weight:700;color:var(--hex-fff);background:{sm.color};border-radius:var(--px-4);padding:var(--px-1) var(--px-6)">{sm.icon}</span>
           </div>
         </div>
-        {#if isOpen && !hasDdl}
-          <!-- per-column diff (name · source type → target type) -->
-          {#each (showIdentical ? d.columns : colChanges) as c (c.name)}
-            {@const csm = statusMeta[c.status]}
-            <div style="display:flex;align-items:stretch;border-bottom:var(--px-1) solid var(--border);background:var(--panel);font-size:var(--px-11_5)">
-              <div class="mono" style="flex:1;display:flex;align-items:center;gap:var(--px-8);padding:var(--px-4) var(--px-14) var(--px-4) var(--px-34);box-shadow:inset var(--px-3) 0 0 {csm.color}">
-                <span style="color:{c.status === 'tgt_only' ? 'var(--muted)' : 'var(--text2)'}">{c.status === 'tgt_only' ? '—' : c.name}</span>
-                {#if c.srcType}<span style="color:var(--muted)">{c.srcType}</span>{/if}
+      {/snippet}
+      {#each grouped as group (group.kind)}
+        {@const gkey = `grp:${group.kind}`}
+        {@const gOpen = !collapsedGroups.has(group.kind)}
+        <!-- object-type group header (Tables / Views / Stored Procedures / …) with a
+             select-all checkbox for the whole group -->
+        <div style="display:flex;align-items:center;gap:var(--px-8);padding:var(--px-7) var(--px-14);background:var(--hover);border-top:var(--px-1) solid var(--border2);border-bottom:var(--px-1) solid var(--border2);box-shadow:inset var(--px-3) 0 0 {kindColor(group.kind)};position:sticky;top:var(--px-30);z-index:2">
+          <span onclick={() => toggleGroupOpen(group.kind)} onkeydown={(e) => e.key === 'Enter' && toggleGroupOpen(group.kind)} role="button" tabindex="0" class="mono" style="width:var(--px-10);color:{kindColor(group.kind)};font-size:var(--px-10);cursor:pointer">{gOpen ? '▾' : '▸'}</span>
+          <input type="checkbox" title="Select all in this group" checked={groupAllSelected(group.items)} onchange={() => toggleGroup(group.items)} />
+          <span class="mono" style="font-size:var(--px-13);color:{kindColor(group.kind)}">{kindGlyph(group.kind)}</span>
+          <span style="font-size:var(--px-12);font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:{kindColor(group.kind)}">{group.label}</span>
+          <span class="mono" style="font-size:var(--px-10);font-weight:700;color:{kindColor(group.kind)};opacity:.75">{group.items.length}</span>
+        </div>
+        {#if gOpen}
+          {#each group.items as d (gkey + ':' + d.name + ':' + (d.idxTable ?? ''))}
+            {@const sm = statusMeta[d.status]}
+            {@const hasDdl = d.srcDdl != null || d.tgtDdl != null}
+            {@const dkey = objectKey(d)}
+            {@const colChanges = d.columns.filter((c) => c.status !== 'identical')}
+            {@const colRows = showIdentical ? d.columns : colChanges}
+            {@const tblIdx = d.kind === 'table' ? tableIndexes(d.name).filter(vis) : []}
+            {@const tblTrg = d.kind === 'table' ? tableTriggers(d.name).filter(vis) : []}
+            {@const childCount = tblIdx.length + tblTrg.length}
+            {@const colKeys = colChanges.map((c) => columnKey(d.name, c.name))}
+            {@const hasChildren = colRows.length > 0 || childCount > 0}
+            {@const expandable = hasDdl || hasChildren}
+            {@const isOpen = isRowOpen(dkey)}
+            <div
+              style="display:flex;align-items:stretch;border-bottom:var(--px-1) solid var(--border);cursor:{expandable ? 'pointer' : 'default'}"
+              onclick={() => { if (hasDdl) selDiff = d; else if (hasChildren) toggleRow(dkey) }}
+              onkeydown={(e) => e.key === 'Enter' && (hasDdl ? (selDiff = d) : hasChildren && toggleRow(dkey))}
+              role="button"
+              tabindex="0"
+              title={hasDdl ? 'View DDL diff' : hasChildren ? 'Show columns / indexes / triggers' : ''}
+            >
+              <div style="flex:1;display:flex;align-items:center;gap:var(--px-8);padding:var(--px-7) var(--px-14) var(--px-7) var(--px-26);box-shadow:inset var(--px-3) 0 0 {sm.color}">
+                <span class="mono" style="width:var(--px-10);color:var(--muted);font-size:var(--px-9)">{hasChildren && !hasDdl ? (isOpen ? '▾' : '▸') : ''}</span>
+                <!-- every object is selectable (including drops / tgt_only) -->
+                <input type="checkbox" checked={selected.has(dkey)} onchange={() => toggleSel(dkey)} onclick={(e) => e.stopPropagation()} />
+                <span class="mono" style="font-size:var(--px-11);color:{kindColor(d.kind)}">{kindGlyph(d.kind)}</span>
+                <span class="mono" style="font-size:var(--px-12_5);font-weight:600;color:{d.status === 'tgt_only' ? 'var(--muted)' : 'var(--text)'}">{d.status === 'tgt_only' ? '—' : d.name}</span>
+                {#if colChanges.length}<span style="font-size:var(--px-9_5);color:var(--warn)">{colChanges.length} col Δ</span>{/if}
+                {#if childCount}<span style="font-size:var(--px-9_5);color:var(--muted)">{tblIdx.length} idx · {tblTrg.length} trg</span>{/if}
               </div>
-              <div class="mono" style="flex:1;display:flex;align-items:center;gap:var(--px-8);padding:var(--px-4) var(--px-14)">
-                <span style="color:{c.status === 'src_only' ? 'var(--muted)' : 'var(--text2)'}">{c.status === 'src_only' ? '—' : c.name}</span>
-                {#if c.tgtType}<span style="color:var(--muted)">{c.tgtType}</span>{/if}
-                <span style="margin-left:auto;color:{csm.color};font-weight:700">{csm.icon}</span>
+              <div style="flex:1;display:flex;align-items:center;gap:var(--px-8);padding:var(--px-7) var(--px-14)">
+                <span class="mono" style="font-size:var(--px-12_5);font-weight:600;color:{d.status === 'src_only' ? 'var(--muted)' : 'var(--text)'}">{d.status === 'src_only' ? '—' : d.name}</span>
+                <span style="margin-left:auto;font-size:var(--px-10);font-weight:700;color:var(--hex-fff);background:{sm.color};border-radius:var(--px-4);padding:var(--px-1) var(--px-7)">{sm.icon} {sm.label}</span>
               </div>
             </div>
+            {#if isOpen && !hasDdl}
+              <!-- table children as folders: Columns / Indexes / Triggers (only
+                   non-empty folders shown — no empty database defaults). -->
+              {#if colRows.length}
+                {@const fkey = dkey + ':columns'}
+                {@render folderRow(fkey, 'Columns', 'column', colKeys)}
+                {#if isRowOpen(fkey)}
+                  {#each colRows as c (c.name)}
+                    {@const csm = statusMeta[c.status]}
+                    {@const ck = columnKey(d.name, c.name)}
+                    {@const changed = c.status !== 'identical'}
+                    <div style="display:flex;align-items:stretch;border-bottom:var(--px-1) solid var(--border);background:var(--panel);font-size:var(--px-11_5)">
+                      <div class="mono" style="flex:1;display:flex;align-items:center;gap:var(--px-8);padding:var(--px-4) var(--px-14) var(--px-4) var(--px-80);box-shadow:inset var(--px-3) 0 0 {csm.color}">
+                        <!-- each column is checkable (only changed columns drive the migration) -->
+                        <input type="checkbox" checked={selected.has(ck)} disabled={!changed} onchange={() => toggleSel(ck)} onclick={(e) => e.stopPropagation()} />
+                        <span class="mono" style="color:{kindColor('column')};font-size:var(--px-10)">{kindGlyph('column')}</span>
+                        <span style="color:{c.status === 'tgt_only' ? 'var(--muted)' : 'var(--text2)'}">{c.status === 'tgt_only' ? '—' : c.name}</span>
+                        {#if c.srcType}<span style="color:var(--muted)">{c.srcType}</span>{/if}
+                      </div>
+                      <div class="mono" style="flex:1;display:flex;align-items:center;gap:var(--px-8);padding:var(--px-4) var(--px-14)">
+                        <span style="color:{c.status === 'src_only' ? 'var(--muted)' : 'var(--text2)'}">{c.status === 'src_only' ? '—' : c.name}</span>
+                        {#if c.tgtType}<span style="color:var(--muted)">{c.tgtType}</span>{/if}
+                        <span style="margin-left:auto;color:{csm.color};font-weight:700">{csm.icon}</span>
+                      </div>
+                    </div>
+                  {/each}
+                {/if}
+              {/if}
+              {#if tblIdx.length}
+                {@const fkey = dkey + ':indexes'}
+                {@render folderRow(fkey, 'Indexes', 'index', tblIdx.map(objectKey))}
+                {#if isRowOpen(fkey)}
+                  {#each tblIdx as ix (objectKey(ix))}{@render nestedObj(ix)}{/each}
+                {/if}
+              {/if}
+              {#if tblTrg.length}
+                {@const fkey = dkey + ':triggers'}
+                {@render folderRow(fkey, 'Triggers', 'trigger', tblTrg.map(objectKey))}
+                {#if isRowOpen(fkey)}
+                  {#each tblTrg as tg (objectKey(tg))}{@render nestedObj(tg)}{/each}
+                {/if}
+              {/if}
+            {/if}
           {/each}
         {/if}
       {/each}
@@ -352,17 +565,19 @@
   {:else}
     <div style="flex:none;display:flex;align-items:center;gap:var(--px-10);padding:var(--px-8) var(--px-14);border-bottom:var(--px-1) solid var(--border)">
       <span style="font-size:var(--px-11_5);color:var(--muted)">Migration to sync TARGET ({tgtProfile?.name}) to SOURCE — {selected.size} object(s) selected</span>
-      <span onclick={openMigration} onkeydown={(e) => e.key === 'Enter' && openMigration()} role="button" tabindex="0" style="margin-left:auto;font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-12);cursor:pointer;font-weight:600">Open in editor</span>
-      <span onclick={execMigration} onkeydown={(e) => e.key === 'Enter' && execMigration()} role="button" tabindex="0" title="Run this migration on the target database" style="font-size:var(--px-11_5);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-6);padding:var(--px-5) var(--px-14);cursor:pointer;font-weight:600;opacity:{executing ? 0.6 : 1}">{executing ? 'Executing…' : 'Execute'}</span>
+      <span onclick={() => compare()} onkeydown={(e) => e.key === 'Enter' && compare()} role="button" tabindex="0" title="Re-run the comparison (re-read both schemas)" style="margin-left:auto;font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-12);cursor:pointer;font-weight:600;color:var(--text2);opacity:{loading ? 0.6 : 1};pointer-events:{loading ? 'none' : 'auto'}">⟳ Refresh</span>
+      <span onclick={openMigration} onkeydown={(e) => e.key === 'Enter' && openMigration()} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-12);cursor:pointer;font-weight:600">Open in editor</span>
+      <span onclick={execMigration} onkeydown={(e) => e.key === 'Enter' && execMigration()} role="button" tabindex="0" title="Run this migration on the target now" style="font-size:var(--px-11_5);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-6);padding:var(--px-5) var(--px-14);cursor:pointer;font-weight:600;opacity:{executing ? 0.6 : 1}">{executing ? 'Executing…' : 'Execute'}</span>
     </div>
     <div style="flex:1;overflow:auto;background:var(--bg)">
-      <pre class="mono" style="margin:0;padding:var(--px-16) var(--px-18);font-size:var(--px-12_5);line-height:1.6;white-space:pre;color:var(--text)">{migration}</pre>
+      <!-- syntax-coloured migration (keywords / strings / comments) for readability -->
+      <pre class="mono" style="margin:0;padding:var(--px-16) var(--px-18);font-size:var(--px-12_5);line-height:1.6;white-space:pre;color:var(--text)">{#each highlightSql(migration) as t}<span style="color:{sqlTokenColor(t.kind)}">{t.text}</span>{/each}</pre>
     </div>
   {/if}
 
   <!-- T19 — side-by-side DDL diff panel (routine/trigger) -->
   {#if selDiff}
-    <div onclick={() => (selDiff = null)} onkeydown={(e) => e.key === 'Escape' && (selDiff = null)} role="presentation" style="position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:56">
+    <div onkeydown={(e) => e.key === 'Escape' && (selDiff = null)} role="presentation" style="position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:56">
       <div onclick={(e) => e.stopPropagation()} onkeydown={() => {}} role="dialog" aria-modal="true" tabindex="-1" style="width:var(--px-900);max-width:96vw;height:80vh;background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-12);box-shadow:0 var(--px-30) var(--px-70) rgba(0,0,0,.55);display:flex;flex-direction:column;overflow:hidden">
         <div style="flex:none;display:flex;align-items:center;gap:var(--px-10);padding:var(--px-12) var(--px-16);border-bottom:var(--px-1) solid var(--border)">
           <span class="mono" style="font-size:var(--px-8);font-weight:700;color:var(--muted);border:var(--px-1) solid var(--border2);border-radius:var(--px-3);padding:var(--px-1) var(--px-4)">{selDiff.kind}</span>

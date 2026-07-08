@@ -119,9 +119,16 @@ pub async fn disconnect(state: State<'_, AppState>, id: String) -> Result<(), Ap
     // dừng luôn subscription pub/sub Redis + consumer Kafka (nếu có) trước khi ngắt
     state.pubsub.abort(&id);
     state.kafka_stops.stop(&id);
-    // Sweep any internal per-database sub-connections opened via attach_database.
-    let prefix = format!("{id}::");
-    for sub in state.registry.connected_ids().into_iter().filter(|c| c.starts_with(&prefix)) {
+    // Sweep internal per-database sub-connections (attach_database, `{id}::db`) AND
+    // per-tab connections (open_tab_connection, `{id}#tab-…`) opened off this base.
+    let db_prefix = format!("{id}::");
+    let tab_prefix = format!("{id}#");
+    for sub in state
+        .registry
+        .connected_ids()
+        .into_iter()
+        .filter(|c| c.starts_with(&db_prefix) || c.starts_with(&tab_prefix))
+    {
         let _ = state.registry.disconnect(&sub).await;
     }
     state.registry.disconnect(&id).await
@@ -231,6 +238,55 @@ pub async fn attach_database(
     Ok(sub_id)
 }
 
+/// The base profile id embedded in any derived connection id: strips a per-tab
+/// suffix (`#tab-…`) and/or a per-database suffix (`::db`). A base profile id has
+/// neither, so this is a no-op for it.
+fn base_conn_id(id: &str) -> String {
+    let no_tab = id.split('#').next().unwrap_or(id);
+    no_tab.split("::").next().unwrap_or(no_tab).to_string()
+}
+
+/// Open a dedicated connection for a single Query Editor tab (item 6). Each tab
+/// gets its OWN physical connection (`{base}#tab-{tab_id}`), so a long/hung query
+/// in one tab never blocks other tabs or the Explorer (which use the base
+/// connection). Idempotent; if the tab already has a connection on a *different*
+/// database it is reconnected to `database`. `database` empty → the base's own DB.
+#[tauri::command]
+pub async fn open_tab_connection(
+    state: State<'_, AppState>,
+    conn_id: String,
+    tab_id: String,
+    database: String,
+) -> Result<String, AppError> {
+    let base = base_conn_id(&conn_id);
+    let (mut profile, password, ssh_password) = resolve_credentials(&state, &base)?;
+    let effective_db = if database.is_empty() { profile.database.clone() } else { database };
+    let tab_conn_id = format!("{base}#tab-{tab_id}");
+    if state.registry.is_connected(&tab_conn_id) {
+        let current_db = state
+            .registry
+            .live_credentials(&tab_conn_id)
+            .map(|(p, _)| p.database)
+            .unwrap_or_default();
+        if current_db == effective_db {
+            return Ok(tab_conn_id);
+        }
+        // database dropdown changed → drop the old tab connection and re-open on the new DB.
+        let _ = state.registry.disconnect(&tab_conn_id).await;
+    }
+    profile.id = tab_conn_id.clone();
+    profile.database = effective_db;
+    state.registry.connect(profile, password, ssh_password).await?;
+    Ok(tab_conn_id)
+}
+
+/// Close (and abort any running query on) a Query Editor tab's dedicated
+/// connection — called when the tab is closed (item 6). No-op if not open.
+#[tauri::command]
+pub async fn close_tab_connection(state: State<'_, AppState>, conn_id: String) -> Result<(), AppError> {
+    state.registry.disconnect(&conn_id).await
+}
+
 /// Timeout kết nối mặc định cho Test (T10). Mọi Test phải trả kết quả rõ ràng
 /// trong khoảng này thay vì treo theo OS TCP timeout.
 pub const CONNECT_TIMEOUT_SECS: u64 = 10;
@@ -286,7 +342,15 @@ pub async fn run_test_bounded(
             biased;
             _ = token.cancelled() => return err_result("Cancelled".into()),
             _ = tokio::time::sleep(timeout) => return err_result("Connection timed out".into()),
-            t = open_tunnel(&profile.ssh, ssh_password, &profile.host, profile.port) => match t {
+            t = open_tunnel(
+                &profile.ssh,
+                ssh_password,
+                &profile.host,
+                profile.port,
+                // Kafka: metadata-rewriting proxy (matches connect()), so the
+                // broker's advertised address reconnects through this tunnel.
+                profile.system.as_str() == "kafka",
+            ) => match t {
                 Ok(t) => t,
                 Err(e) => return err_result(e.to_string()),
             },
@@ -303,7 +367,11 @@ pub async fn run_test_bounded(
         // broker's advertised.listeners directly (bypassing the tunnel).
         if !result.ok && profile.system.as_str() == "kafka" {
             if let Some(e) = result.error.as_mut() {
-                e.push_str(" — Kafka over SSH: the broker's advertised.listeners must be reachable from this machine (a plain host:port SSH forward doesn't cover the addresses librdkafka reconnects to).");
+                e.push_str(
+                    " — Kafka over SSH: the tunnel rewrites advertised.listeners automatically (no server change needed). \
+                     Check that the SSH server itself can reach the broker (`nc -zv <host> <port>` on the SSH server), that \
+                     any required SASL/SSL is set, and note the rewrite currently supports a single broker.",
+                );
             }
         }
         result

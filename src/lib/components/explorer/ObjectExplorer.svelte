@@ -10,6 +10,7 @@
   import * as ContextMenu from '$lib/components/ui/context-menu'
   import * as ipc from '$lib/ipc'
   import SystemIcon from '$lib/components/SystemIcon.svelte'
+  import RedisExplorer from '$lib/components/explorer/RedisExplorer.svelte'
   import { connections } from '$lib/stores/connections.svelte'
   import { explorer } from '$lib/stores/explorer.svelte'
   import { tabs } from '$lib/stores/tabs.svelte'
@@ -20,6 +21,7 @@
   import { testDataWizard } from '$lib/stores/testdata.svelte'
   import { execRoutineWizard } from '$lib/stores/execroutine.svelte'
   import { chCreateWizard } from '$lib/stores/chcreate.svelte'
+  import { natsAddWizard } from '$lib/stores/natsAdd.svelte'
   import { newDatabaseWizard } from '$lib/stores/newdatabase.svelte'
   import { genRenameRoutine } from '$lib/sql/routines'
   import { scriptsWizard } from '$lib/stores/scripts.svelte'
@@ -31,12 +33,15 @@
   import { genAlterTable, genCreate, genDelete, genDrop, genDropDatabase, genForeignKey, genInsert, genRename, genRenameDatabase, genSelect, genTruncate, genUpdate } from '$lib/sql/ddl'
   import { generateScript, type DbObject, type ScriptMode } from '$lib/sql/scripts'
   import { createTemplate, type CreateKind } from '$lib/sql/create-templates'
+  import { partitionOps, supportsPartitioning } from '$lib/sql/partitions'
+  import { addPartitionWizard } from '$lib/stores/addpartition.svelte'
   import { buildExportSelect } from '$lib/export/query'
-  import { kafkaTopicRows, natsStreamRows } from '$lib/stream/explorer'
+  import { kafkaTopicRows, natsStreamRows, filterStreamRows } from '$lib/stream/explorer'
   import { toAlterStatement, type AlterKind } from '$lib/sql/alter'
   import { objectFilterMatch } from '$lib/explorer/filter'
+  import { autofocus } from '$lib/actions/autofocus'
   import { toSqlInsert } from '$lib/export/rows'
-  import type { ColumnInfo, RoutineInfo, TableInfo } from '$lib/types'
+  import type { ColumnInfo, PartitionInfo, RoutineInfo, TableInfo } from '$lib/types'
   import { untrack, type Snippet } from 'svelte'
 
   const selected = $derived(connections.selected)
@@ -63,6 +68,39 @@
 
   let expanded = $state<Set<string>>(new Set())
   let treeSel = $state<string | null>(null)
+  // Clear the tree selection when switching connections so the sidebar ER / Generate
+  // Scripts buttons stay disabled until a schema/database is picked in the new tree.
+  $effect(() => {
+    void selected?.id
+    untrack(() => (treeSel = null))
+  })
+  // The schema/database node the toolbar's View-ER / Generate-Scripts act on, derived
+  // from the current tree selection. Only schema nodes (public/dbo/a database) qualify;
+  // a table/folder/leaf selection → null → those buttons disable.
+  const erTarget = $derived.by(() => {
+    const t = treeSel
+    if (!selected || !t) return null
+    if (t.startsWith('s:')) return { connId: selected.id, base: selected.id, system: selected.system, schema: t.slice(2) }
+    if (t === 'curdb') {
+      const sch = cache?.schemas?.[0]?.name
+      return sch ? { connId: selected.id, base: selected.id, system: selected.system, schema: sch } : null
+    }
+    const mSub = t.match(/^fdb:(.+):s:(.+)$/)
+    if (mSub) {
+      const sub = dbSubId[mSub[1]]
+      return sub ? { connId: sub, base: selected.id, system: selected.system, schema: mSub[2] } : null
+    }
+    const mDb = t.match(/^fdb:([^:]+)$/)
+    if (mDb) {
+      const sub = dbSubId[mDb[1]]
+      const sch = sub ? explorer.cache[sub]?.schemas?.[0]?.name : undefined
+      return sub && sch ? { connId: sub, base: selected.id, system: selected.system, schema: sch } : null
+    }
+    return null
+  })
+  $effect(() => {
+    explorer.selectedSchema = erTarget
+  })
   // Top filter — DATABASE names only (item 1). Object filtering is per-folder.
   let dbFilter = $state('')
   const dbFiltering = $derived(!!dbFilter.trim())
@@ -197,9 +235,31 @@
   // store so the messages tabs can trigger a refresh after purge/delete.
   const isKafka = $derived(selected?.system === 'kafka')
   const isNats = $derived(selected?.system === 'nats')
+  const isRedis = $derived(selected?.system === 'redis')
   const streamCache = $derived(selected ? explorer.streaming[selected.id] : undefined)
   const topicRows = $derived(streamCache?.kafkaTopics ? kafkaTopicRows(streamCache.kafkaTopics) : [])
-  const streamRows = $derived(streamCache?.natsStreams ? natsStreamRows(streamCache.natsStreams) : [])
+  const allStreamRows = $derived(streamCache?.natsStreams ? natsStreamRows(streamCache.natsStreams) : [])
+  // NATS explorer filter — matches stream names only (see filterStreamRows).
+  let streamFilter = $state('')
+  const streamFiltering = $derived(!!streamFilter.trim())
+  const streamRows = $derived(filterStreamRows(streamFilter, allStreamRows))
+  // Per-stream subject filter (SSMS-style "Filter…" on a stream): stream name → query,
+  // plus the set of streams whose filter box is currently shown.
+  let subjFilters = $state<Record<string, string>>({})
+  let subjFilterOpen = $state<Set<string>>(new Set())
+  function openSubjFilter(stream: string) {
+    if (!expanded.has(`nats:s:${stream}`)) toggle(`nats:s:${stream}`)
+    subjFilterOpen = new Set(subjFilterOpen).add(stream)
+    subjFilters = { ...subjFilters, [stream]: subjFilters[stream] ?? '' }
+  }
+  function clearSubjFilter(stream: string) {
+    const f = { ...subjFilters }
+    delete f[stream]
+    subjFilters = f
+    const o = new Set(subjFilterOpen)
+    o.delete(stream)
+    subjFilterOpen = o
+  }
   $effect(() => {
     const s = selected
     if (s?.connected && (s.system === 'kafka' || s.system === 'nats')) {
@@ -207,59 +267,100 @@
     }
   })
 
-  async function deleteTopic(topic: string) {
-    if (!selected || !confirm(`Delete topic "${topic}"? This drops the topic and all its data.`)) return
-    try {
-      await ipc.kafkaDeleteTopic(selected.id, topic)
-      toasts.success(`Deleted topic ${topic}`, 'kafka')
-      explorer.refreshStreaming(selected.id)
-    } catch (e) {
-      toasts.error(String(e), 'kafka')
-    }
+  // In-app confirm popup (window.confirm isn't reliable inside the Tauri webview);
+  // clicking the backdrop does NOT confirm — only the Confirm button runs the action.
+  let confirmState = $state<{ title: string; body: string; run: () => void } | null>(null)
+  function askConfirm(title: string, body: string, run: () => void) {
+    confirmState = { title, body, run }
   }
-  async function clearTopic(topic: string) {
-    if (!selected || !confirm(`Clear all messages of topic "${topic}"? This cannot be undone.`)) return
-    try {
-      await ipc.kafkaPurgeTopic(selected.id, topic)
-      toasts.success(`Cleared messages of ${topic}`, 'kafka')
-      explorer.refreshStreaming(selected.id)
-    } catch (e) {
-      toasts.error(String(e), 'kafka')
-    }
+  function runConfirm() {
+    const c = confirmState
+    confirmState = null
+    c?.run()
   }
-  async function deleteSubject(stream: string, subject: string, subjectCount: number) {
+
+  function deleteTopic(topic: string) {
     if (!selected) return
-    // NATS requires a stream to keep ≥1 subject. When this is the only one,
-    // "remove subject" is impossible — deleting it means deleting the stream.
-    if (subjectCount <= 1) {
-      if (!confirm(`"${subject}" is the only subject of stream "${stream}". Removing it deletes the entire stream and all its messages. Continue?`)) return
+    askConfirm('Delete topic', `Delete topic "${topic}"? This drops the topic and all its data.`, async () => {
+      if (!selected) return
       try {
-        await ipc.natsJsDeleteStream(selected.id, stream)
-        toasts.success(`Deleted stream ${stream}`, 'nats')
+        await ipc.kafkaDeleteTopic(selected.id, topic)
+        toasts.success(`Deleted topic ${topic}`, 'kafka')
         explorer.refreshStreaming(selected.id)
       } catch (e) {
-        toasts.error(String(e), 'nats')
+        toasts.error(String(e), 'kafka')
       }
-      return
-    }
-    if (!confirm(`Remove subject "${subject}" from stream "${stream}"?`)) return
-    try {
-      await ipc.natsJsRemoveSubject(selected.id, stream, subject)
-      toasts.success(`Removed subject ${subject}`, 'nats')
-      explorer.refreshStreaming(selected.id)
-    } catch (e) {
-      toasts.error(String(e), 'nats')
-    }
+    })
   }
-  async function clearSubject(stream: string, subject: string) {
-    if (!selected || !confirm(`Clear all messages of subject "${subject}"?`)) return
-    try {
-      await ipc.natsJsPurgeSubject(selected.id, stream, subject)
-      toasts.success(`Cleared messages of ${subject}`, 'nats')
-      explorer.refreshStreaming(selected.id)
-    } catch (e) {
-      toasts.error(String(e), 'nats')
-    }
+  function clearTopic(topic: string) {
+    if (!selected) return
+    askConfirm('Clear messages', `Clear all messages of topic "${topic}"? This cannot be undone.`, async () => {
+      if (!selected) return
+      try {
+        await ipc.kafkaPurgeTopic(selected.id, topic)
+        toasts.success(`Cleared messages of ${topic}`, 'kafka')
+        explorer.refreshStreaming(selected.id)
+      } catch (e) {
+        toasts.error(String(e), 'kafka')
+      }
+    })
+  }
+  // Delete the subject only — its messages are purged and it is dropped from the
+  // stream config. The stream itself is always kept (a stream must keep ≥1 subject;
+  // deleting the last one is refused by the backend — use "Delete stream" instead).
+  // This is a SEPARATE action from Delete stream and never touches it.
+  function deleteSubject(stream: string, subject: string) {
+    if (!selected) return
+    askConfirm(
+      'Delete subject',
+      `Delete subject "${subject}" from stream "${stream}"? This purges its messages and removes it from the stream. The stream itself is kept.`,
+      async () => {
+        if (!selected) return
+        try {
+          await ipc.natsJsRemoveSubject(selected.id, stream, subject)
+          toasts.success(`Deleted subject ${subject}`, 'nats')
+          explorer.refreshStreaming(selected.id)
+        } catch (e) {
+          toasts.error(String(e), 'nats')
+        }
+      },
+    )
+  }
+  function deleteStream(stream: string) {
+    if (!selected) return
+    askConfirm(
+      'Delete stream',
+      `Delete stream "${stream}"? This drops the stream and all its subjects and messages. This cannot be undone.`,
+      async () => {
+        if (!selected) return
+        try {
+          await ipc.natsJsDeleteStream(selected.id, stream)
+          toasts.success(`Deleted stream ${stream}`, 'nats')
+          explorer.refreshStreaming(selected.id)
+        } catch (e) {
+          toasts.error(String(e), 'nats')
+        }
+      },
+    )
+  }
+  function clearSubject(stream: string, subject: string) {
+    if (!selected) return
+    askConfirm(
+      'Clear messages',
+      `Clear all messages of subject "${subject}"? This cannot be undone.`,
+      async () => {
+        if (!selected) return
+        try {
+          await ipc.natsJsPurgeSubject(selected.id, stream, subject)
+          toasts.success(`Cleared messages of ${subject}`, 'nats')
+          explorer.refreshStreaming(selected.id)
+          // also reload the focused subject-messages tab so it shows empty
+          explorer.bumpNatsSubject(selected.id, stream, subject)
+        } catch (e) {
+          toasts.error(String(e), 'nats')
+        }
+      },
+    )
   }
 
   // ClickHouse Dictionaries (§3) — nạp lười khi mở folder.
@@ -371,13 +472,57 @@
 
   // Rename/Truncate/Drop — mở SQL editable để review trước khi Run (port HTML dòng 3370-3398).
   // `database` binds the SQL tab to a foreign database (see newQuery).
-  function stmtTab(title: string, sql: string, database?: string) {
-    if (!selected) return
-    const tab = tabs.openSqlTab({ connectionId: selected.id, title, query: sql })
+  function stmtTab(title: string, sql: string, database?: string, cid = selected?.id) {
+    if (!cid) return
+    const tab = tabs.openSqlTab({ connectionId: cid, title, query: sql })
     if (database) {
       tab.state.database = database
       tabs.schedulePersist()
     }
+  }
+
+  // ---- Partitions node (View + Manage) ----------------------------------------
+  function partMeta(p: PartitionInfo): string {
+    const bits: string[] = []
+    if (p.expression) bits.push(p.expression)
+    else if (p.method) bits.push(p.method)
+    if (p.rows != null) bits.push(`${p.rows.toLocaleString()} rows`)
+    return bits.join(' · ')
+  }
+
+  /** Reveal a table's Partitions node: load its detail, then expand both the
+   *  table row and its Partitions folder so existing partitions become visible. */
+  async function showPartitions(cid: string, schema: string, table: string, tableKey: string, partsKey: string) {
+    await explorer.loadTableDetail(cid, schema, table)
+    const next = new Set(expanded)
+    next.add(tableKey)
+    next.add(partsKey)
+    expanded = next
+    const parts = explorer.cache[cid]?.bySchema[schema]?.tableDetails[table]?.partitions ?? []
+    if (parts.length === 0) toasts.show(`"${table}" is not partitioned`)
+  }
+
+  /** Right-click menu for one partition: copy + dialect-correct maintenance ops
+   *  (each opens an editable SQL tab for review before running). `cid`/`database`
+   *  target a foreign-database sub-connection when set. */
+  function partitionMenuItems(
+    cid: string,
+    schema: string,
+    table: string,
+    p: PartitionInfo,
+    system: string,
+    database?: string,
+  ): { label: string; run: () => void }[] {
+    const items: { label: string; run: () => void }[] = [{ label: 'Copy name', run: () => copyName(p.name) }]
+    if (p.expression) items.push({ label: 'Copy bound / value', run: () => copyName(p.expression!) })
+    for (const op of partitionOps(system, schema, table, p)) {
+      items.push({
+        label: op.danger ? `${op.label}…` : op.label,
+        run: () => stmtTab(`${table} — ${op.label}`, op.sql, database, cid),
+      })
+    }
+    items.push({ label: 'Refresh', run: () => explorer.refresh(cid, { kind: 'table', schema, table }) })
+    return items
   }
 
   // Generate Scripts cho MỘT bảng theo mode (structure/data/both) — mở SQL tab.
@@ -485,12 +630,14 @@
       const kw = kind === 'procedure' ? 'PROCEDURE' : 'FUNCTION'
       sql = `-- PostgreSQL may need the argument signature: DROP ${kw} ${qual}(...)\nDROP ${kw} IF EXISTS ${qual};`
     }
-    stmtTab(`Drop ${name}`, sql)
+    stmtTab(`Drop ${name}`, sql, dbForSchema(schema))
   }
 
   // T28 — Execute proc/func (dialog by signature) + Rename (dialect-aware).
   function execRoutine(schemaName: string, r: RoutineInfo) {
-    if (selected) execRoutineWizard.show(selected.id, schemaName, r)
+    // Bind to the routine's database (MySQL: schema == database) so the CALL runs
+    // against the right DB — item 3.
+    if (selected) execRoutineWizard.show(selected.id, schemaName, r, dbForSchema(schemaName))
   }
   function renameRoutine(schemaName: string, r: RoutineInfo) {
     if (!selected) return
@@ -542,6 +689,7 @@
     col: 'var(--hex-9aa4b8)',
     folder: 'var(--hex-d0a45e)',
     schema: 'var(--hex-7f8a9e)',
+    part: 'var(--hex-56b6c2)',
   } as const
 
   // Folder icon for database nodes (DataGrip-style) — inline SVG, uses currentColor.
@@ -696,22 +844,51 @@
     </div>
   {/if}
 
+  <!-- filter — finds NATS JetStream streams by name -->
+  {#if selected?.connected && isNats}
+    <div style="flex:none;padding:0 var(--px-8) var(--px-6);position:relative">
+      <span style="position:absolute;left:var(--px-16);top:50%;transform:translateY(-60%);color:var(--muted);font-size:var(--px-11);pointer-events:none">⌕</span>
+      <input
+        bind:value={streamFilter}
+        placeholder="Filter streams…"
+        aria-label="Filter streams"
+        spellcheck="false"
+        style="width:100%;background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-22);color:var(--text);font-size:var(--px-11_5);outline:none"
+      />
+      {#if streamFiltering}
+        <span onclick={() => (streamFilter = '')} onkeydown={(e) => e.key === 'Enter' && (streamFilter = '')} role="button" tabindex="0" title="Clear" style="position:absolute;right:var(--px-14);top:50%;transform:translateY(-60%);color:var(--muted);font-size:var(--px-13);cursor:pointer">×</span>
+      {/if}
+    </div>
+  {/if}
+
   <!-- tree — dòng 143-152 -->
   <div style="flex:1;overflow:auto;padding:0 var(--px-6) var(--px-10)">
     {#if !selected}
       <div style="padding:var(--px-16) var(--px-12);text-align:center;font-size:var(--px-12);color:var(--muted)">
         Select a connection to view its structure
       </div>
+    {:else if connections.connecting.has(selected.id)}
+      <!-- item 5: connection in flight → clear "connecting…" indicator -->
+      <div style="padding:var(--px-20) var(--px-12);text-align:center;font-size:var(--px-12);color:var(--muted);display:flex;flex-direction:column;align-items:center;gap:var(--px-8)">
+        <span class="mono" style="font-size:var(--px-18);color:var(--warn)">◴</span>
+        <span>Connecting to {selected.name}…</span>
+      </div>
     {:else if !selected.connected}
       <div style="padding:var(--px-16) var(--px-12);text-align:center;font-size:var(--px-12);color:var(--muted)">
-        <p>Not connected.</p>
+        {#if connections.connectErrors[selected.id]}
+          <!-- item 5: connect failed → clear message (not just a toast) -->
+          <p style="color:var(--error);font-weight:600">Could not connect to {selected.name}</p>
+          <p class="mono" style="color:var(--error);font-size:var(--px-11);max-width:var(--px-320);margin:var(--px-6) auto;word-break:break-word;line-height:1.4">{connections.connectErrors[selected.id]}</p>
+        {:else}
+          <p>Not connected.</p>
+        {/if}
         <div
           onclick={() => selected && connections.connect(selected.id)}
           onkeydown={(e) => e.key === 'Enter' && selected && connections.connect(selected.id)}
           role="button"
           tabindex="0"
           style="margin-top:var(--px-6);color:var(--primary);cursor:pointer"
-        >Connect</div>
+        >{connections.connectErrors[selected.id] ? 'Retry' : 'Connect'}</div>
       </div>
     {:else if cache?.error}
       <div style="padding:var(--px-12);font-size:var(--px-11_5);color:var(--error)">{cache.error}</div>
@@ -733,6 +910,8 @@
                 <ContextMenu.Content>
                   <ContextMenu.Item onclick={() => cassSelectTab(t.name)}>SELECT * (LIMIT 100)</ContextMenu.Item>
                   <ContextMenu.Item onclick={() => cassDdlTab(t.name)}>View DDL (CQL)</ContextMenu.Item>
+                  <ContextMenu.Separator />
+                  <ContextMenu.Item onclick={() => selected && loadCass(selected.id)}>Refresh</ContextMenu.Item>
                 </ContextMenu.Content>
               {/snippet}
               {@render row({ key: tbKey, depth: 2, glyph: '▦', color: C.table, name: t.name, expandable: true, onClick: () => toggle(tbKey), onDblClick: () => cassSelectTab(t.name) }, cassMenu)}
@@ -808,6 +987,8 @@
               <ContextMenu.Separator />
               <ContextMenu.Item onclick={() => clearTopic(t.name)}>Clear messages</ContextMenu.Item>
               <ContextMenu.Item onclick={() => deleteTopic(t.name)}>Delete topic</ContextMenu.Item>
+              <ContextMenu.Separator />
+              <ContextMenu.Item onclick={() => selected && explorer.refreshStreaming(selected.id)}>Refresh</ContextMenu.Item>
             </ContextMenu.Content>
           {/snippet}
           {@render row(
@@ -823,19 +1004,57 @@
       {:else if streamCache?.loading && !streamCache?.natsStreams}
         <div style="padding:var(--px-16) var(--px-12);text-align:center;font-size:var(--px-12);color:var(--muted)">Loading streams…</div>
       {:else if streamRows.length === 0}
-        <div style="padding:var(--px-16) var(--px-12);text-align:center;font-size:var(--px-12);color:var(--muted)">No JetStream streams</div>
+        <div style="padding:var(--px-16) var(--px-12);text-align:center;font-size:var(--px-12);color:var(--muted)">{streamFiltering ? 'No streams match the filter' : 'No JetStream streams'}</div>
       {:else}
         {#each streamRows as s (s.name)}
           {@const sKey = `nats:s:${s.name}`}
-          {@render row({ key: sKey, depth: 0, glyph: '', svg: NATS_LOGO, color: C.folder, nameColor: 'var(--success)', name: s.name, meta: s.meta, head: true, expandable: true, onClick: () => toggle(sKey) })}
+          {#snippet streamMenu()}
+            <ContextMenu.Content class="w-52">
+              <ContextMenu.Item onclick={() => toggle(sKey)}>Expand / Collapse</ContextMenu.Item>
+              <ContextMenu.Item onclick={() => selected && natsAddWizard.show(selected.id, s.name, '', true)}>Add subject…</ContextMenu.Item>
+              <ContextMenu.Separator />
+              <ContextMenu.Item onclick={() => openSubjFilter(s.name)}>Filter subjects…</ContextMenu.Item>
+              {#if subjFilterOpen.has(s.name)}
+                <ContextMenu.Item onclick={() => clearSubjFilter(s.name)}>Clear filter</ContextMenu.Item>
+              {/if}
+              <ContextMenu.Separator />
+              <ContextMenu.Item onclick={() => deleteStream(s.name)}>Delete stream</ContextMenu.Item>
+              <ContextMenu.Separator />
+              <ContextMenu.Item onclick={() => selected && explorer.refreshStreaming(selected.id)}>Refresh</ContextMenu.Item>
+            </ContextMenu.Content>
+          {/snippet}
+          {@render row({ key: sKey, depth: 0, glyph: '', svg: NATS_LOGO, color: C.folder, nameColor: 'var(--success)', name: s.name, meta: s.meta, head: true, expandable: true, onClick: () => toggle(sKey) }, streamMenu)}
           {#if expanded.has(sKey)}
-            {#each s.subjects as sub (sub.subject)}
+            {#if subjFilterOpen.has(s.name)}
+              <!-- per-stream subject filter (SSMS-style), depth-1 indented -->
+              <div style="display:flex;align-items:center;gap:var(--px-6);padding:var(--px-3) var(--px-8) var(--px-5);padding-left:calc(var(--px-8) + 1 * var(--px-14));position:relative">
+                <span style="position:absolute;left:calc(var(--px-16) + 1 * var(--px-14));color:var(--muted);font-size:var(--px-11);pointer-events:none">⌕</span>
+                <!-- svelte-ignore a11y_autofocus -->
+                <input
+                  bind:value={subjFilters[s.name]}
+                  placeholder="Filter subjects…"
+                  aria-label="Filter subjects"
+                  autofocus
+                  spellcheck="false"
+                  style="flex:1;background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-3) var(--px-22);color:var(--text);font-size:var(--px-11_5);outline:none"
+                />
+                <span onclick={() => clearSubjFilter(s.name)} onkeydown={(e) => e.key === 'Enter' && clearSubjFilter(s.name)} role="button" tabindex="0" title="Clear filter" style="position:absolute;right:var(--px-14);color:var(--muted);font-size:var(--px-13);cursor:pointer">×</span>
+              </div>
+            {/if}
+            {@const subs = s.subjects.filter((sub) => objectFilterMatch(subjFilters[s.name] ?? '', sub.subject))}
+            {#if subs.length === 0}
+              <div style="padding:var(--px-4) var(--px-12);padding-left:calc(var(--px-8) + 1 * var(--px-14));font-size:var(--px-11);color:var(--muted)">No subjects match the filter</div>
+            {/if}
+            {#each subs as sub (sub.subject)}
               {#snippet subjectMenu()}
                 <ContextMenu.Content class="w-52">
                   <ContextMenu.Item onclick={() => selected && tabs.openNatsSubject(selected.id, s.name, sub.subject)}>View messages</ContextMenu.Item>
+                  <ContextMenu.Item onclick={() => selected && natsAddWizard.show(selected.id, s.name, sub.subject, false)}>Add message…</ContextMenu.Item>
                   <ContextMenu.Separator />
                   <ContextMenu.Item onclick={() => clearSubject(s.name, sub.subject)}>Clear messages</ContextMenu.Item>
-                  <ContextMenu.Item onclick={() => deleteSubject(s.name, sub.subject, s.subjects.length)}>Delete subject</ContextMenu.Item>
+                  <ContextMenu.Item onclick={() => deleteSubject(s.name, sub.subject)}>Delete subject</ContextMenu.Item>
+                  <ContextMenu.Separator />
+                  <ContextMenu.Item onclick={() => selected && explorer.refreshStreaming(selected.id)}>Refresh</ContextMenu.Item>
                 </ContextMenu.Content>
               {/snippet}
               {@render row(
@@ -846,6 +1065,9 @@
           {/if}
         {/each}
       {/if}
+    {:else if isRedis}
+      <!-- Redis: key browser (DB selector + SCAN + pattern + tree + Add key). -->
+      <RedisExplorer connId={selected.id} />
     {:else}
       {#if pgMssqlMultiDb}
         <!-- current database header (PG/MSSQL bind one DB per connection); its -->
@@ -979,6 +1201,15 @@
                   <ContextMenu.Item onclick={() => selected && tabs.openTableDesigner(selected.id, schema.name, t.name)}>Design Table</ContextMenu.Item>
                   <ContextMenu.Item onclick={() => stmtTab(`Alter ${t.name}`, genAlterTable(selected!.system, schema.name, t.name), dbForSchema(schema.name))}>Alter Table…</ContextMenu.Item>
                   <ContextMenu.Item onclick={() => selected && tabs.openIndexManager(selected.id, schema.name, t.name)}>Manage Indexes & FKs…</ContextMenu.Item>
+                  {#if !isClickhouse && supportsPartitioning(selected!.system)}
+                    <ContextMenu.Sub>
+                      <ContextMenu.SubTrigger>Partitions</ContextMenu.SubTrigger>
+                      <ContextMenu.SubContent class="w-52">
+                        <ContextMenu.Item onclick={() => selected && showPartitions(selected.id, schema.name, t.name, `t:${schema.name}.${t.name}`, `p:${schema.name}.${t.name}`)}>Show Partitions</ContextMenu.Item>
+                        <ContextMenu.Item onclick={() => selected && addPartitionWizard.show(selected.id, schema.name, t.name, selected.system, dbForSchema(schema.name))}>Add Partition…</ContextMenu.Item>
+                      </ContextMenu.SubContent>
+                    </ContextMenu.Sub>
+                  {/if}
                   <ContextMenu.Item
                     onclick={() => stmtTab(`Rename ${t.name}`, genRename(selected!.system, schema.name, t.name), dbForSchema(schema.name))}
                   >
@@ -1069,6 +1300,8 @@
                         <ContextMenu.Item onclick={() => copyName(`${t.name}.${col.name}`)}>Copy as table.column</ContextMenu.Item>
                         <ContextMenu.Separator />
                         <ContextMenu.Item onclick={() => selected && tabs.openTableViewer(selected.id, schema.name, t.name, [{ col: col.name, op: '=', value: '' }])}>Set as Filter</ContextMenu.Item>
+                        <ContextMenu.Separator />
+                        <ContextMenu.Item onclick={() => selected && explorer.refresh(selected.id, { kind: 'table', schema: schema.name, table: t.name })}>Refresh</ContextMenu.Item>
                       </ContextMenu.Content>
                     {/snippet}
                     {@render row(
@@ -1131,6 +1364,40 @@
                       {/each}
                     {/if}
                   {/if}
+                  {#if (detail.partitions ?? []).length > 0}
+                    {@render row({
+                      key: `p:${schema.name}.${t.name}`,
+                      depth: base + 3,
+                      glyph: '▤',
+                      color: C.part,
+                      name: 'Partitions',
+                      meta: detail.partitions?.[0]?.key ?? String(detail.partitions?.length),
+                      expandable: true,
+                      onClick: () => toggle(`p:${schema.name}.${t.name}`),
+                    })}
+                    {#if expanded.has(`p:${schema.name}.${t.name}`)}
+                      {#each detail.partitions ?? [] as pt (pt.name)}
+                        {#snippet partitionMenu()}
+                          <ContextMenu.Content class="w-56">
+                            {#each partitionMenuItems(selected!.id, schema.name, t.name, pt, selected!.system) as it (it.label)}
+                              <ContextMenu.Item onclick={it.run}>{it.label}</ContextMenu.Item>
+                            {/each}
+                          </ContextMenu.Content>
+                        {/snippet}
+                        {@render row(
+                          {
+                            key: `pt:${schema.name}.${t.name}.${pt.name}`,
+                            depth: base + 4,
+                            glyph: '▤',
+                            color: C.part,
+                            name: pt.name,
+                            meta: partMeta(pt),
+                          },
+                          partitionMenu,
+                        )}
+                      {/each}
+                    {/if}
+                  {/if}
                 {/if}
               {/if}
             {/each}
@@ -1170,6 +1437,7 @@
                   <ContextMenu.Item onclick={() => copyName(v.name)}>Copy Name</ContextMenu.Item>
                   <ContextMenu.Separator />
                   <ContextMenu.Item variant="destructive" onclick={() => dropObject('view', schema.name, v.name)}>Drop</ContextMenu.Item>
+                  <ContextMenu.Item onclick={() => selected && explorer.refresh(selected.id, { kind: 'schema', schema: schema.name })}>Refresh</ContextMenu.Item>
                 </ContextMenu.Content>
               {/snippet}
               {@render row(
@@ -1224,6 +1492,7 @@
                     <ContextMenu.Item onclick={() => copyName(dic)}>Copy Name</ContextMenu.Item>
                     <ContextMenu.Separator />
                     <ContextMenu.Item variant="destructive" onclick={() => stmtTab(`Drop ${dic}`, `DROP DICTIONARY ${schema.name}.${dic};`)}>Drop</ContextMenu.Item>
+                    <ContextMenu.Item onclick={() => selected && explorer.refresh(selected.id, { kind: 'schema', schema: schema.name })}>Refresh</ContextMenu.Item>
                   </ContextMenu.Content>
                 {/snippet}
                 {@render row({ key: `dic:${schema.name}.${dic}`, depth: base + 2, glyph: '⊞', color: C.view, name: dic, meta: 'dictionary' }, dictMenu)}
@@ -1264,6 +1533,7 @@
                     <ContextMenu.Item onclick={() => copyName(r.name)}>Copy Name</ContextMenu.Item>
                     <ContextMenu.Separator />
                     <ContextMenu.Item variant="destructive" onclick={() => dropObject('procedure', schema.name, r.name)}>Drop</ContextMenu.Item>
+                    <ContextMenu.Item onclick={() => selected && explorer.refresh(selected.id, { kind: 'schema', schema: schema.name })}>Refresh</ContextMenu.Item>
                   </ContextMenu.Content>
                 {/snippet}
                 {@render row({
@@ -1317,6 +1587,7 @@
                       <ContextMenu.Item onclick={() => copyName(r.name)}>Copy Name</ContextMenu.Item>
                       <ContextMenu.Separator />
                       <ContextMenu.Item variant="destructive" onclick={() => dropObject('function', schema.name, r.name)}>Drop</ContextMenu.Item>
+                      <ContextMenu.Item onclick={() => selected && explorer.refresh(selected.id, { kind: 'schema', schema: schema.name })}>Refresh</ContextMenu.Item>
                     </ContextMenu.Content>
                   {/snippet}
                   {@render row({ key: `fn:${schema.name}.${r.name}`, depth: base + 2, glyph: 'ƒ', color: C.func, name: routineLabel(r) }, tvfMenu)}
@@ -1345,6 +1616,7 @@
                       <ContextMenu.Item onclick={() => copyName(r.name)}>Copy Name</ContextMenu.Item>
                       <ContextMenu.Separator />
                       <ContextMenu.Item variant="destructive" onclick={() => dropObject('function', schema.name, r.name)}>Drop</ContextMenu.Item>
+                      <ContextMenu.Item onclick={() => selected && explorer.refresh(selected.id, { kind: 'schema', schema: schema.name })}>Refresh</ContextMenu.Item>
                     </ContextMenu.Content>
                   {/snippet}
                   {@render row({
@@ -1390,6 +1662,7 @@
                       <ContextMenu.Item onclick={() => copyName(r.name)}>Copy Name</ContextMenu.Item>
                       <ContextMenu.Separator />
                       <ContextMenu.Item variant="destructive" onclick={() => dropObject('function', schema.name, r.name)}>Drop</ContextMenu.Item>
+                      <ContextMenu.Item onclick={() => selected && explorer.refresh(selected.id, { kind: 'schema', schema: schema.name })}>Refresh</ContextMenu.Item>
                     </ContextMenu.Content>
                   {/snippet}
                   {@render row({
@@ -1436,6 +1709,7 @@
                   <ContextMenu.Item onclick={() => copyName(tg.name)}>Copy Name</ContextMenu.Item>
                   <ContextMenu.Separator />
                   <ContextMenu.Item variant="destructive" onclick={() => dropObject('trigger', schema.name, tg.name, tg.table)}>Drop</ContextMenu.Item>
+                  <ContextMenu.Item onclick={() => selected && explorer.refresh(selected.id, { kind: 'schema', schema: schema.name })}>Refresh</ContextMenu.Item>
                 </ContextMenu.Content>
               {/snippet}
               {@render row({
@@ -1480,6 +1754,7 @@
                     <ContextMenu.Item onclick={() => copyName(sq.name)}>Copy Name</ContextMenu.Item>
                     <ContextMenu.Separator />
                     <ContextMenu.Item variant="destructive" onclick={() => dropSequence(schema.name, sq.name)}>Drop</ContextMenu.Item>
+                    <ContextMenu.Item onclick={() => selected && explorer.refresh(selected.id, { kind: 'schema', schema: schema.name })}>Refresh</ContextMenu.Item>
                   </ContextMenu.Content>
                 {/snippet}
                 {@render row({ key: `sq:${schema.name}.${sq.name}`, depth: base + 2, glyph: '#', color: C.seq, name: sq.name }, seqMenu)}
@@ -1586,6 +1861,15 @@
                             <ContextMenu.Item onclick={() => sub && tabs.openTableDesigner(sub, fsch.name, nm)}>Design Table</ContextMenu.Item>
                             <ContextMenu.Item onclick={() => selected && stmtTab(`Alter ${nm}`, genAlterTable(selected.system, fsch.name, nm), db.name)}>Alter Table…</ContextMenu.Item>
                             <ContextMenu.Item onclick={() => sub && tabs.openIndexManager(sub, fsch.name, nm)}>Manage Indexes & FKs…</ContextMenu.Item>
+                            {#if selected && selected.system !== 'clickhouse' && supportsPartitioning(selected.system)}
+                              <ContextMenu.Sub>
+                                <ContextMenu.SubTrigger>Partitions</ContextMenu.SubTrigger>
+                                <ContextMenu.SubContent class="w-52">
+                                  <ContextMenu.Item onclick={() => sub && showPartitions(sub, fsch.name, nm, `${folderKey}:${nm}`, `${folderKey}:${nm}:parts`)}>Show Partitions</ContextMenu.Item>
+                                  <ContextMenu.Item onclick={() => sub && addPartitionWizard.show(sub, fsch.name, nm, selected!.system, db.name)}>Add Partition…</ContextMenu.Item>
+                                </ContextMenu.SubContent>
+                              </ContextMenu.Sub>
+                            {/if}
                             <ContextMenu.Item onclick={() => selected && stmtTab(`Rename ${nm}`, genRename(selected.system, fsch.name, nm), db.name)}>Rename…</ContextMenu.Item>
                             <ContextMenu.Separator />
                             <ContextMenu.Item onclick={() => genSqlTab('select', fsch.name, nm, sub, db.name)}>Generate SQL · SELECT</ContextMenu.Item>
@@ -1605,7 +1889,7 @@
                           {#if fk === 'v' || fk === 'p' || fk === 'fn' || fk === 'tg'}
                             {@const okind = fk === 'v' ? 'view' : fk === 'p' ? 'procedure' : fk === 'tg' ? 'trigger' : 'function'}
                             {#if fk === 'p' || fk === 'fn'}
-                              <ContextMenu.Item onclick={() => sub && execRoutineWizard.show(sub, fsch.name, it as RoutineInfo)}>Execute…</ContextMenu.Item>
+                              <ContextMenu.Item onclick={() => selected && execRoutineWizard.show(selected.id, fsch.name, it as RoutineInfo, db.name)}>Execute…</ContextMenu.Item>
                             {/if}
                             <ContextMenu.Item onclick={() => sub && showDefinition(okind, fsch.name, nm, sub)}>Show Definition</ContextMenu.Item>
                             <ContextMenu.Item onclick={() => sub && alterObject(okind, fsch.name, nm, sub)}>Alter…</ContextMenu.Item>
@@ -1629,15 +1913,83 @@
                           {/if}
                         </ContextMenu.Content>
                       {/snippet}
+                      {@const isTblLike = fk === 't' || fk === 'v'}
                       {@render row({
                         key: `${folderKey}:${nm}`,
                         depth: 3,
                         glyph: glyph as string,
                         color: fk === 't' ? C.table : fk === 'v' ? C.view : fk === 'tg' ? C.trig : fk === 'sq' ? C.seq : fk === 'p' ? C.proc : C.func,
                         name: nm,
+                        expandable: isTblLike,
                         dragData: fk === 't' ? JSON.stringify({ schema: fsch.name, table: nm }) : undefined,
+                        onClick: isTblLike && sub ? () => { toggle(`${folderKey}:${nm}`); void explorer.loadTableDetail(sub, fsch.name, nm) } : undefined,
                         onDblClick: fk === 't' && sub ? () => tabs.openTableViewer(sub, fsch.name, nm) : undefined,
                       }, fk === 'sq' ? undefined : fObjMenu)}
+                      <!-- item 4: foreign-database tables/views expand to their columns too -->
+                      {#if isTblLike && sub && expanded.has(`${folderKey}:${nm}`)}
+                        {@const fdetail = fsc.tableDetails[nm]}
+                        {#if explorer.isLoading(sub, `table:${fsch.name}.${nm}`)}
+                          <div class="mono" style="padding-left:calc(var(--px-6) + 4 * var(--px-15));font-size:var(--px-10);color:var(--muted)">loading…</div>
+                        {:else if fdetail}
+                          {#each fdetail.columns ?? [] as col (col.name)}
+                            {#snippet fColMenu()}
+                              <ContextMenu.Content class="w-48">
+                                <ContextMenu.Item onclick={() => copyName(col.name)}>Copy Name</ContextMenu.Item>
+                                <ContextMenu.Item onclick={() => copyName(`${nm}.${col.name}`)}>Copy as table.column</ContextMenu.Item>
+                                <ContextMenu.Separator />
+                                <ContextMenu.Item onclick={() => sub && tabs.openTableViewer(sub, fsch.name, nm, [{ col: col.name, op: '=', value: '' }])}>Set as Filter</ContextMenu.Item>
+                                <ContextMenu.Separator />
+                                <ContextMenu.Item onclick={() => sub && explorer.refresh(sub, { kind: 'table', schema: fsch.name, table: nm })}>Refresh</ContextMenu.Item>
+                              </ContextMenu.Content>
+                            {/snippet}
+                            {@render row(
+                              {
+                                key: `${folderKey}:${nm}:col:${col.name}`,
+                                depth: 4,
+                                glyph: '▸',
+                                color: C.col,
+                                name: col.name,
+                                meta: `${col.data_type}${col.is_pk ? ' · PK' : col.is_fk ? ' · FK' : ''}${!col.nullable && !col.is_pk ? ' · NN' : ''}`,
+                              },
+                              fColMenu,
+                            )}
+                          {/each}
+                          {#if (fdetail.partitions ?? []).length > 0}
+                            {@render row({
+                              key: `${folderKey}:${nm}:parts`,
+                              depth: 4,
+                              glyph: '▤',
+                              color: C.part,
+                              name: 'Partitions',
+                              meta: fdetail.partitions?.[0]?.key ?? String(fdetail.partitions?.length),
+                              expandable: true,
+                              onClick: () => toggle(`${folderKey}:${nm}:parts`),
+                            })}
+                            {#if expanded.has(`${folderKey}:${nm}:parts`)}
+                              {#each fdetail.partitions ?? [] as pt (pt.name)}
+                                {#snippet fPartitionMenu()}
+                                  <ContextMenu.Content class="w-56">
+                                    {#each partitionMenuItems(sub!, fsch.name, nm, pt, selected!.system, db.name) as it (it.label)}
+                                      <ContextMenu.Item onclick={it.run}>{it.label}</ContextMenu.Item>
+                                    {/each}
+                                  </ContextMenu.Content>
+                                {/snippet}
+                                {@render row(
+                                  {
+                                    key: `${folderKey}:${nm}:pt:${pt.name}`,
+                                    depth: 5,
+                                    glyph: '▤',
+                                    color: C.part,
+                                    name: pt.name,
+                                    meta: partMeta(pt),
+                                  },
+                                  fPartitionMenu,
+                                )}
+                              {/each}
+                            {/if}
+                          {/if}
+                        {/if}
+                      {/if}
                     {/each}
                   {/if}
                 {/each}
@@ -1697,6 +2049,29 @@
   </div>
 </div>
 
+{#if confirmState}
+  <!-- backdrop click does NOT confirm/close; use Cancel / Confirm / Escape -->
+  <div
+    onkeydown={(e) => { if (e.key === 'Escape') confirmState = null; if (e.key === 'Enter') runConfirm() }}
+    role="presentation"
+    style="position:fixed;inset:0;background:var(--rgba-0-0-0-_5);display:flex;align-items:center;justify-content:center;z-index:90"
+  >
+    <div
+      role="dialog"
+      aria-modal="true"
+      tabindex="-1"
+      style="background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-14);padding:var(--px-18);min-width:var(--px-320);max-width:var(--px-420);box-shadow:0 var(--px-24) var(--px-60) var(--rgba-0-0-0-_55)"
+    >
+      <div style="font-size:var(--px-14);font-weight:600;color:var(--text);margin-bottom:var(--px-8)">{confirmState.title}</div>
+      <div style="font-size:var(--px-12_5);color:var(--text2);line-height:1.45;margin-bottom:var(--px-16)">{confirmState.body}</div>
+      <div style="display:flex;gap:var(--px-8);justify-content:flex-end">
+        <span use:autofocus onclick={() => (confirmState = null)} onkeydown={(e) => e.key === 'Enter' && (confirmState = null)} role="button" tabindex="0" class="cfm-btn">Cancel</span>
+        <span onclick={runConfirm} onkeydown={(e) => e.key === 'Enter' && runConfirm()} role="button" tabindex="0" class="cfm-btn danger">Confirm</span>
+      </div>
+    </div>
+  </div>
+{/if}
+
 <style>
   .xbtn {
     width: var(--px-26);
@@ -1720,5 +2095,23 @@
   .xbtn:hover,
   .xbtn2:hover {
     background: var(--hover);
+  }
+  .cfm-btn {
+    font-size: var(--px-12);
+    color: var(--text2);
+    background: var(--panel);
+    border: var(--px-1) solid var(--border);
+    border-radius: var(--px-6);
+    padding: var(--px-5) var(--px-14);
+    cursor: pointer;
+  }
+  .cfm-btn:hover {
+    background: var(--hover);
+  }
+  .cfm-btn.danger {
+    color: var(--hex-fff);
+    background: var(--error);
+    border-color: var(--error);
+    font-weight: 600;
   }
 </style>

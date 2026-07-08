@@ -235,6 +235,32 @@ pub struct SequenceInfo {
     pub name: String,
 }
 
+/// A single partition of a partitioned table (Explorer "Partitions" node).
+/// `method`/`key` describe the parent table's partitioning; the remaining
+/// per-partition fields describe this one partition.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PartitionInfo {
+    /// Partition name (PG child relation, MySQL partition name, MSSQL "Partition N",
+    /// ClickHouse partition id).
+    pub name: String,
+    /// Parent strategy: RANGE | LIST | HASH | KEY | "" (ClickHouse: "EXPRESSION").
+    pub method: String,
+    /// Parent partition key/expression, same for every row of a table
+    /// (e.g. "created_at", "toYYYYMM(ts)", "(a, b)").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+    /// This partition's bound/value (PG "FOR VALUES …", MySQL description,
+    /// MSSQL boundary, ClickHouse partition value).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expression: Option<String>,
+    /// Estimated / actual row count for this partition, when the engine exposes it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rows: Option<i64>,
+    /// 1-based partition ordinal (MySQL, MSSQL) when available.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub position: Option<i64>,
+}
+
 /// Foreign-key relationship (ER Diagram + Schema Compare).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ForeignKey {

@@ -14,7 +14,9 @@
   let { tab }: Props = $props()
   const topic = $derived((tab.state as { topic?: string }).topic ?? '')
 
-  let from = $state<'earliest' | 'latest' | 'offset'>('latest')
+  // Default to Earliest so opening a topic shows its existing messages (Latest
+  // would only stream records produced after Consume, i.e. usually nothing).
+  let from = $state<'earliest' | 'latest' | 'offset'>('earliest')
   let offset = $state(0)
   let partition = $state<string>('') // '' = all
   let consuming = $state(false)
@@ -25,6 +27,11 @@
   const MAX = 500
   let messages = $state<ipc.KafkaMsg[]>([])
   let unlisten: (() => void) | null = null
+  let unlistenStatus: (() => void) | null = null
+  // Last librdkafka error/warning surfaced from the backend (connection refused,
+  // fetch failure, unknown partition, …) so failures aren't silent.
+  let statusMsg = $state('')
+  let statusLevel = $state<'error' | 'warn' | ''>('')
 
   function fmtTs(ms: number): string {
     if (!ms) return ''
@@ -74,10 +81,21 @@
       if (e.payload.conn_id !== tab.connectionId || paused) return
       messages = [e.payload, ...messages].slice(0, MAX)
     })
+    unlistenStatus = await listen<{ conn_id: string; level: 'error' | 'warn'; message: string }>(
+      'kafka-status',
+      (e) => {
+        if (e.payload.conn_id !== tab.connectionId) return
+        statusLevel = e.payload.level
+        statusMsg = e.payload.message
+      },
+    )
+    // Auto-start browsing from Earliest so clicking a topic shows its messages.
+    if (tab.connectionId && !consuming) void toggle()
   })
 
   onDestroy(() => {
     unlisten?.()
+    unlistenStatus?.()
     if (consuming && tab.connectionId) void ipc.kafkaStopConsume(tab.connectionId)
   })
 
@@ -89,6 +107,8 @@
       return
     }
     const part = partition.trim() === '' ? null : parseInt(partition, 10)
+    statusMsg = ''
+    statusLevel = ''
     try {
       await ipc.kafkaConsume(tab.connectionId, topic, from, offset, Number.isNaN(part as number) ? null : part)
       consuming = true
@@ -135,11 +155,24 @@
     <input bind:value={valFilter} placeholder="filter value (text)" class="cm-mini mono" style="flex:1" />
   </div>
 
+  <!-- status / error line from librdkafka (so empty grid isn't a mystery) -->
+  {#if statusMsg}
+    <div
+      style="flex:none;padding:var(--px-6) var(--px-14);font-size:var(--px-11_5);border-bottom:var(--px-1) solid var(--border);color:{statusLevel === 'error' ? 'var(--danger)' : 'var(--warn2)'};background:var(--surface)"
+    >
+      {statusLevel === 'error' ? '✕' : '⚠'} {statusMsg}
+    </div>
+  {/if}
+
   <!-- message table -->
   <div style="flex:1;overflow:auto;min-height:0">
     {#if messages.length === 0}
       <div style="padding:var(--px-16);text-align:center;font-size:var(--px-12);color:var(--muted)">
-        {consuming ? 'Waiting for messages…' : 'Pick a start position then Consume.'}
+        {#if statusLevel === 'error'}
+          Could not read messages — see the error above.
+        {:else}
+          {consuming ? 'Waiting for messages…' : 'Pick a start position then Consume.'}
+        {/if}
       </div>
     {:else}
       <table class="mono" style="border-collapse:collapse;width:100%;font-size:var(--px-12)">

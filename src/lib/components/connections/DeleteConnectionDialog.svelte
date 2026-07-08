@@ -5,6 +5,7 @@
   import { tabs } from '$lib/stores/tabs.svelte'
   import { toasts } from '$lib/stores/toast.svelte'
   import { ui } from '$lib/stores/ui.svelte'
+  import { autofocus } from '$lib/actions/autofocus'
 
   const target = $derived(ui.deleteTarget)
   const affectedTabs = $derived(target ? tabs.tabsForConnection(target.id) : [])
@@ -39,8 +40,8 @@
 </script>
 
 {#if target}
+  <!-- backdrop click does NOT close; use Cancel / Escape -->
   <div
-    onclick={close}
     onkeydown={(e) => e.key === 'Escape' && close()}
     role="presentation"
     style="position:fixed;inset:0;background:var(--rgba-0-0-0-_5);display:flex;align-items:center;justify-content:center;z-index:55"
@@ -71,6 +72,7 @@
       </div>
       <div style="display:flex;gap:var(--px-9);padding:var(--px-14) var(--px-20);border-top:var(--px-1) solid var(--border);background:var(--panel)">
         <span
+          use:autofocus
           onclick={close}
           onkeydown={(e) => e.key === 'Enter' && close()}
           role="button"

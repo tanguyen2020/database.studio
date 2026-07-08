@@ -24,10 +24,33 @@ test('table designer: columns grid + DDL preview + add column', async ({ page })
   await page.getByText('＋ Add column').first().click()
   await page.waitForTimeout(150)
 
-  // Scripts mode → DDL preview shows CREATE TABLE
+  // item 3/8 — the DataType cell is a searchable dropdown listing the engine's
+  // full type catalog. Focus it → options appear; type to filter → pick one.
+  const typeInput = page.locator('table input[placeholder="type…"]').first()
+  await typeInput.click()
+  await page.waitForTimeout(150)
+  await expect(page.getByRole('option').first()).toBeVisible()
+  // keyboard selection: filter to 'big' then Enter picks the highlighted option (bigint)
+  await typeInput.fill('big')
+  await page.waitForTimeout(150)
+  await typeInput.press('Enter')
+  await page.waitForTimeout(100)
+  await expect(typeInput).toHaveValue('bigint')
+  // reopens a second time (click-twice bug fixed) — Postgres catalog includes jsonb
+  await typeInput.click()
+  await page.waitForTimeout(150)
+  await expect(page.getByRole('option').first()).toBeVisible()
+  await typeInput.fill('jsonb')
+  await page.waitForTimeout(150)
+  await page.getByRole('option', { name: 'jsonb', exact: true }).first().click()
+  await page.waitForTimeout(100)
+  await expect(typeInput).toHaveValue('jsonb')
+
+  // Scripts mode → DDL preview shows CREATE TABLE with the picked type
   await page.getByText('Scripts', { exact: true }).first().click()
   await page.waitForTimeout(200)
   await expect(page.getByText(/CREATE TABLE/).first()).toBeVisible()
+  await expect(page.getByText(/jsonb/).first()).toBeVisible()
 
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
@@ -50,14 +73,29 @@ test('table designer: attribute tabs + index in DDL + Ctrl+S saves', async ({ pa
     await expect(page.getByRole('tab', { name: new RegExp(t) }).first()).toBeVisible()
   }
 
-  // Indexes tab → add an index and give it a name + column
+  // Fields tab → add an 'email' column so it can be picked in the index
+  await page.getByRole('tab', { name: /Fields/ }).first().click()
+  await page.getByText('＋ Add column').first().click()
+  await page.waitForTimeout(100)
+  await page.locator('tbody tr').last().locator('input').first().fill('email')
+  await page.waitForTimeout(100)
+
+  // Indexes tab → add an index, name it, and pick the 'email' column from the dropdown
   await page.getByRole('tab', { name: /Indexes/ }).first().click()
   await page.getByText('＋ Add index').first().click()
   await page.waitForTimeout(100)
   const idxRow = page.locator('tbody tr').first()
-  await idxRow.locator('input').nth(0).fill('ix_email')
-  await idxRow.locator('input').nth(1).fill('email')
+  await idxRow.locator('input').nth(0).fill('ix_email') // index name
+  const colInput = idxRow.locator('input').nth(1)
+  await colInput.click() // open the Columns multi-select
+  await page.waitForTimeout(150)
+  // keyboard selection: filter to the single 'email' match, then Enter picks it
+  await colInput.fill('email')
+  await page.waitForTimeout(150)
+  await colInput.press('Enter')
   await page.waitForTimeout(100)
+  // the picked column shows as a chip (label + × remove button) in the row
+  await expect(idxRow.getByText('email').first()).toBeVisible()
 
   // Foreign Keys tab exists and can add a row
   await page.getByRole('tab', { name: /Foreign Keys/ }).first().click()
@@ -108,6 +146,124 @@ test('table designer: existing table can drop a column (ALTER DROP COLUMN)', asy
   await page.getByText('Scripts', { exact: true }).first().click()
   await page.waitForTimeout(200)
   await expect(page.getByText(/DROP COLUMN/).first()).toBeVisible()
+
+  expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
+})
+
+test('table designer: Partitioning tab emits PARTITION BY in the DDL preview', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(String(e)))
+  await blockRemoteFonts(page)
+  await page.goto(APP_URL)
+  await page.waitForSelector('#app > *', { timeout: 15_000 })
+  await page.waitForTimeout(300)
+
+  await page.getByRole('button', { name: /Postgres/ }).first().click()
+  await page.waitForTimeout(500)
+  await page.getByTitle('New table').first().click()
+  await page.waitForTimeout(300)
+
+  // open the Partitioning tab (free-text key column drives the clause)
+  await page.getByRole('tab', { name: 'Partitioning' }).click()
+  await page.waitForTimeout(150)
+  await page.getByText('Partition this table').click()
+  await page.waitForTimeout(150)
+  await page.getByPlaceholder('created_at').fill('created_at')
+  await page.waitForTimeout(150)
+
+  // preview reflects the partition clause
+  await page.getByText('Scripts', { exact: true }).first().click()
+  await page.waitForTimeout(200)
+  await expect(page.locator('pre').first()).toContainText('PARTITION BY RANGE ("created_at")')
+
+  expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
+})
+
+test('table designer: Design existing partitioned table shows partitions + can add one', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(String(e)))
+  await blockRemoteFonts(page)
+  await page.goto(APP_URL)
+  await page.waitForSelector('#app > *', { timeout: 15_000 })
+  await page.waitForTimeout(300)
+
+  await page.getByRole('button', { name: /Postgres/ }).first().click()
+  await page.waitForTimeout(500)
+  await page.getByText('public', { exact: true }).first().dblclick()
+  await page.waitForTimeout(300)
+  await page.getByText('Tables', { exact: true }).first().dblclick()
+  await page.waitForTimeout(200)
+
+  // Design the demo's partitioned table (enrollments)
+  await page.getByRole('treeitem', { name: /enrollments/ }).first().click({ button: 'right' })
+  await page.waitForTimeout(150)
+  await page.getByText('Design Table', { exact: true }).first().click()
+  await page.waitForTimeout(400)
+
+  await page.getByRole('tab', { name: 'Partitioning' }).click()
+  await page.waitForTimeout(200)
+
+  // existing partitioning is shown read-only (existing partition rows are disabled)
+  await expect(page.getByText(/Current partitioning/).first()).toBeVisible()
+  await expect(page.locator('table input[disabled]').first()).toHaveValue('enrollments_2023')
+
+  // add a new partition using the structured From / To inputs (PG composes the bound)
+  await page.getByText('＋ Add partition').first().click()
+  await page.waitForTimeout(150)
+  await page.getByPlaceholder(/enrollments_p/).last().fill('enrollments_2026')
+  await page.getByPlaceholder("'2024-01-01'").last().fill("'2026-01-01'")
+  await page.getByPlaceholder("'2025-01-01'").last().fill("'2027-01-01'")
+  await page.waitForTimeout(200)
+
+  // the inline partition-script preview updates live (no need to switch tabs)
+  await expect(page.getByText('Add-partition script').first()).toBeVisible()
+  await expect(page.locator('pre').first()).toContainText(
+    `PARTITION OF "public"."enrollments" FOR VALUES FROM ('2026-01-01') TO ('2027-01-01')`,
+  )
+
+  expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
+})
+
+test('table designer: convert an existing non-partitioned table to partitioned', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(String(e)))
+  await blockRemoteFonts(page)
+  await page.goto(APP_URL)
+  await page.waitForSelector('#app > *', { timeout: 15_000 })
+  await page.waitForTimeout(300)
+
+  await page.getByRole('button', { name: /Postgres/ }).first().click()
+  await page.waitForTimeout(500)
+  await page.getByText('public', { exact: true }).first().dblclick()
+  await page.waitForTimeout(300)
+  await page.getByText('Tables', { exact: true }).first().dblclick()
+  await page.waitForTimeout(200)
+
+  // Design the non-partitioned demo table (students)
+  await page.getByRole('treeitem', { name: /students/ }).first().click({ button: 'right' })
+  await page.waitForTimeout(150)
+  await page.getByText('Design Table', { exact: true }).first().click()
+  await page.waitForTimeout(400)
+
+  await page.getByRole('tab', { name: 'Partitioning' }).click()
+  await page.waitForTimeout(200)
+
+  // the toggle is enabled (PG can convert) — turn it on
+  await page.getByText('Partition this table').click()
+  await page.waitForTimeout(200)
+
+  // fill the key + one partition (From / To)
+  await page.getByPlaceholder('created_at').fill('created_at')
+  await page.getByPlaceholder(/students_p/).first().fill('students_2024')
+  await page.getByPlaceholder("'2024-01-01'").first().fill("'2024-01-01'")
+  await page.getByPlaceholder("'2025-01-01'").first().fill("'2025-01-01'")
+  await page.waitForTimeout(200)
+
+  // convert script preview shows the rename + recreate + PARTITION OF migration
+  await expect(page.getByText('Convert-to-partitioned script').first()).toBeVisible()
+  const pre = page.locator('pre').first()
+  await expect(pre).toContainText('RENAME TO "students_old"')
+  await expect(pre).toContainText('PARTITION OF "public"."students"')
 
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })

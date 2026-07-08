@@ -10,6 +10,8 @@
   import { CATEGORY_ORDER, SYSTEM_ORDER, envMeta, systemMeta } from '$lib/systems'
   import { groupByFolder } from '$lib/connections/grouping'
   import { newDatabaseWizard } from '$lib/stores/newdatabase.svelte'
+  import { scriptsWizard } from '$lib/stores/scripts.svelte'
+  import { explorer } from '$lib/stores/explorer.svelte'
   import { connections } from '$lib/stores/connections.svelte'
   import { tabs } from '$lib/stores/tabs.svelte'
   import { toasts } from '$lib/stores/toast.svelte'
@@ -62,6 +64,13 @@
   const REL_SYSTEMS = ['postgres', 'mysql', 'mariadb', 'mssql', 'clickhouse', 'sqlite']
   const isRelational = (system: string) => REL_SYSTEMS.includes(system)
   const selRel = $derived(!!selConn && isRelational(selConn.system))
+  // View ER / Generate Scripts enable only when a schema/database node (public / dbo /
+  // a database) is selected in the Explorer tree AND it belongs to the picked connection.
+  const schemaSel = $derived(
+    explorer.selectedSchema && selConn && explorer.selectedSchema.base === selConn.id
+      ? explorer.selectedSchema
+      : null,
+  )
 
   function toggleGroup(system: string) {
     const next = new Set(collapsed)
@@ -79,7 +88,8 @@
     if (!p.connected) await connections.connect(p.id)
     // Redis/NATS: mở workspace chuyên biệt (không phải SQL editor)
     if (connections.byId(p.id)?.connected) {
-      if (p.system === 'redis') tabs.openRedisTab(p.id)
+      // Redis: key browser lives in the ObjectExplorer sidebar — do NOT open a tab.
+      if (p.system === 'redis') { /* explorer shows keys; open a tab per key on click */ }
       else if (p.system === 'nats') tabs.openNatsTab(p.id)
       else if (p.system === 'kafka') tabs.openKafkaTab(p.id)
       // Cassandra: CQL editor (tái dùng SQL editor + result grid, title Untitled CQL)
@@ -139,10 +149,6 @@
     filterOpen = !filterOpen
     if (!filterOpen) connections.filter = ''
     else setTimeout(() => filterInput?.focus(), 0)
-  }
-
-  function phase5(label: string) {
-    toasts.show(`${label} — Phase 5`)
   }
 
   // ---- Section 8: grouping mode + import/export + quick connect ----
@@ -215,6 +221,8 @@
         <ConnectionIndicator system={p.system} />
         {#if connections.connecting.has(p.id)}
           <span style="width:var(--px-7);height:var(--px-7);border-radius:50%;flex:none;background:var(--warn)" title="Connecting…"></span>
+        {:else if connections.connectErrors[p.id] && !p.connected}
+          <span style="width:var(--px-7);height:var(--px-7);border-radius:50%;flex:none;background:var(--error)" title="Connect failed: {connections.connectErrors[p.id]}"></span>
         {:else}
           <span style="width:var(--px-7);height:var(--px-7);border-radius:50%;flex:none;background:{p.connected ? systemMeta(p.system).accent : 'var(--sys-orphan-accent)'}" title={p.connected ? `Connected · ${p.latency_ms ?? '–'} ms` : 'Disconnected'}></span>
         {/if}
@@ -286,10 +294,10 @@
     <span class="tbtn" onclick={() => selRel && newQueryConsole()} onkeydown={(e) => e.key === 'Enter' && selRel && newQueryConsole()} role="button" tabindex="0" title="New query console" style="cursor:{selRel ? 'pointer' : 'not-allowed'};opacity:{selRel ? 1 : 0.35}">
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="9" cy="5" rx="6.5" ry="2.3"></ellipse><path d="M2.5 5v9c0 1.3 2.9 2.3 6.5 2.3"></path><path d="M2.5 9.5c0 1.3 2.9 2.3 6.5 2.3"></path><line x1="18" y1="14" x2="18" y2="21"></line><line x1="14.5" y1="17.5" x2="21.5" y2="17.5"></line></svg>
     </span>
-    <span class="tbtn" onclick={() => selRel && phase5('ER diagram')} onkeydown={(e) => e.key === 'Enter' && selRel && phase5('ER diagram')} role="button" tabindex="0" title="ER diagram" style="cursor:{selRel ? 'pointer' : 'not-allowed'};opacity:{selRel ? 1 : 0.35}">
+    <span class="tbtn" onclick={() => schemaSel && tabs.openErDiagram(schemaSel.connId, schemaSel.schema)} onkeydown={(e) => e.key === 'Enter' && schemaSel && tabs.openErDiagram(schemaSel.connId, schemaSel.schema)} role="button" tabindex="0" title={schemaSel ? `View ER diagram of ${schemaSel.schema}` : 'View ER diagram (select a database or schema first)'} style="cursor:{schemaSel ? 'pointer' : 'not-allowed'};opacity:{schemaSel ? 1 : 0.35}">
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><rect x="3" y="3.5" width="7.5" height="6.5" rx="1"></rect><rect x="13.5" y="3.5" width="7.5" height="6.5" rx="1"></rect><rect x="8" y="14" width="8" height="6.5" rx="1"></rect><path d="M10.5 6.7h3M12 10v4" stroke-linecap="round"></path></svg>
     </span>
-    <span class="tbtn" onclick={() => selRel && phase5('Generate scripts')} onkeydown={(e) => e.key === 'Enter' && selRel && phase5('Generate scripts')} role="button" tabindex="0" title="DDL / Generate scripts" style="width:auto;cursor:{selRel ? 'pointer' : 'not-allowed'};opacity:{selRel ? 1 : 0.35};font-size:var(--px-10);font-weight:700;letter-spacing:.03em;padding:0 var(--px-6)">DDL</span>
+    <span class="tbtn" onclick={() => schemaSel && scriptsWizard.show(schemaSel.connId, schemaSel.schema)} onkeydown={(e) => e.key === 'Enter' && schemaSel && scriptsWizard.show(schemaSel.connId, schemaSel.schema)} role="button" tabindex="0" title={schemaSel ? `Generate scripts for ${schemaSel.schema}` : 'Generate scripts (select a database or schema first)'} style="width:auto;cursor:{schemaSel ? 'pointer' : 'not-allowed'};opacity:{schemaSel ? 1 : 0.35};font-size:var(--px-10);font-weight:700;letter-spacing:.03em;padding:0 var(--px-6)">DDL</span>
     <span class="tbtn" onclick={() => selRel && tabs.openSchemaCompare(selConn?.id ?? null)} onkeydown={(e) => e.key === 'Enter' && selRel && tabs.openSchemaCompare(selConn?.id ?? null)} role="button" tabindex="0" title="Compare schemas" style="cursor:{selRel ? 'pointer' : 'not-allowed'};opacity:{selRel ? 1 : 0.35}">
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 8h13l-3-3M5 8l3 3"></path><path d="M19 16H6l3 3M19 16l-3-3"></path></svg>
     </span>

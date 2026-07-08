@@ -7,6 +7,7 @@ import type {
   ColumnInfo,
   ConstraintInfo,
   IndexInfo,
+  PartitionInfo,
   RoutineInfo,
   SchemaInfo,
   SequenceInfo,
@@ -18,6 +19,7 @@ export interface TableDetail {
   columns?: ColumnInfo[]
   indexes?: IndexInfo[]
   constraints?: ConstraintInfo[]
+  partitions?: PartitionInfo[]
 }
 
 export interface SchemaCache {
@@ -50,6 +52,24 @@ export interface StreamingCache {
 class ExplorerStore {
   cache = $state<Record<string, ConnCache>>({})
   streaming = $state<Record<string, StreamingCache>>({})
+  // Redis: a per-connection tick the sidebar key browser watches so it reloads the
+  // key list after a mutation from a key-viewer tab (delete / add / TTL change).
+  redisTick = $state<Record<string, number>>({})
+  bumpRedis(connId: string) {
+    this.redisTick[connId] = (this.redisTick[connId] ?? 0) + 1
+  }
+  // NATS: a per-(conn,stream,subject) tick the open subject-messages tab watches so it
+  // reloads (→ shows empty) after the sidebar purges that subject's messages.
+  natsMsgTick = $state<Record<string, number>>({})
+  bumpNatsSubject(connId: string, stream: string, subject: string) {
+    const k = `${connId}:${stream}:${subject}`
+    this.natsMsgTick[k] = (this.natsMsgTick[k] ?? 0) + 1
+  }
+  // The schema/database node currently selected in the tree (public / dbo / a database).
+  // Drives the enabled state of the sidebar "View ER" / "Generate Scripts" toolbar
+  // buttons: `connId` is the connection to act on (a sub-connection for a foreign
+  // database), `base` is the owning sidebar connection used to match the selection.
+  selectedSchema = $state<{ connId: string; base: string; system: string; schema: string } | null>(null)
 
   /** Load Kafka topics / NATS streams for the streaming explorer tree. */
   async loadStreaming(connId: string, system: string, force = false) {
@@ -162,12 +182,22 @@ class ExplorerStore {
     const sc = this.schema(connId, schema)
     if (sc.tableDetails[table]?.columns && !force) return
     await this.track(connId, `table:${schema}.${table}`, async () => {
-      const [columns, indexes, constraints] = await Promise.all([
+      // allSettled, NOT Promise.all: index/constraint introspection can fail on some
+      // engines/servers, and Promise.all would then discard the columns that loaded
+      // fine — so a table would expand to nothing. Columns are what matter most; keep
+      // them even when indexes/constraints error (item 4 — columns for every engine).
+      const [colsR, idxR, consR, partR] = await Promise.allSettled([
         ipc.listColumns(connId, schema, table),
         ipc.listIndexes(connId, schema, table),
         ipc.listConstraints(connId, schema, table),
+        ipc.listPartitions(connId, schema, table),
       ])
-      sc.tableDetails[table] = { columns, indexes, constraints }
+      sc.tableDetails[table] = {
+        columns: colsR.status === 'fulfilled' ? colsR.value : [],
+        indexes: idxR.status === 'fulfilled' ? idxR.value : [],
+        constraints: consR.status === 'fulfilled' ? consR.value : [],
+        partitions: partR.status === 'fulfilled' ? partR.value : [],
+      }
     })
   }
 

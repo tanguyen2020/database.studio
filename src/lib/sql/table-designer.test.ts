@@ -1,5 +1,17 @@
 import { describe, expect, it } from 'vitest'
-import { alterColumn, buildTableDdl, buildTrigger, columnChanged, columnDef, type TableModel } from './table-designer'
+import {
+  alterColumn,
+  buildTableDdl,
+  buildTrigger,
+  columnChanged,
+  columnDef,
+  columnRenamed,
+  renameColumn,
+  indexChanged,
+  uniqueChanged,
+  fkChanged,
+  type TableModel,
+} from './table-designer'
 
 function model(o: Partial<TableModel>): TableModel {
   return {
@@ -26,6 +38,76 @@ describe('columnDef', () => {
   })
   it('PK column omits NOT NULL (the table-level PK enforces it)', () => {
     expect(columnDef('postgres', { name: 'id', type: 'int4', len: '', pk: true, nullable: false, dflt: '' })).toBe('"id" int4')
+  })
+})
+
+describe('buildTableDdl — partitioning (new table)', () => {
+  it('postgres: appends PARTITION BY and CREATE TABLE … PARTITION OF children', () => {
+    const { statements } = buildTableDdl(
+      'postgres',
+      model({
+        table: 'events',
+        columns: [
+          { name: 'id', type: 'bigint', len: '', pk: false, nullable: false, dflt: '' },
+          { name: 'created_at', type: 'date', len: '', pk: false, nullable: false, dflt: '' },
+        ],
+        partition: {
+          strategy: 'RANGE',
+          columns: ['created_at'],
+          partitions: [{ name: 'events_2024', bound: "FROM ('2024-01-01') TO ('2025-01-01')" }],
+        },
+      }),
+      true,
+    )
+    expect(statements[0]).toContain('PARTITION BY RANGE ("created_at")')
+    expect(statements[1]).toBe(
+      `CREATE TABLE "public"."events_2024" PARTITION OF "public"."events" FOR VALUES FROM ('2024-01-01') TO ('2025-01-01');`,
+    )
+  })
+
+  it('mysql: inline PARTITION BY list on the CREATE', () => {
+    const { statements } = buildTableDdl(
+      'mysql',
+      model({
+        schema: '',
+        table: 'logs',
+        columns: [{ name: 'ts', type: 'datetime', len: '', pk: false, nullable: false, dflt: '' }],
+        partition: { strategy: 'RANGE', columns: ['YEAR(ts)'], partitions: [{ name: 'p2024', bound: '2025' }] },
+      }),
+      true,
+    )
+    expect(statements[0]).toContain('PARTITION BY RANGE (YEAR(ts))')
+    expect(statements[0]).toContain('PARTITION `p2024` VALUES LESS THAN (2025)')
+  })
+
+  it('clickhouse: PARTITION BY sits between ENGINE and ORDER BY', () => {
+    const { statements } = buildTableDdl(
+      'clickhouse',
+      model({
+        schema: '',
+        table: 'hits',
+        columns: [{ name: 'ts', type: 'DateTime', len: '', pk: true, nullable: false, dflt: '' }],
+        partition: { strategy: 'RANGE', columns: ['toYYYYMM(ts)'] },
+      }),
+      true,
+    )
+    expect(statements[0]).toMatch(/ENGINE = MergeTree\nPARTITION BY toYYYYMM\(ts\)\nORDER BY/)
+  })
+
+  it('mssql: partition function + scheme precede the CREATE, table lands ON the scheme', () => {
+    const { statements } = buildTableDdl(
+      'mssql',
+      model({
+        schema: 'dbo',
+        table: 'sales',
+        columns: [{ name: 'sale_date', type: 'date', len: '', pk: false, nullable: false, dflt: '' }],
+        partition: { strategy: 'RANGE', columns: ['sale_date'], partitions: [{ name: 'p1', bound: "'2024-01-01'" }] },
+      }),
+      true,
+    )
+    expect(statements[0]).toContain('CREATE PARTITION FUNCTION [pf_sales] (date)')
+    expect(statements[1]).toContain('CREATE PARTITION SCHEME [ps_sales]')
+    expect(statements[2]).toContain('ON [ps_sales] ([sale_date])')
   })
 })
 
@@ -167,6 +249,61 @@ describe('buildTableDdl — existing table (ALTER additions)', () => {
   })
 })
 
+describe('edit existing objects (rename / drop+recreate)', () => {
+  it('columnRenamed + renameColumn per dialect', () => {
+    const c = { name: 'full_name', type: 'text', len: '', pk: false, nullable: true, dflt: '', existing: true, orig: { name: 'name', type: 'text', len: '', nullable: true, dflt: '' } }
+    expect(columnRenamed(c)).toBe(true)
+    expect(renameColumn('postgres', 'public', 'users', 'name', 'full_name')).toBe('ALTER TABLE "public"."users" RENAME COLUMN "name" TO "full_name";')
+    expect(renameColumn('mssql', 'dbo', 'users', 'name', 'full_name')).toBe(`EXEC sp_rename 'dbo.users.name', 'full_name', 'COLUMN';`)
+  })
+
+  it('renamed existing column emits RENAME before the type ALTER', () => {
+    const { statements } = buildTableDdl(
+      'postgres',
+      model({
+        columns: [{ name: 'full_name', type: 'varchar', len: '100', pk: false, nullable: false, dflt: '', existing: true, orig: { name: 'name', type: 'text', len: '', nullable: true, dflt: '' } }],
+      }),
+      false,
+    )
+    const joined = statements.join('\n')
+    expect(statements[0]).toBe('ALTER TABLE "public"."users" RENAME COLUMN "name" TO "full_name";')
+    expect(joined).toContain('ALTER COLUMN "full_name" TYPE varchar(100)')
+  })
+
+  it('edited existing index → DROP then CREATE', () => {
+    const ix = { name: 'ix_a', columns: ['a', 'b'], method: 'btree', existing: true, orig: { columns: ['a'], method: 'btree' } }
+    expect(indexChanged(ix)).toBe(true)
+    const { statements } = buildTableDdl('postgres', model({ indexes: [ix] }), false)
+    const joined = statements.join('\n')
+    expect(joined).toContain('DROP INDEX IF EXISTS "public"."ix_a";')
+    expect(joined).toContain('CREATE INDEX "ix_a" ON "public"."users" USING btree ("a", "b");')
+  })
+
+  it('unchanged existing index/unique/fk is NOT re-emitted', () => {
+    expect(indexChanged({ name: 'ix', columns: ['a'], existing: true, orig: { columns: ['a'] } })).toBe(false)
+    expect(uniqueChanged({ name: 'uq', columns: ['a'], existing: true, orig: { columns: ['a'] } })).toBe(false)
+    expect(fkChanged({ name: 'fk', columns: ['a'], refTable: 'o', refColumns: ['id'], existing: true, orig: { columns: ['a'], refTable: 'o', refColumns: ['id'] } })).toBe(false)
+  })
+
+  it('edited existing FK → DROP then ADD (with ON UPDATE)', () => {
+    const fk = { name: 'fk_o', columns: ['org_id'], refTable: 'orgs', refColumns: ['id'], onDelete: 'CASCADE', onUpdate: 'SET NULL', existing: true, orig: { columns: ['org_id'], refTable: 'orgs', refColumns: ['id'], onDelete: '', onUpdate: '' } }
+    expect(fkChanged(fk)).toBe(true)
+    const { statements } = buildTableDdl('postgres', model({ foreignKeys: [fk] }), false)
+    const joined = statements.join('\n')
+    expect(joined).toContain('ALTER TABLE "public"."users" DROP CONSTRAINT "fk_o";')
+    expect(joined).toContain('ON DELETE CASCADE ON UPDATE SET NULL')
+  })
+
+  it('edited existing unique → DROP CONSTRAINT then ADD CONSTRAINT', () => {
+    const u = { name: 'uq_e', columns: ['email', 'org_id'], existing: true, orig: { columns: ['email'] } }
+    expect(uniqueChanged(u)).toBe(true)
+    const { statements } = buildTableDdl('postgres', model({ uniques: [u] }), false)
+    const joined = statements.join('\n')
+    expect(joined).toContain('DROP CONSTRAINT "uq_e";')
+    expect(joined).toContain('ADD CONSTRAINT "uq_e" UNIQUE ("email", "org_id");')
+  })
+})
+
 describe('buildTrigger — per dialect', () => {
   it('postgres: EXECUTE FUNCTION, appends () if missing', () => {
     const { sql } = buildTrigger('postgres', 'public', 'users', { name: 'aud', timing: 'BEFORE', event: 'INSERT', body: 'audit_fn' })
@@ -241,7 +378,7 @@ describe('buildTableDdl — DROP existing objects (edit/delete across tabs)', ()
 })
 
 describe('columnChanged + alterColumn (edit existing column)', () => {
-  const changed = { name: 'price', type: 'numeric', len: '10,2', pk: false, nullable: false, dflt: '0', existing: true, orig: { type: 'int4', len: '', nullable: true, dflt: '' } }
+  const changed = { name: 'price', type: 'numeric', len: '10,2', pk: false, nullable: false, dflt: '0', existing: true, orig: { name: 'price', type: 'int4', len: '', nullable: true, dflt: '' } }
   it('columnChanged detects a real edit vs an untouched existing column', () => {
     expect(columnChanged(changed)).toBe(true)
     expect(columnChanged({ ...changed, type: 'int4', len: '', nullable: true, dflt: '' })).toBe(false)
@@ -270,7 +407,7 @@ describe('columnChanged + alterColumn (edit existing column)', () => {
     const m = model({
       columns: [
         { name: 'id', type: 'int4', len: '', pk: true, nullable: false, dflt: '', existing: true },
-        { name: 'price', type: 'numeric', len: '10,2', pk: false, nullable: false, dflt: '', existing: true, orig: { type: 'int4', len: '', nullable: true, dflt: '' } },
+        { name: 'price', type: 'numeric', len: '10,2', pk: false, nullable: false, dflt: '', existing: true, orig: { name: 'price', type: 'int4', len: '', nullable: true, dflt: '' } },
       ],
     })
     const j = buildTableDdl('postgres', m, false).statements.join('\n')

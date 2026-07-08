@@ -2,6 +2,7 @@
 // Sinh từ ColumnInfo thật của bảng, quoting theo dialect. ClickHouse:
 // UPDATE/DELETE là ALTER TABLE … (mutation async — CLICKHOUSE_SPEC_ADDENDUM).
 import { qualified as q, quoteIdent } from './dialect'
+import { dataTypes } from './datatypes'
 import type { ColumnInfo } from '$lib/types'
 
 function target(system: string, schema: string, table: string): string {
@@ -180,21 +181,10 @@ export interface DesignerCol {
   dflt: string
 }
 
-/** Danh sách kiểu dữ liệu cho dropdown, theo dialect. */
+/** Data types for the designer's type dropdown, per dialect. Delegates to the
+ *  comprehensive per-engine catalog in `datatypes.ts` (single source of truth). */
 export function designerTypes(system: string): string[] {
-  switch (system) {
-    case 'mysql':
-    case 'mariadb':
-      return ['int', 'bigint', 'decimal', 'varchar', 'text', 'tinyint', 'datetime', 'date', 'char', 'json']
-    case 'mssql':
-      return ['int', 'bigint', 'decimal', 'nvarchar', 'varchar', 'bit', 'datetime2', 'date', 'uniqueidentifier', 'nvarchar(max)']
-    case 'sqlite':
-      return ['INTEGER', 'REAL', 'TEXT', 'BLOB', 'NUMERIC']
-    case 'clickhouse':
-      return ['Int32', 'Int64', 'UInt32', 'Float64', 'String', 'LowCardinality(String)', 'Date', 'DateTime', 'UUID', 'Bool']
-    default: // postgres
-      return ['int4', 'int8', 'numeric', 'varchar', 'text', 'boolean', 'timestamptz', 'date', 'uuid', 'jsonb']
-  }
+  return dataTypes(system)
 }
 
 /** Sinh CREATE TABLE từ mô hình designer (port designerDDL dòng 3158-3162,

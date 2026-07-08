@@ -9,7 +9,7 @@ use serde_json::Value;
 use std::time::{Duration, Instant};
 
 use crate::drivers::types::{
-    ColumnInfo, QueryResultSet, SchemaInfo, StatementOutcome, TableInfo, TestResult,
+    ColumnInfo, PartitionInfo, QueryResultSet, SchemaInfo, StatementOutcome, TableInfo, TestResult,
 };
 use crate::drivers::util::{is_dml, returns_rows};
 use crate::error::QueryError;
@@ -256,6 +256,62 @@ impl ChDriver {
                     is_fk: false, // ClickHouse không có FK
                     data_type: ty,
                     ordinal: i as i32,
+                }
+            })
+            .collect())
+    }
+
+    /// Active partitions of a MergeTree table (from `system.parts`). Returns empty
+    /// when the table has no PARTITION BY key. Row counts are summed per partition.
+    pub async fn partitions(
+        &mut self,
+        schema: &str,
+        table: &str,
+    ) -> Result<Vec<PartitionInfo>, QueryError> {
+        let (meta_body, _) = self
+            .raw_query(
+                "SELECT partition_key FROM system.tables WHERE database = {db:String} AND name = {t:String}",
+                &[("db", schema), ("t", table)],
+            )
+            .await?;
+        let meta: ChJsonBody = serde_json::from_str(&meta_body)
+            .map_err(|e| QueryError::new(SYSTEM, e.to_string(), meta_body.clone()))?;
+        let pkey = meta
+            .data
+            .first()
+            .and_then(|r| r["partition_key"].as_str())
+            .unwrap_or("")
+            .to_string();
+        if pkey.is_empty() {
+            return Ok(Vec::new());
+        }
+        let (body, _) = self
+            .raw_query(
+                "SELECT partition, sum(rows) AS rows FROM system.parts \
+                 WHERE database = {db:String} AND table = {t:String} AND active \
+                 GROUP BY partition ORDER BY partition",
+                &[("db", schema), ("t", table)],
+            )
+            .await?;
+        let parsed: ChJsonBody = serde_json::from_str(&body)
+            .map_err(|e| QueryError::new(SYSTEM, e.to_string(), body.clone()))?;
+        Ok(parsed
+            .data
+            .iter()
+            .map(|r| {
+                let part = r["partition"].as_str().unwrap_or("").to_string();
+                // ClickHouse serializes UInt64 as a JSON string.
+                let rows = r["rows"]
+                    .as_str()
+                    .and_then(|s| s.parse::<i64>().ok())
+                    .or_else(|| r["rows"].as_i64());
+                PartitionInfo {
+                    name: part.clone(),
+                    method: "EXPRESSION".to_string(),
+                    key: Some(pkey.clone()),
+                    expression: Some(part),
+                    rows,
+                    position: None,
                 }
             })
             .collect())

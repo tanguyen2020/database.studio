@@ -11,10 +11,12 @@
   import ResultChart from './ResultChart.svelte'
   import type { SubResult, TabExecution } from '$lib/stores/results.svelte'
   import { mapErrorToDocument } from '$lib/sql/errors'
-  import { toCsv, toJson, toSqlInsert, toExcelHtml, download } from '$lib/export/rows'
+  import { toJson, download, csvCell, sqlLiteral } from '$lib/export/rows'
   import { exportWizard } from '$lib/stores/export.svelte'
   import { ui } from '$lib/stores/ui.svelte'
   import { toasts } from '$lib/stores/toast.svelte'
+  import * as ipc from '$lib/ipc'
+  import { IS_TAURI } from '$lib/demo'
   import { untrack } from 'svelte'
 
   type ViewMode = 'grid' | 'json' | 'single' | 'chart'
@@ -54,17 +56,102 @@
   let viewMode = $state<ViewMode>('grid')
   let exportOpen = $state(false)
 
-  // Export result hiện tại (CSV/JSON/SQL/Excel) — dùng util thuần export/rows.ts.
-  function doExport(fmt: 'csv' | 'json' | 'sql' | 'xls') {
+  // Export progress overlay state — a running bar so you can tell when it's done.
+  let exportJob = $state<{ name: string; pct: number; rows: number; done: boolean; error?: string; path?: string } | null>(null)
+
+  const FMT_META: Record<'csv' | 'json' | 'sql' | 'xls', { ext: string; mime: string; label: string }> = {
+    csv: { ext: 'csv', mime: 'text/csv', label: 'CSV' },
+    json: { ext: 'json', mime: 'application/json', label: 'JSON' },
+    sql: { ext: 'sql', mime: 'text/plain', label: 'SQL' },
+    xls: { ext: 'xls', mime: 'application/vnd.ms-excel', label: 'Excel' },
+  }
+
+  const xmlEsc = (v: unknown) =>
+    v == null ? '' : String(typeof v === 'object' ? JSON.stringify(v) : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+
+  // Serialize rows in chunks, reporting progress so the bar animates (and the UI
+  // stays responsive on large results). Reuses the pure csvCell/sqlLiteral escapers.
+  async function serialize(
+    fmt: 'csv' | 'json' | 'sql' | 'xls',
+    headers: string[],
+    rows: Record<string, unknown>[],
+    onProgress: (done: number) => void,
+  ): Promise<string> {
+    const CHUNK = 1000
+    const n = rows.length
+    const cols = headers.map((h) => `"${h}"`).join(', ')
+    const parts: string[] = []
+    for (let i = 0; i < n; i += CHUNK) {
+      for (const r of rows.slice(i, i + CHUNK)) {
+        if (fmt === 'csv') parts.push(headers.map((h) => csvCell(r[h])).join(','))
+        else if (fmt === 'json') parts.push('  ' + JSON.stringify(r))
+        else if (fmt === 'sql') parts.push(`INSERT INTO "result" (${cols}) VALUES (${headers.map((h) => sqlLiteral(r[h])).join(', ')});`)
+        else parts.push(`<tr>${headers.map((h) => `<td>${xmlEsc(r[h])}</td>`).join('')}</tr>`)
+      }
+      onProgress(n ? Math.min(1, (i + CHUNK) / n) : 1)
+      await new Promise((res) => setTimeout(res, 0)) // yield → bar animates + UI responsive
+    }
+    onProgress(1)
+    if (fmt === 'csv') {
+      const head = headers.map(csvCell).join(',')
+      return parts.length ? `${head}\n${parts.join('\n')}` : head
+    }
+    if (fmt === 'json') return `[\n${parts.join(',\n')}\n]`
+    if (fmt === 'sql') return parts.join('\n')
+    const th = headers.map((h) => `<th>${xmlEsc(h)}</th>`).join('')
+    return `<html><head><meta charset="utf-8"></head><body><table border="1"><thead><tr>${th}</tr></thead><tbody>${parts.join('')}</tbody></table></body></html>`
+  }
+
+  // Export the current result: pick a destination (native save dialog in the
+  // desktop app; browser download otherwise), serialize with a progress bar,
+  // write to disk, and report completion.
+  async function doExport(fmt: 'csv' | 'json' | 'sql' | 'xls') {
     exportOpen = false
     const r = activeResult?.kind === 'rows' ? activeResult.result : undefined
     if (!r) return
     const headers = r.cols.map((c) => c[0])
     const rows = r.rows as Record<string, unknown>[]
-    if (fmt === 'csv') download('result.csv', toCsv(headers, rows), 'text/csv')
-    else if (fmt === 'json') download('result.json', toJson(rows), 'application/json')
-    else if (fmt === 'sql') download('result.sql', toSqlInsert('result', headers, rows), 'text/plain')
-    else download('result.xls', toExcelHtml(headers, rows), 'application/vnd.ms-excel')
+    const meta = FMT_META[fmt]
+    const filename = `result.${meta.ext}`
+
+    // Desktop: ask where to save first (a real Save dialog into any folder).
+    let savePath: string | null = null
+    if (IS_TAURI) {
+      try {
+        const { save } = await import('@tauri-apps/plugin-dialog')
+        savePath = await save({ defaultPath: filename, filters: [{ name: meta.label, extensions: [meta.ext] }] })
+      } catch (e) {
+        toasts.error(String(e))
+        return
+      }
+      if (!savePath) return // user cancelled
+    }
+
+    exportJob = { name: savePath ?? filename, pct: 0, rows: rows.length, done: false }
+    try {
+      const content = await serialize(fmt, headers, rows, (done) => {
+        if (exportJob) exportJob.pct = Math.round(done * 90)
+      })
+      if (IS_TAURI && savePath) {
+        await ipc.writeTextFile(savePath, content)
+      } else {
+        download(filename, content, meta.mime)
+      }
+      if (exportJob) {
+        exportJob.pct = 100
+        exportJob.done = true
+        exportJob.path = savePath ?? filename
+      }
+      toasts.success(`Exported ${rows.length.toLocaleString()} row${rows.length === 1 ? '' : 's'} → ${savePath ?? filename}`)
+      // auto-dismiss the overlay shortly after completion
+      const job = exportJob
+      setTimeout(() => {
+        if (exportJob === job) exportJob = null
+      }, 1400)
+    } catch (e) {
+      if (exportJob) exportJob.error = String(e)
+      toasts.error(`Export failed: ${e}`)
+    }
   }
 
   // Export wizard (T14) — column subset / limit / filename cho result hiện tại.
@@ -173,9 +260,9 @@
         {#if exportOpen}
           <div style="position:absolute;right:0;top:calc(100% + var(--px-4));z-index:20;background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-8);box-shadow:0 var(--px-8) var(--px-24) rgba(0,0,0,.4);overflow:hidden;min-width:var(--px-120)">
             {#each [['csv', 'CSV'], ['json', 'JSON'], ['sql', 'SQL INSERT'], ['xls', 'Excel (.xls)']] as [fmt, label] (fmt)}
-              <div onclick={() => doExport(fmt as 'csv' | 'json' | 'sql' | 'xls')} onkeydown={(e) => e.key === 'Enter' && doExport(fmt as 'csv' | 'json' | 'sql' | 'xls')} role="button" tabindex="0" style="padding:var(--px-7) var(--px-12);font-size:var(--px-12);cursor:pointer;color:var(--text2)">{label}</div>
+              <div class="exp-item" onclick={() => doExport(fmt as 'csv' | 'json' | 'sql' | 'xls')} onkeydown={(e) => e.key === 'Enter' && doExport(fmt as 'csv' | 'json' | 'sql' | 'xls')} role="button" tabindex="0" style="padding:var(--px-7) var(--px-12);font-size:var(--px-12);cursor:pointer;color:var(--text2)">{label}</div>
             {/each}
-            <div onclick={openExportWizard} onkeydown={(e) => e.key === 'Enter' && openExportWizard()} role="button" tabindex="0" style="padding:var(--px-7) var(--px-12);font-size:var(--px-12);cursor:pointer;color:var(--text2);border-top:var(--px-1) solid var(--border)">Custom… (columns/limit)</div>
+            <div class="exp-item" onclick={openExportWizard} onkeydown={(e) => e.key === 'Enter' && openExportWizard()} role="button" tabindex="0" style="padding:var(--px-7) var(--px-12);font-size:var(--px-12);cursor:pointer;color:var(--text2);border-top:var(--px-1) solid var(--border)">Custom… (columns/limit)</div>
           </div>
         {/if}
       </div>
@@ -308,7 +395,6 @@
 <!-- raw driver error modal — cùng ngôn ngữ modal prototype -->
 {#if rawError !== null}
   <div
-    onclick={() => (rawError = null)}
     onkeydown={(e) => e.key === 'Escape' && (rawError = null)}
     role="presentation"
     style="position:fixed;inset:0;background:var(--rgba-0-0-0-_5);display:flex;align-items:center;justify-content:center;z-index:58"
@@ -351,6 +437,30 @@
   </div>
 {/if}
 
+{#if exportJob}
+  <!-- export progress overlay — running bar → done ✓ (or error) -->
+  <div role="presentation" style="position:fixed;inset:0;background:var(--rgba-0-0-0-_5);display:flex;align-items:center;justify-content:center;z-index:80">
+    <div role="dialog" aria-modal="true" tabindex="-1" style="width:var(--px-420);max-width:92vw;background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-14);box-shadow:0 var(--px-24) var(--px-60) var(--rgba-0-0-0-_55);padding:var(--px-18)">
+      <div style="display:flex;align-items:center;gap:var(--px-9);margin-bottom:var(--px-10)">
+        <span style="font-size:var(--px-15);color:{exportJob.error ? 'var(--error)' : exportJob.done ? 'var(--success)' : 'var(--primary)'}">{exportJob.error ? '✗' : exportJob.done ? '✓' : '⭳'}</span>
+        <span style="font-size:var(--px-13_5);font-weight:600;color:var(--text)">{exportJob.error ? 'Export failed' : exportJob.done ? 'Export complete' : 'Exporting…'}</span>
+        {#if exportJob.done || exportJob.error}
+          <span onclick={() => (exportJob = null)} onkeydown={(e) => e.key === 'Enter' && (exportJob = null)} role="button" tabindex="0" style="margin-left:auto;cursor:pointer;color:var(--muted);font-size:var(--px-18)">×</span>
+        {/if}
+      </div>
+      <div class="mono" style="font-size:var(--px-11_5);color:var(--text2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:var(--px-8)">{exportJob.path ?? exportJob.name} · {exportJob.rows.toLocaleString()} rows</div>
+      {#if exportJob.error}
+        <div class="mono" style="font-size:var(--px-11_5);color:var(--error);white-space:pre-wrap;word-break:break-word">{exportJob.error}</div>
+      {:else}
+        <div style="height:var(--px-8);border-radius:var(--px-6);background:var(--panel);overflow:hidden;border:var(--px-1) solid var(--border)">
+          <div style="height:100%;width:{exportJob.pct}%;background:var(--primary);transition:width .15s ease"></div>
+        </div>
+        <div class="mono" style="font-size:var(--px-11);color:var(--muted);text-align:right;margin-top:var(--px-5)">{exportJob.pct}%</div>
+      {/if}
+    </div>
+  </div>
+{/if}
+
 <style>
   .vm-btn {
     padding: var(--px-4) var(--px-11);
@@ -360,5 +470,10 @@
   }
   .msg-row:hover {
     background: var(--hover);
+  }
+  /* Export menu — blue highlight on hover (DataGrip-style). */
+  .exp-item:hover {
+    background: var(--primary);
+    color: var(--hex-fff) !important;
   }
 </style>

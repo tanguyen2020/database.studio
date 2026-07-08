@@ -153,6 +153,68 @@ async fn pg_roundtrip_null_multi_and_error_position() {
     assert!(summary.total >= 2);
 }
 
+/// Items 1/2/4 — the Schema Compare snapshot (and the Explorer tree) rely on the
+/// driver returning EVERY object type for PostgreSQL, not just tables/columns.
+/// Seed a view, function, procedure, trigger, secondary index and sequence, then
+/// prove each introspection call surfaces them (so the compare can display them).
+#[tokio::test]
+async fn pg_full_introspection_surfaces_every_object_type() {
+    let (_c, port) = start_pg().await;
+    let params = PgConnParams {
+        host: "localhost".into(),
+        port,
+        database: "testdb".into(),
+        user: "postgres".into(),
+        password: PASS.into(),
+        ssl: false,
+        ssl_ca: String::new(),
+        ssl_cert: String::new(),
+        ssl_key: String::new(),
+    };
+    let mut drv = retry("postgres", || PgDriver::connect(&params)).await;
+
+    drv.exec("CREATE TABLE emp (id int PRIMARY KEY, name text, dept text)").await.unwrap();
+    drv.exec("CREATE INDEX idx_emp_dept ON emp (dept)").await.unwrap();
+    drv.exec("CREATE VIEW v_emp AS SELECT id, name FROM emp").await.unwrap();
+    drv.exec("CREATE SEQUENCE seq_emp START 1").await.unwrap();
+    drv.exec("CREATE FUNCTION emp_count() RETURNS bigint LANGUAGE sql AS $$ SELECT count(*) FROM emp $$").await.unwrap();
+    drv.exec("CREATE PROCEDURE touch_emp() LANGUAGE sql AS $$ UPDATE emp SET name = name $$").await.unwrap();
+    drv.exec(
+        "CREATE FUNCTION trg_fn() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$",
+    )
+    .await
+    .unwrap();
+    drv.exec("CREATE TRIGGER trg_emp BEFORE INSERT ON emp FOR EACH ROW EXECUTE FUNCTION trg_fn()").await.unwrap();
+
+    // columns (item 4 — must be present for every engine, not only MySQL)
+    let cols = drv.columns("public", "emp").await.unwrap();
+    assert!(cols.iter().any(|c| c.name == "id" && c.is_pk), "columns introspected: {cols:?}");
+    assert_eq!(cols.len(), 3);
+
+    // views appear in tables() with kind=view
+    let tbls = drv.tables("public").await.unwrap();
+    assert!(tbls.iter().any(|t| t.name == "v_emp" && t.kind == "view"), "view listed: {tbls:?}");
+
+    // secondary index (not the PK) — used by the compare's index diff
+    let ix = drv.indexes("public", "emp").await.unwrap();
+    assert!(ix.iter().any(|i| i.name == "idx_emp_dept" && !i.primary && i.columns == vec!["dept".to_string()]), "secondary index: {ix:?}");
+
+    // routines: both the function AND the procedure
+    let routines = drv.routines("public").await.unwrap();
+    assert!(routines.iter().any(|r| r.name == "emp_count"), "function listed: {routines:?}");
+    assert!(routines.iter().any(|r| r.name == "touch_emp"), "procedure listed: {routines:?}");
+
+    // triggers
+    let trigs = drv.triggers("public").await.unwrap();
+    assert!(trigs.iter().any(|t| t.name == "trg_emp" && t.table == "emp"), "trigger listed: {trigs:?}");
+
+    // sequences (a bare CREATE SEQUENCE — the SERIAL-backed ones are also fine)
+    let seqs = drv.sequences("public").await.unwrap();
+    assert!(seqs.iter().any(|s| s.name == "seq_emp"), "sequence listed: {seqs:?}");
+
+    eprintln!("CHK pg_full_introspection_surfaces_every_object_type OK");
+}
+
 /// Item 3 — Explorer must list every database on a Postgres server. `databases()`
 /// returns the server catalog with `current` marking the connected DB (testdb).
 #[tokio::test]
@@ -562,6 +624,84 @@ async fn quick_connect_ephemeral_id_is_queryable_via_registry() {
     assert!(!registry.is_connected("quick-itest"), "disconnect phải gỡ sạch");
 }
 
+/// Item 6 — per-tab connection isolation. `open_tab_connection` gives each Query
+/// Editor tab its own registry entry (`{base}#tab-N`). This proves the guarantee
+/// those entries provide: a hung query on one tab does NOT block another tab, and
+/// cancel/disconnect stops the hung one. (If tabs shared one connection, tab-2
+/// would block until the 30s sleep finished → the 8s timeout would fire.)
+#[tokio::test]
+async fn tab_connections_are_isolated_hung_query_does_not_block() {
+    use database_studio_lib::connections::profile::{
+        ConnectionProfile, Environment, SqliteMode, SshConfig,
+    };
+    use database_studio_lib::connections::registry::Registry;
+    use database_studio_lib::drivers::types::{StatementOutcome, SystemType};
+    use std::sync::Arc;
+
+    let (_c, port) = start_pg().await;
+    let mk = |id: &str| ConnectionProfile {
+        id: id.into(),
+        name: "tabconn".into(),
+        system: SystemType::Postgres,
+        host: "localhost".into(),
+        port,
+        database: "testdb".into(),
+        user: "postgres".into(),
+        password_enc: String::new(),
+        group: String::new(),
+        env: Environment::Development,
+        ssh: SshConfig::default(),
+        ssl: false,
+        ssl_ca: String::new(),
+        ssl_cert: String::new(),
+        ssl_key: String::new(),
+        sqlite_path: String::new(),
+        sqlite_mode: SqliteMode::ReadWrite,
+        mssql_auth: String::new(),
+        schema_registry_url: String::new(),
+        cassandra_dc: String::new(),
+        cassandra_consistency: String::new(),
+    };
+
+    let registry = Arc::new(Registry::default());
+    // two dedicated per-tab connections to the SAME database (retry until ready)
+    let deadline = Instant::now() + Duration::from_secs(240);
+    loop {
+        match registry.connect(mk("base#tab-1"), PASS.into(), String::new()).await {
+            Ok(_) => break,
+            Err(e) => {
+                assert!(Instant::now() < deadline, "connect timeout: {e:?}");
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+        }
+    }
+    registry.connect(mk("base#tab-2"), PASS.into(), String::new()).await.expect("second tab connection");
+
+    // tab-1: a hung query (30s) — spawn, do NOT await.
+    let reg1 = Arc::clone(&registry);
+    let hung = tokio::spawn(async move { reg1.exec_statement("base#tab-1", "SELECT pg_sleep(30)".into()).await });
+    tokio::time::sleep(Duration::from_millis(500)).await; // let it start + register its abort handle
+
+    // tab-2: a normal query must finish quickly despite tab-1 being stuck.
+    let t2 = tokio::time::timeout(
+        Duration::from_secs(8),
+        registry.exec_statement("base#tab-2", "SELECT 1 AS n".into()),
+    )
+    .await;
+    let outcome = t2.expect("tab-2 was blocked by tab-1's hung query — NOT isolated").unwrap().unwrap();
+    let StatementOutcome::Rows { result } = outcome else { panic!("expected rows") };
+    assert_eq!(result.total, 1, "tab-2 ran independently while tab-1 hung");
+
+    // cancel the hung tab-1 query (as closing tab-1 would) → its task aborts.
+    assert!(registry.cancel("base#tab-1"), "cancel returns true for tab-1's running query");
+    let _ = hung.await;
+
+    registry.disconnect("base#tab-1").await.unwrap();
+    registry.disconnect("base#tab-2").await.unwrap();
+    assert!(!registry.is_connected("base#tab-1") && !registry.is_connected("base#tab-2"));
+    eprintln!("CHK tab_connections_are_isolated_hung_query_does_not_block OK");
+}
+
 // ---------------------------------------------------------------------------
 // MySQL + MariaDB (chung driver sqlx-mysql, system type riêng)
 // ---------------------------------------------------------------------------
@@ -687,6 +827,17 @@ async fn mysql_explorer_tree_introspection() {
     )
     .await
     .unwrap();
+    drv.exec("CREATE PROCEDURE p_touch(IN v INT) BEGIN UPDATE students SET gpa = gpa WHERE id = v; END")
+        .await
+        .unwrap();
+    drv.exec("CREATE FUNCTION f_double(x INT) RETURNS INT DETERMINISTIC RETURN x * 2").await.unwrap();
+
+    // Reproduce the user's "Illegal mix of collations" scenario: force a connection
+    // collation (utf8mb4_0900_as_cs) that differs from the information_schema column
+    // collations. Every introspection query below must still work — they are
+    // COLLATE-guarded. Without the guards, routines()/triggers()/schemas() would raise
+    // MySQL error 1267 here.
+    drv.exec("SET collation_connection = 'utf8mb4_0900_as_cs'").await.unwrap();
 
     // loadSchemas: the connected database appears and is flagged default.
     let schemas = drv.schemas().await.unwrap();
@@ -713,6 +864,109 @@ async fn mysql_explorer_tree_introspection() {
     // triggers folder.
     let trigs = drv.triggers("testdb").await.unwrap();
     assert!(trigs.iter().any(|t| t.name == "trg_students_ins" && t.table == "students"), "trigger listed: {trigs:?}");
+
+    // Stored Procedures + Functions folders (the reported failure): routines() must
+    // list both, with parameters, under the mismatched connection collation.
+    let routines = drv.routines("testdb").await.unwrap();
+    let proc = routines.iter().find(|r| r.name == "p_touch").expect("procedure listed");
+    assert_eq!(proc.kind, "procedure");
+    assert_eq!(proc.params.len(), 1, "procedure IN param read (routine_params collation-safe)");
+    let func = routines.iter().find(|r| r.name == "f_double").expect("function listed");
+    assert_eq!(func.kind, "function");
+
+    // remaining introspection under the mismatched collation must not raise 1267 either.
+    assert!(drv.indexes("testdb", "students").await.unwrap().iter().any(|i| i.primary), "PK index read");
+    assert!(!drv.constraints("testdb", "students").await.unwrap().is_empty(), "constraints read");
+    drv.foreign_keys("testdb").await.unwrap();
+    drv.scan_indexes("testdb").await.unwrap();
+}
+
+/// Item 7 — executing MySQL stored functions/procedures of assorted parameter and
+/// return data types (SELECT func(...) / CALL proc(...)), exactly as the Execute
+/// Routine dialog builds them. Guards that value decoding handles each result type.
+#[tokio::test]
+async fn mysql_execute_stored_routines_datatypes() {
+    let c = GenericImage::new("mysql", "8")
+        .with_exposed_port(3306.tcp())
+        .with_env_var("MYSQL_ROOT_PASSWORD", PASS)
+        .with_env_var("MYSQL_DATABASE", "testdb")
+        .start()
+        .await
+        .expect("start mysql container");
+    let port = c.get_host_port_ipv4(3306).await.unwrap();
+    let params = MySqlConnParams {
+        host: "localhost".into(),
+        port,
+        database: "testdb".into(),
+        user: "root".into(),
+        password: PASS.into(),
+        ssl: false,
+        ssl_ca: String::new(),
+        ssl_cert: String::new(),
+        ssl_key: String::new(),
+    };
+    let mut drv = retry("mysql", || MySqlDriver::connect(&params, "mysql")).await;
+
+    // functions returning INT / DECIMAL / DATETIME / VARCHAR with typed params
+    drv.exec("CREATE FUNCTION f_add(a INT, b INT) RETURNS INT DETERMINISTIC RETURN a + b").await.unwrap();
+    drv.exec("CREATE FUNCTION f_price(qty INT, unit DECIMAL(10,2)) RETURNS DECIMAL(12,2) DETERMINISTIC RETURN qty * unit").await.unwrap();
+    drv.exec("CREATE FUNCTION f_greet(who VARCHAR(50)) RETURNS VARCHAR(120) DETERMINISTIC RETURN CONCAT('hi ', who)").await.unwrap();
+    drv.exec("CREATE FUNCTION f_when(d DATE) RETURNS DATETIME DETERMINISTIC RETURN TIMESTAMP(d)").await.unwrap();
+    // a procedure that returns a result set (CALL)
+    drv.exec("CREATE PROCEDURE p_nums() BEGIN SELECT 1 AS n UNION SELECT 2 UNION SELECT 3; END").await.unwrap();
+
+    // SELECT db.func(args) — the shape buildCall() emits for a scalar function
+    let row1 = |o: &StatementOutcome| -> serde_json::Value {
+        let StatementOutcome::Rows { result } = o else { panic!("expected rows, got {o:?}") };
+        result.rows.first().and_then(|r| r.as_object()).and_then(|m| m.values().next()).cloned().unwrap_or(serde_json::Value::Null)
+    };
+
+    let out = drv.exec("SELECT `testdb`.`f_add`(2, 3)").await.expect("execute f_add");
+    assert_eq!(row1(&out), serde_json::json!(5), "INT function result");
+
+    let out = drv.exec("SELECT `testdb`.`f_price`(3, '4.50')").await.expect("execute f_price");
+    assert_eq!(row1(&out), serde_json::json!("13.50"), "DECIMAL function result (string-preserved)");
+
+    let out = drv.exec("SELECT `testdb`.`f_greet`('bo')").await.expect("execute f_greet");
+    assert_eq!(row1(&out), serde_json::json!("hi bo"), "VARCHAR function result");
+
+    let out = drv.exec("SELECT `testdb`.`f_when`('2026-07-07')").await.expect("execute f_when");
+    let StatementOutcome::Rows { result } = &out else { panic!("expected rows") };
+    let dt = result.rows[0].as_object().unwrap().values().next().unwrap().as_str().unwrap_or("");
+    assert!(dt.starts_with("2026-07-07"), "DATETIME function result: {dt}");
+
+    // CALL db.proc() — procedure returning a result set
+    let out = drv.exec("CALL `testdb`.`p_nums`()").await.expect("execute p_nums");
+    let StatementOutcome::Rows { result } = &out else { panic!("CALL should return rows, got {out:?}") };
+    assert_eq!(result.total, 3, "procedure result set rows");
+
+    // procedure with IN + OUT + INOUT params — the real item-7 failure. Passing a
+    // literal for OUT/INOUT (what the old dialog did) is rejected by MySQL; the fix
+    // (buildRoutineExec) must use session variables and SELECT them back.
+    drv.exec(
+        "CREATE PROCEDURE p_calc(IN qty INT, IN unit DECIMAL(10,2), OUT total DECIMAL(12,2), INOUT tax DECIMAL(12,2)) \
+         BEGIN SET total = qty * unit; SET tax = total * tax; END",
+    )
+    .await
+    .unwrap();
+
+    // OLD (buggy) shape: literal for OUT/INOUT → MySQL "not a variable" error
+    assert!(
+        drv.exec("CALL `testdb`.`p_calc`(3, 4.50, 0, 0.1)").await.is_err(),
+        "passing a literal for OUT/INOUT must fail — this is the reported item-7 bug",
+    );
+
+    // NEW shape (exactly what buildRoutineExec emits): SET @vars; CALL(...@vars...); SELECT @vars
+    drv.exec("SET @_total = NULL").await.unwrap();
+    drv.exec("SET @_tax = 0.10").await.unwrap();
+    drv.exec("CALL `testdb`.`p_calc`(3, 4.50, @_total, @_tax)").await.expect("CALL with session vars");
+    let out = drv.exec("SELECT @_total AS `total`, @_tax AS `tax`").await.expect("read OUT/INOUT vars");
+    let StatementOutcome::Rows { result } = &out else { panic!("expected rows") };
+    let obj = result.rows[0].as_object().unwrap();
+    assert!(obj["total"].to_string().contains("13.5"), "OUT total via session var: {}", obj["total"]);
+    assert!(obj["tax"].to_string().contains("1.35"), "INOUT tax via session var: {}", obj["tax"]);
+
+    eprintln!("CHK mysql_execute_stored_routines_datatypes OK");
 }
 
 /// T29 — Index/FK Manager DDL runs on MySQL: create/drop index (DROP INDEX … ON)
@@ -1613,11 +1867,11 @@ async fn ssh_tunnel_forwards_and_rejects_bad_auth() {
     };
 
     // auth sai → phải bị từ chối
-    let bad = open_tunnel(&ssh, "sai-mat-khau", "127.0.0.1", echo_port).await;
+    let bad = open_tunnel(&ssh, "sai-mat-khau", "127.0.0.1", echo_port, false).await;
     assert!(bad.is_err(), "auth sai phải lỗi");
 
     // auth đúng → forward 2 chiều qua tunnel
-    let tunnel = open_tunnel(&ssh, "test123", "127.0.0.1", echo_port).await.unwrap();
+    let tunnel = open_tunnel(&ssh, "test123", "127.0.0.1", echo_port, false).await.unwrap();
     let mut sock = tokio::net::TcpStream::connect(("127.0.0.1", tunnel.local_port)).await.unwrap();
     sock.write_all(b"xin chao qua tunnel").await.unwrap();
     let mut buf = [0u8; 64];
@@ -3722,7 +3976,10 @@ async fn nats_subject_messages_purge_and_remove() {
     .await
     .unwrap();
     for i in 0..3 {
-        js.publish("orders.eu", bytes::Bytes::from(format!("eu{i}"))).await.unwrap().await.unwrap();
+        // publish with a Nats-Msg-Id header so the browsed message exposes a key
+        let mut h = async_nats::HeaderMap::new();
+        h.insert("Nats-Msg-Id", format!("eu-key-{i}").as_str());
+        js.publish_with_headers("orders.eu", h, bytes::Bytes::from(format!("eu{i}"))).await.unwrap().await.unwrap();
     }
     for i in 0..2 {
         js.publish("orders.us", bytes::Bytes::from(format!("us{i}"))).await.unwrap().await.unwrap();
@@ -3744,6 +4001,8 @@ async fn nats_subject_messages_purge_and_remove() {
     let eu = drv.js_subject_messages("ORDERS", "orders.eu", 100).await.unwrap();
     assert_eq!(count_until(&drv, "orders.eu", 3).await, 3, "3 messages on orders.eu");
     assert!(eu.iter().all(|m| m.subject == "orders.eu"), "all messages belong to orders.eu");
+    // the Nats-Msg-Id header is surfaced as the per-message key
+    assert!(eu.iter().all(|m| m.key.starts_with("eu-key-")), "each message exposes its Nats-Msg-Id key");
 
     // clear one subject → its messages gone, the other subject intact
     drv.js_purge_subject("ORDERS", "orders.eu").await.unwrap();

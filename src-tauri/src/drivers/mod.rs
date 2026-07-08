@@ -512,6 +512,26 @@ impl LiveConnection {
         }
     }
 
+    /// Partitions of a table (declarative partitioning). Non-partitioned tables
+    /// and engines without partitioning return an empty list.
+    pub async fn partitions(
+        &mut self,
+        schema: &str,
+        table: &str,
+    ) -> Result<Vec<PartitionInfo>, QueryError> {
+        match self {
+            Self::Postgres(d) => d.partitions(schema, table).await,
+            Self::MySql(d) => d.partitions(schema, table).await,
+            Self::Mssql(d) => d.partitions(schema, table).await,
+            Self::Clickhouse(d) => d.partitions(schema, table).await,
+            Self::Cassandra(d) => d.partitions(schema, table).await,
+            Self::Sqlite(_) => Ok(Vec::new()),
+            Self::Redis(_) => Ok(Vec::new()),
+            Self::Nats(_) => Ok(Vec::new()),
+            Self::Kafka(_) => Ok(Vec::new()),
+        }
+    }
+
     /// Index Scanner (Phase 5 · T7b): quét index toàn schema + tính cờ sức khỏe.
     pub async fn scan_indexes(
         &mut self,

@@ -83,6 +83,18 @@ pub async fn list_constraints(
 }
 
 #[tauri::command]
+pub async fn list_partitions(
+    state: State<'_, AppState>,
+    conn_id: String,
+    schema: String,
+    table: String,
+) -> Result<Vec<PartitionInfo>, AppError> {
+    introspect!(state, conn_id, |driver| async move {
+        driver.lock().await.partitions(&schema, &table).await
+    })
+}
+
+#[tauri::command]
 pub async fn list_routines(
     state: State<'_, AppState>,
     conn_id: String,

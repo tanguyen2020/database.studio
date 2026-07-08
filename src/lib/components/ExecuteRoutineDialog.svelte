@@ -6,7 +6,7 @@
   import { execRoutineWizard } from '$lib/stores/execroutine.svelte'
   import { connections } from '$lib/stores/connections.svelte'
   import { tabs } from '$lib/stores/tabs.svelte'
-  import { buildCall } from '$lib/sql/routines'
+  import { buildRoutineExec } from '$lib/sql/routines'
 
   // effect-mirror the store open flag (reliable cross-component tracking; see T31 note)
   let dlgOpen = $state(false)
@@ -14,43 +14,40 @@
     dlgOpen = execRoutineWizard.open
   })
   const system = $derived(connections.byId(execRoutineWizard.connId)?.system ?? 'postgres')
-  // IN / INOUT params need a value; pure OUT params are omitted from the call.
-  const inParams = $derived(
-    (execRoutineWizard.routine?.params ?? []).filter((p) => !/^(out|o)$/i.test(p.mode)),
-  )
+  const allParams = $derived(execRoutineWizard.routine?.params ?? [])
+  // IN / INOUT params need a value; pure OUT params are filled by the routine.
+  const inParams = $derived(allParams.filter((p) => !/^out$/i.test((p.mode ?? '').trim())))
   let vals = $state<Record<string, string>>({})
 
   $effect(() => {
     if (execRoutineWizard.open) untrack(() => (vals = {}))
   })
 
-  function isNumeric(type: string): boolean {
-    return /\b(int|serial|numeric|decimal|real|double|float|money|bigint|smallint)\b/i.test(type)
-  }
-
-  function literal(type: string, raw: string): string {
-    const v = (raw ?? '').trim()
-    if (v === '' || v.toUpperCase() === 'NULL') return 'NULL'
-    if (isNumeric(type)) return v
-    if (/\b(bool|bit)\b/i.test(type)) return /^(t|true|1|yes)$/i.test(v) ? 'TRUE' : 'FALSE'
-    return `'${v.replace(/'/g, "''")}'`
-  }
-
   function runIt() {
     const r = execRoutineWizard.routine
     const connId = execRoutineWizard.connId
     if (!r || !connId) return
-    const args = inParams.map((p) => literal(p.data_type, vals[p.name] ?? ''))
-    const sql = buildCall(system, execRoutineWizard.schema, r.kind, r.name, args)
+    // buildRoutineExec handles OUT/INOUT params (session vars / OUTPUT) so procedures
+    // with output params run correctly — a plain literal there is rejected (item 7).
+    const sql = buildRoutineExec(system, execRoutineWizard.schema, r.kind, r.name, allParams, vals)
     // Open a SQL tab AND run it immediately so the result grid shows the output.
-    tabs.openSqlTab({ connectionId: connId, title: `${r.name}()`, query: sql, autoRun: true })
+    // Bind it to the routine's database so the CALL/SELECT runs against the right
+    // DB (item 3 — Execute must target the correct database of that connection).
+    tabs.openSqlTab({
+      connectionId: connId,
+      title: `${r.name}()`,
+      query: sql,
+      autoRun: true,
+      database: execRoutineWizard.database,
+    })
     execRoutineWizard.close()
   }
 </script>
 
 {#if dlgOpen && execRoutineWizard.routine}
   {@const r = execRoutineWizard.routine}
-  <div onclick={() => execRoutineWizard.close()} onkeydown={() => {}} role="presentation" style="position:fixed;inset:0;background:var(--rgba-0-0-0-_5);display:flex;align-items:center;justify-content:center;z-index:56">
+  <!-- backdrop click does NOT close (avoid losing input); use × / Cancel / Escape -->
+  <div onkeydown={(e) => e.key === 'Escape' && execRoutineWizard.close()} role="presentation" style="position:fixed;inset:0;background:var(--rgba-0-0-0-_5);display:flex;align-items:center;justify-content:center;z-index:56">
     <div onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.key === 'Escape' && execRoutineWizard.close()} role="dialog" aria-modal="true" tabindex="-1" style="width:var(--px-460);max-width:94vw;background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-14);box-shadow:0 var(--px-30) var(--px-70) var(--rgba-0-0-0-_55);overflow:hidden;display:flex;flex-direction:column">
       <div style="flex:none;display:flex;align-items:center;gap:var(--px-10);padding:var(--px-15) var(--px-18);border-bottom:var(--px-1) solid var(--border)">
         <span style="font-weight:700;font-size:var(--px-15)">Execute {r.kind === 'procedure' ? 'procedure' : 'function'} {r.name}</span>

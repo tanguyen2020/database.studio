@@ -38,3 +38,27 @@ test('connection form: buttons work, no Group field, English', async ({ page }) 
 
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
+
+// Kafka connect via IP + Port: the form must offer a Host and a Port field (not a
+// single bootstrap box) with the default 9092 port prefilled.
+test('connection form: Kafka has Host + Port fields (default 9092)', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(String(e)))
+  await blockRemoteFonts(page)
+  await page.goto(APP_URL)
+  await page.waitForSelector('#app > *', { timeout: 15_000 })
+  await page.waitForTimeout(300)
+
+  await page.getByTitle('New connection').first().click()
+  await page.waitForTimeout(200)
+  await page.locator('.picker-card').filter({ hasText: 'Kafka' }).first().click()
+  await page.waitForTimeout(300)
+
+  const dialog = page.getByRole('dialog')
+  await expect(dialog.getByText('Host / Bootstrap')).toBeVisible()
+  await expect(dialog.getByText('Port', { exact: true })).toBeVisible()
+  // port field prefilled with the Kafka default
+  await expect(dialog.locator('input[type="number"]').first()).toHaveValue('9092')
+
+  expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
+})

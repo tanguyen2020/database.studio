@@ -55,8 +55,8 @@ describe('genMigration', () => {
     expect(sql).toContain('MODIFY COLUMN `msg` text')
   })
 
-  it('respects selected set', () => {
-    const sql = genMigration(diffs, 'postgres', new Set(['orders']))
+  it('respects selected set (keyed by kind:name:table)', () => {
+    const sql = genMigration(diffs, 'postgres', new Set(['table:orders:']))
     expect(sql).toContain('CREATE TABLE "orders"')
     expect(sql).not.toContain('legacy')
   })
@@ -117,6 +117,49 @@ describe('sequences diff + migration (item 2)', () => {
     const sql = genMigration(diffs, 'postgres')
     expect(sql).toContain('CREATE SEQUENCE "seq_a";')
     expect(sql).toContain('DROP SEQUENCE IF EXISTS "seq_b";')
+  })
+})
+
+describe('indexes diff + migration (item 1/2 — indexes were not compared before)', () => {
+  const s: SchemaSnapshot = {
+    tables: [],
+    indexes: [
+      { name: 'idx_email', table: 'users', columns: ['email'], unique: true }, // src only
+      { name: 'idx_name', table: 'users', columns: ['name'], unique: false }, // different (cols)
+      { name: 'idx_shared', table: 'orders', columns: ['total'], unique: false }, // identical
+    ],
+  }
+  const t: SchemaSnapshot = {
+    tables: [],
+    indexes: [
+      { name: 'idx_name', table: 'users', columns: ['first_name', 'last_name'], unique: false }, // differs
+      { name: 'idx_shared', table: 'orders', columns: ['total'], unique: false }, // identical
+      { name: 'idx_old', table: 'orders', columns: ['legacy'], unique: false }, // tgt only
+    ],
+  }
+  const diffs = compareSchemas(s, t)
+  const byIdx = (n: string, table: string) => diffs.find((d) => d.kind === 'index' && d.name === n && d.idxTable === table)!
+
+  it('classifies index existence + column-set / uniqueness changes', () => {
+    expect(byIdx('idx_email', 'users').status).toBe('src_only')
+    expect(byIdx('idx_name', 'users').status).toBe('different')
+    expect(byIdx('idx_shared', 'orders').status).toBe('identical')
+    expect(byIdx('idx_old', 'orders').status).toBe('tgt_only')
+    expect(byIdx('idx_email', 'users').kind).toBe('index')
+  })
+
+  it('migration: CREATE source index / DROP target-only / recreate on difference', () => {
+    const sql = genMigration(diffs, 'postgres')
+    expect(sql).toContain('CREATE UNIQUE INDEX "idx_email" ON "users" ("email");')
+    expect(sql).toContain('DROP INDEX IF EXISTS "idx_old";')
+    // different → drop then recreate to match SOURCE (source cols = ['name'])
+    expect(sql).toContain('DROP INDEX IF EXISTS "idx_name";')
+    expect(sql).toContain('CREATE INDEX "idx_name" ON "users" ("name");')
+  })
+
+  it('MySQL DROP INDEX includes the table', () => {
+    const sql = genMigration(diffs, 'mysql')
+    expect(sql).toContain('DROP INDEX `idx_old` ON `orders`;')
   })
 })
 

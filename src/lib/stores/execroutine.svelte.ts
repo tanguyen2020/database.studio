@@ -7,11 +7,15 @@ class ExecRoutineStore {
   connId = $state<string | null>(null)
   schema = $state('')
   routine = $state<RoutineInfo | null>(null)
+  /** database the routine lives in — the opened SQL tab binds/runs there so the
+   *  routine body resolves against the right DB (MySQL schema==db, foreign DB). */
+  database = $state<string | undefined>(undefined)
 
-  show(connId: string, schema: string, routine: RoutineInfo) {
+  show(connId: string, schema: string, routine: RoutineInfo, database?: string) {
     this.connId = connId
     this.schema = schema
     this.routine = routine
+    this.database = database
     this.open = true
   }
 

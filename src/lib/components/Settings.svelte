@@ -30,7 +30,8 @@
 </script>
 
 {#if settings.open}
-  <div onclick={() => settings.close()} onkeydown={() => {}} role="presentation" style="position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:57">
+  <!-- backdrop click does NOT close; use × / Escape -->
+  <div onkeydown={(e) => e.key === 'Escape' && settings.close()} role="presentation" style="position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:57">
     <div onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.key === 'Escape' && settings.close()} role="dialog" aria-modal="true" tabindex="-1" style="width:var(--px-720);max-width:95vw;height:var(--px-460);max-height:90vh;background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-14);box-shadow:0 var(--px-30) var(--px-70) rgba(0,0,0,.55);overflow:hidden;display:flex;flex-direction:column">
       <div style="flex:none;display:flex;align-items:center;gap:var(--px-10);padding:var(--px-14) var(--px-18);border-bottom:var(--px-1) solid var(--border)">
         <span style="font-weight:700;font-size:var(--px-15)">Settings</span>

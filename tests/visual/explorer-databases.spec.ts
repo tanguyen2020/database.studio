@@ -30,5 +30,25 @@ test('explorer per-database tree: current header + foreign database expands', as
   // no duplicate connection was added to the sidebar
   await expect(page.getByRole('button', { name: /· analytics/ })).toHaveCount(0)
 
+  // item 4 — a table inside the FOREIGN database must expand to its columns too
+  // (previously only the current database's tables did; PG/MSSQL app DBs are foreign).
+  await page.getByRole('treeitem', { name: /public/ }).last().dblclick() // foreign public schema
+  await page.waitForTimeout(600)
+  await page.getByRole('treeitem', { name: /Tables/ }).last().dblclick() // Tables folder
+  await page.waitForTimeout(600)
+  const tbl = page.getByRole('treeitem', { name: /students/ }).last()
+  await tbl.scrollIntoViewIfNeeded()
+  await tbl.getByRole('button').first().click() // chevron → expand to columns
+  await page.waitForTimeout(600)
+  const col = page.getByText('first_name').first()
+  await expect(col).toBeVisible()
+
+  // foreign-database columns must have the same context menu as MySQL's
+  await col.click({ button: 'right' })
+  await page.waitForTimeout(200)
+  await expect(page.getByText('Copy as table.column', { exact: true }).first()).toBeVisible()
+  await expect(page.getByText('Set as Filter', { exact: true }).first()).toBeVisible()
+  await page.keyboard.press('Escape')
+
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })

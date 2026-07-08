@@ -22,6 +22,49 @@ struct KafkaMsgEvent {
     msg: KafkaMessage,
 }
 
+/// Event "kafka-status": librdkafka errors/warnings + consume lifecycle, so the
+/// consumer UI can show WHY a browse produced no messages instead of failing
+/// silently. `level` = "error" | "warn" | "info".
+#[derive(serde::Serialize, Clone)]
+struct KafkaStatusEvent {
+    conn_id: String,
+    level: String,
+    message: String,
+}
+
+/// ConsumerContext that pipes librdkafka's error/log callbacks (connection
+/// refused, fetch failures, unknown partition, …) out to the frontend. Without
+/// this, those errors only reach librdkafka's internal log and the poll loop
+/// sees `None`, so the grid stays empty with no explanation.
+struct BrowseContext {
+    app: AppHandle,
+    conn_id: String,
+}
+
+impl BrowseContext {
+    fn emit(&self, level: &str, message: String) {
+        let _ = self.app.emit(
+            "kafka-status",
+            KafkaStatusEvent { conn_id: self.conn_id.clone(), level: level.into(), message },
+        );
+    }
+}
+
+impl rdkafka::client::ClientContext for BrowseContext {
+    fn error(&self, error: rdkafka::error::KafkaError, reason: &str) {
+        self.emit("error", format!("{error}: {reason}"));
+    }
+    fn log(&self, level: rdkafka::config::RDKafkaLogLevel, fac: &str, log_message: &str) {
+        use rdkafka::config::RDKafkaLogLevel::*;
+        // Forward only notable levels — debug/info would flood the UI.
+        if matches!(level, Emerg | Alert | Critical | Error | Warning) {
+            self.emit("warn", format!("[{fac}] {log_message}"));
+        }
+    }
+}
+
+impl rdkafka::consumer::ConsumerContext for BrowseContext {}
+
 /// Kết quả produce.
 #[derive(serde::Serialize)]
 pub struct ProduceResult {
@@ -203,12 +246,13 @@ pub async fn kafka_consume(
     use std::sync::Arc;
     use std::time::Duration;
 
+    let ctx = BrowseContext { app: app.clone(), conn_id: conn_id.clone() };
     let consumer = state
         .registry
         .with_driver(&conn_id, move |driver| async move {
             let d = driver.lock().await;
             match &*d {
-                LiveConnection::Kafka(k) => k.browse_consumer(&topic, &from, offset, partition),
+                LiveConnection::Kafka(k) => k.browse_consumer(&topic, &from, offset, partition, ctx),
                 _ => Err(not_kafka()),
             }
         })
@@ -219,9 +263,34 @@ pub async fn kafka_consume(
     state.kafka_stops.set(conn_id.clone(), stop.clone());
     let cid = conn_id;
     std::thread::spawn(move || {
+        use rdkafka::error::KafkaError;
+        let mut last_err = String::new();
         while !stop.load(Ordering::Relaxed) {
-            if let Some(Ok(m)) = consumer.poll(Duration::from_millis(400)) {
-                let _ = app.emit("kafka-msg", KafkaMsgEvent { conn_id: cid.clone(), msg: borrowed_to_message(&m) });
+            match consumer.poll(Duration::from_millis(400)) {
+                Some(Ok(m)) => {
+                    let _ = app.emit(
+                        "kafka-msg",
+                        KafkaMsgEvent { conn_id: cid.clone(), msg: borrowed_to_message(&m) },
+                    );
+                }
+                // Reached the end of a partition — normal, means "all read / empty".
+                Some(Err(KafkaError::PartitionEOF(_))) => {}
+                // Real fetch/partition error — surface it (dedup consecutive repeats).
+                Some(Err(e)) => {
+                    let msg = e.to_string();
+                    if msg != last_err {
+                        last_err = msg.clone();
+                        let _ = app.emit(
+                            "kafka-status",
+                            KafkaStatusEvent {
+                                conn_id: cid.clone(),
+                                level: "error".into(),
+                                message: msg,
+                            },
+                        );
+                    }
+                }
+                None => {}
             }
         }
         // consumer drop TRONG thread poll này → close sạch, không deadlock.

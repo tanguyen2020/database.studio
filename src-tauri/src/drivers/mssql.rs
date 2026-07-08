@@ -652,6 +652,54 @@ impl MssqlDriver {
             })
             .collect())
     }
+
+    /// Partitions of a table built on a partition scheme. Tables stored on a plain
+    /// filegroup (not a scheme) yield no rows → treated as non-partitioned.
+    pub async fn partitions(
+        &mut self,
+        schema: &str,
+        table: &str,
+    ) -> Result<Vec<PartitionInfo>, QueryError> {
+        let rows = self
+            .client
+            .query(
+                "SELECT p.partition_number, pf.type_desc, c.name,
+                        CAST(prv.value AS NVARCHAR(4000)), p.rows
+                 FROM sys.tables t
+                 JOIN sys.indexes i ON i.object_id = t.object_id AND i.index_id IN (0, 1)
+                 JOIN sys.partitions p ON p.object_id = t.object_id AND p.index_id = i.index_id
+                 JOIN sys.partition_schemes ps ON ps.data_space_id = i.data_space_id
+                 JOIN sys.partition_functions pf ON pf.function_id = ps.function_id
+                 LEFT JOIN sys.index_columns ic ON ic.object_id = t.object_id
+                        AND ic.index_id = i.index_id AND ic.partition_ordinal = 1
+                 LEFT JOIN sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
+                 LEFT JOIN sys.partition_range_values prv ON prv.function_id = pf.function_id
+                        AND prv.boundary_id = p.partition_number
+                             - CASE WHEN pf.boundary_value_on_right = 1 THEN 1 ELSE 0 END
+                 WHERE t.name = @P2 AND SCHEMA_NAME(t.schema_id) = @P1
+                 ORDER BY p.partition_number",
+                &[&schema, &table],
+            )
+            .await
+            .map_err(|e| map_error(&e))?
+            .into_first_result()
+            .await
+            .map_err(|e| map_error(&e))?;
+        Ok(rows
+            .iter()
+            .map(|r| {
+                let pnum = r.get::<i32, _>(0).unwrap_or(0);
+                PartitionInfo {
+                    name: format!("Partition {pnum}"),
+                    method: r.get::<&str, _>(1).unwrap_or_default().to_string(),
+                    key: r.get::<&str, _>(2).map(|s| s.to_string()),
+                    expression: r.get::<&str, _>(3).map(|s| s.to_string()),
+                    rows: r.get::<i64, _>(4),
+                    position: Some(pnum as i64),
+                }
+            })
+            .collect())
+    }
 }
 
 /// Statements that must run as a raw batch via `simple_query` (not the prepared

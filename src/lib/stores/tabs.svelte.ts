@@ -2,8 +2,10 @@
 // global "active connection". Persisted to SQLite storage via IPC.
 
 import * as ipc from '$lib/ipc'
+import { IS_TAURI } from '$lib/demo'
 import type { SystemType, TabContentType, TabState } from '$lib/types'
 import { connections } from './connections.svelte'
+import { results } from './results.svelte'
 
 const MAX_CLOSED_STACK = 20
 
@@ -61,6 +63,8 @@ class TabsStore {
     pane?: 0 | 1
     /** run the query automatically once the editor mounts (Execute routine) */
     autoRun?: boolean
+    /** bind the tab to a specific database within the connection (runs there) */
+    database?: string
   }): TabState {
     const connId =
       opts?.connectionId !== undefined
@@ -78,7 +82,11 @@ class TabsStore {
       isPinned: false,
       isDirty: false,
       pane,
-      state: { query: opts?.query ?? '', autoRun: opts?.autoRun ?? false },
+      state: {
+        query: opts?.query ?? '',
+        autoRun: opts?.autoRun ?? false,
+        ...(opts?.database ? { database: opts.database } : {}),
+      },
     }
     this.tabs.push(tab)
     if (opts?.activate !== false) {
@@ -134,6 +142,36 @@ class TabsStore {
       isPinned: false,
       isDirty: false,
       state: {},
+    }
+    this.tabs.push(tab)
+    this.activeTabId = tab.id
+    this.schedulePersist()
+    return tab
+  }
+
+  /** Redis single-key viewer tab — 1 tab / (connection, key); focus if already open. */
+  openRedisKey(connectionId: string, key: string): TabState {
+    const existing = this.tabs.find(
+      (t) =>
+        t.contentType === 'redis-key' &&
+        t.connectionId === connectionId &&
+        (t.state as { key?: string }).key === key,
+    )
+    if (existing) {
+      this.activeTabId = existing.id
+      return existing
+    }
+    const profile = connections.byId(connectionId)
+    const tab: TabState = {
+      id: uuid(),
+      connectionId,
+      connectionName: profile?.name ?? '',
+      systemType: (profile?.system as SystemType) ?? 'orphan',
+      contentType: 'redis-key',
+      title: `${key} · key`,
+      isPinned: false,
+      isDirty: false,
+      state: { key },
     }
     this.tabs.push(tab)
     this.activeTabId = tab.id
@@ -654,6 +692,12 @@ class TabsStore {
   forceClose(ids: string[]) {
     const closing = this.tabs.filter((t) => ids.includes(t.id))
     for (const tab of closing) {
+      // Cancel any query still running in this tab so it doesn't keep executing
+      // after the tab is gone, then close the tab's dedicated connection (item 6).
+      results.cancelAndClear(tab.id)
+      if (tab.contentType === 'sql-editor' && tab.connectionId) {
+        void ipc.closeTabConnection(`${tab.connectionId}#tab-${tab.id}`).catch(() => {})
+      }
       this.closedStack.push($state.snapshot(tab) as TabState)
     }
     if (this.closedStack.length > MAX_CLOSED_STACK) {
@@ -816,6 +860,22 @@ class TabsStore {
   }
 
   async restore() {
+    // Product rule: closing the desktop app closes ALL open tabs — tabs do NOT
+    // survive an app restart. Start every launch with a clean slate and wipe any
+    // tabs a previous build persisted. (In the browser/demo harness we still seed
+    // the prototype's demo tabs so the dev preview isn't empty.)
+    if (IS_TAURI) {
+      this.tabs = []
+      this.activeTabId = null
+      this.restored = true
+      try {
+        await ipc.saveTabs([])
+        await ipc.setAppState('active_tab', '')
+      } catch {
+        // persistence cleanup must never break startup
+      }
+      return
+    }
     try {
       const payloads = await ipc.loadTabs<TabState>()
       const restored: TabState[] = []

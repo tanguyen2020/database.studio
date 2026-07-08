@@ -29,7 +29,8 @@
   function openConn(id: string, system: string) {
     connections.selectedId = id
     void connections.connect(id).then(() => {
-      if (system === 'redis') tabs.openRedisTab(id)
+      // Redis: key browser is in the ObjectExplorer sidebar — no tab on connect.
+      if (system === 'redis') { /* keys shown in explorer */ }
       else if (system === 'nats') tabs.openNatsTab(id)
       else if (system === 'kafka') tabs.openKafkaTab(id)
       else if (system === 'cassandra') tabs.openSqlTab({ connectionId: id, title: 'Untitled CQL' })
@@ -137,9 +138,9 @@
 </script>
 
 {#if palette.open}
+  <!-- backdrop click does NOT close; use Escape or pick an item -->
   <div
-    onclick={() => palette.close()}
-    onkeydown={() => {}}
+    onkeydown={(e) => e.key === 'Escape' && palette.close()}
     role="presentation"
     style="position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;justify-content:center;padding-top:var(--px-90);z-index:50"
   >
