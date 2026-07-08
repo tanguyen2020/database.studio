@@ -362,7 +362,29 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
       ])
     case 'list_sequences':
       return ok([])
-    case 'exec_statement':
+    case 'exec_statement': {
+      // Collation unification (MySQL/MariaDB) — feed the audit dialog demo data.
+      const stmtSql = String(args?.sql ?? '')
+      if (/information_schema.SCHEMATA/i.test(stmtSql) && /DEFAULT_COLLATION_NAME/i.test(stmtSql)) {
+        return ok({ ok: true, result: { cols: [['charset', 'text'], ['collation', 'text']], rows: [{ charset: 'utf8mb4', collation: 'utf8mb4_0900_ai_ci' }], total: 1 }, duration_ms: 3 })
+      }
+      if (/information_schema.COLLATIONS/i.test(stmtSql)) {
+        return ok({ ok: true, result: { cols: [['name', 'text'], ['is_default', 'text']], rows: [{ name: 'utf8mb4_0900_ai_ci', is_default: 'Yes' }, { name: 'utf8mb4_general_ci', is_default: '' }, { name: 'utf8mb4_unicode_ci', is_default: '' }], total: 3 }, duration_ms: 3 })
+      }
+      if (/GROUP_CONCAT(DISTINCT c.COLLATION_NAME/i.test(stmtSql)) {
+        return ok({
+          ok: true,
+          result: {
+            cols: [['table_name', 'text'], ['table_collation', 'text'], ['column_collations', 'text']],
+            rows: [
+              { table_name: 'sequences', table_collation: 'utf8mb4_0900_ai_ci', column_collations: 'utf8mb4_0900_ai_ci' },
+              { table_name: 'audit_log', table_collation: 'utf8mb4_general_ci', column_collations: 'utf8mb4_general_ci' },
+            ],
+            total: 2,
+          },
+          duration_ms: 4,
+        })
+      }
       return ok({
         ok: true,
         result: {
@@ -380,6 +402,7 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
         },
         duration_ms: 12,
       })
+    }
     case 'cancel_query':
       return ok({ cancelled: true })
     case 'list_history':

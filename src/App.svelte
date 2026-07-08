@@ -40,6 +40,7 @@
   import GenerateScriptsDialog from '$lib/components/GenerateScriptsDialog.svelte'
   import BackupDialog from '$lib/components/BackupDialog.svelte'
   import CopyTableDialog from '$lib/components/CopyTableDialog.svelte'
+  import CollationDialog from '$lib/components/CollationDialog.svelte'
   import GenerateTestDataDialog from '$lib/components/GenerateTestDataDialog.svelte'
   import ExecuteRoutineDialog from '$lib/components/ExecuteRoutineDialog.svelte'
   import ClickHouseCreateDialog from '$lib/components/ClickHouseCreateDialog.svelte'
@@ -326,6 +327,7 @@
 <GenerateScriptsDialog />
 <BackupDialog />
 <CopyTableDialog />
+<CollationDialog />
 <GenerateTestDataDialog />
 <ExecuteRoutineDialog />
 <ClickHouseCreateDialog />
