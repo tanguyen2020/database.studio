@@ -101,17 +101,10 @@
     const target = p ?? selConn
     if (!target) return
     connections.selectedId = target.id
-    // When a database/schema node is selected in the ObjectExplorer for THIS
-    // connection, open the new query bound to that database so the Query Editor's
-    // Database dropdown pre-selects it (and runs against it). Explicit-connection
-    // clicks (context menu on a different connection) ignore the tree selection.
-    const dbSel = explorer.selectedDatabase
-    const db = !p && dbSel && dbSel.base === target.id ? dbSel.database : undefined
-    tabs.openSqlTab({
-      connectionId: target.id,
-      title: 'Untitled query',
-      ...(db ? { database: db } : {}),
-    })
+    // Bind to the database selected in the ObjectExplorer when it belongs to this
+    // connection (so the Query Editor's Database dropdown pre-selects it). An
+    // explicit context-menu pick (p) ignores the tree selection.
+    tabs.openQueryConsole({ connectionId: target.id, useSelection: !p })
   }
 
   // New Database (DataGrip-style): open a dialog to enter the name; Create runs

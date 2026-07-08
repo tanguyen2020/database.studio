@@ -25,10 +25,12 @@
   import { splitStatements, statementAtOffset, offsetToLineCol } from '$lib/sql/statements'
   import { parseTableRefs, resolveRef } from '$lib/sql/aliases'
   import { dangerousStatements, type DangerStmt } from '$lib/sql/danger'
+  import { quoteIfReserved } from '$lib/sql/reserved'
   import { autofocus } from '$lib/actions/autofocus'
   import type { TabState } from '$lib/types'
   import type { Diagnostic } from '@codemirror/lint'
-  import type { CompletionSource } from '@codemirror/autocomplete'
+  import type { Completion, CompletionSource } from '@codemirror/autocomplete'
+  import type { SQLNamespace } from '@codemirror/lang-sql'
   import { untrack } from 'svelte'
 
   interface Props {
@@ -168,21 +170,35 @@
     })
   })
 
-  /** { table: [cols], schema.table: [cols] } cho lang-sql completion */
-  const completionSchema = $derived.by(() => {
+  // A completion for one table/column identifier. Reserved words (and non-bare
+  // names) get a quoted `apply` so autocomplete inserts e.g. `order` / "order" /
+  // [order] — otherwise the query/JOIN would be a syntax error — while the label
+  // stays plain so prefix matching still works.
+  function identOption(name: string, type: 'type' | 'property'): Completion {
+    const q = quoteIfReserved(tab.systemType, name)
+    return q === name ? { label: name, type } : { label: name, apply: q, type }
+  }
+
+  /** Nested { schema: { table: {self, children:[cols]} } } for lang-sql completion,
+   *  with reserved identifiers quoted on insert (see identOption). */
+  const completionSchema = $derived.by((): SQLNamespace | undefined => {
     const cid = acConnId
     if (!cid) return undefined
     const cache = explorer.cache[cid]
     if (!cache) return undefined
-    const out: Record<string, string[]> = {}
+    const ns: Record<string, SQLNamespace> = {}
     for (const [schemaName, sc] of Object.entries(cache.bySchema)) {
+      const tables: Record<string, SQLNamespace> = {}
       for (const t of sc.tables ?? []) {
-        const cols = sc.tableDetails[t.name]?.columns?.map((c) => c.name) ?? []
-        out[t.name] = cols
-        out[`${schemaName}.${t.name}`] = cols
+        const cols = sc.tableDetails[t.name]?.columns ?? []
+        tables[t.name] = {
+          self: identOption(t.name, 'type'),
+          children: cols.map((c) => identOption(c.name, 'property')),
+        }
       }
+      ns[schemaName] = tables
     }
-    return Object.keys(out).length > 0 ? out : undefined
+    return Object.keys(ns).length > 0 ? ns : undefined
   })
 
   const defaultSchema = $derived.by(() => {
@@ -237,7 +253,7 @@
     if (cols.length === 0) return null
     return {
       from: before.from + dot + 1,
-      options: cols.map((c) => ({ label: c.name, type: 'property', detail: c.data_type })),
+      options: cols.map((c) => ({ ...identOption(c.name, 'property'), detail: c.data_type })),
       validFor: /^[\w$]*$/,
     }
   }

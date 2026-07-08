@@ -118,9 +118,10 @@
       e.preventDefault()
       tabs.openUtilityTab('history', 'Query History')
     } else if ((key === 't' || key === 'n') && !e.shiftKey) {
-      // Ctrl/Cmd+T or Ctrl/Cmd+N → new Query Editor tab
+      // Ctrl/Cmd+T or Ctrl/Cmd+N → new Query Editor tab, bound to the database
+      // selected in the Explorer (its connection + database) when there is one.
       e.preventDefault()
-      tabs.openSqlTab({})
+      tabs.openQueryConsole()
     } else if (key === 'w') {
       e.preventDefault()
       tabs.closeActive()

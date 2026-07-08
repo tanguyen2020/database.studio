@@ -31,15 +31,16 @@
   import { functionSignatures } from '$lib/sql/functions'
   import { highlightSelectionMatches, searchKeymap } from '@codemirror/search'
   import { linter, setDiagnostics, type Diagnostic } from '@codemirror/lint'
-  import { sql, PostgreSQL, MySQL, MSSQL, SQLite, StandardSQL } from '@codemirror/lang-sql'
+  import { sql, PostgreSQL, MySQL, MSSQL, SQLite, StandardSQL, type SQLNamespace } from '@codemirror/lang-sql'
   import { lineColToOffset } from '$lib/sql/statements'
 
   interface Props {
     value: string
     system: string
     readOnly?: boolean
-    /** schema-aware autocomplete (Phase 2): { table: [cols] } từ explorer cache */
-    schema?: Record<string, string[]>
+    /** schema-aware autocomplete (Phase 2): nested { schema: { table: {self,children} } }
+     *  from the explorer cache; reserved identifiers carry a quoted `apply`. */
+    schema?: SQLNamespace
     defaultSchema?: string
     /** async completion cho `alias.`/`table.` — lazy-load cột của bảng trong FROM/JOIN */
     columnSource?: CompletionSource

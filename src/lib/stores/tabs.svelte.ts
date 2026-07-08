@@ -6,6 +6,7 @@ import { IS_TAURI } from '$lib/demo'
 import type { SystemType, TabContentType, TabState } from '$lib/types'
 import { connections } from './connections.svelte'
 import { results } from './results.svelte'
+import { explorer } from './explorer.svelte'
 
 const MAX_CLOSED_STACK = 20
 
@@ -96,6 +97,31 @@ class TabsStore {
     }
     this.schedulePersist()
     return tab
+  }
+
+  /** New Query Editor console, binding to the database currently selected in the
+   *  Explorer tree when it belongs to the target connection (so the editor's
+   *  Database dropdown pre-selects it). Shared by the sidebar "New query console"
+   *  button, its context menu, and Ctrl/Cmd+T / Ctrl/Cmd+N.
+   *  - `connectionId` given → open on that connection (an explicit context-menu
+   *    pick on another connection); pass `useSelection: false` to ignore the tree.
+   *  - `connectionId` omitted → target the selected database's connection, else
+   *    inherit the active tab's / selected connection. */
+  openQueryConsole(opts?: { connectionId?: string | null; useSelection?: boolean }): TabState {
+    const dbSel = explorer.selectedDatabase
+    const connId =
+      opts?.connectionId !== undefined
+        ? opts.connectionId
+        : dbSel
+          ? dbSel.base
+          : this.active?.connectionId ?? connections.selectedId
+    const database =
+      opts?.useSelection !== false && dbSel && dbSel.base === connId ? dbSel.database : undefined
+    return this.openSqlTab({
+      connectionId: connId,
+      title: 'Untitled query',
+      ...(database ? { database } : {}),
+    })
   }
 
   openTableViewer(
