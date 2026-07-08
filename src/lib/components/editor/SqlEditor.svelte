@@ -23,6 +23,8 @@
   import {
     autocompletion,
     acceptCompletion,
+    moveCompletionSelection,
+    completionStatus,
     closeBrackets,
     closeBracketsKeymap,
     completionKeymap,
@@ -87,6 +89,8 @@
     return (ctx) => {
       const word = ctx.matchBefore(/\w+/)
       if (!word || (word.from === word.to && !ctx.explicit)) return null
+      // after `alias.` / `table.` only columns are meaningful — skip functions
+      if (word.from > 0 && ctx.state.sliceDoc(word.from - 1, word.from) === '.') return null
       return { from: word.from, options }
     }
   }
@@ -99,6 +103,19 @@
     const exts = [base, base.language.data.of({ autocomplete: fnSource(sys) })]
     if (columnSource) exts.push(base.language.data.of({ autocomplete: columnSource }))
     return exts
+  }
+
+  // Tab / Enter acceptance. `acceptCompletion` only fires when an option is
+  // actually selected, but post-dot column completions can open with nothing
+  // selected (selected = -1) — so Tab/Enter would do nothing until you pressed an
+  // arrow key. This selects the first option when none is, then accepts, so a
+  // single Tab/Enter always inserts the suggestion. Returns false when no popup is
+  // open, letting Enter fall through to a normal newline.
+  function acceptOrSelectFirst(view: EditorView): boolean {
+    if (completionStatus(view.state) == null) return false
+    if (acceptCompletion(view)) return true
+    if (moveCompletionSelection(true)(view)) return acceptCompletion(view)
+    return false
   }
 
   function dialectFor(sys: string) {
@@ -237,13 +254,17 @@
             },
           },
           // When the completion popup is open, Tab and Enter both accept the
-          // highlighted suggestion. acceptCompletion returns false when no
-          // completion is active, so Tab then falls through to indentWithTab
-          // (normal indentation) — accepting a suggestion never re-indents or
-          // shifts the line, leaving the query's left/right alignment intact.
+          // highlighted (or, if none, the first) suggestion. acceptOrSelectFirst
+          // returns false when no completion is active, so Tab falls through to
+          // indentWithTab (normal indentation) and Enter to a normal newline —
+          // accepting a suggestion never re-indents or shifts the line.
           {
             key: 'Tab',
-            run: acceptCompletion,
+            run: acceptOrSelectFirst,
+          },
+          {
+            key: 'Enter',
+            run: acceptOrSelectFirst,
           },
           ...closeBracketsKeymap,
           ...completionKeymap,

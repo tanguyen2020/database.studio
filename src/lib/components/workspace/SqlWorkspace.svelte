@@ -176,7 +176,14 @@
   // stays plain so prefix matching still works.
   function identOption(name: string, type: 'type' | 'property'): Completion {
     const q = quoteIfReserved(tab.systemType, name)
-    return q === name ? { label: name, type } : { label: name, apply: q, type }
+    // Boost schema identifiers above lang-sql's keyword completions so the popup
+    // highlights (and Tab/Enter insert) the real table/column — columns rank
+    // highest since they only surface in a column context (after a table/alias).
+    // Must clear the matcher's -100 "not a full match" penalty (a prefix-matched
+    // column would otherwise lose to an exact-match keyword like `or`).
+    const boost = type === 'property' ? 200 : 150
+    const base = { label: name, type, boost }
+    return q === name ? base : { ...base, apply: q }
   }
 
   /** Nested { schema: { table: {self, children:[cols]} } } for lang-sql completion,
@@ -231,10 +238,13 @@
   }
 
   // Completion for `alias.` / `table.` — resolves the prefix against the current
-  // statement's FROM/JOIN clauses, lazily loads that table's columns (the built-in
-  // schema completion can't, because columns are loaded on demand), then suggests
-  // its columns. Complements lang-sql's keyword/table completion.
-  const columnSource: CompletionSource = async (ctx) => {
+  // statement's FROM/JOIN clauses and suggests that table's columns. Columns load
+  // on demand (the built-in schema completion can't lazily fetch them), but this
+  // source stays SYNCHRONOUS: if the columns are cached it returns them right away;
+  // if not, it kicks off the load and returns null (the popup refreshes on the next
+  // keystroke). Returning a Promise here would leave the completion popup in a
+  // pending/disabled state, so Tab/Enter couldn't accept the suggestion.
+  const columnSource: CompletionSource = (ctx) => {
     const cid = acConnId
     if (!cid) return null
     const before = ctx.matchBefore(/[a-zA-Z_][\w$]*\.[\w$]*$/)
@@ -248,9 +258,15 @@
     if (!ref) return null
     const schema = ref.schema ?? schemaOfTable(cid, ref.table)
     if (!schema) return null
-    await explorer.loadTableDetail(cid, schema, ref.table)
-    const cols = explorer.cache[cid]?.bySchema[schema]?.tableDetails[ref.table]?.columns ?? []
+    const cols = explorer.cache[cid]?.bySchema[schema]?.tableDetails[ref.table]?.columns
+    if (!cols) {
+      // not loaded yet → fetch it; a later keystroke (or reopening the popup) shows it
+      void explorer.loadTableDetail(cid, schema, ref.table)
+      return null
+    }
     if (cols.length === 0) return null
+    // boost: after `alias.`/`table.` the columns are what the user wants, so rank
+    // them above the keyword completions lang-sql also offers for the typed prefix.
     return {
       from: before.from + dot + 1,
       options: cols.map((c) => ({ ...identOption(c.name, 'property'), detail: c.data_type })),
