@@ -174,7 +174,10 @@
   // names) get a quoted `apply` so autocomplete inserts e.g. `order` / "order" /
   // [order] — otherwise the query/JOIN would be a syntax error — while the label
   // stays plain so prefix matching still works.
-  function identOption(name: string, type: 'type' | 'property'): Completion {
+  // A completion for one table/column identifier. `detail` is shown right-aligned
+  // and greyed so suggestions read explicitly — the schema/database for a table,
+  // the data type for a column (like DataGrip's completion list).
+  function identOption(name: string, type: 'type' | 'property', detail?: string): Completion {
     const q = quoteIfReserved(tab.systemType, name)
     // Boost schema identifiers above lang-sql's keyword completions so the popup
     // highlights (and Tab/Enter insert) the real table/column — columns rank
@@ -182,12 +185,13 @@
     // Must clear the matcher's -100 "not a full match" penalty (a prefix-matched
     // column would otherwise lose to an exact-match keyword like `or`).
     const boost = type === 'property' ? 200 : 150
-    const base = { label: name, type, boost }
+    const base: Completion = { label: name, type, boost, ...(detail ? { detail } : {}) }
     return q === name ? base : { ...base, apply: q }
   }
 
   /** Nested { schema: { table: {self, children:[cols]} } } for lang-sql completion,
-   *  with reserved identifiers quoted on insert (see identOption). */
+   *  with reserved identifiers quoted on insert (see identOption). Table entries
+   *  show their schema/database and columns show their data type in the list. */
   const completionSchema = $derived.by((): SQLNamespace | undefined => {
     const cid = acConnId
     if (!cid) return undefined
@@ -199,8 +203,8 @@
       for (const t of sc.tables ?? []) {
         const cols = sc.tableDetails[t.name]?.columns ?? []
         tables[t.name] = {
-          self: identOption(t.name, 'type'),
-          children: cols.map((c) => identOption(c.name, 'property')),
+          self: identOption(t.name, 'type', schemaName),
+          children: cols.map((c) => identOption(c.name, 'property', c.data_type)),
         }
       }
       ns[schemaName] = tables

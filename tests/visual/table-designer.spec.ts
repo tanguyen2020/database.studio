@@ -113,6 +113,56 @@ test('table designer: attribute tabs + index in DDL + Ctrl+S saves', async ({ pa
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
 
+// Fields grid convenience: a "#" column, ArrowDown/Tab off a filled last row opens
+// a fresh row for entry (never a second empty one), and rows drag-reorder.
+test('table designer: # column, ArrowDown auto-appends a field row, drag reorders', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(String(e)))
+  await blockRemoteFonts(page)
+  await page.goto(APP_URL)
+  await page.waitForSelector('#app > *', { timeout: 15_000 })
+  await page.waitForTimeout(300)
+  await page.getByRole('button', { name: /Postgres/ }).first().click()
+  await page.waitForTimeout(500)
+  await page.getByTitle('New table').first().click()
+  await page.waitForTimeout(300)
+
+  // the "#" reorder column is present
+  await expect(page.getByRole('columnheader', { name: '#', exact: true }).first()).toBeVisible()
+
+  const rows = page.locator('tbody tr')
+  await expect(rows).toHaveCount(1) // seeded id PK row (has data)
+
+  // ArrowDown from the filled row appends a new empty row and focuses it
+  await rows.nth(0).locator('input').first().click() // id name input
+  await page.keyboard.press('ArrowDown')
+  await page.waitForTimeout(150)
+  await expect(rows).toHaveCount(2)
+
+  // ArrowDown on the still-empty last row must NOT open a second empty row
+  await page.keyboard.press('ArrowDown')
+  await page.waitForTimeout(150)
+  await expect(rows).toHaveCount(2)
+
+  // once the row has data, ArrowDown appends again
+  await page.keyboard.type('email')
+  await page.keyboard.press('ArrowDown')
+  await page.waitForTimeout(150)
+  await expect(rows).toHaveCount(3)
+
+  // drag the 'email' row (#2) onto the id row (#1) → email comes first in the DDL
+  const emailHandle = rows.nth(1).locator('td').first()
+  const idHandle = rows.nth(0).locator('td').first()
+  await emailHandle.dragTo(idHandle)
+  await page.waitForTimeout(150)
+  await page.getByText('Scripts', { exact: true }).first().click()
+  await page.waitForTimeout(200)
+  const ddl = await page.getByText(/CREATE TABLE/).first().innerText()
+  expect(ddl.indexOf('"email"')).toBeLessThan(ddl.indexOf('"id"'))
+
+  expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
+})
+
 // Task 4: designing an EXISTING table lets you drop objects across tabs — the ×
 // on an existing column marks it dropped (strikethrough) and the Scripts preview
 // emits an ALTER … DROP COLUMN.

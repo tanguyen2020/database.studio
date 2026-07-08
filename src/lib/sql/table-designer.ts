@@ -268,8 +268,11 @@ export function buildTableDdl(system: string, model: TableModel, isNew: boolean)
   const fkName = (f: DesignForeignKey, i: number) => f.name || `fk_${tbl}_${f.columns.join('_') || i + 1}`
 
   if (isNew) {
-    const lines = model.columns.map((c) => `  ${columnDef(system, c)}`)
-    const pkCols = model.columns.filter((c) => c.pk).map((c) => q(c.name || 'column'))
+    // Skip blank trailing rows (the designer keeps one empty row for quick entry).
+    // Column order follows the model array, so drag-to-reorder is preserved here.
+    const createCols = model.columns.filter((c) => c.name.trim() && !c.dropped)
+    const lines = createCols.map((c) => `  ${columnDef(system, c)}`)
+    const pkCols = createCols.filter((c) => c.pk).map((c) => q(c.name))
     if (!isCh && pkCols.length) lines.push(`  PRIMARY KEY (${pkCols.join(', ')})`)
     if (!isCh) {
       model.uniques.forEach((u, i) => u.columns.length && lines.push(`  CONSTRAINT ${q(uqName(u, i))} UNIQUE (${u.columns.map(q).join(', ')})`))
@@ -296,7 +299,7 @@ export function buildTableDdl(system: string, model: TableModel, isNew: boolean)
 
     let create = `CREATE TABLE ${t} (\n${lines.join(',\n')}\n)`
     if (isCh) {
-      const ck = model.columns.filter((c) => c.pk).map((c) => q(c.name || 'column'))
+      const ck = createCols.filter((c) => c.pk).map((c) => q(c.name))
       create += `\nENGINE = MergeTree`
       if (pc?.clause) create += `\n${pc.clause}` // PARTITION BY expr (before ORDER BY)
       create += `\nORDER BY ${ck.length ? `(${ck.join(', ')})` : 'tuple()'}`

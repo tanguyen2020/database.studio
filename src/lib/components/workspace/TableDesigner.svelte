@@ -3,7 +3,7 @@
   // Fields · Indexes · Foreign Keys · Uniques · Checks · Triggers. Save (Ctrl/Cmd+S
   // or the button) runs dialect-correct DDL: a full CREATE for a new table, or
   // ALTER/CREATE for the objects added to an existing one (see sql/table-designer).
-  import { untrack } from 'svelte'
+  import { tick, untrack } from 'svelte'
   import * as ipc from '$lib/ipc'
   import { connections } from '$lib/stores/connections.svelte'
   import { explorer } from '$lib/stores/explorer.svelte'
@@ -333,6 +333,56 @@
   }
   const addCol = () => (cols = [...cols, blankCol()])
   const delCol = (i: number) => (cols = removeOrDrop(cols, i))
+
+  // ---- Fields grid: keyboard row-append + navigation + drag-reorder ----------
+  // A row "has data" once its name is filled — used to decide whether Tab/Down at
+  // the last row should open a fresh row (never a second empty one).
+  const rowHasData = (c: DesignColumn) => c.name.trim() !== ''
+  // Focus a specific cell input by (row, column) — ids are namespaced per tab so
+  // split panes don't collide.
+  function focusCell(row: number, colKey: 'name' | 'len' | 'dflt') {
+    const el = document.getElementById(`tdf-${tab.id}-${row}-${colKey}`) as HTMLInputElement | null
+    el?.focus()
+    el?.select?.()
+  }
+  async function appendAndFocus(colKey: 'name' | 'len' | 'dflt') {
+    addCol()
+    await tick()
+    focusCell(cols.length - 1, colKey)
+  }
+  // Down/Up move between rows on the same column; at the last row, Down (or Tab
+  // off the last field) appends a new row when the current row has data.
+  async function fieldKey(e: KeyboardEvent, i: number, colKey: 'name' | 'len' | 'dflt') {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      if (i >= cols.length - 1) {
+        if (rowHasData(cols[i])) await appendAndFocus(colKey)
+      } else {
+        focusCell(i + 1, colKey)
+      }
+    } else if (e.key === 'ArrowUp') {
+      if (i > 0) {
+        e.preventDefault()
+        focusCell(i - 1, colKey)
+      }
+    } else if (e.key === 'Tab' && !e.shiftKey && colKey === 'dflt' && i === cols.length - 1 && rowHasData(cols[i])) {
+      e.preventDefault()
+      await appendAndFocus('name')
+    }
+  }
+  // Drag a row by its "#" handle to reorder columns; order is what Save emits.
+  let dragRow = $state<number | null>(null)
+  function moveCol(from: number | null, to: number) {
+    if (from == null || from === to) {
+      dragRow = null
+      return
+    }
+    const next = [...cols]
+    const [item] = next.splice(from, 1)
+    next.splice(to, 0, item)
+    cols = next
+    dragRow = null
+  }
   const addIndex = () => (indexes = [...indexes, { name: '', columns: [], method: '' }])
   const delIndex = (i: number) => (indexes = removeOrDrop(indexes, i))
   const addFk = () => (fks = [...fks, { name: '', columns: [], refTable: '', refColumns: [], onDelete: '', onUpdate: '' }])
@@ -423,23 +473,36 @@
       {#if activeTab === 'fields'}
         <table style="border-collapse:collapse;width:100%;font-size:var(--px-12_5)">
           <thead><tr>
-            {#each [['Column', ''], ['Type', 'width:var(--px-160)'], ['Length', 'width:var(--px-90)'], ['PK', 'width:var(--px-60);text-align:center'], ['Nullable', 'width:var(--px-70);text-align:center'], ['Default', 'width:var(--px-150)'], ['', 'width:var(--px-42)']] as [h, extra] (h + extra)}
+            {#each [['#', 'width:var(--px-42);text-align:center'], ['Column', ''], ['Type', 'width:var(--px-160)'], ['Length', 'width:var(--px-90)'], ['PK', 'width:var(--px-60);text-align:center'], ['Nullable', 'width:var(--px-70);text-align:center'], ['Default', 'width:var(--px-150)'], ['', 'width:var(--px-42)']] as [h, extra] (h + extra)}
               <th style="position:sticky;top:0;background:var(--header);border-bottom:var(--px-1) solid var(--border2);padding:var(--px-8) var(--px-12);text-align:left;color:var(--text2);font-weight:600;{extra}">{h}</th>
             {/each}
           </tr></thead>
           <tbody>
-            {#each cols as col, i (i)}
-              <tr style={col.dropped ? 'opacity:0.5;text-decoration:line-through' : ''}>
-                <td style="border-bottom:var(--px-1) solid var(--border);padding:0"><input bind:value={col.name} class="mono" style="width:100%;border:none;background:transparent;color:var(--text);font-size:var(--px-12_5);padding:var(--px-7) var(--px-12);outline:none" /></td>
+            {#each cols as col, i (col)}
+              <tr
+                style={`${col.dropped ? 'opacity:0.5;text-decoration:line-through;' : ''}${dragRow === i ? 'background:var(--hover);' : ''}`}
+                ondragover={(e) => { e.preventDefault() }}
+                ondrop={(e) => { e.preventDefault(); moveCol(dragRow, i) }}
+              >
+                <!-- # drag handle: reorder rows; the row order is what Save emits -->
+                <td
+                  draggable="true"
+                  ondragstart={() => (dragRow = i)}
+                  ondragend={() => (dragRow = null)}
+                  title="Drag to reorder"
+                  style="border-bottom:var(--px-1) solid var(--border);text-align:center;color:var(--muted);font-size:var(--px-11);cursor:grab;user-select:none"
+                  class="mono"
+                >⋮⋮ {i + 1}</td>
+                <td style="border-bottom:var(--px-1) solid var(--border);padding:0"><input id={`tdf-${tab.id}-${i}-name`} bind:value={col.name} onkeydown={(e) => fieldKey(e, i, 'name')} class="mono" style="width:100%;border:none;background:transparent;color:var(--text);font-size:var(--px-12_5);padding:var(--px-7) var(--px-12);outline:none" /></td>
                 <td style="border-bottom:var(--px-1) solid var(--border);padding:0;position:relative">
                   <!-- searchable type dropdown showing the full per-engine catalog
                        (custom combobox — reliable in WebView2, unlike <datalist>). -->
                   <TypeSelect bind:value={col.type} options={types} placeholder="type…" />
                 </td>
-                <td style="border-bottom:var(--px-1) solid var(--border);padding:0"><input bind:value={col.len} class="mono" style="width:100%;border:none;background:transparent;color:var(--text2);font-size:var(--px-12);padding:var(--px-7) var(--px-12);outline:none" /></td>
+                <td style="border-bottom:var(--px-1) solid var(--border);padding:0"><input id={`tdf-${tab.id}-${i}-len`} bind:value={col.len} onkeydown={(e) => fieldKey(e, i, 'len')} class="mono" style="width:100%;border:none;background:transparent;color:var(--text2);font-size:var(--px-12);padding:var(--px-7) var(--px-12);outline:none" /></td>
                 <td style="border-bottom:var(--px-1) solid var(--border);text-align:center"><span onclick={() => (col.pk = !col.pk)} onkeydown={(e) => e.key === 'Enter' && (col.pk = !col.pk)} role="button" tabindex="0" style="display:inline-flex;width:var(--px-18);height:var(--px-18);border:var(--px-1) solid var(--border2);border-radius:var(--px-5);align-items:center;justify-content:center;cursor:pointer;background:{col.pk ? 'var(--primary)' : 'transparent'};color:var(--hex-fff);font-size:var(--px-11)">{col.pk ? '✓' : ''}</span></td>
                 <td style="border-bottom:var(--px-1) solid var(--border);text-align:center"><span onclick={() => (col.nullable = !col.nullable)} onkeydown={(e) => e.key === 'Enter' && (col.nullable = !col.nullable)} role="button" tabindex="0" style="display:inline-flex;width:var(--px-18);height:var(--px-18);border:var(--px-1) solid var(--border2);border-radius:var(--px-5);align-items:center;justify-content:center;cursor:pointer;background:{col.nullable ? 'var(--primary)' : 'transparent'};color:var(--hex-fff);font-size:var(--px-11)">{col.nullable ? '✓' : ''}</span></td>
-                <td style="border-bottom:var(--px-1) solid var(--border);padding:0"><input bind:value={col.dflt} class="mono" style="width:100%;border:none;background:transparent;color:var(--syntax-string);font-size:var(--px-12);padding:var(--px-7) var(--px-12);outline:none" /></td>
+                <td style="border-bottom:var(--px-1) solid var(--border);padding:0"><input id={`tdf-${tab.id}-${i}-dflt`} bind:value={col.dflt} onkeydown={(e) => fieldKey(e, i, 'dflt')} class="mono" style="width:100%;border:none;background:transparent;color:var(--syntax-string);font-size:var(--px-12);padding:var(--px-7) var(--px-12);outline:none" /></td>
                 <td style="border-bottom:var(--px-1) solid var(--border);text-align:center"><span onclick={() => delCol(i)} onkeydown={(e) => e.key === 'Enter' && delCol(i)} role="button" tabindex="0" title={col.existing ? (col.dropped ? 'Restore column' : 'Drop column') : 'Remove column'} style="cursor:pointer;color:{col.dropped ? 'var(--success)' : 'var(--muted)'};font-size:var(--px-14)">{col.dropped ? '↺' : '×'}</span></td>
               </tr>
             {/each}

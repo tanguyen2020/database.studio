@@ -41,6 +41,44 @@ describe('columnDef', () => {
   })
 })
 
+describe('buildTableDdl — new table column handling', () => {
+  it('skips a trailing blank row (the designer keeps one empty row for entry)', () => {
+    const { statements } = buildTableDdl(
+      'postgres',
+      model({
+        table: 't',
+        columns: [
+          { name: 'id', type: 'int4', len: '', pk: true, nullable: false, dflt: '' },
+          { name: 'name', type: 'text', len: '', pk: false, nullable: true, dflt: '' },
+          { name: '', type: 'int4', len: '', pk: false, nullable: true, dflt: '' }, // blank → skipped
+        ],
+      }),
+      true,
+    )
+    const create = statements[0]
+    expect(create).toContain('"id" int4')
+    expect(create).toContain('"name" text')
+    // only the two real columns are emitted (blank row skipped, in order)
+    const colDefs = [...create.matchAll(/^\s+"(\w+)"\s+\w+/gm)].map((m) => m[1])
+    expect(colDefs).toEqual(['id', 'name'])
+  })
+
+  it('emits columns in model (drag-reorder) order', () => {
+    const { statements } = buildTableDdl(
+      'postgres',
+      model({
+        table: 't',
+        columns: [
+          { name: 'b', type: 'int4', len: '', pk: false, nullable: true, dflt: '' },
+          { name: 'a', type: 'int4', len: '', pk: false, nullable: true, dflt: '' },
+        ],
+      }),
+      true,
+    )
+    expect(statements[0].indexOf('"b"')).toBeLessThan(statements[0].indexOf('"a"'))
+  })
+})
+
 describe('buildTableDdl — partitioning (new table)', () => {
   it('postgres: appends PARTITION BY and CREATE TABLE … PARTITION OF children', () => {
     const { statements } = buildTableDdl(

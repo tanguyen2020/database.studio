@@ -31,6 +31,8 @@ test('suggests tables of the connected database', async ({ page }) => {
   await openSqlTab(page)
   const list = await completionsFor(page, 'SELECT * FROM stu')
   expect(list).toContain('students')
+  // the suggestion is explicit: the table's schema/database shows as a qualifier
+  await expect(page.locator('.cm-tooltip-autocomplete .cm-completionDetail').first()).toHaveText('public')
 })
 
 test('suggests tables after switching the database', async ({ page }) => {
