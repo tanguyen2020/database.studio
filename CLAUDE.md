@@ -334,3 +334,9 @@ Người dùng: Delete stream trong NATS Explorer không xóa trên server NATS 
 - **Frontend deterministic refresh**: `deleteStream` sau khi xóa **await `explorer.loadStreaming(id,'nats',true)`** (thay `refreshStreaming` fire-and-forget) → cây sidebar phản ánh đúng state server ngay.
 - **Integration** `nats_delete_stream_persists_on_server_after_reconnect` (nats `-js`): create DELME → delete → **reconnect client MỚI** → `js_streams` KHÔNG còn DELME (chứng minh xóa trên SERVER, không phải chỉ view local). Regression `nats_jetstream_streams_consumers_peek` (delete T9S qua success-check) EXIT=0.
 - Gates: check 0/0, e2e streaming-explorer 9/9, integration `nats_delete_stream_persists…` + `nats_jetstream_streams_consumers_peek` EXIT=0, rust lib build OK.
+
+## FIX — Query Editor: suggest columns của bảng trong FROM (kể cả bare, không cần alias.)
+Người dùng: chọn column trong table chưa được suggest. Trước đó `columnSource` CHỈ gợi ý cột sau `alias.`/`table.` (có dấu chấm); gõ cột TRẦN trong SELECT/WHERE (không qualifier) KHÔNG có cột nào — chỉ table/keyword/function. Fix `SqlWorkspace.columnSource` thành 2 nhánh (đều resolve theo FROM/JOIN của statement — `parseTableRefs` thấy FROM cả khi nó nằm SAU con trỏ `SELECT ▮ FROM t`):
+- **Case 1** (giữ): sau `alias.`/`table.` → cột của đúng bảng đó.
+- **Case 2 (MỚI)**: identifier trần → gộp cột của MỌI bảng trong FROM/JOIN (như DataGrip). Chỉ bắn khi có ≥1 bảng FROM; nhiều bảng → detail hiện `alias · type` để biết cột thuộc bảng nào; dedup theo `qualifier.col`. Cột nạp lazy qua helper `colsOf` (cache → trả ngay; chưa có → kick off `loadTableDetail` + trả null, popup refresh ở phím kế). Sync (không trả Promise) để Tab/Enter accept được.
+- e2e `editor-autocomplete.spec.ts` +2: `SELECT * FROM students WHERE students.` → `first_name`; bare `SELECT * FROM students WHERE fi`+`r` → `first_name`. Gates: check 0/0, vitest 463, e2e editor-autocomplete 6/6.

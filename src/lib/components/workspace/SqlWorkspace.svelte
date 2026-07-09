@@ -241,41 +241,78 @@
     return def
   }
 
-  // Completion for `alias.` / `table.` — resolves the prefix against the current
-  // statement's FROM/JOIN clauses and suggests that table's columns. Columns load
-  // on demand (the built-in schema completion can't lazily fetch them), but this
-  // source stays SYNCHRONOUS: if the columns are cached it returns them right away;
-  // if not, it kicks off the load and returns null (the popup refreshes on the next
-  // keystroke). Returning a Promise here would leave the completion popup in a
-  // pending/disabled state, so Tab/Enter couldn't accept the suggestion.
+  /** Cached columns of a table, or `null` after kicking off a lazy load. The built-in
+   *  schema completion can't fetch on demand, so column sources load here and the
+   *  popup refreshes on the next keystroke. */
+  function colsOf(cid: string, schema: string, table: string): { name: string; data_type: string }[] | null {
+    const cols = explorer.cache[cid]?.bySchema[schema]?.tableDetails[table]?.columns
+    if (!cols) {
+      void explorer.loadTableDetail(cid, schema, table)
+      return null
+    }
+    return cols
+  }
+
+  // Column completion. Two cases, both resolved against the current statement's
+  // FROM/JOIN clauses (which `parseTableRefs` finds even when they sit AFTER the
+  // cursor, e.g. `SELECT ▮ FROM users`). Columns load on demand; the source stays
+  // SYNCHRONOUS (returns cached columns now, else kicks off the load + returns null —
+  // a Promise would leave the popup pending so Tab/Enter couldn't accept).
   const columnSource: CompletionSource = (ctx) => {
     const cid = acConnId
     if (!cid) return null
-    const before = ctx.matchBefore(/[a-zA-Z_][\w$]*\.[\w$]*$/)
-    if (!before) return null
-    const dot = before.text.lastIndexOf('.')
-    const prefix = before.text.slice(0, dot)
     const doc = ctx.state.doc.toString()
     const stmt = statementAtOffset(doc, ctx.pos)
     const refs = parseTableRefs(stmt?.sql ?? doc)
-    const ref = resolveRef(refs, prefix)
-    if (!ref) return null
-    const schema = ref.schema ?? schemaOfTable(cid, ref.table)
-    if (!schema) return null
-    const cols = explorer.cache[cid]?.bySchema[schema]?.tableDetails[ref.table]?.columns
-    if (!cols) {
-      // not loaded yet → fetch it; a later keystroke (or reopening the popup) shows it
-      void explorer.loadTableDetail(cid, schema, ref.table)
-      return null
+
+    // Case 1 — after `alias.` / `table.` → that one table's columns.
+    const dotted = ctx.matchBefore(/[a-zA-Z_][\w$]*\.[\w$]*$/)
+    if (dotted) {
+      const dot = dotted.text.lastIndexOf('.')
+      const ref = resolveRef(refs, dotted.text.slice(0, dot))
+      if (!ref) return null
+      const schema = ref.schema ?? schemaOfTable(cid, ref.table)
+      if (!schema) return null
+      const cols = colsOf(cid, schema, ref.table)
+      if (!cols || cols.length === 0) return null
+      return {
+        from: dotted.from + dot + 1,
+        options: cols.map((c) => ({ ...identOption(c.name, 'property'), detail: c.data_type })),
+        validFor: /^[\w$]*$/,
+      }
     }
-    if (cols.length === 0) return null
-    // boost: after `alias.`/`table.` the columns are what the user wants, so rank
-    // them above the keyword completions lang-sql also offers for the typed prefix.
-    return {
-      from: before.from + dot + 1,
-      options: cols.map((c) => ({ ...identOption(c.name, 'property'), detail: c.data_type })),
-      validFor: /^[\w$]*$/,
+
+    // Case 2 — a bare identifier (no qualifier) → columns of EVERY table referenced
+    // by the statement (SELECT/WHERE/ORDER BY … suggest the FROM tables' columns, the
+    // way DataGrip does). Only fires once there is at least one FROM/JOIN table.
+    if (refs.length === 0) return null
+    const word = ctx.matchBefore(/[\w$]*$/)
+    if (!word || (word.from === word.to && !ctx.explicit)) return null
+    // don't fire right after a dot (handled by case 1) or a digit-only token
+    if (word.from > 0 && ctx.state.sliceDoc(word.from - 1, word.from) === '.') return null
+    const seen = new Set<string>()
+    const options: Completion[] = []
+    let anyLoaded = false
+    for (const r of refs) {
+      const schema = r.schema ?? schemaOfTable(cid, r.table)
+      if (!schema) continue
+      const cols = colsOf(cid, schema, r.table)
+      if (!cols) continue
+      anyLoaded = true
+      const qualifier = r.alias ?? r.table
+      for (const c of cols) {
+        const key = `${qualifier}.${c.name}`
+        if (seen.has(key)) continue
+        seen.add(key)
+        options.push({
+          ...identOption(c.name, 'property'),
+          // when several tables are in play, show which one each column belongs to
+          detail: refs.length > 1 ? `${qualifier} · ${c.data_type}` : c.data_type,
+        })
+      }
     }
+    if (!anyLoaded || options.length === 0) return null
+    return { from: word.from, options, validFor: /^[\w$]*$/ }
   }
 
   // ---- lint tầng 1 (phase-2 §2b): backend parse-only + schema-aware client ----

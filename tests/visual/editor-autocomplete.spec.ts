@@ -104,3 +104,32 @@ test('PostgreSQL: reserved word double-quoted, MySQL-only keyword left bare', as
   expect(scheduled).toContain('schedule')
   expect(scheduled).not.toContain('"schedule"')
 })
+
+// ---- column completion: the FROM table's columns must be suggested -----------
+// Columns load lazily, so the pattern is: type up to the trigger (kicks off the
+// load), wait, then type one more char to reopen the popup with columns cached.
+async function columnPopup(page: import('@playwright/test').Page, text: string, extra: string) {
+  await page.locator('.cm-content').first().click()
+  await page.keyboard.press('Control+A')
+  await page.keyboard.press('Delete')
+  await page.keyboard.type(text)
+  await page.waitForTimeout(700) // lazy column load kicks off + resolves
+  await page.keyboard.type(extra) // re-open the popup, columns now cached
+  await page.waitForTimeout(500)
+  const tip = page.locator('.cm-tooltip-autocomplete')
+  await expect(tip).toBeVisible({ timeout: 3000 })
+  return tip.innerText()
+}
+
+test('suggests a table\'s columns after `table.`', async ({ page }) => {
+  await openSqlTab(page)
+  const list = await columnPopup(page, 'SELECT * FROM students WHERE students.', 'f')
+  expect(list).toContain('first_name')
+})
+
+test('suggests the FROM table columns for a bare identifier (no qualifier)', async ({ page }) => {
+  await openSqlTab(page)
+  // a bare word in the statement — with `FROM students` present — offers its columns
+  const list = await columnPopup(page, 'SELECT * FROM students WHERE fi', 'r')
+  expect(list).toContain('first_name')
+})
