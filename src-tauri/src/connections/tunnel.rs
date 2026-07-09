@@ -30,6 +30,10 @@ use crate::error::{AppError, AppResult};
 
 /// Kafka Metadata API key.
 const API_KEY_METADATA: i16 = 3;
+/// Kafka FindCoordinator API key — its response carries the group/txn coordinator's
+/// host:port, which must also be rewritten to loop back through the tunnel (else
+/// librdkafka dials the broker's real advertised address directly and stalls).
+const API_KEY_FIND_COORDINATOR: i16 = 10;
 /// Guard against absurd frame sizes (protocol desync / non-Kafka traffic).
 const MAX_FRAME: usize = 100 * 1024 * 1024;
 
@@ -236,6 +240,20 @@ where
                             }
                             None if trace => eprintln!(
                                 "kafka-proxy[{cid}] <- Metadata corr={corr} v={api_version}: REWRITE FAILED (parse) — forwarding unchanged"
+                            ),
+                            None => {}
+                        }
+                    }
+                    Some((API_KEY_FIND_COORDINATOR, api_version)) => {
+                        match rewrite_findcoordinator_response(&frame, api_version, "127.0.0.1", local_port as i32) {
+                            Some(rw) => {
+                                if trace {
+                                    eprintln!("kafka-proxy[{cid}] <- FindCoordinator corr={corr}: rewrote coordinator address -> 127.0.0.1:{local_port}");
+                                }
+                                frame = rw;
+                            }
+                            None if trace => eprintln!(
+                                "kafka-proxy[{cid}] <- FindCoordinator corr={corr} v={api_version}: REWRITE FAILED (parse) — forwarding unchanged"
                             ),
                             None => {}
                         }
@@ -447,6 +465,122 @@ fn rewrite_metadata_response(
     Some(out)
 }
 
+// --- string / tagged-field helpers for FindCoordinator rewriting ------------
+
+/// Copy a (compact|classic) [nullable] string verbatim from `payload` into `out`,
+/// advancing `i`. Handles null (classic len -1 / compact len 0) and empty.
+fn copy_str(payload: &[u8], i: &mut usize, out: &mut Vec<u8>, compact: bool) -> Option<()> {
+    let start = *i;
+    if compact {
+        let l = read_uvarint(payload, i)?;
+        if l > 1 {
+            *i += (l - 1) as usize;
+        }
+    } else {
+        let l = read_i16(payload, i)?;
+        if l > 0 {
+            *i += l as usize;
+        }
+    }
+    out.extend_from_slice(payload.get(start..*i)?);
+    Some(())
+}
+
+/// Skip the original (compact|classic) string in `payload`, writing `new` (non-null)
+/// into `out` in the same encoding. Advances `i` past the original.
+fn put_str(payload: &[u8], i: &mut usize, out: &mut Vec<u8>, compact: bool, new: &str) -> Option<()> {
+    if compact {
+        let l = read_uvarint(payload, i)?;
+        if l > 1 {
+            *i += (l - 1) as usize;
+        }
+        write_uvarint(out, new.len() as u64 + 1);
+    } else {
+        let l = read_i16(payload, i)?;
+        if l > 0 {
+            *i += l as usize;
+        }
+        out.extend_from_slice(&(new.len() as i16).to_be_bytes());
+    }
+    out.extend_from_slice(new.as_bytes());
+    Some(())
+}
+
+/// Copy `n` bytes verbatim from `payload` into `out`, advancing `i`.
+fn copy_n(payload: &[u8], i: &mut usize, out: &mut Vec<u8>, n: usize) -> Option<()> {
+    out.extend_from_slice(payload.get(*i..*i + n)?);
+    *i += n;
+    Some(())
+}
+
+/// Copy a flexible tagged-fields buffer verbatim.
+fn copy_tagged(payload: &[u8], i: &mut usize, out: &mut Vec<u8>) -> Option<()> {
+    let s = *i;
+    skip_tagged_fields(payload, i)?;
+    out.extend_from_slice(payload.get(s..*i)?);
+    Some(())
+}
+
+/// Rewrite the coordinator host:port in a FindCoordinator response so it points at
+/// the tunnel (`new_host:new_port`). Layout per version:
+///  - v0: error_code, node_id, host, port
+///  - v1/v2: throttle_time_ms, error_code, error_message, node_id, host, port
+///  - v3: as v2 but flexible (compact strings + tagged fields) with a v1 response header
+///  - v4: throttle_time_ms, coordinators[] { key, node_id, host, port, error_code,
+///        error_message, tagged }, tagged — flexible.
+/// Non-host/port fields are copied verbatim; only host+port are substituted.
+fn rewrite_findcoordinator_response(
+    payload: &[u8],
+    api_version: i16,
+    new_host: &str,
+    new_port: i32,
+) -> Option<Vec<u8>> {
+    let flexible = api_version >= 3;
+    let mut i = 4usize; // correlation id
+    if flexible {
+        skip_tagged_fields(payload, &mut i)?; // response header v1 tagged fields
+    }
+    let mut out = payload[..i].to_vec();
+
+    if api_version >= 1 {
+        copy_n(payload, &mut i, &mut out, 4)?; // throttle_time_ms
+    }
+
+    if api_version >= 4 {
+        // coordinators array (compact when flexible, which v4 always is)
+        let n = read_uvarint(payload, &mut i)?;
+        write_uvarint(&mut out, n);
+        let count = if n == 0 { 0 } else { (n - 1) as usize };
+        for _ in 0..count {
+            copy_str(payload, &mut i, &mut out, true)?; // key
+            copy_n(payload, &mut i, &mut out, 4)?; // node_id
+            put_str(payload, &mut i, &mut out, true, new_host)?; // host → tunnel
+            i += 4;
+            out.extend_from_slice(&new_port.to_be_bytes()); // port → tunnel
+            copy_n(payload, &mut i, &mut out, 2)?; // error_code
+            copy_str(payload, &mut i, &mut out, true)?; // error_message (nullable)
+            copy_tagged(payload, &mut i, &mut out)?; // per-coordinator tagged fields
+        }
+        copy_tagged(payload, &mut i, &mut out)?; // top-level tagged fields
+    } else {
+        // single coordinator
+        copy_n(payload, &mut i, &mut out, 2)?; // error_code
+        if api_version >= 1 {
+            copy_str(payload, &mut i, &mut out, flexible)?; // error_message (nullable)
+        }
+        copy_n(payload, &mut i, &mut out, 4)?; // node_id
+        put_str(payload, &mut i, &mut out, flexible, new_host)?; // host → tunnel
+        i += 4;
+        out.extend_from_slice(&new_port.to_be_bytes()); // port → tunnel
+        if flexible {
+            copy_tagged(payload, &mut i, &mut out)?; // v3 tagged fields
+        }
+    }
+    // Copy any trailing bytes (defensive; normally none).
+    out.extend_from_slice(payload.get(i..)?);
+    Some(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -575,5 +709,81 @@ mod tests {
             ]
         );
         assert_eq!(out[out.len() - 1], 0x99);
+    }
+
+    // --- FindCoordinator rewrite (the bug: coordinator address wasn't rewritten) ---
+
+    fn has(hay: &[u8], needle: &[u8]) -> bool {
+        hay.windows(needle.len()).any(|w| w == needle)
+    }
+    fn cstr(out: &mut Vec<u8>, s: &str) {
+        write_uvarint(out, s.len() as u64 + 1);
+        out.extend_from_slice(s.as_bytes());
+    }
+
+    #[test]
+    fn findcoordinator_v2_rewrites_coordinator_addr() {
+        // corr, throttle, error_code, error_message(null=-1), node_id, host, port
+        let mut p = Vec::new();
+        p.extend_from_slice(&99i32.to_be_bytes()); // corr
+        p.extend_from_slice(&0i32.to_be_bytes()); // throttle
+        p.extend_from_slice(&0i16.to_be_bytes()); // error_code
+        p.extend_from_slice(&(-1i16).to_be_bytes()); // error_message = null
+        p.extend_from_slice(&1i32.to_be_bytes()); // node_id
+        p.extend_from_slice(&("10.16.71.3".len() as i16).to_be_bytes());
+        p.extend_from_slice(b"10.16.71.3"); // host
+        p.extend_from_slice(&9092i32.to_be_bytes()); // port
+
+        let out = rewrite_findcoordinator_response(&p, 2, "127.0.0.1", 64045).expect("rewrite v2");
+        // node_id preserved (bytes 12..16), host + port substituted
+        assert_eq!(&out[12..16], &1i32.to_be_bytes());
+        let hl = i16::from_be_bytes([out[16], out[17]]) as usize;
+        assert_eq!(&out[18..18 + hl], b"127.0.0.1");
+        let port = i32::from_be_bytes([out[18 + hl], out[19 + hl], out[20 + hl], out[21 + hl]]);
+        assert_eq!(port, 64045);
+        assert!(!has(&out, b"10.16.71.3"), "old coordinator host must be gone");
+    }
+
+    #[test]
+    fn findcoordinator_v3_flexible_rewrites() {
+        // v3: header tagged, throttle, error_code, error_message(compact null=0),
+        // node_id, host(compact), port, tagged
+        let mut p = Vec::new();
+        p.extend_from_slice(&7i32.to_be_bytes()); // corr
+        p.push(0x00); // response header tagged fields (empty)
+        p.extend_from_slice(&0i32.to_be_bytes()); // throttle
+        p.extend_from_slice(&0i16.to_be_bytes()); // error_code
+        p.push(0x00); // error_message = compact null
+        p.extend_from_slice(&1i32.to_be_bytes()); // node_id
+        cstr(&mut p, "kafka"); // host (compact)
+        p.extend_from_slice(&9092i32.to_be_bytes()); // port
+        p.push(0x00); // tagged fields
+
+        let out = rewrite_findcoordinator_response(&p, 3, "127.0.0.1", 64045).expect("rewrite v3");
+        assert!(has(&out, b"127.0.0.1") && !has(&out, b"kafka"), "coordinator host rewritten");
+        assert!(has(&out, &64045i32.to_be_bytes()), "coordinator port rewritten");
+    }
+
+    #[test]
+    fn findcoordinator_v4_batched_rewrites_each() {
+        // v4: header tagged, throttle, coordinators[compact array], top tagged
+        let mut p = Vec::new();
+        p.extend_from_slice(&5i32.to_be_bytes()); // corr
+        p.push(0x00); // header tagged
+        p.extend_from_slice(&0i32.to_be_bytes()); // throttle
+        write_uvarint(&mut p, 2); // 1 coordinator (compact count = n+1)
+        cstr(&mut p, "mygroup"); // key
+        p.extend_from_slice(&1i32.to_be_bytes()); // node_id
+        cstr(&mut p, "10.16.71.3"); // host
+        p.extend_from_slice(&9092i32.to_be_bytes()); // port
+        p.extend_from_slice(&0i16.to_be_bytes()); // error_code
+        p.push(0x00); // error_message compact null
+        p.push(0x00); // per-coord tagged
+        p.push(0x00); // top-level tagged
+
+        let out = rewrite_findcoordinator_response(&p, 4, "127.0.0.1", 64045).expect("rewrite v4");
+        assert!(has(&out, b"mygroup"), "coordinator key preserved");
+        assert!(has(&out, b"127.0.0.1") && !has(&out, b"10.16.71.3"), "coordinator host rewritten");
+        assert!(has(&out, &64045i32.to_be_bytes()), "coordinator port rewritten");
     }
 }

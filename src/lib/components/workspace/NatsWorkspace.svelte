@@ -30,6 +30,11 @@
 
   // panel: '' = monitor (subscribe), 'js' = JetStream, 'kv' = KV, 'obj' = Object
   let panel = $state<'' | 'js' | 'kv' | 'obj'>('')
+  // JetStream button ref — focused on mount (task: double-click NATS connection).
+  let jsBtn = $state<HTMLElement | null>(null)
+  function captureJs(node: HTMLElement, isJs: boolean) {
+    if (isJs) jsBtn = node
+  }
   const jsMode = $derived(panel === 'js')
   let jsStreams = $state<ipc.NatsJsStream[]>([])
   let jsSel = $state<string | null>(null)
@@ -55,6 +60,10 @@
   }
 
   onMount(async () => {
+    // Open the JetStream panel (and focus its button) when the NATS tab opens
+    // via double-click on the connection, so streams show immediately.
+    void setPanel('js')
+    requestAnimationFrame(() => jsBtn?.focus())
     if (!tab.connectionId) return
     info = await ipc.natsInfo(tab.connectionId).catch(() => null)
     if (!IS_TAURI) return
@@ -241,7 +250,7 @@
     <div style="margin-left:auto;display:flex;gap:var(--px-8);align-items:center">
       {#if info}<span class="mono" style="font-size:var(--px-10_5);color:var(--muted)">NATS {info.version} · {info.server_name}</span>{/if}
       {#each [['js', 'JetStream'], ['kv', 'KV'], ['obj', 'Object']] as [p, label] (p)}
-        <span onclick={() => setPanel(p as '' | 'js' | 'kv' | 'obj')} onkeydown={(e) => e.key === 'Enter' && setPanel(p as '' | 'js' | 'kv' | 'obj')} role="button" tabindex="0" style="font-size:var(--px-11_5);background:{panel === p ? 'var(--primary)' : 'var(--panel)'};color:{panel === p ? 'var(--hex-fff)' : 'var(--text)'};border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-12);cursor:pointer;font-weight:600">{label}</span>
+        <span use:captureJs={p === 'js'} onclick={() => setPanel(p as '' | 'js' | 'kv' | 'obj')} onkeydown={(e) => e.key === 'Enter' && setPanel(p as '' | 'js' | 'kv' | 'obj')} role="button" tabindex="0" style="font-size:var(--px-11_5);background:{panel === p ? 'var(--primary)' : 'var(--panel)'};color:{panel === p ? 'var(--hex-fff)' : 'var(--text)'};border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-12);cursor:pointer;font-weight:600">{label}</span>
       {/each}
       <span onclick={toggle} onkeydown={(e) => e.key === 'Enter' && toggle()} role="button" tabindex="0" style="font-size:var(--px-11_5);background:{subscribed ? '#27AE60' : 'var(--panel)'};color:{subscribed ? 'var(--hex-fff)' : 'var(--text)'};border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-12);cursor:pointer;font-weight:600">{subscribed ? 'Stop' : 'Subscribe'}</span>
       <span onclick={() => (paused = !paused)} onkeydown={(e) => e.key === 'Enter' && (paused = !paused)} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-12);cursor:pointer">{paused ? 'Resume' : 'Pause'}</span>

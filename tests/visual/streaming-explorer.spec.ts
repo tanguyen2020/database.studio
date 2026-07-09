@@ -18,6 +18,26 @@ test('explorer: Kafka topics list, click opens consumer, context menu', async ({
   await expect(page.getByText('payments', { exact: true }).first()).toBeVisible({ timeout: 8000 })
   await expect(page.getByText('enrollment.events', { exact: true }).first()).toBeVisible()
 
+  // Filter topics narrows the list (task 1)
+  const topicFilter = page.getByPlaceholder('Filter topics…')
+  await expect(topicFilter).toBeVisible()
+  await topicFilter.fill('pay')
+  await page.waitForTimeout(150)
+  await expect(page.getByText('payments', { exact: true }).first()).toBeVisible()
+  await expect(page.getByText('enrollment.events', { exact: true })).toHaveCount(0)
+  await topicFilter.fill('')
+  await page.waitForTimeout(150)
+  await expect(page.getByText('enrollment.events', { exact: true }).first()).toBeVisible()
+
+  // Add topic (task 1): button below the filter opens a dialog; created topic appears
+  await page.getByRole('button', { name: 'Add topic' }).click()
+  const addDlg = page.getByRole('dialog')
+  await expect(addDlg.getByPlaceholder('e.g. orders.events')).toBeVisible()
+  await addDlg.getByPlaceholder('e.g. orders.events').fill('demo.new.topic')
+  await addDlg.getByRole('button', { name: 'Create' }).click()
+  await page.waitForTimeout(250)
+  await expect(page.getByText('demo.new.topic', { exact: true }).first()).toBeVisible()
+
   // right-click a topic → Clear messages + Delete topic
   await page.getByText('payments', { exact: true }).first().click({ button: 'right' })
   await page.waitForTimeout(150)

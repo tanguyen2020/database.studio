@@ -108,6 +108,7 @@ pub fn run() {
             commands::kafka::kafka_create_topic,
             commands::kafka::kafka_delete_topic,
             commands::kafka::kafka_purge_topic,
+            commands::kafka::kafka_delete_records,
             commands::kafka::kafka_consume,
             commands::kafka::kafka_stop_consume,
             commands::kafka::kafka_produce,

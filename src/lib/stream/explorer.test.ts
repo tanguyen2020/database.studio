@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { kafkaTopicRows, natsStreamRows, topicMessageCount, filterStreamRows } from './explorer'
+import { kafkaTopicRows, natsStreamRows, topicMessageCount, filterStreamRows, filterTopicRows } from './explorer'
 import type { KafkaTopic, NatsJsStream } from '$lib/ipc'
 
 const topic = (name: string, internal: boolean, parts: [number, number][]): KafkaTopic => ({
@@ -31,6 +31,28 @@ describe('kafkaTopicRows', () => {
   it('showInternal keeps __ topics', () => {
     const rows = kafkaTopicRows([topic('__consumer_offsets', true, [[0, 5]])], true)
     expect(rows).toHaveLength(1)
+  })
+})
+
+describe('filterTopicRows', () => {
+  const rows = kafkaTopicRows([
+    topic('orders', false, [[0, 100]]),
+    topic('order_events', false, [[0, 5]]),
+    topic('audit', false, [[0, 3]]),
+  ])
+
+  it('blank query returns rows unchanged', () => {
+    expect(filterTopicRows('', rows)).toBe(rows)
+    expect(filterTopicRows('   ', rows)).toBe(rows)
+  })
+
+  it('matches topic names case-insensitively (substring)', () => {
+    expect(filterTopicRows('ORDER', rows).map((t) => t.name)).toEqual(['order_events', 'orders'])
+    expect(filterTopicRows('audit', rows).map((t) => t.name)).toEqual(['audit'])
+  })
+
+  it('drops topics with no name match', () => {
+    expect(filterTopicRows('nomatch', rows)).toEqual([])
   })
 })
 

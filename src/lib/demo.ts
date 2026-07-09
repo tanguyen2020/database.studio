@@ -216,6 +216,33 @@ let demoNatsStreams: DemoNatsStream[] = [
   { name: 'EVENTS', subjects: ['events.*'], retention: 'WorkQueue', storage: 'Memory', messages: 57, bytes: 8192, consumers: 1 },
 ]
 
+interface DemoKafkaPartition {
+  id: number
+  leader: number
+  replicas: number[]
+  isr: number[]
+  low: number
+  high: number
+  lag: number
+}
+interface DemoKafkaTopic {
+  name: string
+  internal: boolean
+  partitions: DemoKafkaPartition[]
+}
+let demoKafkaTopics: DemoKafkaTopic[] = [
+  {
+    name: 'payments',
+    internal: false,
+    partitions: Array.from({ length: 3 }, (_, i) => ({ id: i, leader: (i % 3) + 1, replicas: [1, 2, 3], isr: [1, 2, 3], low: 0, high: 15200 + i * 100, lag: 15200 + i * 100 })),
+  },
+  {
+    name: 'enrollment.events',
+    internal: false,
+    partitions: Array.from({ length: 2 }, (_, i) => ({ id: i, leader: (i % 3) + 1, replicas: [1, 2], isr: [1, 2], low: 40, high: 980 + i * 50, lag: 940 + i * 50 })),
+  },
+]
+
 /**
  * Mock trả lời cho từng IPC command khi không có Tauri runtime.
  * Chỉ đủ cho render/visual — thao tác ghi là no-op.
@@ -621,21 +648,25 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
         partition_count: 18,
       })
     case 'kafka_topics':
-      return ok([
-        {
-          name: 'payments',
-          internal: false,
-          partitions: Array.from({ length: 3 }, (_, i) => ({ id: i, leader: (i % 3) + 1, replicas: [1, 2, 3], isr: [1, 2, 3], low: 0, high: 15200 + i * 100, lag: 15200 + i * 100 })),
-        },
-        {
-          name: 'enrollment.events',
-          internal: false,
-          partitions: Array.from({ length: 2 }, (_, i) => ({ id: i, leader: (i % 3) + 1, replicas: [1, 2], isr: [1, 2], low: 40, high: 980 + i * 50, lag: 940 + i * 50 })),
-        },
-      ])
-    case 'kafka_create_topic':
-    case 'kafka_delete_topic':
+      return ok(demoKafkaTopics.map((t) => ({ ...t, partitions: t.partitions.map((p) => ({ ...p })) })))
+    case 'kafka_create_topic': {
+      const name = String(args?.name ?? '')
+      const parts = Math.max(1, Number(args?.partitions ?? 1))
+      if (name && !demoKafkaTopics.some((t) => t.name === name)) {
+        demoKafkaTopics = [
+          ...demoKafkaTopics,
+          { name, internal: false, partitions: Array.from({ length: parts }, (_, i) => ({ id: i, leader: (i % 3) + 1, replicas: [1], isr: [1], low: 0, high: 0, lag: 0 })) },
+        ]
+      }
+      return ok(null)
+    }
+    case 'kafka_delete_topic': {
+      const name = String(args?.name ?? '')
+      demoKafkaTopics = demoKafkaTopics.filter((t) => t.name !== name) // real removal
+      return ok(null)
+    }
     case 'kafka_purge_topic':
+    case 'kafka_delete_records':
     case 'kafka_consume':
     case 'kafka_stop_consume':
       return ok(null)

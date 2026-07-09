@@ -310,6 +310,10 @@ export const kafkaDeleteTopic = (connId: string, name: string) =>
   invoke<void>('kafka_delete_topic', { connId, name })
 export const kafkaPurgeTopic = (connId: string, name: string) =>
   invoke<void>('kafka_purge_topic', { connId, name })
+// Delete records in one partition up to (and including) `offset` — Kafka's only
+// per-message deletion (truncates the log prefix: this record + all older in that partition).
+export const kafkaDeleteRecords = (connId: string, name: string, partition: number, offset: number) =>
+  invoke<void>('kafka_delete_records', { connId, name, partition, offset })
 
 export interface KafkaMsg {
   conn_id: string

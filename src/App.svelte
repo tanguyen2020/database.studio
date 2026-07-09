@@ -49,6 +49,8 @@
   import AddPartitionDialog from '$lib/components/AddPartitionDialog.svelte'
   import NewDatabaseDialog from '$lib/components/NewDatabaseDialog.svelte'
   import NatsAddMessageDialog from '$lib/components/NatsAddMessageDialog.svelte'
+  import NatsCreateStreamDialog from '$lib/components/NatsCreateStreamDialog.svelte'
+  import KafkaCreateTopicDialog from '$lib/components/KafkaCreateTopicDialog.svelte'
   import Settings from '$lib/components/Settings.svelte'
   import { palette } from '$lib/stores/palette.svelte'
   import { settings } from '$lib/stores/settings.svelte'
@@ -343,5 +345,7 @@
 <AddPartitionDialog />
 <NewDatabaseDialog />
 <NatsAddMessageDialog />
+<NatsCreateStreamDialog />
+<KafkaCreateTopicDialog />
 <Settings />
 <Toasts />

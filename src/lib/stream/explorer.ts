@@ -35,6 +35,16 @@ export function kafkaTopicRows(topics: KafkaTopic[], showInternal = false): Topi
     .sort((a, b) => a.name.localeCompare(b.name))
 }
 
+/**
+ * Filter Kafka topic rows by name (case-insensitive substring). A blank query
+ * returns the rows unchanged.
+ */
+export function filterTopicRows(query: string, rows: TopicRow[]): TopicRow[] {
+  const q = query.trim().toLowerCase()
+  if (q === '') return rows
+  return rows.filter((t) => t.name.toLowerCase().includes(q))
+}
+
 export interface SubjectRow {
   subject: string
 }

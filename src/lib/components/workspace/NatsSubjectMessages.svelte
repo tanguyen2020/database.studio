@@ -240,7 +240,7 @@
                 <td style="border-bottom:var(--px-1) solid var(--border);padding:var(--px-6) var(--px-12);color:{cellColor(m.seq, 'var(--text2)')};white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title={m.key}>{m.key || '—'}</td>
               {/if}
               <!-- single-line preview trimmed to the column; hover shows the full text, Copy grabs all of it -->
-              <td style="border-bottom:var(--px-1) solid var(--border);padding:var(--px-6) var(--px-12);color:{cellColor(m.seq, 'var(--text)')};white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title={m.payload}>{m.payload}</td>
+              <td style="border-bottom:var(--px-1) solid var(--border);padding:var(--px-6) var(--px-12);color:{cellColor(m.seq, 'var(--hex-98c379)')};white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title={m.payload}>{m.payload}</td>
               <!-- action icons: recolour to white when the row is selected so the blue
                    highlight never hides them (View JSON / Copy / Delete). -->
               <td style="border-bottom:var(--px-1) solid var(--border);padding:var(--px-6) var(--px-8);white-space:nowrap">

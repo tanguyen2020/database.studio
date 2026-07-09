@@ -151,9 +151,11 @@ impl KafkaDriver {
                 }
                 let mut parts = Vec::new();
                 for p in t.partitions() {
-                    // watermark offsets (earliest/latest) → lag
+                    // watermark offsets (earliest/latest) → lag. Bounded (2s) so a
+                    // slow/unreachable partition can't stall the whole topic list —
+                    // watermarks are best-effort (fall back to 0/0 on timeout).
                     let (low, high) = c
-                        .fetch_watermarks(t.name(), p.id(), Duration::from_secs(5))
+                        .fetch_watermarks(t.name(), p.id(), Duration::from_secs(2))
                         .unwrap_or((0, 0));
                     parts.push(KafkaPartition {
                         id: p.id(),
@@ -426,6 +428,22 @@ impl KafkaDriver {
         .map_err(|e| err("spawn_blocking error", e))?
         .map_err(|e| err("Failed to read topic watermarks", e))?;
 
+        let admin: AdminClient<DefaultClientContext> =
+            self.config.create().map_err(|e| err("Failed to create admin client", e))?;
+        let opts = AdminOptions::new().operation_timeout(Some(Duration::from_secs(30)));
+        admin.delete_records(&tpl, &opts).await.map_err(|e| err("delete_records error", e))?;
+        Ok(())
+    }
+
+    /// Delete records in ONE partition up to (and including) `offset` — the only
+    /// per-message deletion Kafka supports. KIP-107 DeleteRecords truncates the log
+    /// prefix, so this removes the record at `offset` AND every older record in that
+    /// partition; Kafka cannot delete a single record from the middle of the log.
+    pub async fn delete_records_upto(&self, name: &str, partition: i32, offset: i64) -> Result<(), QueryError> {
+        let mut tpl = TopicPartitionList::new();
+        // DeleteRecords deletes everything BEFORE this offset → offset+1 includes the target.
+        tpl.add_partition_offset(name, partition, Offset::Offset(offset + 1))
+            .map_err(|e| err("invalid partition offset", e))?;
         let admin: AdminClient<DefaultClientContext> =
             self.config.create().map_err(|e| err("Failed to create admin client", e))?;
         let opts = AdminOptions::new().operation_timeout(Some(Duration::from_secs(30)));
