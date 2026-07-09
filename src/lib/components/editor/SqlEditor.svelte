@@ -203,8 +203,15 @@
       flex: 'none',
       marginLeft: 'auto',
       paddingLeft: 'var(--px-16)',
-      color: 'var(--muted)',
+      // brighter than --muted so the schema/type qualifier at the right edge is
+      // easy to read on the popup background
+      color: 'var(--text2)',
       fontStyle: 'normal',
+    },
+    // on the highlighted row (blue background) the qualifier needs a light color to
+    // stay legible — mirror the white label CodeMirror uses for the selected item
+    '.cm-tooltip-autocomplete ul li[aria-selected] .cm-completionDetail': {
+      color: 'var(--hex-fff)',
     },
   })
 
@@ -320,6 +327,11 @@
   })
 
   // ---- public API (via bind:this) ----
+
+  /** Focus the editor (e.g. when a fresh Query tab opens via Ctrl/Cmd+N). */
+  export function focus() {
+    view?.focus()
+  }
 
   export function getDoc(): string {
     return view?.state.doc.toString() ?? ''

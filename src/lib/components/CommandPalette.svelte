@@ -32,7 +32,8 @@
       // Redis: key browser is in the ObjectExplorer sidebar — no tab on connect.
       if (system === 'redis') { /* keys shown in explorer */ }
       else if (system === 'nats') tabs.openNatsTab(id)
-      else if (system === 'kafka') tabs.openKafkaTab(id)
+      // Kafka: topics shown in explorer — no cluster tab on connect (topic → consumer).
+      else if (system === 'kafka') { /* topics shown in explorer */ }
       else if (system === 'cassandra') tabs.openSqlTab({ connectionId: id, title: 'Untitled CQL' })
       else tabs.openSqlTab({ connectionId: id, title: 'Untitled query' })
     })

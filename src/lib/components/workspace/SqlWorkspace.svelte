@@ -31,7 +31,7 @@
   import type { Diagnostic } from '@codemirror/lint'
   import type { Completion, CompletionSource } from '@codemirror/autocomplete'
   import type { SQLNamespace } from '@codemirror/lang-sql'
-  import { untrack } from 'svelte'
+  import { untrack, onMount } from 'svelte'
 
   interface Props {
     tab: TabState
@@ -357,6 +357,12 @@
     await results.run(tab.id, cid, statements)
     showExecErrors()
   }
+
+  // Focus the editor when a Query tab opens (e.g. Ctrl/Cmd+N) so you can type
+  // immediately. Parent onMount runs after the child editor's view is created.
+  onMount(() => {
+    requestAnimationFrame(() => editor?.focus())
+  })
 
   // Auto-run once when a tab is opened with autoRun (Execute routine dialog):
   // the editor is seeded with the CALL/SELECT and executed immediately so the

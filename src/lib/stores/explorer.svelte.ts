@@ -65,6 +65,13 @@ class ExplorerStore {
     const k = `${connId}:${stream}:${subject}`
     this.natsMsgTick[k] = (this.natsMsgTick[k] ?? 0) + 1
   }
+  // Kafka: a per-(conn,topic) tick the open consumer tab watches so it clears its
+  // displayed messages after the sidebar purges that topic (Clear messages).
+  kafkaMsgTick = $state<Record<string, number>>({})
+  bumpKafkaTopic(connId: string, topic: string) {
+    const k = `${connId}:${topic}`
+    this.kafkaMsgTick[k] = (this.kafkaMsgTick[k] ?? 0) + 1
+  }
   // The schema/database node currently selected in the tree (public / dbo / a database).
   // Drives the enabled state of the sidebar "View ER" / "Generate Scripts" toolbar
   // buttons: `connId` is the connection to act on (a sub-connection for a foreign

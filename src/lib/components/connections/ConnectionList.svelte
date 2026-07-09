@@ -91,7 +91,9 @@
       // Redis: key browser lives in the ObjectExplorer sidebar — do NOT open a tab.
       if (p.system === 'redis') { /* explorer shows keys; open a tab per key on click */ }
       else if (p.system === 'nats') tabs.openNatsTab(p.id)
-      else if (p.system === 'kafka') tabs.openKafkaTab(p.id)
+      // Kafka: topics live in the ObjectExplorer sidebar — do NOT open a cluster tab
+      // (click a topic to open its consumer).
+      else if (p.system === 'kafka') { /* explorer shows topics; consumer opens per topic */ }
       // Cassandra: CQL editor (tái dùng SQL editor + result grid, title Untitled CQL)
       else if (p.system === 'cassandra') tabs.openSqlTab({ connectionId: p.id, title: 'Untitled CQL' })
     }

@@ -52,7 +52,20 @@ impl BrowseContext {
 
 impl rdkafka::client::ClientContext for BrowseContext {
     fn error(&self, error: rdkafka::error::KafkaError, reason: &str) {
-        self.emit("error", format!("{error}: {reason}"));
+        use rdkafka::error::RDKafkaErrorCode;
+        // PartitionEOF ("reached end of partition / no more messages") is informational,
+        // not a failure — librdkafka raises it via the error callback too when
+        // enable.partition.eof is on. Don't surface it as an error toast. Match by code
+        // AND by text (the callback may wrap it as KafkaError::Global, whose code may
+        // not resolve on every rdkafka version).
+        let display = format!("{error}");
+        let is_eof = error.rdkafka_error_code() == Some(RDKafkaErrorCode::PartitionEOF)
+            || display.contains("PartitionEOF")
+            || reason.contains("reached end of partition");
+        if is_eof {
+            return;
+        }
+        self.emit("error", format!("{display}: {reason}"));
     }
     fn log(&self, level: rdkafka::config::RDKafkaLogLevel, fac: &str, log_message: &str) {
         use rdkafka::config::RDKafkaLogLevel::*;
@@ -158,6 +171,30 @@ pub async fn kafka_purge_topic(
             let d = driver.lock().await;
             match &*d {
                 LiveConnection::Kafka(k) => k.purge_topic(&name).await,
+                _ => Err(not_kafka()),
+            }
+        })
+        .await?;
+    inner.map_err(|e| AppError::Driver(e.message))
+}
+
+/// Delete records in one partition up to (and including) `offset` — Kafka's only
+/// per-message deletion (truncates the log prefix; removes this record + all older
+/// ones in that partition).
+#[tauri::command]
+pub async fn kafka_delete_records(
+    state: State<'_, AppState>,
+    conn_id: String,
+    name: String,
+    partition: i32,
+    offset: i64,
+) -> Result<(), AppError> {
+    let inner = state
+        .registry
+        .with_driver(&conn_id, move |driver| async move {
+            let d = driver.lock().await;
+            match &*d {
+                LiveConnection::Kafka(k) => k.delete_records_upto(&name, partition, offset).await,
                 _ => Err(not_kafka()),
             }
         })

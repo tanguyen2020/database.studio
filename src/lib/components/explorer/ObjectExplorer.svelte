@@ -23,6 +23,9 @@
   import { execRoutineWizard } from '$lib/stores/execroutine.svelte'
   import { chCreateWizard } from '$lib/stores/chcreate.svelte'
   import { natsAddWizard } from '$lib/stores/natsAdd.svelte'
+  import { natsCreateStream } from '$lib/stores/natsCreateStream.svelte'
+  import { kafkaTopicWizard } from '$lib/stores/kafkaTopic.svelte'
+  import { properties, type PropTarget } from '$lib/stores/properties.svelte'
   import { newDatabaseWizard } from '$lib/stores/newdatabase.svelte'
   import { genRenameRoutine } from '$lib/sql/routines'
   import { scriptsWizard } from '$lib/stores/scripts.svelte'
@@ -37,7 +40,7 @@
   import { partitionOps, supportsPartitioning } from '$lib/sql/partitions'
   import { addPartitionWizard } from '$lib/stores/addpartition.svelte'
   import { buildExportSelect } from '$lib/export/query'
-  import { kafkaTopicRows, natsStreamRows, filterStreamRows } from '$lib/stream/explorer'
+  import { kafkaTopicRows, natsStreamRows, filterStreamRows, filterTopicRows } from '$lib/stream/explorer'
   import { toAlterStatement, type AlterKind } from '$lib/sql/alter'
   import { objectFilterMatch } from '$lib/explorer/filter'
   import { autofocus } from '$lib/actions/autofocus'
@@ -201,6 +204,44 @@
     }
   })
 
+  // Right-side Properties panel: parse the selected key precisely (schema / table /
+  // column) and publish it so PropertiesPanel can render columns / definition.
+  const propTarget = $derived.by((): PropTarget | null => {
+    const k = treeSel
+    const s = selected
+    if (!k || !s || k.indexOf(':') < 0) return null
+    const prefix = k.slice(0, k.indexOf(':'))
+    const rest = k.slice(k.indexOf(':') + 1)
+    const kindMap: Record<string, { kind: string; label: string }> = {
+      t: { kind: 'table', label: 'Table' },
+      v: { kind: 'view', label: 'View' },
+      col: { kind: 'column', label: 'Column' },
+      vcol: { kind: 'column', label: 'Column' },
+      p: { kind: 'procedure', label: 'Procedure' },
+      fn: { kind: 'function', label: 'Function' },
+      tg: { kind: 'trigger', label: 'Trigger' },
+      seq: { kind: 'sequence', label: 'Sequence' },
+      s: { kind: 'schema', label: 'Schema' },
+      dic: { kind: 'dictionary', label: 'Dictionary' },
+    }
+    const m = kindMap[prefix]
+    if (!m) return null
+    const parts = rest.split('.')
+    if (m.kind === 'schema') {
+      return { connId: s.id, system: s.system, kind: m.kind, typeLabel: m.label, schema: rest, name: rest }
+    }
+    if (m.kind === 'column') {
+      return { connId: s.id, system: s.system, kind: m.kind, typeLabel: m.label, schema: parts[0] ?? '', table: parts[1], name: parts.slice(2).join('.') || (parts[1] ?? '') }
+    }
+    return { connId: s.id, system: s.system, kind: m.kind, typeLabel: m.label, schema: parts[0] ?? '', name: parts.slice(1).join('.') || (parts[0] ?? '') }
+  })
+
+  // Sync the parsed target into the shared store (no feedback loop: propTarget is
+  // derived from treeSel/selected only, and we only write to `properties`).
+  $effect(() => {
+    properties.set(propTarget)
+  })
+
   // untrack: loadSchemas() đọc+ghi explorer.cache đồng bộ (conn()/track()) → nếu
   // trong vùng track của effect sẽ read+write cùng $state → effect_update_depth
   // (kích hoạt khi chọn 1 connection ĐANG kết nối). Xem build-gotchas memory.
@@ -319,6 +360,10 @@
   const isRedis = $derived(selected?.system === 'redis')
   const streamCache = $derived(selected ? explorer.streaming[selected.id] : undefined)
   const topicRows = $derived(streamCache?.kafkaTopics ? kafkaTopicRows(streamCache.kafkaTopics) : [])
+  // Kafka explorer filter — matches topic names (case-insensitive substring).
+  let topicFilter = $state('')
+  const topicFiltering = $derived(!!topicFilter.trim())
+  const filteredTopicRows = $derived(filterTopicRows(topicFilter, topicRows))
   const allStreamRows = $derived(streamCache?.natsStreams ? natsStreamRows(streamCache.natsStreams) : [])
   // NATS explorer filter — matches stream names only (see filterStreamRows).
   let streamFilter = $state('')
@@ -381,6 +426,8 @@
         await ipc.kafkaPurgeTopic(selected.id, topic)
         toasts.success(`Cleared messages of ${topic}`, 'kafka')
         explorer.refreshStreaming(selected.id)
+        // clear the open consumer tab for this topic too, so both stay in sync
+        explorer.bumpKafkaTopic(selected.id, topic)
       } catch (e) {
         toasts.error(String(e), 'kafka')
       }
@@ -772,7 +819,12 @@
     folder: 'var(--hex-d0a45e)',
     schema: 'var(--hex-7f8a9e)',
     part: 'var(--hex-56b6c2)',
+    kafka: 'var(--hex-8b5cf6)',
   } as const
+
+  // Kafka topic icon — the gradient Kafka logo (connected nodes) served as an SVG
+  // asset so the blue→purple gradient renders exactly (like the NATS logo).
+  const KAFKA_LOGO = '<img src="/assets/db-kafka.svg" width="14" height="15" style="display:block" alt="kafka" />'
 
   // Folder icon for database nodes (DataGrip-style) — inline SVG, uses currentColor.
   const DB_FOLDER_SVG =
@@ -928,10 +980,41 @@
     </div>
   {/if}
 
+  <!-- filter — finds Kafka topics by name -->
+  {#if selected?.connected && isKafka}
+    <div style="flex:none;padding:var(--px-6) var(--px-8);position:relative">
+      <span style="position:absolute;left:var(--px-16);top:50%;transform:translateY(-50%);color:var(--muted);font-size:var(--px-11);pointer-events:none">⌕</span>
+      <input
+        bind:value={topicFilter}
+        placeholder="Filter topics…"
+        aria-label="Filter topics"
+        spellcheck="false"
+        style="width:100%;background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-22);color:var(--text);font-size:var(--px-11_5);outline:none"
+      />
+      {#if topicFiltering}
+        <span onclick={() => (topicFilter = '')} onkeydown={(e) => e.key === 'Enter' && (topicFilter = '')} role="button" tabindex="0" title="Clear" style="position:absolute;right:var(--px-14);top:50%;transform:translateY(-50%);color:var(--muted);font-size:var(--px-13);cursor:pointer">×</span>
+      {/if}
+    </div>
+  {/if}
+
+  <!-- Kafka: Add topic button (below the filter) -->
+  {#if selected?.connected && isKafka}
+    <div style="flex:none;padding:var(--px-4) var(--px-8) var(--px-6);display:flex;justify-content:flex-end">
+      <span
+        onclick={() => selected && kafkaTopicWizard.show(selected.id)}
+        onkeydown={(e) => e.key === 'Enter' && selected && kafkaTopicWizard.show(selected.id)}
+        role="button"
+        tabindex="0"
+        title="Add topic"
+        style="font-size:var(--px-11);color:var(--text2);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer;font-weight:600"
+      >＋ Add topic</span>
+    </div>
+  {/if}
+
   <!-- filter — finds NATS JetStream streams by name -->
   {#if selected?.connected && isNats}
-    <div style="flex:none;padding:0 var(--px-8) var(--px-6);position:relative">
-      <span style="position:absolute;left:var(--px-16);top:50%;transform:translateY(-60%);color:var(--muted);font-size:var(--px-11);pointer-events:none">⌕</span>
+    <div style="flex:none;padding:var(--px-6) var(--px-8) 0;position:relative">
+      <span style="position:absolute;left:var(--px-16);top:calc(50% + var(--px-3));transform:translateY(-60%);color:var(--muted);font-size:var(--px-11);pointer-events:none">⌕</span>
       <input
         bind:value={streamFilter}
         placeholder="Filter streams…"
@@ -940,8 +1023,22 @@
         style="width:100%;background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-22);color:var(--text);font-size:var(--px-11_5);outline:none"
       />
       {#if streamFiltering}
-        <span onclick={() => (streamFilter = '')} onkeydown={(e) => e.key === 'Enter' && (streamFilter = '')} role="button" tabindex="0" title="Clear" style="position:absolute;right:var(--px-14);top:50%;transform:translateY(-60%);color:var(--muted);font-size:var(--px-13);cursor:pointer">×</span>
+        <span onclick={() => (streamFilter = '')} onkeydown={(e) => e.key === 'Enter' && (streamFilter = '')} role="button" tabindex="0" title="Clear" style="position:absolute;right:var(--px-14);top:calc(50% + var(--px-3));transform:translateY(-60%);color:var(--muted);font-size:var(--px-13);cursor:pointer">×</span>
       {/if}
+    </div>
+  {/if}
+
+  <!-- NATS: Add stream button (below the filter) -->
+  {#if selected?.connected && isNats}
+    <div style="flex:none;padding:var(--px-8) var(--px-8) var(--px-6);display:flex;justify-content:flex-end">
+      <span
+        onclick={() => selected && natsCreateStream.show(selected.id)}
+        onkeydown={(e) => e.key === 'Enter' && selected && natsCreateStream.show(selected.id)}
+        role="button"
+        tabindex="0"
+        title="Add stream"
+        style="font-size:var(--px-11);color:var(--text2);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer;font-weight:600"
+      >＋ Add stream</span>
     </div>
   {/if}
 
@@ -1060,10 +1157,10 @@
         <div style="padding:var(--px-12);font-size:var(--px-11_5);color:var(--error)">{streamCache.error}</div>
       {:else if streamCache?.loading && !streamCache?.kafkaTopics}
         <div style="padding:var(--px-16) var(--px-12);text-align:center;font-size:var(--px-12);color:var(--muted)">Loading topics…</div>
-      {:else if topicRows.length === 0}
-        <div style="padding:var(--px-16) var(--px-12);text-align:center;font-size:var(--px-12);color:var(--muted)">No topics</div>
+      {:else if filteredTopicRows.length === 0}
+        <div style="padding:var(--px-16) var(--px-12);text-align:center;font-size:var(--px-12);color:var(--muted)">{topicFiltering ? 'No topics match the filter' : 'No topics'}</div>
       {:else}
-        {#each topicRows as t (t.name)}
+        {#each filteredTopicRows as t (t.name)}
           {#snippet topicMenu()}
             <ContextMenu.Content class="w-52">
               <ContextMenu.Item onclick={() => selected && tabs.openKafkaTool(selected.id, 'kafka-consumer', t.name)}>View messages</ContextMenu.Item>
@@ -1076,7 +1173,7 @@
             </ContextMenu.Content>
           {/snippet}
           {@render row(
-            { key: `kafka:t:${t.name}`, depth: 0, glyph: '▤', color: C.table, name: t.name, meta: t.meta, openOnSingleClick: true, onClick: () => selected && tabs.openKafkaTool(selected.id, 'kafka-consumer', t.name) },
+            { key: `kafka:t:${t.name}`, depth: 0, glyph: '', svg: KAFKA_LOGO, color: C.kafka, nameColor: 'var(--hex-56b6c2)', head: true, name: t.name, meta: t.meta, openOnSingleClick: true, onClick: () => selected && tabs.openKafkaTool(selected.id, 'kafka-consumer', t.name) },
             topicMenu,
           )}
         {/each}

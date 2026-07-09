@@ -7,6 +7,7 @@
   import { natsAddWizard } from '$lib/stores/natsAdd.svelte'
   import { explorer } from '$lib/stores/explorer.svelte'
   import { toasts } from '$lib/stores/toast.svelte'
+  import { autofocus } from '$lib/actions/autofocus'
 
   // Svelte 5 quirk: gate on a local $state mirror of the singleton store flag so the
   // dialog reliably opens when toggled from another component.
@@ -77,18 +78,17 @@
 
       <label style="display:flex;flex-direction:column;gap:var(--px-4)">
         <span style="font-size:var(--px-11_5);color:var(--text2)">Subject</span>
-        <!-- svelte-ignore a11y_autofocus -->
         <input
           bind:value={subject}
+          use:autofocus
           placeholder="e.g. orders.eu"
-          autofocus
           class="mono"
           style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-6) var(--px-10);font-size:var(--px-12_5);color:var(--warn2);outline:none"
         />
       </label>
 
       <label style="display:flex;flex-direction:column;gap:var(--px-4)">
-        <span style="font-size:var(--px-11_5);color:var(--text2)">Payload</span>
+        <span style="font-size:var(--px-11_5);color:#98c379">Payload</span>
         <textarea
           bind:value={payload}
           placeholder={'{"id":1001,"total":42.5}'}
