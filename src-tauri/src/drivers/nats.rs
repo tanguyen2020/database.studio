@@ -310,10 +310,14 @@ impl NatsDriver {
         Ok(())
     }
 
-    /// Delete a stream ON THE SERVER. `delete_stream` returns a `DeleteStatus`; a
-    /// `success:false` means the server did NOT remove it — surface that as an error
-    /// instead of reporting a false "deleted" (the delete must be real, not local).
+    /// Delete a stream ON THE SERVER, then SELF-VERIFY it is really gone.
+    /// `delete_stream` returns a `DeleteStatus`; `success:false` → error. On success we
+    /// re-list with the SAME client and confirm the stream no longer exists — if it is
+    /// still there the delete did not actually take effect on this connection's
+    /// JetStream (wrong domain/account, or the stream was recreated by server
+    /// config/a controller), so we surface a precise error instead of a false "deleted".
     pub async fn js_delete_stream(&self, name: &str) -> Result<(), QueryError> {
+        use futures::TryStreamExt;
         let js = async_nats::jetstream::new(self.client.clone());
         let status = js
             .delete_stream(name)
@@ -324,6 +328,24 @@ impl NatsDriver {
                 format!("NATS did not delete stream '{name}'"),
                 "delete_stream returned success=false",
             ));
+        }
+        // Self-verify on the server: the stream must be absent from a fresh listing.
+        let mut infos = js.streams();
+        while let Some(info) = infos
+            .try_next()
+            .await
+            .map_err(|e| err("Verify delete: failed to list streams", e))?
+        {
+            if info.config.name == name {
+                return Err(err(
+                    format!(
+                        "Stream '{name}' still exists after delete — the server did not remove it. \
+                         Likely a JetStream domain/account mismatch, or the stream is recreated by \
+                         server config or an external controller."
+                    ),
+                    "post-delete verification: stream still present",
+                ));
+            }
         }
         Ok(())
     }
