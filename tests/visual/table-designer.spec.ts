@@ -150,8 +150,17 @@ test('table designer: # column, ArrowDown auto-appends a field row, drag reorder
   await page.waitForTimeout(150)
   await expect(rows).toHaveCount(3)
 
-  // drag reorders: drag the 'email' row (#2) onto the id row (#1) → email first
-  await rows.nth(1).locator('td').first().dragTo(rows.nth(0).locator('td').first())
+  // drag reorders via POINTER events (press & hold the # handle, move up): drag
+  // the 'email' row (#2) onto the id row (#1) → email first. (Native HTML5 drag is
+  // swallowed by the Tauri WebView, so the handle uses pointer capture instead.)
+  const emailHandle = rows.nth(1).locator('td').first()
+  const idHandle = rows.nth(0).locator('td').first()
+  const sb = (await emailHandle.boundingBox())!
+  const db = (await idHandle.boundingBox())!
+  await page.mouse.move(sb.x + sb.width / 2, sb.y + sb.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(db.x + db.width / 2, db.y + db.height / 2, { steps: 10 })
+  await page.mouse.up()
   await page.waitForTimeout(150)
   await expect(rows.nth(0).locator('input').first()).toHaveValue('email')
 

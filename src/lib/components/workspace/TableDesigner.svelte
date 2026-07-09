@@ -3,7 +3,7 @@
   // Fields · Indexes · Foreign Keys · Uniques · Checks · Triggers. Save (Ctrl/Cmd+S
   // or the button) runs dialect-correct DDL: a full CREATE for a new table, or
   // ALTER/CREATE for the objects added to an existing one (see sql/table-designer).
-  import { tick, untrack } from 'svelte'
+  import { tick, untrack, onDestroy } from 'svelte'
   import * as ipc from '$lib/ipc'
   import { connections } from '$lib/stores/connections.svelte'
   import { explorer } from '$lib/stores/explorer.svelte'
@@ -370,21 +370,64 @@
       await appendAndFocus('name')
     }
   }
-  // Reorder rows — order is what Save emits. Two ways: drag by the "#" handle, or
-  // the ▲/▼ buttons (reliable in the WebView, where native HTML5 drag can be flaky).
-  let dragRow = $state<number | null>(null)
-  function moveCol(from: number | null, to: number) {
-    if (from == null || from === to || to < 0 || to >= cols.length) {
-      dragRow = null
-      return
-    }
+  // Reorder rows — the row order is exactly what Save emits (column order in the
+  // generated DDL). Drag&drop uses POINTER events, not the native HTML5 drag API:
+  // WebView2 (Tauri) hands file-style drag-drop to the OS, which swallows HTML5
+  // dragstart/drop inside the page — so native DnD silently does nothing there.
+  // Pointer capture + live reorder works in both the WebView and the browser.
+  // The ▲/▼ buttons remain as a keyboard/click fallback.
+  let fieldsBody = $state<HTMLTableSectionElement | null>(null)
+  let dragRow = $state<number | null>(null) // current index of the row being dragged
+
+  function reorderCols(from: number, to: number) {
+    if (from === to || to < 0 || from < 0 || to >= cols.length || from >= cols.length) return
     const next = [...cols]
     const [item] = next.splice(from, 1)
     next.splice(to, 0, item)
     cols = next
-    dragRow = null
   }
-  const moveRow = (i: number, dir: -1 | 1) => moveCol(i, i + dir)
+  const moveRow = (i: number, dir: -1 | 1) => reorderCols(i, i + dir)
+
+  // Index of the <tbody> row the cursor is directly over (box contains y), clamped
+  // to the first/last row when above/below the list. Containment (not midpoint
+  // crossing) makes the live drag target the row you're hovering, so dropping onto
+  // a row's center reorders there.
+  function rowIndexFromY(y: number): number | null {
+    if (!fieldsBody) return null
+    const rows = Array.from(fieldsBody.querySelectorAll('tr'))
+    if (rows.length === 0) return null
+    for (let idx = 0; idx < rows.length; idx++) {
+      const r = rows[idx].getBoundingClientRect()
+      if (y >= r.top && y <= r.bottom) return idx
+    }
+    return y < rows[0].getBoundingClientRect().top ? 0 : rows.length - 1
+  }
+  // Global listeners while dragging (attached on pointerdown, removed on pointerup)
+  // — more reliable than element pointer-capture across the WebView + tests.
+  function onDragMove(e: PointerEvent) {
+    if (dragRow == null) return
+    const t = rowIndexFromY(e.clientY)
+    if (t != null && t !== dragRow) {
+      reorderCols(dragRow, t) // live reorder → DOM follows (keyed by object identity)
+      dragRow = t
+    }
+  }
+  function onDragUp() {
+    dragRow = null
+    window.removeEventListener('pointermove', onDragMove)
+    window.removeEventListener('pointerup', onDragUp)
+  }
+  function dragStart(i: number, e: PointerEvent) {
+    if (e.button !== 0) return // left button only
+    dragRow = i
+    window.addEventListener('pointermove', onDragMove)
+    window.addEventListener('pointerup', onDragUp)
+    e.preventDefault()
+  }
+  onDestroy(() => {
+    window.removeEventListener('pointermove', onDragMove)
+    window.removeEventListener('pointerup', onDragUp)
+  })
   const addIndex = () => (indexes = [...indexes, { name: '', columns: [], method: '' }])
   const delIndex = (i: number) => (indexes = removeOrDrop(indexes, i))
   const addFk = () => (fks = [...fks, { name: '', columns: [], refTable: '', refColumns: [], onDelete: '', onUpdate: '' }])
@@ -479,26 +522,24 @@
               <th style="position:sticky;top:0;background:var(--header);border-bottom:var(--px-1) solid var(--border2);padding:var(--px-8) var(--px-12);text-align:left;color:var(--text2);font-weight:600;{extra}">{h}</th>
             {/each}
           </tr></thead>
-          <tbody>
+          <tbody bind:this={fieldsBody}>
             {#each cols as col, i (col)}
               <tr
                 style={`${col.dropped ? 'opacity:0.5;text-decoration:line-through;' : ''}${dragRow === i ? 'background:var(--hover);' : ''}`}
-                ondragover={(e) => { e.preventDefault() }}
-                ondrop={(e) => { e.preventDefault(); moveCol(dragRow, i) }}
               >
-                <!-- # cell: reorder rows (drag the handle OR the ▲/▼ buttons). The
-                     row order is what Save emits. -->
+                <!-- # cell: drag handle (press & hold, move up/down) via POINTER
+                     events — reliable in the Tauri WebView where native HTML5 drag
+                     is swallowed by the OS drag-drop handler. Row order = column
+                     order emitted on Save. ▲/▼ remain as a click fallback. -->
                 <td
-                  draggable="true"
-                  ondragstart={(e) => { dragRow = i; e.dataTransfer?.setData('text/plain', String(i)); if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move' }}
-                  ondragend={() => (dragRow = null)}
+                  onpointerdown={(e) => dragStart(i, e)}
                   title="Drag to reorder"
-                  style="border-bottom:var(--px-1) solid var(--border);cursor:grab;user-select:none;padding:0"
+                  style="border-bottom:var(--px-1) solid var(--border);cursor:grab;user-select:none;touch-action:none;padding:0"
                 >
                   <div style="display:flex;align-items:center;justify-content:center;gap:var(--px-3)">
-                    <span onclick={() => moveRow(i, -1)} onkeydown={(e) => e.key === 'Enter' && moveRow(i, -1)} role="button" tabindex="0" title="Move up" style="cursor:pointer;color:{i === 0 ? 'var(--border2)' : 'var(--muted)'};font-size:var(--px-10);line-height:1">▲</span>
+                    <span onpointerdown={(e) => e.stopPropagation()} onclick={() => moveRow(i, -1)} onkeydown={(e) => e.key === 'Enter' && moveRow(i, -1)} role="button" tabindex="0" title="Move up" style="cursor:pointer;color:{i === 0 ? 'var(--border2)' : 'var(--muted)'};font-size:var(--px-10);line-height:1">▲</span>
                     <span class="mono" style="color:var(--muted);font-size:var(--px-11);min-width:var(--px-16);text-align:center">{i + 1}</span>
-                    <span onclick={() => moveRow(i, 1)} onkeydown={(e) => e.key === 'Enter' && moveRow(i, 1)} role="button" tabindex="0" title="Move down" style="cursor:pointer;color:{i === cols.length - 1 ? 'var(--border2)' : 'var(--muted)'};font-size:var(--px-10);line-height:1">▼</span>
+                    <span onpointerdown={(e) => e.stopPropagation()} onclick={() => moveRow(i, 1)} onkeydown={(e) => e.key === 'Enter' && moveRow(i, 1)} role="button" tabindex="0" title="Move down" style="cursor:pointer;color:{i === cols.length - 1 ? 'var(--border2)' : 'var(--muted)'};font-size:var(--px-10);line-height:1">▼</span>
                   </div>
                 </td>
                 <td style="border-bottom:var(--px-1) solid var(--border);padding:0"><input id={`tdf-${tab.id}-${i}-name`} bind:value={col.name} onkeydown={(e) => fieldKey(e, i, 'name')} class="mono" style="width:100%;border:none;background:transparent;color:var(--text);font-size:var(--px-12_5);padding:var(--px-7) var(--px-12);outline:none" /></td>
