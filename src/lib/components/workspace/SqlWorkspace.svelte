@@ -59,6 +59,14 @@
   )
   const currentDb = $derived(((tab.state.database as string) || profile?.database || '').trim())
 
+  // ---- schema dropdown ---------------------------------------------------------
+  // Postgres/MSSQL split one database into multiple schemas; picking one scopes
+  // autocomplete (and, for Postgres, the run-time search_path) to that schema.
+  // Systems where a "database" already IS a schema (MySQL/MariaDB/ClickHouse) or
+  // that have no schemas (SQLite) don't show this dropdown.
+  const supportsSchemaSwitch = $derived(!isOrphan && ['postgres', 'mssql'].includes(tab.systemType))
+  const selectedSchema = $derived(((tab.state.schema as string) || '').trim())
+
   $effect(() => {
     const p = profile
     if (!p?.connected || !supportsDbSwitch) return
@@ -80,6 +88,12 @@
 
   function pickDatabase(db: string) {
     tab.state.database = db
+    tab.state.schema = '' // the new database has its own schemas — reset the pick
+    tabs.schedulePersist()
+  }
+
+  function pickSchema(s: string) {
+    tab.state.schema = s
     tabs.schedulePersist()
   }
 
@@ -93,7 +107,15 @@
     // per-tab connection keyed by tab id.
     const db = supportsDbSwitch && currentDb && currentDb !== (profile?.database ?? '') ? currentDb : ''
     try {
-      return await ipc.openTabConnection(tab.connectionId, tab.id, db)
+      const cid = await ipc.openTabConnection(tab.connectionId, tab.id, db)
+      // Postgres: scope unqualified names to the picked schema for this run. Re-applied
+      // every run so it survives a cancel/reconnect heal. No pick → default search_path
+      // (query as before). MSSQL has no session default-schema SET, so it's PG-only.
+      if (tab.systemType === 'postgres' && selectedSchema) {
+        const q = `"${selectedSchema.replace(/"/g, '""')}"`
+        await ipc.execStatement(cid, `SET search_path TO ${q}, public`).catch(() => {})
+      }
+      return cid
     } catch (e) {
       toasts.error(`Cannot open a connection for this tab: ${e}`)
       return tab.connectionId
@@ -142,6 +164,7 @@
     const p = profile
     const db = currentDb
     const switchable = supportsDbSwitch
+    const picked = selectedSchema // re-run the loader when the schema pick changes
     if (!p?.connected) {
       acConnId = null
       return
@@ -160,11 +183,14 @@
         await explorer.loadSchemas(cid)
         const schemas = explorer.cache[cid]?.schemas ?? []
         // Load the tables the completion needs: the default schema, plus — for
-        // MySQL/MariaDB/ClickHouse where a "database" IS a schema — the picked one.
+        // MySQL/MariaDB/ClickHouse where a "database" IS a schema — the picked one,
+        // plus the schema chosen in the Schema dropdown (PG/MSSQL) so its tables
+        // surface in autocomplete.
         const targets = new Set<string>()
         const def = schemas.find((s) => s.is_default) ?? schemas[0]
         if (def) targets.add(def.name)
         if (db && schemas.some((s) => s.name === db)) targets.add(db)
+        if (picked && schemas.some((s) => s.name === picked)) targets.add(picked)
         for (const name of targets) await explorer.loadSchemaChildren(cid, name)
       })()
     })
@@ -212,11 +238,28 @@
     return Object.keys(ns).length > 0 ? ns : undefined
   })
 
-  const defaultSchema = $derived.by(() => {
+  // The database's own default schema (public / dbo) from introspection.
+  const dbDefaultSchema = $derived.by(() => {
     const cid = acConnId
     if (!cid) return undefined
     const schemas = explorer.cache[cid]?.schemas ?? []
     return (schemas.find((s) => s.is_default) ?? schemas[0])?.name
+  })
+
+  // Schema anchor for autocomplete (which schema counts as "current", so its tables
+  // insert unqualified). Postgres honours the picked schema (search_path makes the
+  // unqualified name valid); MSSQL keeps the DB default so a picked non-default schema
+  // still inserts qualified (schema.table) — correct, since MSSQL can't switch the
+  // session default schema. Non-schema systems fall through to the DB default.
+  const defaultSchema = $derived(
+    tab.systemType === 'postgres' ? selectedSchema || dbDefaultSchema : dbDefaultSchema,
+  )
+
+  // Schema dropdown options (PG/MSSQL): every schema in the active database.
+  const schemaOptions = $derived.by(() => {
+    const cid = acConnId
+    if (!cid) return [] as { value: string; label: string }[]
+    return (explorer.cache[cid]?.schemas ?? []).map((s) => ({ value: s.name, label: s.name }))
   })
 
   const knownTables = $derived.by(() => {
@@ -613,6 +656,21 @@
           placeholder="(database)"
           title="Database"
           onChange={(v) => v && pickDatabase(v)}
+        />
+      </div>
+    {/if}
+
+    <!-- schema dropdown — only for schema-based systems (Postgres/MSSQL); a
+         database with multiple schemas. Scopes autocomplete (+ PG search_path). -->
+    {#if supportsSchemaSwitch && profile?.connected && schemaOptions.length > 0}
+      <div style="display:flex;align-items:center;gap:var(--px-6)">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" style="flex:none;color:var(--muted)"><path d="M3 7h18M3 12h18M3 17h18"></path></svg>
+        <SearchSelect
+          value={selectedSchema || dbDefaultSchema || null}
+          options={schemaOptions}
+          placeholder="(schema)"
+          title="Schema"
+          onChange={(v) => v && pickSchema(v)}
         />
       </div>
     {/if}

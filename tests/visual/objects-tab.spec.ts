@@ -89,6 +89,30 @@ test('Objects tab: double-clicking another database refreshes the same singleton
   await expect(page.getByRole('tab').first()).toContainText('Objects')
 })
 
+test('Objects tab: double-click a schema (PG) scopes Objects to that schema', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(String(e)))
+  await blockRemoteFonts(page)
+  await page.goto(APP_URL)
+  await page.waitForSelector('#app > *', { timeout: 15_000 })
+  await page.waitForTimeout(300)
+
+  await page.getByRole('button', { name: /Postgres/ }).first().click()
+  await page.waitForTimeout(500)
+
+  // Postgres splits a database into schemas → double-clicking the "public" schema
+  // node opens the Objects tab scoped to that schema (not the whole database).
+  await page.getByRole('treeitem', { name: /public/ }).first().dblclick()
+  await page.waitForTimeout(700)
+
+  const firstTab = page.getByRole('tab').first()
+  await expect(firstTab).toContainText('Objects')
+  // header shows connection / database / schema
+  await expect(page.getByTitle(/Postgres \/ .+ \/ public/)).toBeVisible()
+  await expect(page.getByRole('cell', { name: 'students', exact: true })).toBeVisible()
+  expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
+})
+
 test('Objects tab: Refresh re-queries the backend', async ({ page }) => {
   const errors: string[] = []
   page.on('pageerror', (e) => errors.push(String(e)))

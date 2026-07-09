@@ -296,6 +296,13 @@
     if (!selected) return
     tabs.openObjectsTab({ connId: selected.id, database: curDbName || selected.database || 'database' })
   }
+  // PG/MSSQL split a database into schemas → double-clicking a SCHEMA opens the
+  // Objects tab scoped to that schema (its tables only). Keeps the expand/collapse.
+  function openObjectsForSchema(schemaName: string) {
+    if (!selected) return
+    expandSchema(schemaName) // keep the original toggle behavior
+    tabs.openObjectsTab({ connId: selected.id, database: curDbName || selected.database || 'database', schema: schemaName })
+  }
   async function openObjectsForForeignDb(dbName: string) {
     if (!selected) return
     await toggleForeignDb(dbName) // keep the original expand/collapse (attaches on expand)
@@ -1327,8 +1334,12 @@
           head: true,
           expandable: true,
           onClick: () => expandSchema(schema.name),
-          // double-click a database node → expand/collapse (as before) + Objects tab
-          onDblClick: schemaNodeIsDatabase ? () => openObjectsForSchemaDb(schema.name) : undefined,
+          // double-click: schema-as-database systems (MySQL/MariaDB/ClickHouse) →
+          // Objects for that database; PG/MSSQL (real schemas) → Objects scoped to
+          // the double-clicked schema. Both keep the expand/collapse.
+          onDblClick: schemaNodeIsDatabase
+            ? () => openObjectsForSchemaDb(schema.name)
+            : () => openObjectsForSchema(schema.name),
         }, schemaMenu)}
 
         {#if sOpen && sc}

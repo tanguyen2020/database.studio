@@ -129,11 +129,15 @@
   <!-- header: connection + database (colored); the tab title already says "Objects" -->
   <div style="flex:none;display:flex;align-items:center;gap:var(--px-9);padding:var(--px-10) var(--px-14);border-bottom:var(--px-1) solid var(--border);background:var(--surface)">
     <span style="width:var(--px-3);height:var(--px-20);border-radius:var(--px-2);background:{accent}"></span>
-    <div style="display:flex;align-items:baseline;gap:var(--px-7);min-width:0" title={`${profile?.name ?? ''}${database ? ` / ${database}` : ''}`}>
+    <div style="display:flex;align-items:baseline;gap:var(--px-7);min-width:0" title={`${profile?.name ?? ''}${database ? ` / ${database}` : ''}${schema && schema !== database ? ` / ${schema}` : ''}`}>
       <span style="font-size:var(--px-13);font-weight:600;color:var(--text);white-space:nowrap">{profile?.name ?? '—'}</span>
       {#if database}
         <span style="font-size:var(--px-12);color:var(--muted)">/</span>
         <span class="mono" style="font-size:var(--px-13);font-weight:700;color:{accent};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{database}</span>
+      {/if}
+      {#if schema && schema !== database}
+        <span style="font-size:var(--px-12);color:var(--muted)">/</span>
+        <span class="mono" style="font-size:var(--px-13);font-weight:700;color:{accent};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{schema}</span>
       {/if}
     </div>
     <div style="margin-left:auto;display:flex;gap:var(--px-10);align-items:center">
