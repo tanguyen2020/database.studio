@@ -179,6 +179,33 @@
       color: 'var(--text)',
       border: 'var(--px-1) solid var(--border2)',
     },
+    // Autocomplete popup: wider for readability, and each row is a flex line so
+    // the qualifier (schema/database for a table, data type for a column) sits at
+    // the RIGHT edge instead of crowding the identifier.
+    '.cm-tooltip.cm-tooltip-autocomplete > ul': {
+      minWidth: 'var(--px-340)',
+      maxWidth: 'var(--px-520)',
+      fontFamily: 'var(--font-mono, monospace)',
+    },
+    '.cm-tooltip.cm-tooltip-autocomplete > ul > li': {
+      display: 'flex',
+      alignItems: 'center',
+      padding: 'var(--px-4) var(--px-10)',
+    },
+    '.cm-tooltip-autocomplete .cm-completionLabel': {
+      flex: '0 1 auto',
+      minWidth: '0',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      whiteSpace: 'nowrap',
+    },
+    '.cm-tooltip-autocomplete .cm-completionDetail': {
+      flex: 'none',
+      marginLeft: 'auto',
+      paddingLeft: 'var(--px-16)',
+      color: 'var(--muted)',
+      fontStyle: 'normal',
+    },
   })
 
   onMount(() => {
