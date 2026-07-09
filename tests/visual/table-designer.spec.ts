@@ -150,15 +150,22 @@ test('table designer: # column, ArrowDown auto-appends a field row, drag reorder
   await page.waitForTimeout(150)
   await expect(rows).toHaveCount(3)
 
-  // drag the 'email' row (#2) onto the id row (#1) → email comes first in the DDL
-  const emailHandle = rows.nth(1).locator('td').first()
-  const idHandle = rows.nth(0).locator('td').first()
-  await emailHandle.dragTo(idHandle)
+  // drag reorders: drag the 'email' row (#2) onto the id row (#1) → email first
+  await rows.nth(1).locator('td').first().dragTo(rows.nth(0).locator('td').first())
   await page.waitForTimeout(150)
+  await expect(rows.nth(0).locator('input').first()).toHaveValue('email')
+
+  // the ▲/▼ buttons reorder too (reliable in the WebView): move email back down
+  await rows.nth(0).getByTitle('Move down').click()
+  await page.waitForTimeout(150)
+  await expect(rows.nth(0).locator('input').first()).toHaveValue('id')
+  await expect(rows.nth(1).locator('input').first()).toHaveValue('email')
+
+  // the row order flows into the DDL
   await page.getByText('Scripts', { exact: true }).first().click()
   await page.waitForTimeout(200)
   const ddl = await page.getByText(/CREATE TABLE/).first().innerText()
-  expect(ddl.indexOf('"email"')).toBeLessThan(ddl.indexOf('"id"'))
+  expect(ddl.indexOf('"id"')).toBeLessThan(ddl.indexOf('"email"'))
 
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })

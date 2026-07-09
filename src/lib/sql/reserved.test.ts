@@ -17,6 +17,21 @@ describe('isReserved', () => {
     expect(isReserved('mariadb', 'zerofill')).toBe(true) // inherits MySQL set
   })
 
+  it('flags MySQL 8 window-function reserved words (common column-name clashes)', () => {
+    for (const w of ['system', 'groups', 'lead', 'lag', 'rank', 'over', 'window', 'dense_rank', 'row_number']) {
+      expect(isReserved('mysql', w), w).toBe(true)
+    }
+    expect(quoteIfReserved('mysql', 'system')).toBe('`system`')
+    expect(quoteIfReserved('mariadb', 'groups')).toBe('`groups`')
+  })
+
+  it('does not over-quote common non-reserved column names', () => {
+    for (const w of ['name', 'status', 'type', 'value', 'description', 'title', 'code', 'amount']) {
+      expect(quoteIfReserved('mysql', w), w).toBe(w)
+      expect(quoteIfReserved('postgres', w), w).toBe(w)
+    }
+  })
+
   it('does not flag ordinary names', () => {
     expect(isReserved('postgres', 'first_name')).toBe(false)
     expect(isReserved('mysql', 'customer_id')).toBe(false)

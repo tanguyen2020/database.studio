@@ -370,10 +370,11 @@
       await appendAndFocus('name')
     }
   }
-  // Drag a row by its "#" handle to reorder columns; order is what Save emits.
+  // Reorder rows — order is what Save emits. Two ways: drag by the "#" handle, or
+  // the ▲/▼ buttons (reliable in the WebView, where native HTML5 drag can be flaky).
   let dragRow = $state<number | null>(null)
   function moveCol(from: number | null, to: number) {
-    if (from == null || from === to) {
+    if (from == null || from === to || to < 0 || to >= cols.length) {
       dragRow = null
       return
     }
@@ -383,6 +384,7 @@
     cols = next
     dragRow = null
   }
+  const moveRow = (i: number, dir: -1 | 1) => moveCol(i, i + dir)
   const addIndex = () => (indexes = [...indexes, { name: '', columns: [], method: '' }])
   const delIndex = (i: number) => (indexes = removeOrDrop(indexes, i))
   const addFk = () => (fks = [...fks, { name: '', columns: [], refTable: '', refColumns: [], onDelete: '', onUpdate: '' }])
@@ -473,7 +475,7 @@
       {#if activeTab === 'fields'}
         <table style="border-collapse:collapse;width:100%;font-size:var(--px-12_5)">
           <thead><tr>
-            {#each [['#', 'width:var(--px-42);text-align:center'], ['Column', ''], ['Type', 'width:var(--px-160)'], ['Length', 'width:var(--px-90)'], ['PK', 'width:var(--px-60);text-align:center'], ['Nullable', 'width:var(--px-70);text-align:center'], ['Default', 'width:var(--px-150)'], ['', 'width:var(--px-42)']] as [h, extra] (h + extra)}
+            {#each [['#', 'width:var(--px-90);text-align:center'], ['Column', ''], ['Type', 'width:var(--px-160)'], ['Length', 'width:var(--px-90)'], ['PK', 'width:var(--px-60);text-align:center'], ['Nullable', 'width:var(--px-70);text-align:center'], ['Default', 'width:var(--px-150)'], ['', 'width:var(--px-42)']] as [h, extra] (h + extra)}
               <th style="position:sticky;top:0;background:var(--header);border-bottom:var(--px-1) solid var(--border2);padding:var(--px-8) var(--px-12);text-align:left;color:var(--text2);font-weight:600;{extra}">{h}</th>
             {/each}
           </tr></thead>
@@ -484,15 +486,21 @@
                 ondragover={(e) => { e.preventDefault() }}
                 ondrop={(e) => { e.preventDefault(); moveCol(dragRow, i) }}
               >
-                <!-- # drag handle: reorder rows; the row order is what Save emits -->
+                <!-- # cell: reorder rows (drag the handle OR the ▲/▼ buttons). The
+                     row order is what Save emits. -->
                 <td
                   draggable="true"
-                  ondragstart={() => (dragRow = i)}
+                  ondragstart={(e) => { dragRow = i; e.dataTransfer?.setData('text/plain', String(i)); if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move' }}
                   ondragend={() => (dragRow = null)}
                   title="Drag to reorder"
-                  style="border-bottom:var(--px-1) solid var(--border);text-align:center;color:var(--muted);font-size:var(--px-11);cursor:grab;user-select:none"
-                  class="mono"
-                >⋮⋮ {i + 1}</td>
+                  style="border-bottom:var(--px-1) solid var(--border);cursor:grab;user-select:none;padding:0"
+                >
+                  <div style="display:flex;align-items:center;justify-content:center;gap:var(--px-3)">
+                    <span onclick={() => moveRow(i, -1)} onkeydown={(e) => e.key === 'Enter' && moveRow(i, -1)} role="button" tabindex="0" title="Move up" style="cursor:pointer;color:{i === 0 ? 'var(--border2)' : 'var(--muted)'};font-size:var(--px-10);line-height:1">▲</span>
+                    <span class="mono" style="color:var(--muted);font-size:var(--px-11);min-width:var(--px-16);text-align:center">{i + 1}</span>
+                    <span onclick={() => moveRow(i, 1)} onkeydown={(e) => e.key === 'Enter' && moveRow(i, 1)} role="button" tabindex="0" title="Move down" style="cursor:pointer;color:{i === cols.length - 1 ? 'var(--border2)' : 'var(--muted)'};font-size:var(--px-10);line-height:1">▼</span>
+                  </div>
+                </td>
                 <td style="border-bottom:var(--px-1) solid var(--border);padding:0"><input id={`tdf-${tab.id}-${i}-name`} bind:value={col.name} onkeydown={(e) => fieldKey(e, i, 'name')} class="mono" style="width:100%;border:none;background:transparent;color:var(--text);font-size:var(--px-12_5);padding:var(--px-7) var(--px-12);outline:none" /></td>
                 <td style="border-bottom:var(--px-1) solid var(--border);padding:0;position:relative">
                   <!-- searchable type dropdown showing the full per-engine catalog
