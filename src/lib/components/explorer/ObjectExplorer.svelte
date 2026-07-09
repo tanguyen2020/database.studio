@@ -282,32 +282,24 @@
     }
   }
 
-  // Double-clicking a database name opens (or retargets) the pinned Objects tab, in
-  // ADDITION to the existing expand/collapse. Three database-node shapes:
-  //  - schema-as-database node (MySQL/MariaDB/ClickHouse): expand + Objects(schema).
-  //  - current-database header (PG/MSSQL): Objects across all schemas.
-  //  - foreign-database node (PG/MSSQL): attach + expand + Objects across schemas.
+  // Double-clicking opens (or retargets) the pinned Objects tab. The unit differs by
+  // system:
+  //  - schema-as-database (MySQL/MariaDB/ClickHouse): the "database" IS a schema, so
+  //    double-clicking it opens Objects for that database.
+  //  - schema-based (PG/MSSQL): a database has many schemas, so Objects is scoped to a
+  //    SCHEMA — double-clicking a schema opens it; double-clicking the database node
+  //    only expands (never a mixed all-schemas view).
   function openObjectsForSchemaDb(schemaName: string) {
     if (!selected) return
     expandSchema(schemaName) // keep the original toggle behavior
     tabs.openObjectsTab({ connId: selected.id, database: schemaName, schema: schemaName })
   }
-  function openObjectsForCurrentDb() {
-    if (!selected) return
-    tabs.openObjectsTab({ connId: selected.id, database: curDbName || selected.database || 'database' })
-  }
-  // PG/MSSQL split a database into schemas → double-clicking a SCHEMA opens the
-  // Objects tab scoped to that schema (its tables only). Keeps the expand/collapse.
+  // PG/MSSQL: double-clicking a SCHEMA opens the Objects tab scoped to that schema
+  // (its tables only). Keeps the expand/collapse.
   function openObjectsForSchema(schemaName: string) {
     if (!selected) return
     expandSchema(schemaName) // keep the original toggle behavior
     tabs.openObjectsTab({ connId: selected.id, database: curDbName || selected.database || 'database', schema: schemaName })
-  }
-  async function openObjectsForForeignDb(dbName: string) {
-    if (!selected) return
-    await toggleForeignDb(dbName) // keep the original expand/collapse (attaches on expand)
-    const sub = dbSubId[dbName] ?? selected.id
-    tabs.openObjectsTab({ connId: sub, database: dbName })
   }
 
   // Cassandra (Phase 4b): cây keyspace lấy qua command chuyên biệt (cassandra_tree),
@@ -1281,7 +1273,7 @@
           </ContextMenu.Content>
         {/snippet}
         {#if !dbFiltering || matchDb(curDbName)}
-          {@render row({ key: 'curdb', depth: 0, glyph: '', svg: DB_FOLDER_SVG, color: 'var(--primary)', name: curDb?.name ?? selected.database ?? 'database', meta: 'current', head: true, onDblClick: openObjectsForCurrentDb }, curDbMenu)}
+          {@render row({ key: 'curdb', depth: 0, glyph: '', svg: DB_FOLDER_SVG, color: 'var(--primary)', name: curDb?.name ?? selected.database ?? 'database', meta: 'current', head: true }, curDbMenu)}
         {/if}
       {/if}
 
@@ -1911,7 +1903,7 @@
               <ContextMenu.Item variant="destructive" onclick={() => selected && stmtTab(`Drop database ${db.name}`, genDropDatabase(selected.system, db.name))}>Drop Database…</ContextMenu.Item>
             </ContextMenu.Content>
           {/snippet}
-          {@render row({ key: fkey, depth: 0, glyph: '', svg: DB_FOLDER_SVG, color: C.folder, name: db.name, meta: attaching === db.name ? 'attaching…' : 'database', head: true, expandable: true, onClick: () => toggleForeignDb(db.name), onDblClick: () => void openObjectsForForeignDb(db.name) }, dbMenu)}
+          {@render row({ key: fkey, depth: 0, glyph: '', svg: DB_FOLDER_SVG, color: C.folder, name: db.name, meta: attaching === db.name ? 'attaching…' : 'database', head: true, expandable: true, onClick: () => toggleForeignDb(db.name) }, dbMenu)}
           {#if expanded.has(fkey) && fcache}
             {#each fcache.schemas ?? [] as fsch (fsch.name)}
               {@const skey = `${fkey}:s:${fsch.name}`}
@@ -1937,7 +1929,7 @@
                   <ContextMenu.Item onclick={() => sub && explorer.refresh(sub, { kind: 'schema', schema: fsch.name })}>Refresh</ContextMenu.Item>
                 </ContextMenu.Content>
               {/snippet}
-              {@render row({ key: skey, depth: 1, glyph: '▤', color: C.schema, name: fsch.name, meta: 'schema', head: true, expandable: true, onClick: () => { toggle(skey); if (sub && !fsc?.tables) void explorer.loadSchemaChildren(sub, fsch.name) } }, fSchemaMenu)}
+              {@render row({ key: skey, depth: 1, glyph: '▤', color: C.schema, name: fsch.name, meta: 'schema', head: true, expandable: true, onClick: () => { toggle(skey); if (sub && !fsc?.tables) void explorer.loadSchemaChildren(sub, fsch.name) }, onDblClick: () => { toggle(skey); if (sub) { if (!fsc?.tables) void explorer.loadSchemaChildren(sub, fsch.name); tabs.openObjectsTab({ connId: sub, database: db.name, schema: fsch.name }) } } }, fSchemaMenu)}
               {#if expanded.has(skey) && fsc}
                 {@const fTables = fsc.tables?.filter((t) => t.kind !== 'view') ?? []}
                 {@const fViews = fsc.tables?.filter((t) => t.kind === 'view') ?? []}
