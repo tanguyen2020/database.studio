@@ -2253,7 +2253,9 @@ async fn kafka_connect_and_metadata() {
     eprintln!("CHK produce OK (offset {off})");
     // BaseConsumer (assign, không group) — build trước, chỉ move consumer vào
     // spawn_blocking để poll + drop trong đúng thread poll (tránh deadlock close rdkafka).
-    let consumer = drv.browse_consumer("phase4_itest", "earliest", 0, None).unwrap();
+    let consumer = drv
+        .browse_consumer("phase4_itest", "earliest", 0, None, rdkafka::consumer::DefaultConsumerContext)
+        .unwrap();
     eprintln!("CHK browse_consumer created");
     let value = tokio::task::spawn_blocking(move || -> String {
         let deadline = Instant::now() + Duration::from_secs(15);
@@ -3989,7 +3991,7 @@ async fn nats_subject_messages_purge_and_remove() {
     async fn count_until(drv: &NatsDriver, subject: &str, want: usize) -> usize {
         let deadline = Instant::now() + Duration::from_secs(15);
         loop {
-            let n = drv.js_subject_messages("ORDERS", subject, 100).await.unwrap().len();
+            let n = drv.js_subject_messages("ORDERS", subject, 100, None).await.unwrap().len();
             if n == want || Instant::now() >= deadline {
                 return n;
             }
@@ -3998,7 +4000,7 @@ async fn nats_subject_messages_purge_and_remove() {
     }
 
     // browse: only orders.eu messages, correct subject
-    let eu = drv.js_subject_messages("ORDERS", "orders.eu", 100).await.unwrap();
+    let eu = drv.js_subject_messages("ORDERS", "orders.eu", 100, None).await.unwrap();
     assert_eq!(count_until(&drv, "orders.eu", 3).await, 3, "3 messages on orders.eu");
     assert!(eu.iter().all(|m| m.subject == "orders.eu"), "all messages belong to orders.eu");
     // the Nats-Msg-Id header is surfaced as the per-message key
@@ -4315,4 +4317,116 @@ async fn pg_table_designer_edit_and_drop_objects_end_to_end() {
     assert_eq!(result.rows[0]["n"].as_str().unwrap(), "numeric", "price altered to numeric");
     assert_eq!(result.rows[0]["is_nullable"].as_str().unwrap(), "YES", "price now nullable");
     eprintln!("CHK pg_table_designer_edit_and_drop_objects_end_to_end OK");
+}
+
+// ---------------------------------------------------------------------------
+// Reserved-word identifier quoting (Query Editor autocomplete `quoteIfReserved`).
+// The quoted identifier the editor inserts on Tab/Enter must be valid SQL the
+// real engine accepts, with the right quote character per dialect:
+//   PostgreSQL / SQLite → "…"   MySQL / MariaDB / ClickHouse → `…`   MSSQL → […]
+// A table named `order` (reserved everywhere) with a column `select`, plus the
+// reported MySQL case of a table named `schedule`, are created + round-tripped
+// through the exact quoting the frontend emits.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn sqlite_reserved_identifier_quoting_roundtrip() {
+    let mut drv = SqliteDriver::connect(&SqliteConnParams { path: String::new(), mode: SqliteMode::InMemory })
+        .await
+        .unwrap();
+    drv.exec("CREATE TABLE \"order\" (\"select\" int)").await.unwrap();
+    drv.exec("INSERT INTO \"order\" (\"select\") VALUES (7)").await.unwrap();
+    let out = drv.exec("SELECT \"select\" FROM \"order\"").await.unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    assert_eq!(result.rows[0]["select"], serde_json::json!(7));
+    eprintln!("CHK sqlite_reserved_identifier_quoting_roundtrip OK");
+}
+
+#[tokio::test]
+async fn pg_reserved_identifier_quoting_roundtrip() {
+    let (_c, port) = start_pg().await;
+    let params = PgConnParams {
+        host: "localhost".into(),
+        port,
+        database: "testdb".into(),
+        user: "postgres".into(),
+        password: PASS.into(),
+        ssl: false,
+        ssl_ca: String::new(),
+        ssl_cert: String::new(),
+        ssl_key: String::new(),
+    };
+    let mut drv = retry("postgres", || PgDriver::connect(&params)).await;
+    drv.exec("CREATE TABLE \"order\" (\"select\" int)").await.unwrap();
+    drv.exec("INSERT INTO \"order\" (\"select\") VALUES (7)").await.unwrap();
+    let out = drv.exec("SELECT \"select\" FROM \"order\"").await.unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    assert_eq!(result.rows[0]["select"], serde_json::json!(7));
+    eprintln!("CHK pg_reserved_identifier_quoting_roundtrip OK");
+}
+
+#[tokio::test]
+async fn mysql_reserved_identifier_quoting_roundtrip() {
+    let c = GenericImage::new("mysql", "8.0")
+        .with_exposed_port(3306.tcp())
+        .with_env_var("MYSQL_ROOT_PASSWORD", PASS)
+        .with_env_var("MYSQL_DATABASE", "testdb")
+        .start()
+        .await
+        .expect("start mysql container");
+    let port = c.get_host_port_ipv4(3306).await.unwrap();
+    let params = MySqlConnParams {
+        host: "localhost".into(),
+        port,
+        database: "testdb".into(),
+        user: "root".into(),
+        password: PASS.into(),
+        ssl: false,
+        ssl_ca: String::new(),
+        ssl_cert: String::new(),
+        ssl_key: String::new(),
+    };
+    let mut drv = retry("mysql", || MySqlDriver::connect(&params, "mysql")).await;
+    // `order` reserved everywhere → backtick for MySQL
+    drv.exec("CREATE TABLE `order` (`select` int)").await.unwrap();
+    drv.exec("INSERT INTO `order` (`select`) VALUES (7)").await.unwrap();
+    let out = drv.exec("SELECT `select` FROM `order`").await.unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    assert_eq!(result.rows[0]["select"], serde_json::json!(7));
+    // the reported case: a table literally named `schedule` (MySQL keyword)
+    drv.exec("CREATE TABLE `schedule` (id int)").await.unwrap();
+    drv.exec("INSERT INTO `schedule` VALUES (1)").await.unwrap();
+    let out = drv.exec("SELECT * FROM `schedule`").await.unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    assert_eq!(result.total, 1);
+    eprintln!("CHK mysql_reserved_identifier_quoting_roundtrip OK");
+}
+
+#[tokio::test]
+async fn mssql_reserved_identifier_quoting_roundtrip() {
+    let c = GenericImage::new("mcr.microsoft.com/mssql/server", "2022-latest")
+        .with_exposed_port(1433.tcp())
+        .with_env_var("ACCEPT_EULA", "Y")
+        .with_env_var("MSSQL_SA_PASSWORD", MSSQL_PASS)
+        .start()
+        .await
+        .expect("start mssql container");
+    let port = c.get_host_port_ipv4(1433).await.unwrap();
+    let params = MssqlConnParams {
+        host: "localhost".into(),
+        port,
+        database: "".into(),
+        user: "sa".into(),
+        password: MSSQL_PASS.into(),
+        ssl: false,
+        ssl_ca: String::new(),
+        auth: "sql".into(),
+    };
+    let mut drv = retry("mssql", || MssqlDriver::connect(&params)).await;
+    drv.exec("CREATE TABLE [order] ([select] int)").await.unwrap();
+    drv.exec("INSERT INTO [order] ([select]) VALUES (7)").await.unwrap();
+    let out = drv.exec("SELECT [select] FROM [order]").await.unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    assert_eq!(result.rows[0]["select"], serde_json::json!(7));
+    eprintln!("CHK mssql_reserved_identifier_quoting_roundtrip OK");
 }

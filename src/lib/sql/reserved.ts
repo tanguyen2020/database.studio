@@ -7,6 +7,7 @@
 // and leaves ordinary names untouched so completions stay readable.
 
 import { quoteIdent } from './dialect'
+import { PostgreSQL, MySQL, MSSQL, SQLite, type SQLDialect } from '@codemirror/lang-sql'
 
 // Core reserved words shared across the SQL dialects we target. Curated toward
 // the words people actually name columns/tables (not an exhaustive grammar dump).
@@ -92,11 +93,44 @@ const BY_SYSTEM: Record<string, string[]> = {
 }
 BY_SYSTEM.mariadb = BY_SYSTEM.mysql
 
+// Authoritative keyword lists from `@codemirror/lang-sql` (the same lists the
+// editor highlights with) — the most complete per-dialect coverage available,
+// so an identifier that collides with ANY built-in keyword of that engine
+// (e.g. MySQL `schedule`) is quoted on autocomplete insert. ClickHouse/Cassandra
+// have no lang-sql dialect here → they fall back to CORE + BY_SYSTEM only.
+function langKeywords(dialect: SQLDialect | undefined): string[] {
+  const kw = (dialect?.spec?.keywords ?? '') as string
+  return kw.toLowerCase().split(/\s+/).filter(Boolean)
+}
+const LANG_BY_SYSTEM: Record<string, string[]> = {
+  postgres: langKeywords(PostgreSQL),
+  mysql: langKeywords(MySQL),
+  mariadb: langKeywords(MySQL),
+  mssql: langKeywords(MSSQL),
+  sqlite: langKeywords(SQLite),
+}
+
+// Extremely common column identifiers that appear as NON-reserved keywords in
+// some dialects' full keyword lists but are perfectly legal unquoted. We never
+// auto-quote these — quoting them would only add noise to everyday queries
+// (`id`, `name`, `value`, `date`…). None of these are truly reserved in any
+// engine we target, so leaving them bare never breaks a statement.
+const SAFE = new Set([
+  'id', 'name', 'value', 'type', 'status', 'code', 'count', 'level', 'state',
+  'comment', 'data', 'date', 'time', 'datetime', 'timestamp', 'text', 'number',
+  'description', 'title', 'content', 'label', 'position', 'source', 'target',
+  'result', 'action', 'role', 'owner', 'parent', 'path', 'mode', 'size',
+  'format', 'priority', 'version', 'language', 'location', 'amount', 'price',
+  'total', 'message', 'category', 'tag', 'note', 'notes', 'address', 'phone',
+])
+
 const CACHE: Record<string, Set<string>> = {}
 
 function reservedSet(system: string): Set<string> {
   if (!CACHE[system]) {
-    CACHE[system] = new Set([...CORE, ...(BY_SYSTEM[system] ?? [])])
+    const set = new Set([...CORE, ...(BY_SYSTEM[system] ?? []), ...(LANG_BY_SYSTEM[system] ?? [])])
+    for (const w of SAFE) set.delete(w)
+    CACHE[system] = set
   }
   return CACHE[system]
 }

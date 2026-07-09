@@ -55,3 +55,52 @@ test('suggests tables after switching the database', async ({ page }) => {
   const list = await completionsFor(page, 'SELECT * FROM stu')
   expect(list).toContain('students')
 })
+
+// ---- reserved-word aware quoting on accept (Tab/Enter) ----------------------
+// A suggested table/column whose name collides with a keyword must insert with
+// the dialect's quote char: PG/SQLite "…", MySQL/MariaDB/ClickHouse `…`, MSSQL […].
+
+// Open a query tab bound to a SPECIFIC connection (via the connection's
+// "New Query Console" context item), identified by its unique host text — the
+// generic New-SQL-tab button binds to the active tab's connection instead.
+async function newTabFor(page: import('@playwright/test').Page, hostText: string) {
+  await blockRemoteFonts(page)
+  await page.goto(APP_URL)
+  await page.waitForSelector('#app > *', { timeout: 15_000 })
+  await page.waitForTimeout(400)
+  await page.getByText(hostText, { exact: false }).first().click({ button: 'right' })
+  await page.waitForTimeout(200)
+  await page.getByText('New Query Console', { exact: true }).first().click()
+  await page.waitForTimeout(700)
+}
+
+/** Type text, wait for the popup, accept with Tab, return the editor contents. */
+async function acceptAndRead(page: import('@playwright/test').Page, text: string) {
+  await page.locator('.cm-content').first().click()
+  await page.keyboard.press('Control+A')
+  await page.keyboard.press('Delete')
+  await page.keyboard.type(text)
+  await page.waitForTimeout(500)
+  await expect(page.locator('.cm-tooltip-autocomplete')).toBeVisible({ timeout: 3000 })
+  await page.keyboard.press('Tab')
+  await page.waitForTimeout(200)
+  return page.locator('.cm-content').first().innerText()
+}
+
+test('MySQL: reserved/keyword table names are backtick-quoted on accept', async ({ page }) => {
+  await newTabFor(page, 'localhost:3306') // MySQL connection (unique host:port)
+  // the reported case: `schedule` is a MySQL keyword
+  expect(await acceptAndRead(page, 'SELECT * FROM sched')).toContain('`schedule`')
+  // and a word reserved everywhere
+  expect(await acceptAndRead(page, 'SELECT * FROM ord')).toContain('`order`')
+})
+
+test('PostgreSQL: reserved word double-quoted, MySQL-only keyword left bare', async ({ page }) => {
+  await newTabFor(page, '10.0.1.5') // Postgres connection (unique host)
+  // `order` is reserved in PG → double-quoted
+  expect(await acceptAndRead(page, 'SELECT * FROM ord')).toContain('"order"')
+  // `schedule` is NOT a PG keyword → inserted bare (dialect-aware)
+  const scheduled = await acceptAndRead(page, 'SELECT * FROM sched')
+  expect(scheduled).toContain('schedule')
+  expect(scheduled).not.toContain('"schedule"')
+})

@@ -266,6 +266,11 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
         { name: 'students', kind: 'table', row_estimate: 3842, locked: false, engine: 'MergeTree' },
         { name: 'courses', kind: 'table', row_estimate: 214, locked: false, engine: 'ReplacingMergeTree' },
         { name: 'enrollments', kind: 'table', row_estimate: 12480, locked: false, engine: 'MergeTree' },
+        // reserved/keyword-named tables — autocomplete must quote them per dialect.
+        // `schedule` is a keyword only in MySQL/MariaDB; `order` is reserved in
+        // every engine (PG/SQLite "order", MySQL/MariaDB/CH `order`, MSSQL [order]).
+        { name: 'schedule', kind: 'table', row_estimate: 168, locked: false, engine: 'MergeTree' },
+        { name: 'order', kind: 'table', row_estimate: 920, locked: false, engine: 'MergeTree' },
         { name: 'vw_active_students', kind: 'view', row_estimate: null, locked: false, engine: 'MaterializedView' },
         { name: 'vw_recent_enrollments', kind: 'view', row_estimate: null, locked: false, engine: 'View' },
       ])
