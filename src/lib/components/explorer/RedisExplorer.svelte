@@ -5,10 +5,11 @@
   // tab (redis-key). No workspace tab is opened when the connection connects.
   import { untrack } from 'svelte'
   import * as ipc from '$lib/ipc'
+  import * as ContextMenu from '$lib/components/ui/context-menu'
   import { explorer } from '$lib/stores/explorer.svelte'
   import { tabs } from '$lib/stores/tabs.svelte'
   import { toasts } from '$lib/stores/toast.svelte'
-  import { buildRedisTree, flattenRedisTree, type RedisKeyInfo } from '$lib/redis/tree'
+  import { buildRedisTree, flattenRedisTree, keysUnderPrefix, type RedisKeyInfo } from '$lib/redis/tree'
 
   interface Props {
     connId: string
@@ -109,15 +110,55 @@
     expanded = next
   }
 
-  async function flushDb() {
-    const ans = window.prompt(`FLUSHDB will DELETE ALL of db${curDb}. Type "db${curDb}" to confirm:`)
-    if (ans !== `db${curDb}`) return
+  // ---- context menu: Delete + Refresh (both hit Redis for real) --------------
+  // Refresh = re-SCAN the keyspace from Redis (fresh). Delete = DEL the key (or, on a
+  // folder, every key under the prefix), confirmed in-app; then reload + notify any
+  // open key-viewer tab via the redisTick.
+  function refresh() {
+    void load()
+  }
+  let delTarget = $state<{ keys: string[]; label: string } | null>(null)
+  let delBusy = $state(false)
+  function askDeleteKey(name: string) {
+    delTarget = { keys: [name], label: `key "${name}"` }
+  }
+  function askDeleteFolder(prefix: string) {
+    const ks = keysUnderPrefix(keys, prefix)
+    delTarget = { keys: ks, label: `${ks.length} key${ks.length === 1 ? '' : 's'} under "${prefix}"` }
+  }
+  async function confirmDelete() {
+    if (!delTarget) return
+    delBusy = true
+    try {
+      let removed = 0
+      for (const k of delTarget.keys) removed += await ipc.redisDel(connId, k)
+      toasts.success(`Deleted ${removed} key${removed === 1 ? '' : 's'}`)
+      delTarget = null
+      await load()
+      explorer.bumpRedis(connId) // any open key-viewer tab reloads
+    } catch (e) {
+      toasts.error(`Delete failed: ${e}`)
+    } finally {
+      delBusy = false
+    }
+  }
+
+  // FLUSHDB — window.prompt/confirm is unreliable inside the Tauri webview, so use an
+  // in-app confirm dialog. Confirm runs FLUSHDB on the server, then reloads the tree.
+  let flushOpen = $state(false)
+  let flushBusy = $state(false)
+  async function confirmFlush() {
+    flushBusy = true
     try {
       await ipc.redisFlushDb(connId)
-      toasts.success('FLUSHDB — entire DB cleared')
+      toasts.success(`FLUSHDB — db${curDb} cleared`)
+      flushOpen = false
       await load()
+      explorer.bumpRedis(connId) // any open key-viewer tab reloads
     } catch (e) {
       toasts.error(`FLUSHDB failed: ${e}`)
+    } finally {
+      flushBusy = false
     }
   }
 
@@ -200,7 +241,7 @@
     <span style="margin-left:auto;display:flex;gap:var(--px-8);align-items:center">
       <span onclick={openAdd} onkeydown={(e) => e.key === 'Enter' && openAdd()} role="button" tabindex="0" title="Add a new key" style="font-size:var(--px-10_5);color:var(--primary);cursor:pointer">＋ Key</span>
       <span onclick={() => tabs.openRedisPubSubTab(connId)} onkeydown={(e) => e.key === 'Enter' && tabs.openRedisPubSubTab(connId)} role="button" tabindex="0" title="Pub/Sub Monitor" style="font-size:var(--px-10_5);color:var(--primary);cursor:pointer">Pub/Sub ▸</span>
-      <span onclick={flushDb} onkeydown={(e) => e.key === 'Enter' && flushDb()} role="button" tabindex="0" title="FLUSHDB (clear entire DB)" style="font-size:var(--px-10_5);color:var(--error);cursor:pointer">Flush</span>
+      <span onclick={() => (flushOpen = true)} onkeydown={(e) => e.key === 'Enter' && (flushOpen = true)} role="button" tabindex="0" title="FLUSHDB (clear entire DB)" style="font-size:var(--px-10_5);color:var(--error);cursor:pointer">Flush</span>
     </span>
     <input
       bind:value={pattern}
@@ -220,35 +261,89 @@
   {:else}
     {#each rows as r (r.path)}
       {#if r.kind === 'folder'}
-        <div
-          onclick={() => toggle(r.path)}
-          onkeydown={(e) => e.key === 'Enter' && toggle(r.path)}
-          role="button"
-          tabindex="0"
-          style="display:flex;align-items:center;gap:var(--px-8);padding:var(--px-5) var(--px-8);border-radius:var(--px-6);cursor:pointer;padding-left:calc(var(--px-8) + {r.depth} * var(--px-14))"
-        >
-          <span class="mono" style="flex:none;width:var(--px-10);text-align:center;font-size:var(--px-9);color:var(--muted)">{r.expanded ? '▾' : '▸'}</span>
-          <span class="mono" style="font-size:var(--px-12);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text2)">{r.segment}</span>
-          <span class="mono" style="margin-left:auto;flex:none;font-size:var(--px-10);color:var(--muted)">{r.count}</span>
-        </div>
+        <ContextMenu.Root>
+          <ContextMenu.Trigger>
+            <div
+              onclick={() => toggle(r.path)}
+              onkeydown={(e) => e.key === 'Enter' && toggle(r.path)}
+              role="button"
+              tabindex="0"
+              style="display:flex;align-items:center;gap:var(--px-8);padding:var(--px-5) var(--px-8);border-radius:var(--px-6);cursor:pointer;padding-left:calc(var(--px-8) + {r.depth} * var(--px-14))"
+            >
+              <span class="mono" style="flex:none;width:var(--px-10);text-align:center;font-size:var(--px-9);color:var(--muted)">{r.expanded ? '▾' : '▸'}</span>
+              <span class="mono" style="font-size:var(--px-12);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text2)">{r.segment}</span>
+              <span class="mono" style="margin-left:auto;flex:none;font-size:var(--px-10);color:var(--muted)">{r.count}</span>
+            </div>
+          </ContextMenu.Trigger>
+          <ContextMenu.Content class="w-44">
+            <ContextMenu.Item variant="destructive" onclick={() => askDeleteFolder(r.path)}>Delete</ContextMenu.Item>
+            <ContextMenu.Item onclick={refresh}>Refresh</ContextMenu.Item>
+          </ContextMenu.Content>
+        </ContextMenu.Root>
       {:else}
         {@const kt = r.key?.key_type ?? 'string'}
-        <div
-          onclick={() => tabs.openRedisKey(connId, r.path)}
-          onkeydown={(e) => e.key === 'Enter' && tabs.openRedisKey(connId, r.path)}
-          role="button"
-          tabindex="0"
-          title={r.path}
-          style="display:flex;align-items:center;gap:var(--px-8);padding:var(--px-5) var(--px-8);border-radius:var(--px-6);cursor:pointer;padding-left:calc(var(--px-8) + {r.depth} * var(--px-14));background:{activeKey === r.path ? 'color-mix(in srgb, var(--primary) 26%, transparent)' : 'transparent'}"
-        >
-          <span class="mono" style="flex:none;font-size:var(--px-9);font-weight:700;color:{typeColor(kt)};border:var(--px-1) solid {typeColor(kt)};border-radius:var(--px-3);padding:0 var(--px-4)">{typeBadge(kt)}</span>
-          <span class="mono" style="font-size:var(--px-12);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{r.segment}</span>
-          <span class="mono" style="margin-left:auto;flex:none;font-size:var(--px-10);color:{r.key?.ttl === -2 ? 'var(--error)' : 'var(--muted)'}">{r.key ? ttlLabel(r.key.ttl) : ''}</span>
-        </div>
+        <ContextMenu.Root>
+          <ContextMenu.Trigger>
+            <div
+              onclick={() => tabs.openRedisKey(connId, r.path)}
+              onkeydown={(e) => e.key === 'Enter' && tabs.openRedisKey(connId, r.path)}
+              role="button"
+              tabindex="0"
+              title={r.path}
+              style="display:flex;align-items:center;gap:var(--px-8);padding:var(--px-5) var(--px-8);border-radius:var(--px-6);cursor:pointer;padding-left:calc(var(--px-8) + {r.depth} * var(--px-14));background:{activeKey === r.path ? 'color-mix(in srgb, var(--primary) 26%, transparent)' : 'transparent'}"
+            >
+              <span class="mono" style="flex:none;font-size:var(--px-9);font-weight:700;color:{typeColor(kt)};border:var(--px-1) solid {typeColor(kt)};border-radius:var(--px-3);padding:0 var(--px-4)">{typeBadge(kt)}</span>
+              <span class="mono" style="font-size:var(--px-12);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{r.segment}</span>
+              <span class="mono" style="margin-left:auto;flex:none;font-size:var(--px-10);color:{r.key?.ttl === -2 ? 'var(--error)' : 'var(--muted)'}">{r.key ? ttlLabel(r.key.ttl) : ''}</span>
+            </div>
+          </ContextMenu.Trigger>
+          <ContextMenu.Content class="w-44">
+            <ContextMenu.Item variant="destructive" onclick={() => askDeleteKey(r.path)}>Delete</ContextMenu.Item>
+            <ContextMenu.Item onclick={refresh}>Refresh</ContextMenu.Item>
+          </ContextMenu.Content>
+        </ContextMenu.Root>
       {/if}
     {/each}
   {/if}
 </div>
+
+{#if flushOpen}
+  <div role="presentation" style="position:fixed;inset:0;background:var(--rgba-0-0-0-_5);display:flex;align-items:center;justify-content:center;z-index:92">
+    <div
+      role="dialog"
+      aria-modal="true"
+      onkeydown={(e) => e.key === 'Escape' && (flushOpen = false)}
+      tabindex="-1"
+      style="background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-14);padding:var(--px-18);width:min(var(--px-460), 92vw);box-shadow:0 var(--px-24) var(--px-60) var(--rgba-0-0-0-_55)"
+    >
+      <div style="font-size:var(--px-14);font-weight:600;color:var(--text);margin-bottom:var(--px-8)">Flush database</div>
+      <div style="font-size:var(--px-12_5);color:var(--text2);line-height:1.45;margin-bottom:var(--px-16)">Run <span class="mono" style="color:var(--text)">FLUSHDB</span> on <span class="mono" style="color:var(--text)">db{curDb}</span>? This deletes <b>every key</b> in this database and cannot be undone.</div>
+      <div style="display:flex;gap:var(--px-8);justify-content:flex-end">
+        <span onclick={() => (flushOpen = false)} onkeydown={(e) => e.key === 'Enter' && (flushOpen = false)} role="button" tabindex="0" class="eg-btn">Cancel</span>
+        <span onclick={confirmFlush} onkeydown={(e) => e.key === 'Enter' && confirmFlush()} role="button" tabindex="0" class="eg-btn danger" style={flushBusy ? 'opacity:.6;pointer-events:none' : ''}>Flush db{curDb}</span>
+      </div>
+    </div>
+  </div>
+{/if}
+
+{#if delTarget}
+  <div role="presentation" style="position:fixed;inset:0;background:var(--rgba-0-0-0-_5);display:flex;align-items:center;justify-content:center;z-index:92">
+    <div
+      role="dialog"
+      aria-modal="true"
+      onkeydown={(e) => e.key === 'Escape' && (delTarget = null)}
+      tabindex="-1"
+      style="background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-14);padding:var(--px-18);width:min(var(--px-460), 92vw);box-shadow:0 var(--px-24) var(--px-60) var(--rgba-0-0-0-_55)"
+    >
+      <div style="font-size:var(--px-14);font-weight:600;color:var(--text);margin-bottom:var(--px-8)">Delete from Redis</div>
+      <div style="font-size:var(--px-12_5);color:var(--text2);line-height:1.45;margin-bottom:var(--px-16)">Delete <span class="mono" style="color:var(--text)">{delTarget.label}</span>? This runs DEL on Redis and cannot be undone.</div>
+      <div style="display:flex;gap:var(--px-8);justify-content:flex-end">
+        <span onclick={() => (delTarget = null)} onkeydown={(e) => e.key === 'Enter' && (delTarget = null)} role="button" tabindex="0" class="eg-btn">Cancel</span>
+        <span onclick={confirmDelete} onkeydown={(e) => e.key === 'Enter' && confirmDelete()} role="button" tabindex="0" class="eg-btn danger" style={delBusy ? 'opacity:.6;pointer-events:none' : ''}>Delete</span>
+      </div>
+    </div>
+  </div>
+{/if}
 
 {#if addOpen}
   <div
@@ -321,6 +416,12 @@
     color: var(--hex-fff);
     background: var(--primary);
     border-color: var(--primary);
+    font-weight: 600;
+  }
+  .eg-btn.danger {
+    color: var(--hex-fff);
+    background: var(--error);
+    border-color: var(--error);
     font-weight: 600;
   }
 </style>

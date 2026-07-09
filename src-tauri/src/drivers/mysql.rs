@@ -201,9 +201,13 @@ impl MySqlDriver {
 
     pub async fn tables(&mut self, schema: &str) -> Result<Vec<TableInfo>, QueryError> {
         let rows = sqlx::query(
+            // information_schema numeric columns are BIGINT UNSIGNED — CAST to SIGNED
+            // so sqlx decodes them as i64 (otherwise try_get::<i64> silently yields None,
+            // which is why row_estimate used to come back empty for MySQL).
             "SELECT TABLE_NAME,
                     CASE TABLE_TYPE WHEN 'VIEW' THEN 'view' ELSE 'table' END,
-                    COALESCE(TABLE_ROWS, 0)
+                    CAST(COALESCE(TABLE_ROWS, 0) AS SIGNED),
+                    CAST(COALESCE(DATA_LENGTH, 0) + COALESCE(INDEX_LENGTH, 0) AS SIGNED)
              FROM information_schema.TABLES
              WHERE CONVERT(TABLE_SCHEMA USING utf8mb4) = CONVERT(? USING utf8mb4)
              ORDER BY TABLE_NAME",
@@ -221,6 +225,7 @@ impl MySqlDriver {
                 row_estimate: r.try_get::<i64, _>(2).ok(),
                 locked: false,
                 engine: None,
+                data_length: r.try_get::<i64, _>(3).ok(),
             })
             .collect())
     }

@@ -11,7 +11,9 @@ vi.mock('$lib/ipc', () => ({
   listConnections: vi.fn(async () => []),
 }))
 
+import * as ipc from '$lib/ipc'
 import { tabs } from './tabs.svelte'
+import type { TabState } from '$lib/types'
 
 function reset() {
   tabs.tabs = []
@@ -219,5 +221,88 @@ describe('split view (T11)', () => {
     tabs.moveToSplit(b.id, 'v')
     tabs.toggleSplitDir()
     expect(tabs.splitDir).toBe('h')
+  })
+})
+
+describe('Objects tab — pinned, non-closable singleton', () => {
+  it('opens a pinned "Objects" tab at index 0 and activates it', () => {
+    tabs.openSqlTab({ connectionId: null })
+    const obj = tabs.openObjectsTab({ connId: 'c1', database: 'library_db', schema: 'library_db' })
+    expect(obj.contentType).toBe('objects')
+    expect(obj.title).toBe('Objects')
+    expect(obj.isPinned).toBe(true)
+    expect(tabs.tabs[0].id).toBe(obj.id) // pinned at the very front
+    expect(tabs.activeTabId).toBe(obj.id)
+    expect(obj.state).toEqual({ database: 'library_db', schema: 'library_db' })
+  })
+
+  it('is a singleton — reopening retargets the SAME tab (no second Objects tab)', () => {
+    const first = tabs.openObjectsTab({ connId: 'c1', database: 'app', schema: null })
+    const firstId = first.id
+    tabs.openSqlTab({ connectionId: null })
+    const again = tabs.openObjectsTab({ connId: 'c1', database: 'analytics', schema: null })
+    expect(again.id).toBe(firstId) // same tab object
+    expect(tabs.tabs.filter((t) => t.contentType === 'objects')).toHaveLength(1)
+    expect(again.state).toEqual({ database: 'analytics', schema: null })
+    expect(tabs.tabs[0].id).toBe(firstId) // still index 0
+    expect(tabs.activeTabId).toBe(firstId)
+  })
+
+  it('cannot be closed — requestClose / forceClose / middle-click are no-ops', () => {
+    const obj = tabs.openObjectsTab({ connId: 'c1', database: 'app' })
+    expect(tabs.requestClose([obj.id])).toBe(false)
+    expect(tabs.byId(obj.id)).not.toBeNull()
+    tabs.forceClose([obj.id])
+    expect(tabs.byId(obj.id)).not.toBeNull()
+    expect(tabs.isClosable(obj)).toBe(false)
+  })
+
+  it('Close All keeps only the Objects tab', () => {
+    const obj = tabs.openObjectsTab({ connId: 'c1', database: 'app' })
+    tabs.openSqlTab({ connectionId: null })
+    tabs.openSqlTab({ connectionId: null })
+    tabs.requestClose(tabs.tabs.map((t) => t.id))
+    expect(tabs.tabs.map((t) => t.id)).toEqual([obj.id])
+  })
+
+  it('Close Others keeps the Objects tab plus the target', () => {
+    const obj = tabs.openObjectsTab({ connId: 'c1', database: 'app' })
+    const c = tabs.openSqlTab({ connectionId: null })
+    const d = tabs.openSqlTab({ connectionId: null })
+    tabs.closeOthers(c.id)
+    const ids = tabs.tabs.map((t) => t.id)
+    expect(ids).toContain(obj.id)
+    expect(ids).toContain(c.id)
+    expect(ids).not.toContain(d.id)
+  })
+
+  it('cannot be dragged, and nothing can be dropped before it (stays index 0)', () => {
+    const obj = tabs.openObjectsTab({ connId: 'c1', database: 'app' })
+    const a = tabs.openSqlTab({ connectionId: null })
+    const b = tabs.openSqlTab({ connectionId: null })
+    // tabs = [obj, a, b]
+    tabs.reorder(0, 2) // try to move Objects — must be refused
+    expect(tabs.tabs[0].id).toBe(obj.id)
+    tabs.reorder(2, 0) // try to drop `b` before Objects — clamps to index 1
+    expect(tabs.tabs[0].id).toBe(obj.id)
+    expect(tabs.tabs[1].id).toBe(b.id)
+    expect(tabs.tabs[2].id).toBe(a.id)
+  })
+
+  it('is not duplicated by duplicate()', () => {
+    const obj = tabs.openObjectsTab({ connId: 'c1', database: 'app' })
+    tabs.duplicate(obj.id)
+    expect(tabs.tabs.filter((t) => t.contentType === 'objects')).toHaveLength(1)
+  })
+
+  it('restore keeps the Objects tab at index 0 even if persisted out of order', async () => {
+    const persisted: TabState[] = [
+      { id: 't-sql', connectionId: null, connectionName: '', systemType: 'orphan', contentType: 'sql-editor', title: 'Q', isPinned: false, isDirty: false, state: {} },
+      { id: 't-obj', connectionId: null, connectionName: '', systemType: 'orphan', contentType: 'objects', title: 'Objects', isPinned: true, isDirty: false, state: { database: 'app', schema: null } },
+    ]
+    vi.mocked(ipc.loadTabs).mockResolvedValueOnce(persisted as never)
+    tabs.restored = false
+    await tabs.restore()
+    expect(tabs.tabs[0].contentType).toBe('objects')
   })
 })

@@ -66,3 +66,39 @@ test('nats subject messages: per-message copy + clear (delete by seq)', async ({
 
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
+
+// Item 3: selecting a record highlights it (blue, Result-Grid style) WITHOUT hiding
+// the three per-row action icons — they flip to white so they stay visible/clickable.
+test('nats subject messages: selecting a row keeps the 3 action icons visible', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(String(e)))
+  await blockRemoteFonts(page)
+  await page.goto(APP_URL)
+  await page.waitForSelector('#app > *', { timeout: 15_000 })
+  await page.waitForTimeout(300)
+
+  await page.getByRole('button', { name: /Messaging NATS/ }).first().click()
+  await page.waitForTimeout(400)
+  await page.getByText('ORDERS', { exact: true }).first().dblclick()
+  await page.waitForTimeout(300)
+  await page.getByText('orders.eu', { exact: true }).first().click()
+  await page.waitForTimeout(400)
+
+  const row = page.locator('tbody tr').first()
+  // click a data cell (not an icon) to select the record
+  await row.locator('td').nth(1).click()
+  await expect(row).toHaveAttribute('aria-selected', 'true')
+
+  // all three icons remain present + visible on the selected (blue) row
+  const view = row.locator('[title="View payload as JSON"]')
+  const copy = row.locator('[title="Copy full payload"]')
+  const del = row.locator('[title="Delete this message (by sequence)"]')
+  await expect(view).toBeVisible()
+  await expect(copy).toBeVisible()
+  await expect(del).toBeVisible()
+  // they turn white on selection (contrast with the blue highlight = not hidden)
+  expect(await copy.evaluate((el) => getComputedStyle(el).color)).toBe('rgb(255, 255, 255)')
+  expect(await del.evaluate((el) => getComputedStyle(el).color)).toBe('rgb(255, 255, 255)')
+
+  expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
+})

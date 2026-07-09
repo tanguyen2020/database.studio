@@ -17,7 +17,7 @@
 </script>
 
 {#if key === 'postgres'}
-  <img src="/assets/db-postgres.png" width={size} height={size} style="object-fit:contain;display:block" alt="postgres" />
+  <img src="/assets/db-postgres.svg" width={size} height={size} style="object-fit:contain;display:block" alt="postgres" />
 {:else if key === 'mysql'}
   <img src="/assets/db-mysql.png" width={size} height={size} style="object-fit:contain;display:block" alt="mysql" />
 {:else if key === 'mssql'}

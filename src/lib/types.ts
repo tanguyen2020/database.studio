@@ -129,6 +129,8 @@ export interface TableInfo {
   locked: boolean
   /** ClickHouse engine (for explorer badge) */
   engine?: string
+  /** On-disk size in bytes (best-effort; undefined where unavailable). */
+  data_length?: number
 }
 
 export interface ColumnInfo {
@@ -220,6 +222,7 @@ export type TabContentType =
   | 'index-scanner'
   | 'index-manager'
   | 'admin'
+  | 'objects'
 
 export interface TabState {
   id: string

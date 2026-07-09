@@ -296,6 +296,7 @@ impl SqliteDriver {
                     row_estimate: None,
                     locked,
                     engine: None,
+                    data_length: None,
                 });
             }
             // sqlite_master itself is browsable (locked/read-only).
@@ -306,6 +307,7 @@ impl SqliteDriver {
                 row_estimate: None,
                 locked: true,
                 engine: None,
+                data_length: None,
             });
             Ok(out)
         })

@@ -190,6 +190,41 @@ test('explorer: NATS delete-subject removes the subject, delete-stream is its ow
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
 
+// Item 2: confirming "Delete stream" removes it on the server — it must NOT reappear
+// after a Refresh (the demo stream list is stateful, mirroring the real backend which
+// is covered by the js_delete_stream integration assertion).
+test('explorer: NATS delete-stream removes it and it stays gone after Refresh', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(String(e)))
+  await blockRemoteFonts(page)
+  await page.goto(APP_URL)
+  await page.waitForSelector('#app > *', { timeout: 15_000 })
+  await page.waitForTimeout(300)
+
+  await page.getByRole('button', { name: /Messaging NATS/ }).first().click()
+  await page.waitForTimeout(500)
+  await expect(page.getByText('ORDERS', { exact: true }).first()).toBeVisible({ timeout: 8000 })
+
+  // Delete stream → Confirm (destructive)
+  await page.getByText('ORDERS', { exact: true }).first().click({ button: 'right' })
+  await page.waitForTimeout(150)
+  await page.getByText('Delete stream', { exact: true }).first().click()
+  await page.waitForTimeout(200)
+  await page.getByRole('dialog').getByRole('button', { name: 'Confirm' }).click()
+  await page.waitForTimeout(500)
+
+  // gone from the tree; the sibling stream survives
+  await expect(page.getByText('ORDERS', { exact: true })).toHaveCount(0)
+  await expect(page.getByText('EVENTS', { exact: true }).first()).toBeVisible()
+
+  // and it STAYS gone after an explicit Refresh (re-fetch from the server)
+  await page.getByRole('button', { name: 'Refresh', exact: true }).click()
+  await page.waitForTimeout(500)
+  await expect(page.getByText('ORDERS', { exact: true })).toHaveCount(0)
+
+  expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
+})
+
 // Clear messages (subject) → in-app confirm popup; confirming purges and refreshes
 // the open subject-messages tab.
 test('explorer: NATS clear-messages shows a confirm popup and refreshes the tab', async ({ page }) => {

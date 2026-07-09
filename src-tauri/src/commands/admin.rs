@@ -42,12 +42,14 @@ pub fn admin_query(system: &str, view: &str) -> Option<String> {
              ORDER BY state, pid"
         }
         ("mysql" | "mariadb", "sessions") => {
-            "SELECT id AS pid, user AS username, db AS database, command AS state, \
+            // `database` is a reserved word → must be back-quoted as a column alias.
+            "SELECT id AS pid, user AS username, db AS `database`, command AS state, \
                     time AS seconds, LEFT(COALESCE(info,''),120) AS query \
              FROM information_schema.processlist ORDER BY time DESC"
         }
         ("mssql", "sessions") => {
-            "SELECT session_id AS pid, login_name AS username, DB_NAME(database_id) AS database, \
+            // `database` is a reserved keyword → must be bracket-quoted as a column alias.
+            "SELECT session_id AS pid, login_name AS username, DB_NAME(database_id) AS [database], \
                     status AS state, cpu_time AS cpu_ms FROM sys.dm_exec_sessions WHERE is_user_process = 1 \
              ORDER BY session_id"
         }
@@ -195,8 +197,11 @@ mod tests {
         assert!(admin_query("postgres", "locks").unwrap().contains("pg_locks"));
         assert!(admin_query("postgres", "users").unwrap().contains("pg_roles"));
         assert!(admin_query("postgres", "extensions").unwrap().contains("pg_available_extensions"));
-        assert!(admin_query("mysql", "sessions").unwrap().contains("processlist"));
-        assert!(admin_query("mssql", "sessions").unwrap().contains("dm_exec_sessions"));
+        // the reserved word `database` MUST be quoted as an alias (else a syntax error)
+        let my = admin_query("mysql", "sessions").unwrap();
+        assert!(my.contains("processlist") && my.contains("AS `database`"), "mysql alias back-quoted: {my}");
+        let ms = admin_query("mssql", "sessions").unwrap();
+        assert!(ms.contains("dm_exec_sessions") && ms.contains("AS [database]"), "mssql alias bracket-quoted: {ms}");
         assert!(admin_query("redis", "sessions").is_none());
         // extensions chỉ PG
         assert!(admin_query("mysql", "extensions").is_none());

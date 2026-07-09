@@ -11,6 +11,7 @@
   import * as ipc from '$lib/ipc'
   import SystemIcon from '$lib/components/SystemIcon.svelte'
   import RedisExplorer from '$lib/components/explorer/RedisExplorer.svelte'
+  import TableContextMenu from '$lib/components/explorer/TableContextMenu.svelte'
   import { connections } from '$lib/stores/connections.svelte'
   import { explorer } from '$lib/stores/explorer.svelte'
   import { tabs } from '$lib/stores/tabs.svelte'
@@ -55,6 +56,13 @@
   // MySQL/MariaDB expose each database as a schema node (SCHEMATA) — show it with
   // the DataGrip-style database folder icon, not the plain schema glyph.
   const schemaIsDatabase = $derived(selected?.system === 'mysql' || selected?.system === 'mariadb')
+  // Systems whose schema-tree nodes ARE databases (double-clicking one opens the
+  // Objects tab): MySQL/MariaDB (SCHEMATA) and ClickHouse. For PG/MSSQL the schema
+  // nodes are schemas — their database nodes are the current-DB header / foreign-DB
+  // nodes, handled separately below.
+  const schemaNodeIsDatabase = $derived(
+    selected?.system === 'mysql' || selected?.system === 'mariadb' || selected?.system === 'clickhouse',
+  )
   const showRoutines = $derived(!isSqlite && !isClickhouse)
   const showTriggers = $derived(!isClickhouse)
   // AUDIT-4 item 2 — PG/MSSQL bind one DB per connection; the tree nests schemas
@@ -233,6 +241,27 @@
     }
   }
 
+  // Double-clicking a database name opens (or retargets) the pinned Objects tab, in
+  // ADDITION to the existing expand/collapse. Three database-node shapes:
+  //  - schema-as-database node (MySQL/MariaDB/ClickHouse): expand + Objects(schema).
+  //  - current-database header (PG/MSSQL): Objects across all schemas.
+  //  - foreign-database node (PG/MSSQL): attach + expand + Objects across schemas.
+  function openObjectsForSchemaDb(schemaName: string) {
+    if (!selected) return
+    expandSchema(schemaName) // keep the original toggle behavior
+    tabs.openObjectsTab({ connId: selected.id, database: schemaName, schema: schemaName })
+  }
+  function openObjectsForCurrentDb() {
+    if (!selected) return
+    tabs.openObjectsTab({ connId: selected.id, database: curDbName || selected.database || 'database' })
+  }
+  async function openObjectsForForeignDb(dbName: string) {
+    if (!selected) return
+    await toggleForeignDb(dbName) // keep the original expand/collapse (attaches on expand)
+    const sub = dbSubId[dbName] ?? selected.id
+    tabs.openObjectsTab({ connId: sub, database: dbName })
+  }
+
   // Cassandra (Phase 4b): cây keyspace lấy qua command chuyên biệt (cassandra_tree),
   // không đi qua explorer store quan hệ.
   const isCassandra = $derived(selected?.system === 'cassandra')
@@ -253,6 +282,31 @@
     } catch (e) {
       cassError = String(e)
       cassTree = null
+    }
+  }
+
+  // Header "⟳ Refresh" — works for EVERY connection type by dispatching to the right
+  // reload path (relational/ClickHouse schema cache, Kafka/NATS streaming, Redis key
+  // browser, Cassandra keyspace tree). Guarded + spinning indicator (Refresh rule chung).
+  let refreshingTree = $state(false)
+  async function refreshConnection() {
+    const s = selected
+    if (!s || refreshingTree) return
+    refreshingTree = true
+    try {
+      if (s.system === 'kafka' || s.system === 'nats') {
+        await explorer.loadStreaming(s.id, s.system, true)
+      } else if (s.system === 'redis') {
+        explorer.bumpRedis(s.id) // RedisExplorer reloads its key list on the tick
+      } else if (s.system === 'cassandra') {
+        await loadCass(s.id)
+      } else {
+        // relational + ClickHouse: rebuild the schema cache; PG/MSSQL also re-list DBs
+        await explorer.refresh(s.id, { kind: 'connection' })
+        if (s.system === 'postgres' || s.system === 'mssql') await explorer.loadDatabases(s.id)
+      }
+    } finally {
+      refreshingTree = false
     }
   }
   // NATS mark (blue tile + white "N" + chat-bubble tail) served from an asset
@@ -361,9 +415,10 @@
       async () => {
         if (!selected) return
         try {
-          await ipc.natsJsDeleteStream(selected.id, stream)
+          await ipc.natsJsDeleteStream(selected.id, stream) // throws if the server didn't delete
           toasts.success(`Deleted stream ${stream}`, 'nats')
-          explorer.refreshStreaming(selected.id)
+          // await a FRESH server list so the tree reflects the real server state
+          await explorer.loadStreaming(selected.id, 'nats', true)
         } catch (e) {
           toasts.error(String(e), 'nats')
         }
@@ -845,13 +900,15 @@
       <span class="mono" style="font-size:var(--px-11_5);color:var(--text2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{selected.name}</span>
     {/if}
     <span
-      onclick={() => selected && explorer.refresh(selected.id, { kind: 'connection' })}
-      onkeydown={(e) => e.key === 'Enter' && selected && explorer.refresh(selected.id, { kind: 'connection' })}
+      onclick={refreshConnection}
+      onkeydown={(e) => e.key === 'Enter' && refreshConnection()}
       role="button"
       tabindex="0"
+      aria-busy={refreshingTree}
+      aria-label="Refresh"
       title="Refresh"
-      style="margin-left:auto;cursor:pointer;color:var(--muted);font-size:var(--px-13)"
-    >⟳</span>
+      style="margin-left:auto;display:inline-flex;align-items:center;gap:var(--px-4);cursor:{refreshingTree ? 'default' : 'pointer'};color:var(--muted);font-size:var(--px-11_5);font-weight:600;opacity:{selected ? (refreshingTree ? 0.6 : 1) : 0.4}"
+    ><span class="tree-refresh-glyph" class:spinning={refreshingTree} style="font-size:var(--px-13)">⟳</span>{refreshingTree ? 'Refreshing…' : 'Refresh'}</span>
   </div>
 
   <!-- filter — finds databases and objects by name (schema-tree systems) -->
@@ -1120,7 +1177,7 @@
           </ContextMenu.Content>
         {/snippet}
         {#if !dbFiltering || matchDb(curDbName)}
-          {@render row({ key: 'curdb', depth: 0, glyph: '', svg: DB_FOLDER_SVG, color: 'var(--primary)', name: curDb?.name ?? selected.database ?? 'database', meta: 'current', head: true }, curDbMenu)}
+          {@render row({ key: 'curdb', depth: 0, glyph: '', svg: DB_FOLDER_SVG, color: 'var(--primary)', name: curDb?.name ?? selected.database ?? 'database', meta: 'current', head: true, onDblClick: openObjectsForCurrentDb }, curDbMenu)}
         {/if}
       {/if}
 
@@ -1173,6 +1230,8 @@
           head: true,
           expandable: true,
           onClick: () => expandSchema(schema.name),
+          // double-click a database node → expand/collapse (as before) + Objects tab
+          onDblClick: schemaNodeIsDatabase ? () => openObjectsForSchemaDb(schema.name) : undefined,
         }, schemaMenu)}
 
         {#if sOpen && sc}
@@ -1217,88 +1276,19 @@
               {@const tbOpen = expanded.has(`t:${schema.name}.${t.name}`)}
               {@const detail = sc.tableDetails[t.name]}
               {#snippet tableMenu()}
-                <ContextMenu.Content class="w-52">
-                  <ContextMenu.Item onclick={() => openData(schema.name, t)}>Open Data</ContextMenu.Item>
-                  <ContextMenu.Item onclick={() => selected && importWizard.show(selected.id, schema.name)}>Import Data…</ContextMenu.Item>
-                  <ContextMenu.Item onclick={() => selected && exportWizard.showTable(selected.id, schema.name, t.name)}>Export Data…</ContextMenu.Item>
-                  <ContextMenu.Item onclick={() => selected && copyWizard.show(selected.id, schema.name, t.name)}>Copy to…</ContextMenu.Item>
-                  <ContextMenu.Item onclick={() => selected && testDataWizard.show(selected.id, schema.name, t.name)}>Generate Test Data…</ContextMenu.Item>
-                  <ContextMenu.Item onclick={() => newQuery(schema.name, t.name)}>New Query</ContextMenu.Item>
-                  <ContextMenu.Separator />
-                  <ContextMenu.Item onclick={() => selected && tabs.openTableDesigner(selected.id, schema.name, t.name)}>Design Table</ContextMenu.Item>
-                  <ContextMenu.Item onclick={() => stmtTab(`Alter ${t.name}`, genAlterTable(selected!.system, schema.name, t.name), dbForSchema(schema.name))}>Alter Table…</ContextMenu.Item>
-                  <ContextMenu.Item onclick={() => selected && tabs.openIndexManager(selected.id, schema.name, t.name)}>Manage Indexes & FKs…</ContextMenu.Item>
-                  {#if !isClickhouse && supportsPartitioning(selected!.system)}
-                    <ContextMenu.Sub>
-                      <ContextMenu.SubTrigger>Partitions</ContextMenu.SubTrigger>
-                      <ContextMenu.SubContent class="w-52">
-                        <ContextMenu.Item onclick={() => selected && showPartitions(selected.id, schema.name, t.name, `t:${schema.name}.${t.name}`, `p:${schema.name}.${t.name}`)}>Show Partitions</ContextMenu.Item>
-                        <ContextMenu.Item onclick={() => selected && addPartitionWizard.show(selected.id, schema.name, t.name, selected.system, dbForSchema(schema.name))}>Add Partition…</ContextMenu.Item>
-                      </ContextMenu.SubContent>
-                    </ContextMenu.Sub>
-                  {/if}
-                  <ContextMenu.Item
-                    onclick={() => stmtTab(`Rename ${t.name}`, genRename(selected!.system, schema.name, t.name), dbForSchema(schema.name))}
-                  >
-                    Rename…
-                  </ContextMenu.Item>
-                  <ContextMenu.Separator />
-                  <ContextMenu.Item onclick={() => genSqlTab('select', schema.name, t.name)}>Generate SQL · SELECT</ContextMenu.Item>
-                  <ContextMenu.Item onclick={() => genSqlTab('insert', schema.name, t.name)}>Generate SQL · INSERT</ContextMenu.Item>
-                  <ContextMenu.Item onclick={() => genSqlTab('update', schema.name, t.name)}>Generate SQL · UPDATE</ContextMenu.Item>
-                  <ContextMenu.Item onclick={() => genSqlTab('delete', schema.name, t.name)}>Generate SQL · DELETE</ContextMenu.Item>
-                  <ContextMenu.Sub>
-                    <ContextMenu.SubTrigger>Generate Scripts</ContextMenu.SubTrigger>
-                    <ContextMenu.SubContent class="w-44">
-                      <ContextMenu.Item onclick={() => genTableScript(schema.name, t.name, 'structure')}>Structure Only</ContextMenu.Item>
-                      <ContextMenu.Item onclick={() => genTableScript(schema.name, t.name, 'data')}>Data Only</ContextMenu.Item>
-                      <ContextMenu.Item onclick={() => genTableScript(schema.name, t.name, 'both')}>Structure and Data</ContextMenu.Item>
-                    </ContextMenu.SubContent>
-                  </ContextMenu.Sub>
-                  <ContextMenu.Item onclick={() => genSqlTab('ddl', schema.name, t.name)}>View DDL</ContextMenu.Item>
-                  {#if isClickhouse}
-                    <ContextMenu.Item onclick={() => chTtl.show(selected!.id, schema.name, t.name)}>TTL Policy…</ContextMenu.Item>
-                    <ContextMenu.Item onclick={() => stmtTab(`Optimize ${t.name}`, chops.optimizeFinal(schema.name, t.name))}>Optimize Table (FINAL)</ContextMenu.Item>
-                    <ContextMenu.Item onclick={() => stmtTab(`${t.name} · partitions`, chops.showPartitions(t.name))}>Show Partitions</ContextMenu.Item>
-                    <ContextMenu.Item onclick={() => stmtTab(`${t.name} · engine`, chops.showEngine(t.name))}>Show Engine / Settings</ContextMenu.Item>
-                    <ContextMenu.Item onclick={() => stmtTab(`${t.name} · mutations`, chops.showMutations(t.name))}>Show Mutations</ContextMenu.Item>
-                    {#if chops.needsFinal(t.engine)}
-                      <ContextMenu.Item onclick={() => stmtTab(`${t.name} · FINAL`, `SELECT * FROM ${quoteIdent(selected!.system, t.name)} FINAL LIMIT 100;`)}>Preview (SELECT … FINAL)</ContextMenu.Item>
-                    {/if}
-                    <ContextMenu.Item onclick={() => stmtTab(`Detach partition · ${t.name}`, chops.detachPartition(schema.name, t.name))}>Detach Partition…</ContextMenu.Item>
-                    <ContextMenu.Item onclick={() => stmtTab(`Freeze · ${t.name}`, chops.freezePartition(schema.name, t.name))}>Freeze (Backup) Partition</ContextMenu.Item>
-                    <ContextMenu.Item variant="destructive" onclick={() => stmtTab(`Drop partition · ${t.name}`, chops.dropPartition(schema.name, t.name))}>Drop Partition…</ContextMenu.Item>
-                  {/if}
-                  <ContextMenu.Separator />
-                  <ContextMenu.Item onclick={() => copyName(t.name)}>Copy Name</ContextMenu.Item>
-                  <ContextMenu.Item
-                    onclick={() => copyName(`${quoteIdent(selected!.system, schema.name)}.${quoteIdent(selected!.system, t.name)}`)}
-                  >
-                    Copy Qualified Name
-                  </ContextMenu.Item>
-                  <ContextMenu.Item onclick={() => copyDdl(schema.name, t.name)}>Copy DDL</ContextMenu.Item>
-                  <ContextMenu.Separator />
-                  <ContextMenu.Item
-                    onclick={() => selected && explorer.refresh(selected.id, { kind: 'table', schema: schema.name, table: t.name })}
-                  >
-                    Refresh
-                  </ContextMenu.Item>
-                  <ContextMenu.Separator />
-                  {#if !t.locked}
-                    <ContextMenu.Item
-                      variant="destructive"
-                      onclick={() => stmtTab(`Truncate ${t.name}`, genTruncate(selected!.system, schema.name, t.name), dbForSchema(schema.name))}
-                    >
-                      Truncate
-                    </ContextMenu.Item>
-                    <ContextMenu.Item
-                      variant="destructive"
-                      onclick={() => stmtTab(`Drop ${t.name}`, genDrop(selected!.system, schema.name, t.name), dbForSchema(schema.name))}
-                    >
-                      Drop
-                    </ContextMenu.Item>
-                  {/if}
-                </ContextMenu.Content>
+                <!-- the single shared relational table menu (rule chung); the tree
+                     supplies the two context actions (reveal Partitions, refresh). -->
+                <TableContextMenu
+                  connId={selected!.id}
+                  schema={schema.name}
+                  table={t.name}
+                  system={selected!.system}
+                  locked={t.locked}
+                  engine={t.engine}
+                  database={dbForSchema(schema.name)}
+                  onShowPartitions={() => selected && showPartitions(selected.id, schema.name, t.name, `t:${schema.name}.${t.name}`, `p:${schema.name}.${t.name}`)}
+                  onRefresh={() => selected && explorer.refresh(selected.id, { kind: 'table', schema: schema.name, table: t.name })}
+                />
               {/snippet}
               {@render row(
                 {
@@ -1813,7 +1803,7 @@
               <ContextMenu.Item variant="destructive" onclick={() => selected && stmtTab(`Drop database ${db.name}`, genDropDatabase(selected.system, db.name))}>Drop Database…</ContextMenu.Item>
             </ContextMenu.Content>
           {/snippet}
-          {@render row({ key: fkey, depth: 0, glyph: '', svg: DB_FOLDER_SVG, color: C.folder, name: db.name, meta: attaching === db.name ? 'attaching…' : 'database', head: true, expandable: true, onClick: () => toggleForeignDb(db.name) }, dbMenu)}
+          {@render row({ key: fkey, depth: 0, glyph: '', svg: DB_FOLDER_SVG, color: C.folder, name: db.name, meta: attaching === db.name ? 'attaching…' : 'database', head: true, expandable: true, onClick: () => toggleForeignDb(db.name), onDblClick: () => void openObjectsForForeignDb(db.name) }, dbMenu)}
           {#if expanded.has(fkey) && fcache}
             {#each fcache.schemas ?? [] as fsch (fsch.name)}
               {@const skey = `${fkey}:s:${fsch.name}`}
@@ -2100,6 +2090,18 @@
 {/if}
 
 <style>
+  .tree-refresh-glyph {
+    display: inline-block;
+    line-height: 1;
+  }
+  .tree-refresh-glyph.spinning {
+    animation: tree-refresh-spin 0.7s linear infinite;
+  }
+  @keyframes tree-refresh-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
   .xbtn {
     width: var(--px-26);
     height: var(--px-24);

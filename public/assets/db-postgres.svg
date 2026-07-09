@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="PostgreSQL">
+  <!-- database cylinder (behind, royal blue) -->
+  <g>
+    <path fill="#1a5fc4" d="M44 120 a156 58 0 0 1 312 0 V352 a156 58 0 0 1 -312 0 Z"/>
+    <ellipse cx="200" cy="120" rx="156" ry="58" fill="#2f77db"/>
+    <path fill="none" stroke="#f2f6fc" stroke-width="16" d="M46 200 a156 58 0 0 0 308 0"/>
+    <path fill="none" stroke="#f2f6fc" stroke-width="16" d="M46 280 a156 58 0 0 0 308 0"/>
+  </g>
+  <!-- PostgreSQL elephant (front, periwinkle + blue outline) -->
+  <g fill="#8ea3d4" stroke="#3a5cc4" stroke-width="20" stroke-linejoin="round" stroke-linecap="round">
+    <!-- left ear -->
+    <path d="M232 214 c-40 -34 -96 -20 -104 34 c-6 44 26 78 70 74 c26 -3 44 -22 46 -50 Z"/>
+    <!-- right ear -->
+    <path d="M360 196 c48 -30 108 -8 112 50 c4 50 -34 84 -80 76 c-28 -5 -46 -28 -44 -58 Z"/>
+    <!-- head + trunk -->
+    <path d="M300 168
+             c-58 0 -104 42 -104 104
+             c0 34 14 62 36 82
+             l0 62
+             c0 30 22 50 52 50
+             c22 0 40 -12 48 -32
+             l6 -34
+             c2 -12 12 -20 24 -20
+             c16 0 24 12 22 28
+             c-2 14 -14 22 -28 20
+             c22 26 60 24 80 -6
+             c26 -40 26 -104 -6 -158
+             c-30 -50 -86 -84 -152 -84 Z"/>
+    <!-- tusk -->
+    <path d="M300 350 c-14 6 -22 20 -18 36" fill="#eef2fb"/>
+  </g>
+  <!-- eyes -->
+  <g fill="#243a78">
+    <circle cx="278" cy="256" r="13"/>
+    <circle cx="372" cy="248" r="13"/>
+  </g>
+</svg>

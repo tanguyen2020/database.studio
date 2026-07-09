@@ -195,6 +195,11 @@ async fn pg_full_introspection_surfaces_every_object_type() {
     let tbls = drv.tables("public").await.unwrap();
     assert!(tbls.iter().any(|t| t.name == "v_emp" && t.kind == "view"), "view listed: {tbls:?}");
 
+    // data_length (Objects tab): base tables report an on-disk size (pg_total_relation_size,
+    // ≥ one index metapage even when empty); views leave it unreported.
+    let emp_row = tbls.iter().find(|t| t.name == "emp").unwrap();
+    assert!(emp_row.data_length.is_some_and(|b| b > 0), "table data_length reported: {emp_row:?}");
+
     // secondary index (not the PK) — used by the compare's index diff
     let ix = drv.indexes("public", "emp").await.unwrap();
     assert!(ix.iter().any(|i| i.name == "idx_emp_dept" && !i.primary && i.columns == vec!["dept".to_string()]), "secondary index: {ix:?}");
@@ -852,6 +857,9 @@ async fn mysql_explorer_tree_introspection() {
     let tables = drv.tables("testdb").await.unwrap();
     let base = tables.iter().find(|t| t.name == "students").expect("students table listed");
     assert_eq!(base.kind, "table");
+    // data_length (Objects tab): InnoDB reports DATA_LENGTH + INDEX_LENGTH for the
+    // seeded table (≥ one 16 KB page after the insert above).
+    assert!(base.data_length.is_some_and(|b| b > 0), "table data_length reported: {base:?}");
     let view = tables.iter().find(|t| t.name == "v_students").expect("view listed");
     assert_eq!(view.kind, "view", "view rendered under Views, not Tables");
 
@@ -1128,6 +1136,12 @@ async fn mssql_roundtrip_and_line_error() {
     let out = drv.exec("SELECT TOP 1 v FROM it_t").await.unwrap();
     let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
     assert_eq!(result.rows[0]["v"], serde_json::json!("xin chào"));
+
+    // tables() lists the table with a data_length (Objects tab) — reserved pages from
+    // sys.dm_db_partition_stats (≥ one 8 KB page for the seeded table).
+    let tbls = drv.tables("dbo").await.unwrap();
+    let it_t = tbls.iter().find(|t| t.name == "it_t").expect("it_t listed");
+    assert!(it_t.data_length.is_some_and(|b| b > 0), "mssql data_length reported: {it_t:?}");
 
     // MSSQL trả line number cho lỗi → position
     let err = drv.exec("SELECT 1\nFROM bang_khong_co").await.expect_err("phải fail");
@@ -2160,8 +2174,13 @@ async fn nats_jetstream_streams_consumers_peek() {
     // --- Phase 4 · T9: stream mgmt + KV + Object store ---
     // create/purge/delete stream
     drv.js_create_stream("T9S".into(), vec!["t9.>".into()]).await.unwrap();
+    assert!(drv.js_streams().await.unwrap().iter().any(|s| s.name == "T9S"), "created stream listed");
     drv.js_purge_stream("ORDERS").await.unwrap();
     drv.js_delete_stream("T9S").await.unwrap();
+    // Item 2: a deleted stream must NOT reappear when the list is refreshed — the
+    // delete persists on the NATS server (js.delete_stream), not just in the UI.
+    let after_del: Vec<String> = drv.js_streams().await.unwrap().into_iter().map(|s| s.name).collect();
+    assert!(!after_del.contains(&"T9S".to_string()), "deleted stream gone from list, got {after_del:?}");
     // create/delete consumer + delete message trên ORDERS
     drv.js_create_consumer("ORDERS", "t9cons".into(), String::new()).await.unwrap();
     drv.js_delete_consumer("ORDERS", "t9cons").await.unwrap();
@@ -2189,6 +2208,33 @@ async fn nats_jetstream_streams_consumers_peek() {
     drv.obj_delete_bucket("t9obj").await.unwrap();
     let _ = tokio::fs::remove_file(&up).await;
     let _ = tokio::fs::remove_file(&down).await;
+}
+
+/// Delete stream must remove it ON THE SERVER (not just the local view): after
+/// deleting, a FRESH reconnected client must no longer see the stream. `js_delete_stream`
+/// now verifies the server acknowledged the delete (DeleteStatus.success).
+#[tokio::test]
+async fn nats_delete_stream_persists_on_server_after_reconnect() {
+    use database_studio_lib::drivers::nats::{NatsConnParams, NatsDriver};
+    let c = GenericImage::new("nats", "2.10-alpine")
+        .with_exposed_port(4222.tcp())
+        .with_cmd(vec!["-js"])
+        .start()
+        .await
+        .expect("start nats -js");
+    let port = c.get_host_port_ipv4(4222).await.unwrap();
+    let params = NatsConnParams { host: "localhost".into(), port, user: String::new(), password: String::new(), ssl: false };
+
+    let drv = retry("nats-js", || NatsDriver::connect(&params)).await;
+    drv.js_create_stream("DELME".into(), vec!["delme.>".into()]).await.unwrap();
+    assert!(drv.js_streams().await.unwrap().iter().any(|s| s.name == "DELME"), "created");
+    drv.js_delete_stream("DELME").await.unwrap(); // returns Err if the server doesn't ack
+
+    // reconnect a brand-new client → the server itself must no longer have it
+    let drv2 = retry("nats-js", || NatsDriver::connect(&params)).await;
+    let names: Vec<String> = drv2.js_streams().await.unwrap().into_iter().map(|s| s.name).collect();
+    assert!(!names.contains(&"DELME".to_string()), "stream gone ON SERVER after reconnect: {names:?}");
+    eprintln!("CHK nats_delete_stream_persists_on_server_after_reconnect OK");
 }
 
 // ---------------------------------------------------------------------------
@@ -3603,6 +3649,60 @@ async fn pg_admin_views_and_kill_session() {
     eprintln!("CHK PG admin views (sessions/users/extensions) + kill OK");
 }
 
+/// Item 2 — the MySQL "Sessions" admin query must RUN (previously failed with a
+/// syntax error because the reserved word `database` was used as an unquoted alias).
+#[tokio::test]
+async fn mysql_admin_sessions_query_runs() {
+    use database_studio_lib::commands::admin::admin_query;
+    let c = GenericImage::new("mysql", "8")
+        .with_exposed_port(3306.tcp())
+        .with_env_var("MYSQL_ROOT_PASSWORD", PASS)
+        .with_env_var("MYSQL_DATABASE", "testdb")
+        .start()
+        .await
+        .expect("start mysql container");
+    let port = c.get_host_port_ipv4(3306).await.unwrap();
+    let params = MySqlConnParams {
+        host: "localhost".into(), port, database: "testdb".into(), user: "root".into(),
+        password: PASS.into(), ssl: false, ssl_ca: String::new(), ssl_cert: String::new(), ssl_key: String::new(),
+    };
+    let mut drv = retry("mysql", || MySqlDriver::connect(&params, "mysql")).await;
+
+    let out = drv.exec(&admin_query("mysql", "sessions").unwrap()).await.unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!("sessions rows") };
+    assert!(result.total >= 1, "at least the current session is listed");
+    assert!(result.cols.iter().any(|c| c.0 == "database"), "the `database` alias resolves: {:?}", result.cols);
+    assert!(result.cols.iter().any(|c| c.0 == "pid") && result.cols.iter().any(|c| c.0 == "state"));
+    eprintln!("CHK mysql_admin_sessions_query_runs OK");
+}
+
+/// Item 3 — the MSSQL "Sessions" admin query must RUN (previously failed with
+/// "Incorrect syntax near the keyword 'database'" — the alias is now bracket-quoted).
+#[tokio::test]
+async fn mssql_admin_sessions_query_runs() {
+    use database_studio_lib::commands::admin::admin_query;
+    let c = GenericImage::new("mcr.microsoft.com/mssql/server", "2022-latest")
+        .with_exposed_port(1433.tcp())
+        .with_env_var("ACCEPT_EULA", "Y")
+        .with_env_var("MSSQL_SA_PASSWORD", MSSQL_PASS)
+        .start()
+        .await
+        .expect("start mssql container");
+    let port = c.get_host_port_ipv4(1433).await.unwrap();
+    let params = MssqlConnParams {
+        host: "localhost".into(), port, database: String::new(), user: "sa".into(),
+        password: MSSQL_PASS.into(), ssl: false, ssl_ca: String::new(), auth: "sql".into(),
+    };
+    let mut drv = retry("mssql", || MssqlDriver::connect(&params)).await;
+
+    let out = drv.exec(&admin_query("mssql", "sessions").unwrap()).await.unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!("sessions rows") };
+    assert!(result.total >= 1, "at least the current session is listed");
+    assert!(result.cols.iter().any(|c| c.0 == "database"), "the [database] alias resolves: {:?}", result.cols);
+    assert!(result.cols.iter().any(|c| c.0 == "pid") && result.cols.iter().any(|c| c.0 == "state"));
+    eprintln!("CHK mssql_admin_sessions_query_runs OK");
+}
+
 /// Phase 5 · T23 (CE alternative) — Redis memory analysis qua INFO memory (bản CE
 /// hỗ trợ sẵn), parse thành bảng metric/value.
 #[tokio::test]
@@ -4269,6 +4369,47 @@ async fn redis_select_db_switches_and_isolates_keys() {
     let g0b = drv.command(&["GET".into(), "k".into()]).await.unwrap();
     assert!(g0b.contains("v0"), "db0 value preserved, got {g0b}");
     eprintln!("CHK redis_select_db_switches_and_isolates_keys OK");
+}
+
+/// Explorer Redis context menu — "Delete" must remove the key on the server for real
+/// (DEL), and a subsequent SCAN must no longer list it while siblings survive.
+/// "Refresh" is the same SCAN path the explorer's load() uses.
+#[tokio::test]
+async fn redis_del_removes_key_and_scan_reflects_it() {
+    use database_studio_lib::drivers::redis::{RedisConnParams, RedisDriver};
+    let (_c, port) = start_redis("test123").await;
+    let params = RedisConnParams { host: "localhost".into(), port, password: "test123".into(), db: 0, ssl: false, ssl_ca: String::new() };
+    let mut drv = retry("redis", || RedisDriver::connect(&params)).await;
+
+    // seed a small keyspace (a folder prefix + a sibling)
+    for (k, v) in [("user:1", "a"), ("user:2", "b"), ("session:x", "c")] {
+        drv.command(&["SET".into(), k.into(), v.into()]).await.unwrap();
+    }
+    async fn scan_names(drv: &mut RedisDriver) -> Vec<String> {
+        let mut names = Vec::new();
+        let mut cursor = 0u64;
+        loop {
+            let (next, keys) = drv.scan("*", cursor, 100).await.unwrap();
+            names.extend(keys.into_iter().map(|k| k.name));
+            cursor = next;
+            if cursor == 0 {
+                break;
+            }
+        }
+        names
+    }
+    let before = scan_names(&mut drv).await;
+    assert!(before.contains(&"user:1".to_string()) && before.contains(&"user:2".to_string()) && before.contains(&"session:x".to_string()), "seed present: {before:?}");
+
+    // Delete (single key) → DEL returns 1, key gone from SCAN, siblings intact
+    assert_eq!(drv.del("user:1").await.unwrap(), 1, "DEL removed exactly one key");
+    let after = scan_names(&mut drv).await;
+    assert!(!after.contains(&"user:1".to_string()), "deleted key gone from SCAN: {after:?}");
+    assert!(after.contains(&"user:2".to_string()) && after.contains(&"session:x".to_string()), "siblings survive: {after:?}");
+
+    // DEL of a missing key is a no-op (0), not an error
+    assert_eq!(drv.del("user:1").await.unwrap(), 0, "second DEL removes nothing");
+    eprintln!("CHK redis_del_removes_key_and_scan_reflects_it OK");
 }
 
 // Task 4 — Design Table edit/delete across tabs: the DROP + ALTER COLUMN DDL that

@@ -378,6 +378,16 @@
   // The ▲/▼ buttons remain as a keyboard/click fallback.
   let fieldsBody = $state<HTMLTableSectionElement | null>(null)
   let dragRow = $state<number | null>(null) // current index of the row being dragged
+  let dragStartRow = $state<number | null>(null) // where the drag began (for direction)
+  // Which way the dragged row has moved vs. where it was grabbed — drives the
+  // ↑/↓ direction badge and accent bar so you can see it lifting up or down.
+  const dragDir = $derived<'up' | 'down' | null>(
+    dragRow == null || dragStartRow == null || dragRow === dragStartRow
+      ? null
+      : dragRow < dragStartRow
+        ? 'up'
+        : 'down'
+  )
 
   function reorderCols(from: number, to: number) {
     if (from === to || to < 0 || from < 0 || to >= cols.length || from >= cols.length) return
@@ -414,17 +424,22 @@
   }
   function onDragUp() {
     dragRow = null
+    dragStartRow = null
+    document.body.style.cursor = '' // release the global grabbing cursor
     window.removeEventListener('pointermove', onDragMove)
     window.removeEventListener('pointerup', onDragUp)
   }
   function dragStart(i: number, e: PointerEvent) {
     if (e.button !== 0) return // left button only
     dragRow = i
+    dragStartRow = i
+    document.body.style.cursor = 'grabbing' // whole-window feedback while dragging
     window.addEventListener('pointermove', onDragMove)
     window.addEventListener('pointerup', onDragUp)
     e.preventDefault()
   }
   onDestroy(() => {
+    document.body.style.cursor = ''
     window.removeEventListener('pointermove', onDragMove)
     window.removeEventListener('pointerup', onDragUp)
   })
@@ -524,22 +539,39 @@
           </tr></thead>
           <tbody bind:this={fieldsBody}>
             {#each cols as col, i (col)}
+              {@const dragging = dragRow === i}
               <tr
-                style={`${col.dropped ? 'opacity:0.5;text-decoration:line-through;' : ''}${dragRow === i ? 'background:var(--hover);' : ''}`}
+                style={`${col.dropped ? 'opacity:0.5;text-decoration:line-through;' : ''}${dragging ? `background:color-mix(in srgb, ${accent} 16%, var(--surface));box-shadow:inset var(--px-3) 0 0 ${accent}, 0 var(--px-3) var(--px-8) var(--rgba-0-0-0-_5);position:relative;z-index:1;` : ''}`}
               >
                 <!-- # cell: drag handle (press & hold, move up/down) via POINTER
                      events — reliable in the Tauri WebView where native HTML5 drag
                      is swallowed by the OS drag-drop handler. Row order = column
-                     order emitted on Save. ▲/▼ remain as a click fallback. -->
+                     order emitted on Save. The ⠿ grip reads as "draggable"; while
+                     dragging, the handle becomes a ↑/↓ badge showing the direction.
+                     ▲/▼ remain as a click fallback. -->
                 <td
                   onpointerdown={(e) => dragStart(i, e)}
                   title="Drag to reorder"
-                  style="border-bottom:var(--px-1) solid var(--border);cursor:grab;user-select:none;touch-action:none;padding:0"
+                  style="border-bottom:var(--px-1) solid var(--border);cursor:{dragging ? 'grabbing' : 'grab'};user-select:none;touch-action:none;padding:0"
                 >
-                  <div style="display:flex;align-items:center;justify-content:center;gap:var(--px-3)">
-                    <span onpointerdown={(e) => e.stopPropagation()} onclick={() => moveRow(i, -1)} onkeydown={(e) => e.key === 'Enter' && moveRow(i, -1)} role="button" tabindex="0" title="Move up" style="cursor:pointer;color:{i === 0 ? 'var(--border2)' : 'var(--muted)'};font-size:var(--px-10);line-height:1">▲</span>
-                    <span class="mono" style="color:var(--muted);font-size:var(--px-11);min-width:var(--px-16);text-align:center">{i + 1}</span>
-                    <span onpointerdown={(e) => e.stopPropagation()} onclick={() => moveRow(i, 1)} onkeydown={(e) => e.key === 'Enter' && moveRow(i, 1)} role="button" tabindex="0" title="Move down" style="cursor:pointer;color:{i === cols.length - 1 ? 'var(--border2)' : 'var(--muted)'};font-size:var(--px-10);line-height:1">▼</span>
+                  <div style="display:flex;align-items:center;justify-content:center;gap:var(--px-4)">
+                    {#if dragging}
+                      <!-- direction badge: which way this row is moving vs. grab point -->
+                      <span class="mono" title={dragDir === 'up' ? 'Moving up' : dragDir === 'down' ? 'Moving down' : 'Drag up or down'} style="display:inline-flex;align-items:center;justify-content:center;width:var(--px-16);height:var(--px-16);font-size:var(--px-13);font-weight:700;line-height:1;color:{accent}">{dragDir === 'up' ? '↑' : dragDir === 'down' ? '↓' : '↕'}</span>
+                    {:else}
+                      <!-- grip handle (two columns of dots) — the universal "drag me" affordance -->
+                      <svg width="8" height="14" viewBox="0 0 8 14" aria-hidden="true" style="flex:none;color:var(--muted)">
+                        {#each [2, 7, 12] as cy (cy)}
+                          <circle cx="2" cy={cy} r="1.15" fill="currentColor" />
+                          <circle cx="6" cy={cy} r="1.15" fill="currentColor" />
+                        {/each}
+                      </svg>
+                    {/if}
+                    <span class="mono" style="color:{dragging ? accent : 'var(--muted)'};font-weight:{dragging ? 700 : 400};font-size:var(--px-11);min-width:var(--px-14);text-align:center">{i + 1}</span>
+                    <div style="display:flex;flex-direction:column;line-height:0.7">
+                      <span onpointerdown={(e) => e.stopPropagation()} onclick={() => moveRow(i, -1)} onkeydown={(e) => e.key === 'Enter' && moveRow(i, -1)} role="button" tabindex="0" title="Move up" style="cursor:pointer;color:{i === 0 ? 'var(--border2)' : 'var(--muted)'};font-size:var(--px-9);line-height:0.9">▲</span>
+                      <span onpointerdown={(e) => e.stopPropagation()} onclick={() => moveRow(i, 1)} onkeydown={(e) => e.key === 'Enter' && moveRow(i, 1)} role="button" tabindex="0" title="Move down" style="cursor:pointer;color:{i === cols.length - 1 ? 'var(--border2)' : 'var(--muted)'};font-size:var(--px-9);line-height:0.9">▼</span>
+                    </div>
                   </div>
                 </td>
                 <td style="border-bottom:var(--px-1) solid var(--border);padding:0"><input id={`tdf-${tab.id}-${i}-name`} bind:value={col.name} onkeydown={(e) => fieldKey(e, i, 'name')} class="mono" style="width:100%;border:none;background:transparent;color:var(--text);font-size:var(--px-12_5);padding:var(--px-7) var(--px-12);outline:none" /></td>

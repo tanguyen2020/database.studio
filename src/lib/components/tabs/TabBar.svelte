@@ -79,6 +79,8 @@
     {@const idx = tabs.tabs.indexOf(tab)}
     {@const meta = systemMeta(tab.systemType)}
     {@const isActive = tab.id === activeId}
+    <!-- the pinned Objects tab is a system tab: no close, no drag, no rename -->
+    {@const closable = tab.contentType !== 'objects'}
     <ContextMenu.Root>
       <ContextMenu.Trigger style="display:flex;align-items:stretch;min-width:0">
         <!-- tab — dòng 177 -->
@@ -86,13 +88,13 @@
           role="tab"
           tabindex="0"
           aria-selected={isActive}
-          draggable={renamingId !== tab.id}
+          draggable={renamingId !== tab.id && closable}
           use:scrollActiveIntoView={isActive}
           onclick={() => tabs.activate(tab.id)}
           onauxclick={(e) => {
-            if (e.button === 1) tabs.requestClose([tab.id])
+            if (e.button === 1 && closable) tabs.requestClose([tab.id])
           }}
-          ondblclick={() => startRename(tab.id, tab.title)}
+          ondblclick={() => closable && startRename(tab.id, tab.title)}
           onkeydown={(e) => e.key === 'Enter' && tabs.activate(tab.id)}
           ondragstart={(e) => onDragStart(e, idx)}
           ondragover={(e) => onDragOver(e, idx)}
@@ -128,47 +130,54 @@
           {/if}
           <!-- dirtyMark: '●' hoặc chuỗi rỗng (dòng 4680) — span rỗng không chiếm width -->
           <span style="flex:none;color:{tab.isDirty ? meta.accent : 'transparent'};font-size:var(--px-13)" title={tab.isDirty ? 'Unsaved changes' : ''}>{tab.isDirty ? '●' : ''}</span>
-          <span
-            onclick={(e) => {
-              e.stopPropagation()
-              tabs.requestClose([tab.id])
-            }}
-            onkeydown={(e) => {
-              if (e.key === 'Enter') {
+          {#if closable}
+            <span
+              onclick={(e) => {
                 e.stopPropagation()
                 tabs.requestClose([tab.id])
-              }
-            }}
-            role="button"
-            tabindex="0"
-            title="Close (Ctrl+W)"
-            style="flex:none;color:var(--muted);font-size:var(--px-14);width:var(--px-16);height:var(--px-16);display:flex;align-items:center;justify-content:center;border-radius:var(--px-4)"
-          >×</span>
+              }}
+              onkeydown={(e) => {
+                if (e.key === 'Enter') {
+                  e.stopPropagation()
+                  tabs.requestClose([tab.id])
+                }
+              }}
+              role="button"
+              tabindex="0"
+              title="Close (Ctrl+W)"
+              style="flex:none;color:var(--muted);font-size:var(--px-14);width:var(--px-16);height:var(--px-16);display:flex;align-items:center;justify-content:center;border-radius:var(--px-4)"
+            >×</span>
+          {/if}
         </div>
       </ContextMenu.Trigger>
       <ContextMenu.Content class="w-52">
-        <ContextMenu.Item onclick={() => tabs.togglePin(tab.id)}>
-          {tab.isPinned ? 'Unpin' : 'Pin'}
-        </ContextMenu.Item>
-        <ContextMenu.Item onclick={() => tabs.duplicate(tab.id)}>Duplicate</ContextMenu.Item>
-        <ContextMenu.Item onclick={() => startRename(tab.id, tab.title)}>Rename</ContextMenu.Item>
-        <ContextMenu.Separator />
-        <ContextMenu.Item onclick={() => tabs.requestClose([tab.id])}>Close</ContextMenu.Item>
-        <ContextMenu.Item disabled={tabs.tabs.length <= 1} onclick={() => tabs.closeOthers(tab.id)}>
-          Close Others
-        </ContextMenu.Item>
-        <ContextMenu.Item disabled={idx === tabs.tabs.length - 1} onclick={() => tabs.closeToRight(tab.id)}>
-          Close to the Right
-        </ContextMenu.Item>
-        <ContextMenu.Item onclick={() => tabs.requestClose(tabs.tabs.map((t) => t.id))}>Close All</ContextMenu.Item>
-        <ContextMenu.Separator />
-        {#if !tabs.splitDir}
-          <ContextMenu.Item disabled={tabs.tabs.length <= 1} onclick={() => tabs.moveToSplit(tab.id, 'v')}>Split Right</ContextMenu.Item>
-          <ContextMenu.Item disabled={tabs.tabs.length <= 1} onclick={() => tabs.moveToSplit(tab.id, 'h')}>Split Down</ContextMenu.Item>
+        {#if !closable}
+          <!-- pinned system tab: no close / duplicate / split / rename actions -->
+          <ContextMenu.Item disabled>Objects (pinned)</ContextMenu.Item>
         {:else}
-          <ContextMenu.Item onclick={() => tabs.moveToSplit(tab.id)}>Move to Other Pane</ContextMenu.Item>
-          <ContextMenu.Item onclick={() => tabs.toggleSplitDir()}>Toggle Split Direction</ContextMenu.Item>
-          <ContextMenu.Item onclick={() => tabs.closeSplit()}>Close Split (Merge)</ContextMenu.Item>
+          <ContextMenu.Item onclick={() => tabs.togglePin(tab.id)}>
+            {tab.isPinned ? 'Unpin' : 'Pin'}
+          </ContextMenu.Item>
+          <ContextMenu.Item onclick={() => tabs.duplicate(tab.id)}>Duplicate</ContextMenu.Item>
+          <ContextMenu.Item onclick={() => startRename(tab.id, tab.title)}>Rename</ContextMenu.Item>
+          <ContextMenu.Separator />
+          <ContextMenu.Item onclick={() => tabs.requestClose([tab.id])}>Close</ContextMenu.Item>
+          <ContextMenu.Item disabled={tabs.tabs.length <= 1} onclick={() => tabs.closeOthers(tab.id)}>
+            Close Others
+          </ContextMenu.Item>
+          <ContextMenu.Item disabled={idx === tabs.tabs.length - 1} onclick={() => tabs.closeToRight(tab.id)}>
+            Close to the Right
+          </ContextMenu.Item>
+          <ContextMenu.Item onclick={() => tabs.requestClose(tabs.tabs.map((t) => t.id))}>Close All</ContextMenu.Item>
+          <ContextMenu.Separator />
+          {#if !tabs.splitDir}
+            <ContextMenu.Item disabled={tabs.tabs.length <= 1} onclick={() => tabs.moveToSplit(tab.id, 'v')}>Split Right</ContextMenu.Item>
+            <ContextMenu.Item disabled={tabs.tabs.length <= 1} onclick={() => tabs.moveToSplit(tab.id, 'h')}>Split Down</ContextMenu.Item>
+          {:else}
+            <ContextMenu.Item onclick={() => tabs.moveToSplit(tab.id)}>Move to Other Pane</ContextMenu.Item>
+            <ContextMenu.Item onclick={() => tabs.toggleSplitDir()}>Toggle Split Direction</ContextMenu.Item>
+            <ContextMenu.Item onclick={() => tabs.closeSplit()}>Close Split (Merge)</ContextMenu.Item>
+          {/if}
         {/if}
       </ContextMenu.Content>
     </ContextMenu.Root>

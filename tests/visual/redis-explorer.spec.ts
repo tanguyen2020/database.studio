@@ -89,3 +89,73 @@ test('redis: add key dialog opens from the explorer header', async ({ page }) =>
 
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
+
+// Context menu on a Redis key (and folder): Delete removes it on the server (DEL),
+// Refresh re-SCANs from Redis. Wiring is asserted via the demo IPC counter; the real
+// DEL/SCAN behavior is covered by the redis_del integration test.
+test('redis explorer: key context menu Delete + Refresh hit the server', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(String(e)))
+  await blockRemoteFonts(page)
+  await page.goto(APP_URL)
+  await page.waitForSelector('#app > *', { timeout: 15_000 })
+  await page.waitForTimeout(400)
+
+  await page.getByRole('button', { name: /Cache Redis 10\.0\.1\.7/ }).dblclick()
+  await page.waitForTimeout(700)
+  await expect(page.getByText('leaderboard').first()).toBeVisible({ timeout: 8000 })
+
+  const count = (c: string) =>
+    page.evaluate((k) => (window as unknown as { __ipcCalls?: Record<string, number> }).__ipcCalls?.[k] ?? 0, c)
+
+  // right-click a key → the menu offers Delete + Refresh
+  await page.getByText('leaderboard').first().click({ button: 'right' })
+  await expect(page.getByRole('menuitem', { name: 'Delete', exact: true })).toBeVisible()
+  await expect(page.getByRole('menuitem', { name: 'Refresh', exact: true })).toBeVisible()
+
+  // Delete → in-app confirm → DEL sent to Redis, dialog closes
+  const delBefore = await count('redis_del')
+  await page.getByRole('menuitem', { name: 'Delete', exact: true }).click()
+  await expect(page.getByText('Delete from Redis')).toBeVisible()
+  await page.getByRole('button', { name: 'Delete', exact: true }).click()
+  await page.waitForTimeout(400)
+  expect(await count('redis_del')).toBeGreaterThan(delBefore)
+  await expect(page.getByText('Delete from Redis')).toHaveCount(0)
+
+  // Refresh → re-SCAN from Redis
+  const scanBefore = await count('redis_scan')
+  await page.getByText('leaderboard').first().click({ button: 'right' })
+  await page.getByRole('menuitem', { name: 'Refresh', exact: true }).click()
+  await page.waitForTimeout(400)
+  expect(await count('redis_scan')).toBeGreaterThan(scanBefore)
+
+  expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
+})
+
+// Flush uses an in-app confirm dialog (window.prompt is unreliable in the Tauri
+// webview). Confirm must send FLUSHDB to the server (redis_flushdb).
+test('redis explorer: Flush opens an in-app confirm and runs FLUSHDB', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(String(e)))
+  await blockRemoteFonts(page)
+  await page.goto(APP_URL)
+  await page.waitForSelector('#app > *', { timeout: 15_000 })
+  await page.waitForTimeout(400)
+
+  await page.getByRole('button', { name: /Cache Redis 10\.0\.1\.7/ }).dblclick()
+  await page.waitForTimeout(700)
+  await expect(page.getByText(/SCAN ·/).first()).toBeVisible({ timeout: 8000 })
+
+  // click Flush → in-app dialog (NOT a native prompt)
+  await page.getByText('Flush', { exact: true }).first().click()
+  await expect(page.getByText('Flush database')).toBeVisible()
+
+  // confirm → FLUSHDB hits the server
+  const before = await page.evaluate(() => (window as unknown as { __ipcCalls?: Record<string, number> }).__ipcCalls?.redis_flushdb ?? 0)
+  await page.getByRole('button', { name: /Flush db0/ }).click()
+  await page.waitForTimeout(400)
+  expect(await page.evaluate(() => (window as unknown as { __ipcCalls?: Record<string, number> }).__ipcCalls?.redis_flushdb ?? 0)).toBeGreaterThan(before)
+  await expect(page.getByText('Flush database')).toHaveCount(0)
+
+  expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
+})

@@ -95,11 +95,17 @@ describe('SystemBadge (port dòng 873 HTML)', () => {
 })
 
 describe('SystemIcon (port dbIcon() HTML dòng 3883)', () => {
-  it.each(['postgres', 'mysql', 'mssql'])('%s dùng logo raster assets/', (key) => {
+  // MySQL/MSSQL use the raster PNG logo; PostgreSQL now uses an SVG logo (elephant
+  // + database cylinder — see public/assets/db-postgres.svg).
+  it.each([
+    ['postgres', 'svg'],
+    ['mysql', 'png'],
+    ['mssql', 'png'],
+  ])('%s dùng logo assets/ (%s)', (key, ext) => {
     const { container } = render(SystemIcon, { system: key, size: 16 })
     const img = container.querySelector('img')!
     expect(img).toBeTruthy()
-    expect(img.getAttribute('src')).toBe(`/assets/db-${key}.png`)
+    expect(img.getAttribute('src')).toBe(`/assets/db-${key}.${ext}`)
     expect(img.getAttribute('width')).toBe('16')
   })
 

@@ -310,10 +310,21 @@ impl NatsDriver {
         Ok(())
     }
 
-    /// Xóa stream.
+    /// Delete a stream ON THE SERVER. `delete_stream` returns a `DeleteStatus`; a
+    /// `success:false` means the server did NOT remove it — surface that as an error
+    /// instead of reporting a false "deleted" (the delete must be real, not local).
     pub async fn js_delete_stream(&self, name: &str) -> Result<(), QueryError> {
         let js = async_nats::jetstream::new(self.client.clone());
-        js.delete_stream(name).await.map_err(|e| err("Failed to delete stream", e))?;
+        let status = js
+            .delete_stream(name)
+            .await
+            .map_err(|e| err(format!("Failed to delete stream '{name}'"), e))?;
+        if !status.success {
+            return Err(err(
+                format!("NATS did not delete stream '{name}'"),
+                "delete_stream returned success=false",
+            ));
+        }
         Ok(())
     }
 

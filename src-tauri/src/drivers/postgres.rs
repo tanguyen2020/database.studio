@@ -225,7 +225,10 @@ impl PgDriver {
         let rows = sqlx::query(
             "SELECT c.relname,
                     CASE c.relkind WHEN 'v' THEN 'view' WHEN 'm' THEN 'view' ELSE 'table' END AS kind,
-                    GREATEST(c.reltuples::bigint, 0) AS row_estimate
+                    GREATEST(c.reltuples::bigint, 0) AS row_estimate,
+                    CASE WHEN c.relkind IN ('r','p','m')
+                         THEN pg_catalog.pg_total_relation_size(c.oid)::bigint
+                         ELSE 0 END AS data_length
              FROM pg_catalog.pg_class c
              JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
              WHERE n.nspname = $1 AND c.relkind IN ('r','p','v','m')
@@ -244,6 +247,7 @@ impl PgDriver {
                 row_estimate: r.try_get::<i64, _>(2).ok(),
                 locked: false,
                 engine: None,
+                data_length: r.try_get::<i64, _>(3).ok(),
             })
             .collect())
     }

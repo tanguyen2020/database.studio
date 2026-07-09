@@ -200,11 +200,34 @@ export const DEMO_TABS = [
 
 const appState: Record<string, string> = { theme: 'dark', active_tab: 't1' }
 
+// Stateful demo JetStream stream list so create/delete actually mutate it — a deleted
+// stream must NOT reappear on refresh (mirrors the real backend). Reset per page load.
+interface DemoNatsStream {
+  name: string
+  subjects: string[]
+  retention: string
+  storage: string
+  messages: number
+  bytes: number
+  consumers: number
+}
+let demoNatsStreams: DemoNatsStream[] = [
+  { name: 'ORDERS', subjects: ['orders.eu', 'orders.us'], retention: 'Limits', storage: 'File', messages: 1240, bytes: 98304, consumers: 2 },
+  { name: 'EVENTS', subjects: ['events.*'], retention: 'WorkQueue', storage: 'Memory', messages: 57, bytes: 8192, consumers: 1 },
+]
+
 /**
  * Mock trả lời cho từng IPC command khi không có Tauri runtime.
  * Chỉ đủ cho render/visual — thao tác ghi là no-op.
  */
 export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+  // Test observability (demo/browser only): count IPC calls per command so e2e can
+  // assert that actions like Refresh actually re-hit the backend. No effect in Tauri.
+  if (typeof window !== 'undefined') {
+    const w = window as unknown as { __ipcCalls?: Record<string, number> }
+    w.__ipcCalls = w.__ipcCalls ?? {}
+    w.__ipcCalls[cmd] = (w.__ipcCalls[cmd] ?? 0) + 1
+  }
   const ok = (v: unknown) => Promise.resolve(v as T)
   switch (cmd) {
     case 'list_connections':
@@ -263,14 +286,14 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
       return ok([{ name: 'public', is_default: true }])
     case 'list_tables':
       return ok([
-        { name: 'students', kind: 'table', row_estimate: 3842, locked: false, engine: 'MergeTree' },
-        { name: 'courses', kind: 'table', row_estimate: 214, locked: false, engine: 'ReplacingMergeTree' },
-        { name: 'enrollments', kind: 'table', row_estimate: 12480, locked: false, engine: 'MergeTree' },
+        { name: 'students', kind: 'table', row_estimate: 3842, locked: false, engine: 'MergeTree', data_length: 1114112 },
+        { name: 'courses', kind: 'table', row_estimate: 214, locked: false, engine: 'ReplacingMergeTree', data_length: 65536 },
+        { name: 'enrollments', kind: 'table', row_estimate: 12480, locked: false, engine: 'MergeTree', data_length: 3686400 },
         // reserved/keyword-named tables — autocomplete must quote them per dialect.
         // `schedule` is a keyword only in MySQL/MariaDB; `order` is reserved in
         // every engine (PG/SQLite "order", MySQL/MariaDB/CH `order`, MSSQL [order]).
-        { name: 'schedule', kind: 'table', row_estimate: 168, locked: false, engine: 'MergeTree' },
-        { name: 'order', kind: 'table', row_estimate: 920, locked: false, engine: 'MergeTree' },
+        { name: 'schedule', kind: 'table', row_estimate: 168, locked: false, engine: 'MergeTree', data_length: 16384 },
+        { name: 'order', kind: 'table', row_estimate: 920, locked: false, engine: 'MergeTree', data_length: 327680 },
         { name: 'vw_active_students', kind: 'view', row_estimate: null, locked: false, engine: 'MaterializedView' },
         { name: 'vw_recent_enrollments', kind: 'view', row_estimate: null, locked: false, engine: 'View' },
       ])
@@ -509,10 +532,7 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
     case 'nats_request':
       return ok('{"ok":true,"demo":"reply"}')
     case 'nats_js_streams':
-      return ok([
-        { name: 'ORDERS', subjects: ['orders.eu', 'orders.us'], retention: 'Limits', storage: 'File', messages: 1240, bytes: 98304, consumers: 2 },
-        { name: 'EVENTS', subjects: ['events.*'], retention: 'WorkQueue', storage: 'Memory', messages: 57, bytes: 8192, consumers: 1 },
-      ])
+      return ok(demoNatsStreams.map((s) => ({ ...s, subjects: [...s.subjects] })))
     case 'nats_js_subject_messages': {
       // Simulate server-side pagination: a subject with 250 retained messages;
       // return only the page starting at `startSeq` (ascending), bounded by `limit`.
@@ -549,8 +569,19 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
       ])
     case 'nats_js_peek':
       return ok({ seq: (args?.seq as number) ?? 1, subject: 'orders.new', payload: '{"id":1001,"total":42.5}', time: '2026-06-30T10:23:14Z', key: 'msg-1001' })
-    case 'nats_js_create_stream':
-    case 'nats_js_delete_stream':
+    case 'nats_js_create_stream': {
+      const name = String(args?.name ?? '')
+      const subjects = (args?.subjects as string[]) ?? []
+      if (name && !demoNatsStreams.some((s) => s.name === name)) {
+        demoNatsStreams = [...demoNatsStreams, { name, subjects, retention: 'Limits', storage: 'File', messages: 0, bytes: 0, consumers: 0 }]
+      }
+      return ok(null)
+    }
+    case 'nats_js_delete_stream': {
+      const name = String(args?.name ?? '')
+      demoNatsStreams = demoNatsStreams.filter((s) => s.name !== name) // real removal
+      return ok(null)
+    }
     case 'nats_js_purge_stream':
     case 'nats_js_create_consumer':
     case 'nats_js_delete_consumer':

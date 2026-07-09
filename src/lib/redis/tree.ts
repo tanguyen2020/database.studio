@@ -18,6 +18,16 @@ export interface RedisTreeNode {
   key?: RedisKeyInfo
 }
 
+/**
+ * Key names living under a folder `prefix` in the tree: the prefix itself when it is
+ * also a key, plus every key beginning with `prefix:`. Used by the Explorer's folder
+ * "Delete" (delete every key under a prefix). A key one level up that merely *starts*
+ * with the same text (e.g. `userdata` vs folder `user`) is NOT included.
+ */
+export function keysUnderPrefix(keys: RedisKeyInfo[], prefix: string): string[] {
+  return keys.map((k) => k.name).filter((n) => n === prefix || n.startsWith(`${prefix}:`))
+}
+
 /** Dựng rừng cây từ danh sách key, sort segment theo alphabet ở mọi cấp. */
 export function buildRedisTree(keys: RedisKeyInfo[]): RedisTreeNode[] {
   const root: RedisTreeNode = { segment: '', path: '', children: [] }

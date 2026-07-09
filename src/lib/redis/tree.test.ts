@@ -1,7 +1,7 @@
 // Unit test Redis prefix-tree builder + flatten (Phase 3 · T3).
 
 import { describe, expect, it } from 'vitest'
-import { buildRedisTree, flattenRedisTree, type RedisKeyInfo } from './tree'
+import { buildRedisTree, flattenRedisTree, keysUnderPrefix, type RedisKeyInfo } from './tree'
 
 const k = (name: string, key_type = 'string', ttl = -1): RedisKeyInfo => ({ name, key_type, ttl })
 
@@ -40,5 +40,25 @@ describe('flattenRedisTree', () => {
     const open = flattenRedisTree(tree, new Set(['user']))
     expect(open.map((r) => r.path)).toEqual(['user', 'user:1', 'user:2'])
     expect(open[1]).toMatchObject({ kind: 'key', depth: 1 })
+  })
+})
+
+describe('keysUnderPrefix', () => {
+  const keys = [k('user'), k('user:1'), k('user:2'), k('user:2:role'), k('userdata'), k('session:abc')]
+
+  it('collects the prefix key itself + everything under prefix:', () => {
+    expect(keysUnderPrefix(keys, 'user').sort()).toEqual(['user', 'user:1', 'user:2', 'user:2:role'].sort())
+  })
+
+  it('does not match a sibling that merely starts with the same text', () => {
+    expect(keysUnderPrefix(keys, 'user')).not.toContain('userdata')
+  })
+
+  it('nested prefix returns only its own subtree', () => {
+    expect(keysUnderPrefix(keys, 'user:2').sort()).toEqual(['user:2', 'user:2:role'].sort())
+  })
+
+  it('unknown prefix → empty', () => {
+    expect(keysUnderPrefix(keys, 'nope')).toEqual([])
   })
 })

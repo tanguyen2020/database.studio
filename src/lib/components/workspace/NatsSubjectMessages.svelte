@@ -50,6 +50,16 @@
   let loaded = $state(false)
   let error = $state('')
 
+  // Row selection (Result Grid parity): click selects a record; the selected row uses
+  // the blue --grid-select with white text. Cell colours flip to white when selected so
+  // the payload AND the three action icons stay visible (never hidden by the highlight).
+  let selSeq = $state<number | null>(null)
+  let hoverSeq = $state<number | null>(null)
+  const rowBg = (seq: number) => (selSeq === seq ? 'var(--grid-select)' : hoverSeq === seq ? 'var(--hover)' : 'transparent')
+  const cellColor = (seq: number, base: string) => (selSeq === seq ? 'var(--hex-fff)' : base)
+  // Result Grid's typographic rule (rule chung): JetBrains Mono + tabular figures.
+  const GRID_FONT = "font-variant-numeric:tabular-nums;font-feature-settings:'tnum' 1,'zero' 1"
+
   // In-app confirm popup (window.confirm isn't reliable inside the Tauri webview).
   let confirmState = $state<{ title: string; body: string; danger: boolean; run: () => void } | null>(null)
   function askConfirm(title: string, body: string, run: () => void) {
@@ -206,7 +216,7 @@
     {:else if messages.length === 0}
       <div style="padding:var(--px-20);color:var(--muted);font-size:var(--px-12)">No messages retained for this subject.</div>
     {:else}
-      <table style="border-collapse:collapse;width:100%;font-size:var(--px-12);table-layout:fixed">
+      <table class="mono" style="border-collapse:collapse;width:100%;font-size:var(--px-12);table-layout:fixed;{GRID_FONT}">
         <thead><tr>
           {#each [['Seq', 'width:var(--px-90)'], ['Time', 'width:var(--px-180)'], ['Subject', 'width:var(--px-160)'], ...(hasKey ? [['Key', 'width:var(--px-140)']] : []), ['Payload', ''], ['', 'width:var(--px-90)']] as [h, extra] (h)}
             <th style="position:sticky;top:0;background:var(--header);border-bottom:var(--px-1) solid var(--border2);padding:var(--px-7) var(--px-12);text-align:left;color:var(--text2);font-weight:600;{extra}">{h}</th>
@@ -214,19 +224,29 @@
         </tr></thead>
         <tbody>
           {#each rows as m (m.seq)}
-            <tr>
-              <td class="mono" style="border-bottom:var(--px-1) solid var(--border);padding:var(--px-6) var(--px-12);color:var(--muted)">{m.seq}</td>
-              <td class="mono" style="border-bottom:var(--px-1) solid var(--border);padding:var(--px-6) var(--px-12);font-weight:700;color:var(--warn2)">{fmtTime(m.time)}</td>
-              <td class="mono" style="border-bottom:var(--px-1) solid var(--border);padding:var(--px-6) var(--px-12);color:var(--warn2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title={m.subject}>{m.subject}</td>
+            {@const sel = selSeq === m.seq}
+            <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
+            <tr
+              aria-selected={sel}
+              onclick={() => (selSeq = m.seq)}
+              onmouseenter={() => (hoverSeq = m.seq)}
+              onmouseleave={() => (hoverSeq === m.seq ? (hoverSeq = null) : null)}
+              style="background:{rowBg(m.seq)};cursor:default"
+            >
+              <td style="border-bottom:var(--px-1) solid var(--border);padding:var(--px-6) var(--px-12);color:{cellColor(m.seq, 'var(--muted)')}">{m.seq}</td>
+              <td style="border-bottom:var(--px-1) solid var(--border);padding:var(--px-6) var(--px-12);font-weight:700;color:{cellColor(m.seq, 'var(--warn2)')}">{fmtTime(m.time)}</td>
+              <td style="border-bottom:var(--px-1) solid var(--border);padding:var(--px-6) var(--px-12);color:{cellColor(m.seq, 'var(--warn2)')};white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title={m.subject}>{m.subject}</td>
               {#if hasKey}
-                <td class="mono" style="border-bottom:var(--px-1) solid var(--border);padding:var(--px-6) var(--px-12);color:var(--text2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title={m.key}>{m.key || '—'}</td>
+                <td style="border-bottom:var(--px-1) solid var(--border);padding:var(--px-6) var(--px-12);color:{cellColor(m.seq, 'var(--text2)')};white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title={m.key}>{m.key || '—'}</td>
               {/if}
               <!-- single-line preview trimmed to the column; hover shows the full text, Copy grabs all of it -->
-              <td class="mono" style="border-bottom:var(--px-1) solid var(--border);padding:var(--px-6) var(--px-12);color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title={m.payload}>{m.payload}</td>
+              <td style="border-bottom:var(--px-1) solid var(--border);padding:var(--px-6) var(--px-12);color:{cellColor(m.seq, 'var(--text)')};white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title={m.payload}>{m.payload}</td>
+              <!-- action icons: recolour to white when the row is selected so the blue
+                   highlight never hides them (View JSON / Copy / Delete). -->
               <td style="border-bottom:var(--px-1) solid var(--border);padding:var(--px-6) var(--px-8);white-space:nowrap">
-                <span onclick={() => viewJson(m)} onkeydown={(e) => e.key === 'Enter' && viewJson(m)} role="button" tabindex="0" title="View payload as JSON" style="cursor:pointer;color:var(--muted);margin-right:var(--px-6)">⛶</span>
-                <span onclick={() => copyMsg(m.payload)} onkeydown={(e) => e.key === 'Enter' && copyMsg(m.payload)} role="button" tabindex="0" title="Copy full payload" style="cursor:pointer;color:var(--muted)">⧉</span>
-                <span onclick={() => deleteMsg(m.seq)} onkeydown={(e) => e.key === 'Enter' && deleteMsg(m.seq)} role="button" tabindex="0" title="Delete this message (by sequence)" style="cursor:pointer;color:var(--error);font-size:var(--px-13);margin-left:var(--px-6)">×</span>
+                <span onclick={(e) => { e.stopPropagation(); viewJson(m) }} onkeydown={(e) => e.key === 'Enter' && viewJson(m)} role="button" tabindex="0" title="View payload as JSON" style="cursor:pointer;color:{cellColor(m.seq, 'var(--muted)')};margin-right:var(--px-6)">⛶</span>
+                <span onclick={(e) => { e.stopPropagation(); copyMsg(m.payload) }} onkeydown={(e) => e.key === 'Enter' && copyMsg(m.payload)} role="button" tabindex="0" title="Copy full payload" style="cursor:pointer;color:{cellColor(m.seq, 'var(--muted)')}">⧉</span>
+                <span onclick={(e) => { e.stopPropagation(); deleteMsg(m.seq) }} onkeydown={(e) => e.key === 'Enter' && deleteMsg(m.seq)} role="button" tabindex="0" title="Delete this message (by sequence)" style="cursor:pointer;color:{cellColor(m.seq, 'var(--error)')};font-size:var(--px-13);margin-left:var(--px-6)">×</span>
               </td>
             </tr>
           {/each}

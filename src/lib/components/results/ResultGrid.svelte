@@ -850,7 +850,7 @@
     <thead style="position:sticky;top:0;z-index:10">
       <tr>
         <!-- No. gutter (AUDIT-5 item 2): row number + click to select (shift/ctrl multi) -->
-        <th style="background:var(--header);border-bottom:var(--px-1) solid var(--border2);border-right:var(--px-1) solid var(--border);padding:var(--px-6) var(--px-8);text-align:right;font-weight:600;color:var(--muted);white-space:nowrap;position:sticky;left:0;z-index:11">#</th>
+        <th style="width:1%;background:var(--header);border-bottom:var(--px-1) solid var(--border2);border-right:var(--px-1) solid var(--border);padding:var(--px-6) var(--px-8);text-align:right;font-weight:600;color:var(--muted);white-space:nowrap;position:sticky;left:0;z-index:11">#</th>
         {#each data.cols as [name, type], ci (ci)}
           <th style="background:var(--header);border-bottom:var(--px-1) solid var(--border2);border-right:var(--px-1) solid var(--border);padding:var(--px-6) var(--px-12);text-align:left;font-weight:600;color:var(--text2);white-space:nowrap">
             {name}
@@ -879,7 +879,7 @@
             oncontextmenu={(e) => openRowCtx(e, ri)}
             title="Click to select · Shift/Ctrl for multiple · right-click for menu"
             class="mono"
-            style="padding:var(--px-3) var(--px-8);text-align:right;color:{isRowSelected ? 'var(--hex-fff)' : 'var(--muted)'};border-bottom:var(--px-1) solid var(--border);border-right:var(--px-1) solid var(--border);background:{isRowSelected ? 'var(--grid-select)' : 'var(--header)'};position:sticky;left:0;font-size:var(--px-10_5);user-select:none">{ri + 1}</td>
+            style="width:1%;padding:var(--px-3) var(--px-8);text-align:right;color:{isRowSelected ? 'var(--hex-fff)' : 'var(--muted)'};border-bottom:var(--px-1) solid var(--border);border-right:var(--px-1) solid var(--border);background:{isRowSelected ? 'var(--grid-select)' : 'var(--header)'};position:sticky;left:0;font-size:var(--px-10_5);user-select:none">{ri + 1}</td>
           {#each columns as col, ci (ci)}
             {@const edited = edits.has(cellKey(ri, col))}
             {@const rawVal = edited ? edits.get(cellKey(ri, col)) : row?.[col]}
@@ -957,7 +957,7 @@
         <!-- inserted rows (pending) — nền xanh lá nhạt (chỉ hiện ở trang cuối); render sau spacer nên luôn nằm ở đáy -->
         {#each insertedRows as ins, insIdx (insIdx)}
           <tr style="height:{ROW_H}px;background:var(--rgba-39-174-96-_14)">
-            <td class="mono" style="padding:var(--px-3) var(--px-8);text-align:right;color:var(--success);border-bottom:var(--px-1) solid var(--border);border-right:var(--px-1) solid var(--border);position:sticky;left:0;font-size:var(--px-10_5)">＋</td>
+            <td class="mono" style="width:1%;padding:var(--px-3) var(--px-8);text-align:right;color:var(--success);border-bottom:var(--px-1) solid var(--border);border-right:var(--px-1) solid var(--border);position:sticky;left:0;font-size:var(--px-10_5)">＋</td>
             {#each columns as col, ci (ci)}
               {@const isEditing = editingCell?.insert === insIdx && editingCell?.col === col}
               <td

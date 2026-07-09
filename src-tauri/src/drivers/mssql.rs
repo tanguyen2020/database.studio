@@ -275,7 +275,9 @@ impl MssqlDriver {
                 "SELECT o.name,
                         CASE o.type WHEN 'V' THEN 'view' ELSE 'table' END,
                         ISNULL((SELECT SUM(ps.row_count) FROM sys.dm_db_partition_stats ps
-                                WHERE ps.object_id = o.object_id AND ps.index_id IN (0, 1)), 0)
+                                WHERE ps.object_id = o.object_id AND ps.index_id IN (0, 1)), 0),
+                        ISNULL((SELECT SUM(ps.reserved_page_count) * 8192 FROM sys.dm_db_partition_stats ps
+                                WHERE ps.object_id = o.object_id), 0)
                  FROM sys.objects o
                  JOIN sys.schemas s ON s.schema_id = o.schema_id
                  WHERE o.type IN ('U','V') AND s.name = @P1
@@ -296,6 +298,7 @@ impl MssqlDriver {
                 row_estimate: r.get::<i64, _>(2),
                 locked: false,
                 engine: None,
+                data_length: r.get::<i64, _>(3),
             })
             .collect())
     }

@@ -167,6 +167,10 @@ pub struct TableInfo {
     /// ClickHouse engine (MergeTree, ReplacingMergeTree, …) for the explorer badge.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub engine: Option<String>,
+    /// On-disk data size in bytes (MySQL DATA_LENGTH / PG pg_total_relation_size).
+    /// Best-effort — `None` on engines where it isn't cheaply available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data_length: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

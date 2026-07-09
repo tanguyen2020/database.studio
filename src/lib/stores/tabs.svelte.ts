@@ -633,6 +633,54 @@ class TabsStore {
     return tab
   }
 
+  /**
+   * Objects tab — a pinned, non-closable singleton pinned at index 0 that lists a
+   * database's tables (Table Name · Data Length · Rows). Double-clicking a database
+   * name in the Explorer opens it the first time, or just retargets + activates the
+   * existing one afterwards (never a second tab). `connId` may be a sub-connection
+   * id (foreign database); `database` is the display name; `schema` (optional) lists
+   * a single schema, otherwise every schema of the connection.
+   */
+  openObjectsTab(opts: { connId: string; database: string; schema?: string | null }): TabState {
+    const profile = connections.byId(opts.connId)
+    const nextState = { database: opts.database, schema: opts.schema ?? null }
+    const existing = this.tabs.find((t) => t.contentType === 'objects')
+    if (existing) {
+      existing.connectionId = opts.connId
+      existing.connectionName = profile?.name ?? existing.connectionName
+      existing.systemType = (profile?.system as SystemType) ?? existing.systemType
+      existing.state = nextState
+      existing.pane = 0
+      this.activePane = 0
+      this.activeTabId = existing.id
+      this.schedulePersist()
+      return existing
+    }
+    const tab: TabState = {
+      id: uuid(),
+      connectionId: opts.connId,
+      connectionName: profile?.name ?? '',
+      systemType: (profile?.system as SystemType) ?? 'orphan',
+      contentType: 'objects',
+      title: 'Objects',
+      isPinned: true,
+      isDirty: false,
+      pane: 0,
+      state: nextState,
+    }
+    // Pinned at the very front of the tab strip.
+    this.tabs.unshift(tab)
+    this.activePane = 0
+    this.activeTabId = tab.id
+    this.schedulePersist()
+    return tab
+  }
+
+  /** The Objects tab cannot be closed / reordered / dragged (pinned system tab). */
+  isClosable(t: TabState | null | undefined): boolean {
+    return !!t && t.contentType !== 'objects'
+  }
+
   activate(id: string) {
     const t = this.byId(id)
     if (!t) return
@@ -705,17 +753,22 @@ class TabsStore {
    * (pendingClose); clean tabs close immediately. Returns true when closed.
    */
   requestClose(ids: string[]): boolean {
-    const targets = this.tabs.filter((t) => ids.includes(t.id))
+    // The pinned Objects tab is never closable — drop it from any (bulk) request.
+    const targets = this.tabs.filter((t) => ids.includes(t.id) && this.isClosable(t))
+    if (targets.length === 0) return false
     const dirty = targets.filter((t) => t.isDirty)
     if (dirty.length > 0) {
       this.pendingClose = targets
       return false
     }
-    this.forceClose(ids)
+    this.forceClose(targets.map((t) => t.id))
     return true
   }
 
   forceClose(ids: string[]) {
+    // Never force-close the pinned Objects tab, even via a direct call.
+    ids = ids.filter((id) => this.isClosable(this.byId(id)))
+    if (ids.length === 0) return
     const closing = this.tabs.filter((t) => ids.includes(t.id))
     for (const tab of closing) {
       // Cancel any query still running in this tab so it doesn't keep executing
@@ -790,8 +843,14 @@ class TabsStore {
 
   reorder(fromIdx: number, toIdx: number) {
     if (fromIdx === toIdx || fromIdx < 0 || toIdx < 0) return
+    // The pinned Objects tab can't be dragged, and nothing can be dropped before it
+    // (it stays at index 0). Clamp the destination past any leading Objects tab.
+    if (this.tabs[fromIdx]?.contentType === 'objects') return
+    const minIdx = this.tabs[0]?.contentType === 'objects' ? 1 : 0
+    const dest = Math.max(toIdx, minIdx)
+    if (fromIdx === dest) return
     const [moved] = this.tabs.splice(fromIdx, 1)
-    this.tabs.splice(toIdx, 0, moved)
+    this.tabs.splice(dest, 0, moved)
     this.schedulePersist()
   }
 
@@ -813,7 +872,7 @@ class TabsStore {
 
   duplicate(id: string) {
     const tab = this.byId(id)
-    if (!tab) return
+    if (!tab || tab.contentType === 'objects') return // singleton — never duplicated
     const copy: TabState = {
       ...($state.snapshot(tab) as TabState),
       id: uuid(),
@@ -915,6 +974,13 @@ class TabsStore {
         // split layout không persist → gộp về pane 0 để không có tab "ẩn"
         p.pane = 0
         restored.push(p)
+      }
+      // The pinned Objects tab always restores at index 0 (persist stores pinned
+      // first, but guard it explicitly in case ordering drifted).
+      const objIdx = restored.findIndex((t) => t.contentType === 'objects')
+      if (objIdx > 0) {
+        const [obj] = restored.splice(objIdx, 1)
+        restored.unshift(obj)
       }
       this.tabs = restored
       const savedActive = await ipc.getAppState('active_tab')

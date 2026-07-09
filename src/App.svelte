@@ -34,6 +34,7 @@
   import IndexScanner from '$lib/components/workspace/IndexScanner.svelte'
   import IndexManager from '$lib/components/workspace/IndexManager.svelte'
   import AdminView from '$lib/components/workspace/AdminView.svelte'
+  import ObjectsView from '$lib/components/workspace/ObjectsView.svelte'
   import CommandPalette from '$lib/components/CommandPalette.svelte'
   import ClickHouseTtlDialog from '$lib/components/ClickHouseTtlDialog.svelte'
   import ImportDialog from '$lib/components/ImportDialog.svelte'
@@ -246,6 +247,8 @@
             <IndexManager tab={t} />
           {:else if t.contentType === 'admin'}
             <AdminView tab={t} />
+          {:else if t.contentType === 'objects'}
+            <ObjectsView tab={t} />
           {:else}
             <SqlWorkspace tab={t} />
           {/if}
