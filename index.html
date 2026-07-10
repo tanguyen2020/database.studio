@@ -5,6 +5,13 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Database Studio</title>
+    <!-- Paint the first frame in the app's dark surface colour so the WebView never
+         flashes white while the JS bundle + CSS load (dark is the default theme; the
+         ui store re-applies a persisted light choice after mount). -->
+    <style>
+      html, body { margin: 0; height: 100%; background: #0f1219; }
+      html:not(.dark) { background: #eef1f7; }
+    </style>
   </head>
   <body>
     <div id="app"></div>
