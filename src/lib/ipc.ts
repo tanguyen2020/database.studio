@@ -651,6 +651,9 @@ export const cancelExport = (exportId: string) => invoke<void>('cancel_export', 
 /** Write UTF-8 text to a file (used by Ctrl+S save-to-file). Tauri-only. */
 export const writeTextFile = (path: string, contents: string) =>
   invoke<void>('write_text_file', { path, contents })
+/** Write binary content (base64) — image exports where WebView2 can't do a real download. */
+export const writeFileBase64 = (path: string, base64: string) =>
+  invoke<void>('write_file_base64', { path, base64 })
 
 export const listSchemas = (connId: string) => invoke<SchemaInfo[]>('list_schemas', { connId })
 

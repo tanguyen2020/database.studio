@@ -152,6 +152,7 @@ pub fn run() {
             commands::admin::kill_session,
             // files
             commands::files::write_text_file,
+            commands::files::write_file_base64,
             // lint tầng 1
             commands::lint::lint_sql,
             // SQLite PRAGMA panel

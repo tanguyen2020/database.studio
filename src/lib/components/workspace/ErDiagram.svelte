@@ -14,6 +14,7 @@
   import { connections } from '$lib/stores/connections.svelte'
   import { tabs } from '$lib/stores/tabs.svelte'
   import { genForeignKey } from '$lib/sql/ddl'
+  import { IS_TAURI } from '$lib/demo'
   import type { TabState } from '$lib/types'
 
   interface Props {
@@ -213,21 +214,59 @@
   function copyMermaid() {
     void navigator.clipboard.writeText(toMermaid(tables, fks)).then(() => toasts.success('Copied Mermaid'))
   }
-  function downloadSvg() {
-    triggerDownload(new Blob([toSvg(tables, fks, positions)], { type: 'image/svg+xml' }), `er_${schema || 'schema'}.svg`)
+  // Pick a save path via the native dialog (desktop). Returns null if cancelled.
+  async function pickSavePath(filename: string, label: string, ext: string): Promise<string | null> {
+    const { save } = await import('@tauri-apps/plugin-dialog')
+    return save({ defaultPath: filename, filters: [{ name: label, extensions: [ext] }] })
+  }
+
+  // SVG/PNG export. In the desktop app WebView2 can't do a real `<a download>`, so
+  // save through the native dialog + backend write (text for SVG, base64 bytes for
+  // PNG). In a plain browser, fall back to the blob download.
+  async function downloadSvg() {
+    const svg = toSvg(tables, fks, positions)
+    const filename = `er_${schema || 'schema'}.svg`
+    if (IS_TAURI) {
+      try {
+        const path = await pickSavePath(filename, 'SVG', 'svg')
+        if (!path) return
+        await ipc.writeTextFile(path, svg)
+        toasts.success(`Exported → ${path}`)
+      } catch (e) {
+        toasts.error(`Export failed: ${e}`)
+      }
+    } else {
+      triggerDownload(new Blob([svg], { type: 'image/svg+xml' }), filename)
+    }
   }
   function downloadPng() {
     const svg = toSvg(tables, fks, positions)
+    const filename = `er_${schema || 'schema'}.png`
     const img = new Image()
+    img.onerror = () => toasts.error('Failed to render PNG')
     img.onload = () => {
-      const canvas = document.createElement('canvas')
-      canvas.width = img.width * 2
-      canvas.height = img.height * 2
-      const ctx = canvas.getContext('2d')
-      if (!ctx) return
-      ctx.scale(2, 2)
-      ctx.drawImage(img, 0, 0)
-      canvas.toBlob((b) => b && triggerDownload(b, `er_${schema || 'schema'}.png`), 'image/png')
+      void (async () => {
+        const canvas = document.createElement('canvas')
+        canvas.width = img.width * 2
+        canvas.height = img.height * 2
+        const ctx = canvas.getContext('2d')
+        if (!ctx) return
+        ctx.scale(2, 2)
+        ctx.drawImage(img, 0, 0)
+        if (IS_TAURI) {
+          try {
+            const path = await pickSavePath(filename, 'PNG', 'png')
+            if (!path) return
+            const b64 = canvas.toDataURL('image/png').split(',')[1] ?? ''
+            await ipc.writeFileBase64(path, b64)
+            toasts.success(`Exported → ${path}`)
+          } catch (e) {
+            toasts.error(`Export failed: ${e}`)
+          }
+        } else {
+          canvas.toBlob((b) => b && triggerDownload(b, filename), 'image/png')
+        }
+      })()
     }
     img.src = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svg)))
   }
