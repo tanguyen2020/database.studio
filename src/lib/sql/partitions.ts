@@ -261,11 +261,26 @@ export function buildConvertToPartitioned(
       )
       return out
     }
-    case 'clickhouse':
+    case 'clickhouse': {
+      // ClickHouse can't ALTER … PARTITION BY in place → recreate. `CREATE TABLE new
+      // AS old` copies the column structure; ENGINE + ORDER BY must be restated (we
+      // default ORDER BY to the partition expression — adjust to the original sorting
+      // key from SHOW CREATE TABLE before running). Data is copied, old table dropped.
+      const bak = `${table}_old`
+      const bakQ = qualified(system, schema, bak)
+      const expr = spec.columns.join(', ') // raw (CH partitions by an expression)
+      out.pre.push(`RENAME TABLE ${t} TO ${quoteIdent(system, bak)};`)
+      out.pre.push(`CREATE TABLE ${t} AS ${bakQ}\nENGINE = MergeTree\nPARTITION BY ${expr}\nORDER BY (${expr});`)
+      out.post.push(`INSERT INTO ${t} SELECT * FROM ${bakQ};`)
+      out.post.push(`DROP TABLE ${bakQ};`)
+      if (spec.strategy !== 'RANGE') {
+        out.warnings.push('ClickHouse only supports expression PARTITION BY (strategy ignored).')
+      }
       out.warnings.push(
-        'ClickHouse cannot change PARTITION BY on an existing table — create a new partitioned table (New Table → Partitioning) and migrate the data.',
+        'ClickHouse recreates the table to change PARTITION BY: adjust ENGINE and ORDER BY to match the original (see SHOW CREATE TABLE) before running — data is copied and the old table is dropped at the end.',
       )
       return out
+    }
     default:
       out.warnings.push(`Partitioning an existing table is not supported for ${system}.`)
       return out
@@ -274,7 +289,7 @@ export function buildConvertToPartitioned(
 
 /** Whether an existing table can be converted to partitioned in the designer. */
 export function canConvertToPartitioned(system: string): boolean {
-  return ['postgres', 'mysql', 'mariadb', 'mssql'].includes(system)
+  return ['postgres', 'mysql', 'mariadb', 'mssql', 'clickhouse'].includes(system)
 }
 
 /** Systems that support declarative table partitioning in the designer. */

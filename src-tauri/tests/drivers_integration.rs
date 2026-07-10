@@ -1446,6 +1446,45 @@ async fn clickhouse_parity_grid_showcreate_admin() {
     eprintln!("CHK ClickHouse parity P1/P2/P3a OK");
 }
 
+/// ClickHouse P3b — streaming export runs on a real server: FORMAT
+/// JSONCompactEachRowWithNames streamed to a writer, one row at a time.
+#[tokio::test]
+async fn clickhouse_stream_export_csv() {
+    use database_studio_lib::drivers::postgres::ExportFormat;
+    use std::sync::atomic::AtomicBool;
+
+    let c = GenericImage::new("clickhouse/clickhouse-server", "24.8")
+        .with_exposed_port(8123.tcp())
+        .with_env_var("CLICKHOUSE_PASSWORD", PASS)
+        .start()
+        .await
+        .expect("start clickhouse container");
+    let port = c.get_host_port_ipv4(8123).await.unwrap();
+    let params = ChConnParams {
+        host: "localhost".into(),
+        port,
+        database: "default".into(),
+        user: "default".into(),
+        password: PASS.into(),
+        ssl: false,
+    };
+    let mut drv = retry("clickhouse", || ChDriver::connect(&params)).await;
+    drv.exec("CREATE TABLE ex (id UInt64, name String) ENGINE = MergeTree ORDER BY id").await.unwrap();
+    drv.exec("INSERT INTO ex VALUES (1,'a'),(2,'b'),(3,'c')").await.unwrap();
+
+    let mut buf: Vec<u8> = Vec::new();
+    let cancel = AtomicBool::new(false);
+    let n = drv
+        .stream_export("SELECT id, name FROM ex ORDER BY id", ExportFormat::Csv, "ex", &mut buf, |_n| {}, &cancel)
+        .await
+        .expect("stream export");
+    assert_eq!(n, 3, "3 rows streamed");
+    let text = String::from_utf8(buf).unwrap();
+    assert!(text.starts_with("id,name"), "CSV header first: {text}");
+    assert!(text.contains("1,a") && text.contains("3,c"), "rows present: {text}");
+    eprintln!("CHK ClickHouse streaming export OK");
+}
+
 // ---------------------------------------------------------------------------
 // SQLite — file thật + in-memory, đủ 3 mode (không cần container)
 // ---------------------------------------------------------------------------

@@ -196,20 +196,25 @@ describe('buildConvertToPartitioned (existing non-partitioned table)', () => {
     expect(r.post[0]).toBe('CREATE CLUSTERED INDEX [CIX_sales_partition] ON [dbo].[sales] ([sale_date]) ON [ps_sales] ([sale_date]);')
   })
 
-  it('ClickHouse cannot convert — warns only', () => {
+  it('ClickHouse recreates the table (rename → CREATE AS + PARTITION BY → copy → drop)', () => {
     const r = buildConvertToPartitioned('clickhouse', 'default', 'hits', { strategy: 'RANGE', columns: ['toYYYYMM(d)'] })
-    expect(r.pre).toHaveLength(0)
-    expect(r.post).toHaveLength(0)
-    expect(r.warnings.join(' ')).toMatch(/cannot change PARTITION BY/)
+    // rename original, then create the partitioned replacement from its structure
+    expect(r.pre[0]).toBe('RENAME TABLE `default`.`hits` TO `hits_old`;')
+    expect(r.pre[1]).toContain('CREATE TABLE `default`.`hits` AS `default`.`hits_old`')
+    expect(r.pre[1]).toContain('PARTITION BY toYYYYMM(d)')
+    // copy data then drop the backup
+    expect(r.post.some((s) => s.includes('INSERT INTO `default`.`hits` SELECT * FROM `default`.`hits_old`'))).toBe(true)
+    expect(r.post.some((s) => s.includes('DROP TABLE `default`.`hits_old`'))).toBe(true)
+    expect(r.warnings.join(' ')).toMatch(/adjust ENGINE and ORDER BY/)
   })
 })
 
 describe('canConvertToPartitioned', () => {
-  it('true for PG/MySQL/MariaDB/MSSQL, false for ClickHouse/SQLite', () => {
+  it('true for PG/MySQL/MariaDB/MSSQL/ClickHouse, false for SQLite', () => {
     expect(canConvertToPartitioned('postgres')).toBe(true)
     expect(canConvertToPartitioned('mysql')).toBe(true)
     expect(canConvertToPartitioned('mssql')).toBe(true)
-    expect(canConvertToPartitioned('clickhouse')).toBe(false)
+    expect(canConvertToPartitioned('clickhouse')).toBe(true)
     expect(canConvertToPartitioned('sqlite')).toBe(false)
   })
 })
