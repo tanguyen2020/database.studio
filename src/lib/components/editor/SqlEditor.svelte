@@ -34,6 +34,7 @@
   import { highlightSelectionMatches, searchKeymap } from '@codemirror/search'
   import { linter, setDiagnostics, type Diagnostic } from '@codemirror/lint'
   import { sql, PostgreSQL, MySQL, MSSQL, SQLite, StandardSQL, type SQLNamespace } from '@codemirror/lang-sql'
+  import { clickHouseDialect } from '$lib/sql/ch-editor-dialect'
   import { lineColToOffset } from '$lib/sql/statements'
 
   interface Props {
@@ -129,6 +130,9 @@
         return MSSQL
       case 'sqlite':
         return SQLite
+      case 'clickhouse':
+        // lang-sql has no ClickHouse dialect → our own (ENGINE/LowCardinality/…)
+        return clickHouseDialect
       default:
         return StandardSQL
     }
