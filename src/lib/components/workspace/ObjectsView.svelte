@@ -14,6 +14,8 @@
   import { tabs } from '$lib/stores/tabs.svelte'
   import { systemMeta } from '$lib/systems'
   import { formatBytes } from '$lib/format/bytes'
+  import { quoteIdent, qualified } from '$lib/sql/dialect'
+  import { IS_TAURI } from '$lib/demo'
   import type { SystemType, TabState, TableInfo } from '$lib/types'
 
   interface Props {
@@ -39,6 +41,15 @@
   let error = $state<string | null>(null)
   let selIndex = $state<number | null>(null)
   let hoverIndex = $state<number | null>(null)
+  // Exact row counts (real SELECT COUNT(*)) keyed by "schema.name". The list shows
+  // the catalog ESTIMATE immediately (fast), then these replace it as each COUNT(*)
+  // resolves. Only computed in the desktop app (real backend); the browser/demo
+  // path keeps the estimate so it stays deterministic for tests.
+  let counts = $state<Record<string, number>>({})
+  // Generation guard: bumped on every (re)load so stale in-flight COUNT(*) results
+  // from a previous target are discarded.
+  let loadGen = 0
+  const rowKey = (t: TableInfo) => `${t.schema}.${t.name}`
   // Guard against duplicate requests: re-loading only happens when the target
   // (connection, database, schema) actually changes — double-clicking the same
   // database again just re-activates the tab without re-fetching.
@@ -53,6 +64,8 @@
 
   async function load(cid: string | null, _db: string, sch: string | null) {
     selIndex = null
+    const gen = ++loadGen // invalidate any COUNT(*) still in flight from a prior load
+    counts = {}
     if (!cid) {
       rows = []
       error = null
@@ -79,6 +92,8 @@
       }
       // Objects grid lists base tables (views/system objects excluded).
       rows = list.filter((t) => t.kind === 'table')
+      // Compute exact counts in the background (desktop app only).
+      if (IS_TAURI && cid) void fetchCounts(cid, rows, gen)
     } catch (e) {
       // Database disconnected / dropped while the tab is open → empty state, no crash.
       error = String(e)
@@ -86,6 +101,39 @@
     } finally {
       loading = false
     }
+  }
+
+  // Build a `SELECT COUNT(*)` for one table, dialect-quoted (SQLite 'main' → bare).
+  function countSql(t: TableInfo): string {
+    const sys = tab.systemType
+    const sch = t.schema || schema || database
+    const target =
+      sys === 'sqlite' && sch === 'main' ? quoteIdent(sys, t.name) : qualified(sys, sch, t.name)
+    return `SELECT COUNT(*) AS c FROM ${target}`
+  }
+
+  // Run COUNT(*) for every table with a small concurrency cap so the grid fills in
+  // live without flooding the connection. A COUNT that fails (permissions, dropped
+  // table) is skipped — that row just keeps showing the estimate.
+  async function fetchCounts(cid: string, list: TableInfo[], gen: number) {
+    const CONC = 4
+    const queue = [...list]
+    async function worker() {
+      while (queue.length) {
+        if (gen !== loadGen) return // target changed → abandon stale work
+        const t = queue.shift()!
+        try {
+          const res = await ipc.execStatement(cid, countSql(t))
+          if (gen !== loadGen) return
+          const cell = res.ok && res.result?.rows?.[0] ? Object.values(res.result.rows[0])[0] : null
+          const n = typeof cell === 'number' ? cell : Number(cell)
+          if (Number.isFinite(n)) counts = { ...counts, [rowKey(t)]: n }
+        } catch {
+          /* keep the estimate for this row */
+        }
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(CONC, queue.length) }, worker))
   }
 
   // Refresh rule: always re-query the backend (list_tables bypasses any cache),
@@ -177,6 +225,7 @@
         <span role="columnheader" style="padding:var(--px-6) var(--px-12);text-align:right">Rows</span>
       </div>
       {#each rows as t, i (t.schema + '.' + t.name)}
+        {@const exact = counts[rowKey(t)]}
         <ContextMenu.Root>
           <ContextMenu.Trigger>
             <div
@@ -196,7 +245,12 @@
               <span role="cell" class="mono" style="padding:var(--px-5) var(--px-10);text-align:right;font-size:var(--px-10_5);color:{cellColor(i, 'var(--muted)')};{SEP}">{i + 1}</span>
               <span role="cell" class="mono" style="padding:var(--px-5) var(--px-12);color:{cellColor(i, 'var(--text)')};font-weight:{selIndex === i ? 600 : 500};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;{SEP}">{t.name}</span>
               <span role="cell" class="mono" style="padding:var(--px-5) var(--px-12);text-align:right;color:{cellColor(i, 'var(--syntax-number)')};{SEP}">{formatBytes(t.data_length)}</span>
-              <span role="cell" class="mono" style="padding:var(--px-5) var(--px-12);text-align:right;color:{cellColor(i, 'var(--syntax-number)')}">{t.row_estimate != null ? t.row_estimate.toLocaleString() : '—'}</span>
+              <span
+                role="cell"
+                class="mono"
+                title={exact != null ? 'Exact count' : IS_TAURI ? 'Estimate — computing exact count…' : 'Estimate'}
+                style="padding:var(--px-5) var(--px-12);text-align:right;color:{cellColor(i, exact != null ? 'var(--syntax-number)' : 'var(--muted)')}"
+              >{exact != null ? exact.toLocaleString() : t.row_estimate != null ? '~' + t.row_estimate.toLocaleString() : '—'}</span>
             </div>
           </ContextMenu.Trigger>
           {#if connId}
