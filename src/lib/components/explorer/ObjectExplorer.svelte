@@ -2063,7 +2063,6 @@
               {#snippet sIdxMenu()}
                 <ContextMenu.Content class="w-48">
                   <ContextMenu.Item onclick={() => selected && alterIndex(selected.id, selected.system, schema.name, ix.table, { name: ix.name, columns: ix.columns, unique: ix.unique })}>Alter…</ContextMenu.Item>
-                  <ContextMenu.Item onclick={() => selected && tabs.openTableViewer(selected.id, schema.name, ix.table)}>Open Table Data</ContextMenu.Item>
                   <ContextMenu.Item onclick={() => copyName(ix.name)}>Copy Name</ContextMenu.Item>
                   <ContextMenu.Item onclick={() => copyName(`${ix.table}.${ix.name}`)}>Copy Qualified Name</ContextMenu.Item>
                   <ContextMenu.Separator />
@@ -2356,7 +2355,6 @@
                     {#snippet fSIdxMenu()}
                       <ContextMenu.Content class="w-48">
                         <ContextMenu.Item onclick={() => sub && alterIndex(sub, selected!.system, fsch.name, ix.table, { name: ix.name, columns: ix.columns, unique: ix.unique }, db.name)}>Alter…</ContextMenu.Item>
-                        <ContextMenu.Item onclick={() => sub && tabs.openTableViewer(sub, fsch.name, ix.table)}>Open Table Data</ContextMenu.Item>
                         <ContextMenu.Item onclick={() => copyName(ix.name)}>Copy Name</ContextMenu.Item>
                         <ContextMenu.Separator />
                         <ContextMenu.Item variant="destructive" onclick={() => sub && stmtTab(`Drop index ${ix.name}`, genDropIndex(selected!.system, fsch.name, ix.table, ix.name), db.name)}>Drop…</ContextMenu.Item>

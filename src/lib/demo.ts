@@ -450,6 +450,10 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
     case 'exec_statement': {
       // Collation unification (MySQL/MariaDB) — feed the audit dialog demo data.
       const stmtSql = String(args?.sql ?? '')
+      // Table Data Viewer footer: a plain COUNT(*) → a fixed demo total.
+      if (/^\s*SELECT\s+COUNT\(\*\)/i.test(stmtSql)) {
+        return ok({ ok: true, result: { cols: [['c', 'int8']], rows: [{ c: 3842 }], total: 1 }, duration_ms: 4 })
+      }
       if (/information_schema\.SCHEMATA/i.test(stmtSql) && /DEFAULT_COLLATION_NAME/i.test(stmtSql)) {
         return ok({ ok: true, result: { cols: [['charset', 'text'], ['collation', 'text']], rows: [{ charset: 'utf8mb4', collation: 'utf8mb4_0900_ai_ci' }], total: 1 }, duration_ms: 3 })
       }

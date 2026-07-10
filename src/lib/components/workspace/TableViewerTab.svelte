@@ -5,8 +5,9 @@
   // ResultGrid + editable grid (spec phase-2 §5).
   import ResultGrid, { type EditTarget } from '$lib/components/results/ResultGrid.svelte'
   import SystemBadge from '$lib/components/SystemBadge.svelte'
-  import { execFiltered, listColumns, type FilterCond, type SortSpec } from '$lib/ipc'
+  import { execFiltered, execStatement, listColumns, type FilterCond, type SortSpec } from '$lib/ipc'
   import { connections } from '$lib/stores/connections.svelte'
+  import { quoteIdent, qualified } from '$lib/sql/dialect'
   import type { QueryError, QueryResultSet, TabState } from '$lib/types'
 
   interface Props {
@@ -29,6 +30,9 @@
   let page = $state(0)
   let pkCols = $state<string[]>([])
   let columnNames = $state<string[]>([])
+  // Total row count of the table (COUNT(*)) → footer "Page X of Y · N records".
+  // Only computed for the unfiltered view; null while filters are active.
+  let totalRecords = $state<number | null>(null)
 
   // filter builder state — seed từ initialFilters (Set as Filter · T12) nếu có
   // svelte-ignore state_referenced_locally
@@ -83,6 +87,22 @@
         } catch {
           pkCols = []
         }
+        // Total record count for the footer — exact for the unfiltered table; with
+        // an active filter we show the current window instead (no full count).
+        if (active.length) {
+          totalRecords = null
+        } else {
+          try {
+            const sch = profile.system === 'sqlite' ? 'main' : schema
+            const target = profile.system === 'sqlite' ? quoteIdent('sqlite', table) : qualified(profile.system, sch, table)
+            const cnt = await execStatement(tab.connectionId, `SELECT COUNT(*) AS c FROM ${target}`)
+            const cell = cnt.ok && cnt.result?.rows?.[0] ? Object.values(cnt.result.rows[0])[0] : null
+            const n = typeof cell === 'number' ? cell : Number(cell)
+            totalRecords = Number.isFinite(n) ? n : null
+          } catch {
+            totalRecords = null
+          }
+        }
       } else if (res.error) {
         error = res.error
       }
@@ -134,6 +154,9 @@
   }
 
   const hasMore = $derived(!!data && data.total >= pageSize)
+  // Footer pagination: total pages from the exact record count (unfiltered view).
+  const totalPages = $derived(totalRecords != null ? Math.max(1, Math.ceil(totalRecords / pageSize)) : null)
+  const canNext = $derived(totalPages != null ? page + 1 < totalPages : hasMore)
 </script>
 
 <div style="flex:1;display:flex;flex-direction:column;min-height:0">
@@ -157,9 +180,9 @@
           <option value={1000}>1000</option>
         </select>
       </label>
-      <span class="tv-btn" onclick={() => { page = 0; void load() }} onkeydown={(e) => e.key === 'Enter' && (page = 0, load())} role="button" tabindex="0" title="Refresh">⟳</span>
+      <span class="tv-btn" style="display:inline-flex;align-items:center;gap:var(--px-5)" onclick={() => { page = 0; void load() }} onkeydown={(e) => e.key === 'Enter' && (page = 0, load())} role="button" tabindex="0" title="Refresh">⟳ Refresh</span>
       {#if data}
-        <span class="mono" style="font-size:var(--px-12_5);color:var(--muted)">{data.total.toLocaleString()} rows · {durationMs} ms</span>
+        <span class="mono" style="font-size:var(--px-12_5);color:var(--muted)">{durationMs} ms</span>
       {/if}
     </div>
   </div>
@@ -247,17 +270,31 @@
     {/if}
   </div>
 
-  <!-- pager — dòng 571-587 -->
-  {#if data && (page > 0 || hasMore)}
+  <!-- footer pager — record + page count in English -->
+  {#if data}
     <div style="flex:none;display:flex;align-items:center;gap:var(--px-10);padding:var(--px-7) var(--px-12);border-top:var(--px-1) solid var(--border);background:var(--header)">
       <span class="mono" style="font-size:var(--px-12_5);color:var(--text2)">
-        {(page * pageSize + 1).toLocaleString()}–{(page * pageSize + data.rows.length).toLocaleString()}
+        {#if data.rows.length}
+          {(page * pageSize + 1).toLocaleString()}–{(page * pageSize + data.rows.length).toLocaleString()}
+        {:else}
+          0
+        {/if}
+        {#if totalRecords != null}
+          of {totalRecords.toLocaleString()} record{totalRecords === 1 ? '' : 's'}
+        {:else}
+          (filtered)
+        {/if}
       </span>
-      <div style="margin-left:auto;display:flex;gap:var(--px-5)">
-        <span class="tv-pg" style="opacity:{page > 0 ? 1 : 0.4}" onclick={() => { if (page > 0) { page = 0; void load() } }} onkeydown={(e) => e.key === 'Enter' && page > 0 && (page = 0, load())} role="button" tabindex="0">«</span>
-        <span class="tv-pg" style="opacity:{page > 0 ? 1 : 0.4}" onclick={() => { if (page > 0) { page--; void load() } }} onkeydown={(e) => e.key === 'Enter' && page > 0 && (page--, load())} role="button" tabindex="0">‹</span>
-        <span class="mono" style="align-self:center;font-size:var(--px-12_5);color:var(--text2)">trang {page + 1}</span>
-        <span class="tv-pg" style="opacity:{hasMore ? 1 : 0.4}" onclick={() => { if (hasMore) { page++; void load() } }} onkeydown={(e) => e.key === 'Enter' && hasMore && (page++, load())} role="button" tabindex="0">›</span>
+      <div style="margin-left:auto;display:flex;align-items:center;gap:var(--px-5)">
+        <span class="tv-pg" style="opacity:{page > 0 ? 1 : 0.4}" onclick={() => { if (page > 0) { page = 0; void load() } }} onkeydown={(e) => e.key === 'Enter' && page > 0 && (page = 0, load())} role="button" tabindex="0" title="First page">«</span>
+        <span class="tv-pg" style="opacity:{page > 0 ? 1 : 0.4}" onclick={() => { if (page > 0) { page--; void load() } }} onkeydown={(e) => e.key === 'Enter' && page > 0 && (page--, load())} role="button" tabindex="0" title="Previous page">‹</span>
+        <span class="mono" style="align-self:center;font-size:var(--px-12_5);color:var(--text2)">
+          Page {(page + 1).toLocaleString()}{totalPages != null ? ` of ${totalPages.toLocaleString()}` : ''}
+        </span>
+        <span class="tv-pg" style="opacity:{canNext ? 1 : 0.4}" onclick={() => { if (canNext) { page++; void load() } }} onkeydown={(e) => e.key === 'Enter' && canNext && (page++, load())} role="button" tabindex="0" title="Next page">›</span>
+        {#if totalPages != null}
+          <span class="tv-pg" style="opacity:{page + 1 < totalPages ? 1 : 0.4}" onclick={() => { if (totalPages != null && page + 1 < totalPages) { page = totalPages - 1; void load() } }} onkeydown={(e) => e.key === 'Enter' && totalPages != null && page + 1 < totalPages && (page = totalPages - 1, load())} role="button" tabindex="0" title="Last page">»</span>
+        {/if}
       </div>
     </div>
   {/if}

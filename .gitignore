@@ -26,3 +26,6 @@ Thumbs.db
 # integration test logs
 src-tauri/out*.log
 out.log
+
+# Local Linux build artifacts
+dist-linux/
