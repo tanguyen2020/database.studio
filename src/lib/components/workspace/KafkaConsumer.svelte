@@ -285,7 +285,7 @@
               onmouseleave={() => (hoverKey === k ? (hoverKey = null) : null)}
               style="background:{rowBg(k)};cursor:default"
             >
-              <td style="padding:var(--px-5) var(--px-12);border-bottom:var(--px-1) solid var(--border);color:{cellColor(k, 'var(--muted)')}">{m.partition}</td>
+              <td style="padding:var(--px-5) var(--px-12);border-bottom:var(--px-1) solid var(--border);white-space:nowrap;width:1%;color:{cellColor(k, 'var(--muted)')}">{m.partition}</td>
               <td style="padding:var(--px-5) var(--px-12);border-bottom:var(--px-1) solid var(--border);white-space:nowrap;width:1%;color:{cellColor(k, 'var(--hex-d19a66)')}">{m.offset}</td>
               <td style="padding:var(--px-5) var(--px-12);border-bottom:var(--px-1) solid var(--border);white-space:nowrap;width:1%;font-weight:700;color:{cellColor(k, 'var(--warn2)')}">{fmtTs(m.timestamp)}</td>
               <td style="padding:var(--px-5) var(--px-12);border-bottom:var(--px-1) solid var(--border);color:{cellColor(k, 'var(--hex-61afef)')};max-width:var(--px-140);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title={m.key}>{m.key}</td>
