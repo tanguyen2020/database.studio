@@ -1378,6 +1378,74 @@ async fn clickhouse_roundtrip_types_and_errors() {
     assert!(dicts.iter().any(|d| d == "it_dict"), "dictionaries phải liệt kê it_dict, got {dicts:?}");
 }
 
+/// ClickHouse parity (P1/P2/P3a): the Table Viewer's literal SELECT builder, the
+/// Show Definition query (SHOW CREATE), and the Admin views all RUN on a real
+/// server — proving these previously-broken/missing features now work for CH.
+#[tokio::test]
+async fn clickhouse_parity_grid_showcreate_admin() {
+    use database_studio_lib::commands::admin::admin_query;
+    use database_studio_lib::commands::schema::definition_query;
+    use database_studio_lib::drivers::grid::{build_select_literal, FilterCond, SortSpec};
+    use serde_json::json;
+
+    let c = GenericImage::new("clickhouse/clickhouse-server", "24.8")
+        .with_exposed_port(8123.tcp())
+        .with_env_var("CLICKHOUSE_PASSWORD", PASS)
+        .start()
+        .await
+        .expect("start clickhouse container");
+    let port = c.get_host_port_ipv4(8123).await.unwrap();
+    let params = ChConnParams {
+        host: "localhost".into(),
+        port,
+        database: "default".into(),
+        user: "default".into(),
+        password: PASS.into(),
+        ssl: false,
+    };
+    let mut drv = retry("clickhouse", || ChDriver::connect(&params)).await;
+
+    drv.exec("CREATE TABLE pv (kind String, n UInt64) ENGINE = MergeTree ORDER BY n").await.unwrap();
+    drv.exec("INSERT INTO pv VALUES ('click',1),('view',2),('click',3)").await.unwrap();
+
+    // P1 — Table Viewer literal SELECT (filter + sort + paginate) runs on ClickHouse.
+    let sql = build_select_literal(
+        &Some("default".into()),
+        "pv",
+        &[FilterCond { col: "kind".into(), op: "=".into(), value: json!("click") }],
+        false,
+        &[SortSpec { col: "n".into(), desc: true }],
+        10,
+        0,
+    );
+    let StatementOutcome::Rows { result } = drv.exec(&sql).await.expect("literal select runs") else {
+        panic!("expected rows")
+    };
+    assert_eq!(result.rows.len(), 2, "kind='click' → 2 rows, SQL={sql}");
+    let first_n = result.rows[0]["n"].as_str().and_then(|s| s.parse::<i64>().ok()).or_else(|| result.rows[0]["n"].as_i64());
+    assert_eq!(first_n, Some(3), "ORDER BY n DESC → first row n=3");
+
+    // P2 — Show Definition (SHOW CREATE) returns the view's DDL.
+    drv.exec("CREATE VIEW pv_v AS SELECT kind, n FROM pv").await.unwrap();
+    let defq = definition_query("clickhouse", "view", "default", "pv_v").unwrap();
+    let StatementOutcome::Rows { result } = drv.exec(&defq).await.expect("SHOW CREATE runs") else {
+        panic!("expected rows")
+    };
+    let ddl = result.rows[0].as_object().and_then(|o| o.values().next()).and_then(|v| v.as_str()).unwrap_or("");
+    assert!(ddl.to_uppercase().contains("CREATE"), "SHOW CREATE → DDL, got: {ddl}");
+
+    // P3a — Admin views (sessions / mutations / users) run; users includes 'default'.
+    for view in ["sessions", "mutations", "users"] {
+        let q = admin_query("clickhouse", view).unwrap();
+        drv.exec(&q).await.unwrap_or_else(|e| panic!("admin '{view}' failed: {}", e.message));
+    }
+    let uq = admin_query("clickhouse", "users").unwrap();
+    let StatementOutcome::Rows { result } = drv.exec(&uq).await.unwrap() else { panic!("rows") };
+    assert!(result.rows.iter().any(|r| r["name"].as_str() == Some("default")), "system.users has 'default'");
+
+    eprintln!("CHK ClickHouse parity P1/P2/P3a OK");
+}
+
 // ---------------------------------------------------------------------------
 // SQLite — file thật + in-memory, đủ 3 mode (không cần container)
 // ---------------------------------------------------------------------------
