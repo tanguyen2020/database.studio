@@ -19,7 +19,6 @@
   import { addPartitionWizard } from '$lib/stores/addpartition.svelte'
   import { quoteIdent, selectStarSql } from '$lib/sql/dialect'
   import {
-    genAlterTable,
     genCreate,
     genDelete,
     genDrop,
@@ -131,12 +130,11 @@
   <ContextMenu.Item onclick={() => tabs.openTableViewer(connId, schema, table)}>Open Data</ContextMenu.Item>
   <ContextMenu.Item onclick={() => importWizard.show(connId, schema)}>Import Data…</ContextMenu.Item>
   <ContextMenu.Item onclick={() => exportWizard.showTable(connId, schema, table)}>Export Data…</ContextMenu.Item>
-  <ContextMenu.Item onclick={() => copyWizard.show(connId, schema, table)}>Copy to…</ContextMenu.Item>
   <ContextMenu.Item onclick={() => testDataWizard.show(connId, schema, table)}>Generate Test Data…</ContextMenu.Item>
   <ContextMenu.Item onclick={() => stmtTab(`${table} · SELECT`, selectStarSql(system, schema, table))}>New Query</ContextMenu.Item>
   <ContextMenu.Separator />
+  <!-- Design Table includes a Script tab (the former "Alter Table…" flow). -->
   <ContextMenu.Item onclick={() => tabs.openTableDesigner(connId, schema, table)}>Design Table</ContextMenu.Item>
-  <ContextMenu.Item onclick={() => stmtTab(`Alter ${table}`, genAlterTable(system, schema, table))}>Alter Table…</ContextMenu.Item>
   {#if !isClickhouse}
     <!-- ClickHouse has no FKs and no btree/unique indexes (only data-skipping
          indexes, surfaced via the Index Scanner) → the Index/FK manager doesn't apply. -->
@@ -153,12 +151,16 @@
       </ContextMenu.SubContent>
     </ContextMenu.Sub>
   {/if}
-  <ContextMenu.Item onclick={() => stmtTab(`Rename ${table}`, genRename(system, schema, table))}>Rename…</ContextMenu.Item>
   <ContextMenu.Separator />
-  <ContextMenu.Item onclick={() => genSqlTab('select')}>Generate SQL · SELECT</ContextMenu.Item>
-  <ContextMenu.Item onclick={() => genSqlTab('insert')}>Generate SQL · INSERT</ContextMenu.Item>
-  <ContextMenu.Item onclick={() => genSqlTab('update')}>Generate SQL · UPDATE</ContextMenu.Item>
-  <ContextMenu.Item onclick={() => genSqlTab('delete')}>Generate SQL · DELETE</ContextMenu.Item>
+  <ContextMenu.Sub>
+    <ContextMenu.SubTrigger>Generate SQL</ContextMenu.SubTrigger>
+    <ContextMenu.SubContent class="w-44">
+      <ContextMenu.Item onclick={() => genSqlTab('select')}>SELECT</ContextMenu.Item>
+      <ContextMenu.Item onclick={() => genSqlTab('insert')}>INSERT</ContextMenu.Item>
+      <ContextMenu.Item onclick={() => genSqlTab('update')}>UPDATE</ContextMenu.Item>
+      <ContextMenu.Item onclick={() => genSqlTab('delete')}>DELETE</ContextMenu.Item>
+    </ContextMenu.SubContent>
+  </ContextMenu.Sub>
   <ContextMenu.Sub>
     <ContextMenu.SubTrigger>Generate Scripts</ContextMenu.SubTrigger>
     <ContextMenu.SubContent class="w-44">
@@ -182,6 +184,8 @@
     <ContextMenu.Item variant="destructive" onclick={() => stmtTab(`Drop partition · ${table}`, chops.dropPartition(schema, table))}>Drop Partition…</ContextMenu.Item>
   {/if}
   <ContextMenu.Separator />
+  <ContextMenu.Item onclick={() => copyWizard.show(connId, schema, table)}>Copy to…</ContextMenu.Item>
+  <ContextMenu.Item onclick={() => stmtTab(`Rename ${table}`, genRename(system, schema, table))}>Rename…</ContextMenu.Item>
   <ContextMenu.Item onclick={() => copyName(table)}>Copy Name</ContextMenu.Item>
   <ContextMenu.Item onclick={() => copyName(`${quoteIdent(system, schema)}.${quoteIdent(system, table)}`)}>Copy Qualified Name</ContextMenu.Item>
   <ContextMenu.Item onclick={copyDdl}>Copy DDL</ContextMenu.Item>

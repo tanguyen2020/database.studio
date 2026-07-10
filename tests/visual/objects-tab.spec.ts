@@ -46,7 +46,7 @@ test('Objects tab: double-click a schema opens the pinned singleton scoped to it
 
   // right-click a row shows the FULL relational table context menu (rule chung)
   await page.getByRole('cell', { name: 'students', exact: true }).click({ button: 'right' })
-  for (const item of ['Open Data', 'Design Table', 'Generate SQL · SELECT', 'Manage Indexes & FKs…', 'Copy DDL', 'Truncate', 'Drop']) {
+  for (const item of ['Open Data', 'Design Table', 'Generate SQL', 'Manage Indexes & FKs…', 'Copy DDL', 'Truncate', 'Drop']) {
     await expect(page.getByRole('menuitem', { name: item, exact: true })).toBeVisible()
   }
   await page.keyboard.press('Escape')

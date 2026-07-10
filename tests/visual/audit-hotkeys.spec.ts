@@ -138,8 +138,9 @@ test('Compare Databases entry preselects the same connection', async ({ page }) 
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
 
-// Follow-up — table context menu has "Alter Table…" (relational Alter).
-test('table context menu has Alter Table', async ({ page }) => {
+// Table context menu: "Design Table" (which now absorbs the old "Alter Table…" via
+// its Scripts tab); the separate "Alter Table…" item is gone.
+test('table context menu: Design Table (merged Alter)', async ({ page }) => {
   const errors: string[] = []
   page.on('pageerror', (e) => errors.push(String(e)))
   await blockRemoteFonts(page)
@@ -154,10 +155,13 @@ test('table context menu has Alter Table', async ({ page }) => {
   await page.waitForTimeout(300)
   await page.getByText('students', { exact: true }).first().click({ button: 'right' })
   await page.waitForTimeout(200)
-  await expect(page.getByText('Alter Table…', { exact: true }).first()).toBeVisible()
-  await page.getByText('Alter Table…', { exact: true }).first().click()
-  await page.waitForTimeout(300)
-  await expect(page.locator('.cm-content').first()).toContainText('ALTER TABLE')
+  await expect(page.getByText('Design Table', { exact: true }).first()).toBeVisible()
+  await expect(page.getByText('Alter Table…', { exact: true })).toHaveCount(0)
+  await page.getByText('Design Table', { exact: true }).first().click()
+  await page.waitForTimeout(400)
+  // designer opened, with the Scripts tab that holds the generated DDL/alter script
+  await expect(page.getByRole('tab', { name: /Fields/ }).first()).toBeVisible()
+  await expect(page.getByText('Scripts', { exact: true }).first()).toBeVisible()
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
 
