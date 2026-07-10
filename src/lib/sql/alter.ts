@@ -58,6 +58,15 @@ export function toAlterStatement(system: string, kind: AlterKind, schema: string
       }
       return `${def};` // SQLite has no stored procedures/functions
     }
+    case 'clickhouse': {
+      if (kind === 'view') {
+        // SHOW CREATE (TABLE) of a view → `CREATE [MATERIALIZED] VIEW …`; ClickHouse
+        // supports CREATE OR REPLACE VIEW (best-effort for MATERIALIZED VIEW).
+        return `${swapLeadingCreate(def, 'CREATE OR REPLACE')};`
+      }
+      // ClickHouse has no CREATE OR REPLACE for tables — surface the DDL for manual edit.
+      return `-- ClickHouse has no CREATE OR REPLACE for tables — edit with ALTER TABLE …\n${def};`
+    }
     default:
       return `${def};`
   }

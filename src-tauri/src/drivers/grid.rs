@@ -350,6 +350,70 @@ pub fn build_select(
     BoundStatement { sql, params }
 }
 
+/// ClickHouse-only filtered SELECT with values inlined as literals. ClickHouse's
+/// HTTP interface has no positional bind, so `exec_params` is unavailable — this
+/// mirrors `build_select` (filters / sorts / LIMIT-OFFSET) but escapes values into
+/// the SQL text (single-quote doubling), then runs via the raw `exec` path. Only
+/// used for ClickHouse; every other engine keeps the parameterized `build_select`.
+pub fn build_select_literal(
+    schema: &Option<String>,
+    table: &str,
+    filters: &[FilterCond],
+    combinator_or: bool,
+    sorts: &[SortSpec],
+    limit: u32,
+    offset: u32,
+) -> String {
+    let system = "clickhouse";
+    let q = quote_style(system);
+    let lit = |v: &Value| -> String {
+        match v {
+            Value::Null => "NULL".into(),
+            Value::Bool(b) => b.to_string(),
+            Value::Number(num) => num.to_string(),
+            other => {
+                let s = other.as_str().map(String::from).unwrap_or_else(|| other.to_string());
+                format!("'{}'", s.replace('\'', "''"))
+            }
+        }
+    };
+
+    let mut sql = format!("SELECT * FROM {}", qualified(system, schema, table));
+
+    let valid_ops = ["=", "!=", "<>", ">", ">=", "<", "<=", "LIKE"];
+    let conds: Vec<String> = filters
+        .iter()
+        .filter_map(|f| {
+            let ident = quote_ident(&f.col, q);
+            match f.op.to_uppercase().as_str() {
+                "IS NULL" => Some(format!("{ident} IS NULL")),
+                "IS NOT NULL" => Some(format!("{ident} IS NOT NULL")),
+                op if valid_ops.contains(&op) || valid_ops.contains(&f.op.as_str()) => {
+                    let real_op = if op == "LIKE" { "LIKE" } else { &f.op };
+                    Some(format!("{ident} {real_op} {}", lit(&f.value)))
+                }
+                _ => None,
+            }
+        })
+        .collect();
+    if !conds.is_empty() {
+        sql.push_str(" WHERE ");
+        sql.push_str(&conds.join(if combinator_or { " OR " } else { " AND " }));
+    }
+
+    let orders: Vec<String> = sorts
+        .iter()
+        .map(|s| format!("{} {}", quote_ident(&s.col, q), if s.desc { "DESC" } else { "ASC" }))
+        .collect();
+    if !orders.is_empty() {
+        sql.push_str(" ORDER BY ");
+        sql.push_str(&orders.join(", "));
+    }
+
+    sql.push_str(&format!(" LIMIT {} OFFSET {offset}", limit.min(100_000)));
+    sql
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -503,6 +567,46 @@ mod tests {
         let b = build_select("postgres", &None, "t", &[FilterCond { col: "a".into(), op: "; DROP TABLE t --".into(), value: json!(1) }], false, &[], 50, 0);
         assert!(!b.sql.contains("DROP"));
         assert!(!b.sql.contains("WHERE"));
+    }
+
+    #[test]
+    fn ch_build_select_literal_inlines_values_backtick() {
+        let sql = build_select_literal(
+            &Some("analytics".into()),
+            "events",
+            &[
+                FilterCond { col: "kind".into(), op: "=".into(), value: json!("click") },
+                FilterCond { col: "n".into(), op: ">".into(), value: json!(5) },
+            ],
+            false,
+            &[SortSpec { col: "ts".into(), desc: true }],
+            100,
+            200,
+        );
+        assert_eq!(
+            sql,
+            "SELECT * FROM `analytics`.`events` WHERE `kind` = 'click' AND `n` > 5 ORDER BY `ts` DESC LIMIT 100 OFFSET 200"
+        );
+    }
+
+    #[test]
+    fn ch_build_select_literal_escapes_quotes_and_rejects_bad_op() {
+        // single quotes doubled (no injection); unknown op dropped
+        let sql = build_select_literal(
+            &None,
+            "t",
+            &[
+                FilterCond { col: "name".into(), op: "=".into(), value: json!("O'Brien") },
+                FilterCond { col: "a".into(), op: "; DROP TABLE t --".into(), value: json!(1) },
+            ],
+            false,
+            &[],
+            50,
+            0,
+        );
+        assert!(sql.contains("`name` = 'O''Brien'"));
+        assert!(!sql.contains("DROP"));
+        assert!(sql.ends_with("LIMIT 50 OFFSET 0"));
     }
 
     #[test]

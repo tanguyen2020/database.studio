@@ -59,14 +59,24 @@ pub async fn exec_filtered(
         .system_of(&conn_id)
         .or_else(|| state.storage.get_connection(&conn_id).ok().map(|p| p.system.as_str().to_string()))
         .unwrap_or_else(|| "postgres".into());
-    let stmt = grid::build_select(&system, &schema, &table, &filters, combinator_or, &sorts, limit, offset);
     let started = std::time::Instant::now();
-    let out = state
-        .registry
-        .with_driver(&conn_id, move |driver| async move {
-            driver.lock().await.exec_params(&stmt.sql, &stmt.params).await
-        })
-        .await?;
+    // ClickHouse has no positional bind over HTTP → build a literal SELECT and run it
+    // through the raw `exec` path. Every other engine keeps the parameterized path.
+    let out = if system == "clickhouse" {
+        let sql = grid::build_select_literal(&schema, &table, &filters, combinator_or, &sorts, limit, offset);
+        state
+            .registry
+            .with_driver(&conn_id, move |driver| async move { driver.lock().await.exec(&sql).await })
+            .await?
+    } else {
+        let stmt = grid::build_select(&system, &schema, &table, &filters, combinator_or, &sorts, limit, offset);
+        state
+            .registry
+            .with_driver(&conn_id, move |driver| async move {
+                driver.lock().await.exec_params(&stmt.sql, &stmt.params).await
+            })
+            .await?
+    };
     let duration_ms = started.elapsed().as_millis() as u64;
     Ok(match out {
         Ok(o) => ExecResponse::from_outcome(o, duration_ms),
