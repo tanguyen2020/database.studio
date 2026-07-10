@@ -2109,71 +2109,42 @@
                     {#each (items as { name: string }[]).filter((it) => folderMatch(folderKey, it.name)) as it (('name' in (it as object) ? (it as { name: string }).name : String(it)))}
                       {@const nm = (it as { name: string }).name}
                       {#snippet fObjMenu()}
-                        <ContextMenu.Content class="w-52">
-                          {#if fk === 't' || fk === 'v'}
-                            <ContextMenu.Item onclick={() => sub && tabs.openTableViewer(sub, fsch.name, nm)}>Open Data</ContextMenu.Item>
-                          {/if}
-                          <ContextMenu.Item onclick={() => newQuery(fsch.name, fk === 't' || fk === 'v' ? nm : undefined, db.name)}>New Query</ContextMenu.Item>
-                          {#if fk === 't'}
-                            <ContextMenu.Item onclick={() => sub && importWizard.show(sub, fsch.name)}>Import Data…</ContextMenu.Item>
-                            <ContextMenu.Item onclick={() => sub && exportWizard.showTable(sub, fsch.name, nm)}>Export Data…</ContextMenu.Item>
-                            <ContextMenu.Item onclick={() => sub && copyWizard.show(sub, fsch.name, nm)}>Copy to…</ContextMenu.Item>
-                            <ContextMenu.Item onclick={() => sub && testDataWizard.show(sub, fsch.name, nm)}>Generate Test Data…</ContextMenu.Item>
-                            <ContextMenu.Separator />
-                            <ContextMenu.Item onclick={() => sub && tabs.openTableDesigner(sub, fsch.name, nm)}>Design Table</ContextMenu.Item>
-                            <ContextMenu.Item onclick={() => selected && stmtTab(`Alter ${nm}`, genAlterTable(selected.system, fsch.name, nm), db.name)}>Alter Table…</ContextMenu.Item>
-                            <ContextMenu.Item onclick={() => sub && tabs.openIndexManager(sub, fsch.name, nm)}>Manage Indexes & FKs…</ContextMenu.Item>
-                            {#if selected && selected.system !== 'clickhouse' && supportsPartitioning(selected.system)}
-                              <ContextMenu.Sub>
-                                <ContextMenu.SubTrigger>Partitions</ContextMenu.SubTrigger>
-                                <ContextMenu.SubContent class="w-52">
-                                  <ContextMenu.Item onclick={() => sub && showPartitions(sub, fsch.name, nm, `${folderKey}:${nm}`, `${folderKey}:${nm}:parts`)}>Show Partitions</ContextMenu.Item>
-                                  <ContextMenu.Item onclick={() => sub && addPartitionWizard.show(sub, fsch.name, nm, selected!.system, db.name)}>Add Partition…</ContextMenu.Item>
-                                </ContextMenu.SubContent>
-                              </ContextMenu.Sub>
+                        {#if fk === 't'}
+                          <!-- rule chung: foreign-db tables use the SAME shared table menu -->
+                          <TableContextMenu
+                            connId={sub ?? selected!.id}
+                            schema={fsch.name}
+                            table={nm}
+                            system={selected!.system}
+                            database={db.name}
+                            onShowPartitions={() => sub && showPartitions(sub, fsch.name, nm, `${folderKey}:${nm}`, `${folderKey}:${nm}:parts`)}
+                            onRefresh={() => sub && explorer.refresh(sub, { kind: 'table', schema: fsch.name, table: nm })}
+                          />
+                        {:else}
+                          <ContextMenu.Content class="w-52">
+                            {#if fk === 'v'}
+                              <ContextMenu.Item onclick={() => sub && tabs.openTableViewer(sub, fsch.name, nm)}>Open Data</ContextMenu.Item>
                             {/if}
-                            <ContextMenu.Item onclick={() => selected && stmtTab(`Rename ${nm}`, genRename(selected.system, fsch.name, nm), db.name)}>Rename…</ContextMenu.Item>
-                            <ContextMenu.Separator />
-                            <ContextMenu.Item onclick={() => genSqlTab('select', fsch.name, nm, sub, db.name)}>Generate SQL · SELECT</ContextMenu.Item>
-                            <ContextMenu.Item onclick={() => genSqlTab('insert', fsch.name, nm, sub, db.name)}>Generate SQL · INSERT</ContextMenu.Item>
-                            <ContextMenu.Item onclick={() => genSqlTab('update', fsch.name, nm, sub, db.name)}>Generate SQL · UPDATE</ContextMenu.Item>
-                            <ContextMenu.Item onclick={() => genSqlTab('delete', fsch.name, nm, sub, db.name)}>Generate SQL · DELETE</ContextMenu.Item>
-                            <ContextMenu.Sub>
-                              <ContextMenu.SubTrigger>Generate Scripts</ContextMenu.SubTrigger>
-                              <ContextMenu.SubContent class="w-44">
-                                <ContextMenu.Item onclick={() => genTableScript(fsch.name, nm, 'structure', sub, db.name)}>Structure Only</ContextMenu.Item>
-                                <ContextMenu.Item onclick={() => genTableScript(fsch.name, nm, 'data', sub, db.name)}>Data Only</ContextMenu.Item>
-                                <ContextMenu.Item onclick={() => genTableScript(fsch.name, nm, 'both', sub, db.name)}>Structure and Data</ContextMenu.Item>
-                              </ContextMenu.SubContent>
-                            </ContextMenu.Sub>
-                            <ContextMenu.Item onclick={() => genSqlTab('ddl', fsch.name, nm, sub, db.name)}>View DDL</ContextMenu.Item>
-                          {/if}
-                          {#if fk === 'v' || fk === 'p' || fk === 'fn' || fk === 'tg'}
-                            {@const okind = fk === 'v' ? 'view' : fk === 'p' ? 'procedure' : fk === 'tg' ? 'trigger' : 'function'}
-                            {#if fk === 'p' || fk === 'fn'}
-                              <ContextMenu.Item onclick={() => selected && execRoutineWizard.show(selected.id, fsch.name, it as RoutineInfo, db.name)}>Execute…</ContextMenu.Item>
+                            <ContextMenu.Item onclick={() => newQuery(fsch.name, fk === 'v' ? nm : undefined, db.name)}>New Query</ContextMenu.Item>
+                            {#if fk === 'v' || fk === 'p' || fk === 'fn' || fk === 'tg'}
+                              {@const okind = fk === 'v' ? 'view' : fk === 'p' ? 'procedure' : fk === 'tg' ? 'trigger' : 'function'}
+                              {#if fk === 'p' || fk === 'fn'}
+                                <ContextMenu.Item onclick={() => selected && execRoutineWizard.show(selected.id, fsch.name, it as RoutineInfo, db.name)}>Execute…</ContextMenu.Item>
+                              {/if}
+                              <ContextMenu.Item onclick={() => sub && showDefinition(okind, fsch.name, nm, sub)}>Show Definition</ContextMenu.Item>
+                              <ContextMenu.Item onclick={() => sub && alterObject(okind, fsch.name, nm, sub)}>Alter…</ContextMenu.Item>
+                              {#if fk === 'p' || fk === 'fn'}
+                                <ContextMenu.Item variant="destructive" onclick={() => stmtTab(`Drop ${nm}`, `DROP ${fk === 'p' ? 'PROCEDURE' : 'FUNCTION'} IF EXISTS ${selected ? qualified(selected.system, fsch.name, nm) : nm};`, db.name)}>Drop</ContextMenu.Item>
+                              {:else}
+                                <ContextMenu.Item variant="destructive" onclick={() => stmtTab(`Drop ${nm}`, `DROP ${fk === 'v' ? 'VIEW' : 'TRIGGER'} IF EXISTS ${selected ? qualified(selected.system, fsch.name, nm) : nm};`, db.name)}>Drop</ContextMenu.Item>
+                              {/if}
                             {/if}
-                            <ContextMenu.Item onclick={() => sub && showDefinition(okind, fsch.name, nm, sub)}>Show Definition</ContextMenu.Item>
-                            <ContextMenu.Item onclick={() => sub && alterObject(okind, fsch.name, nm, sub)}>Alter…</ContextMenu.Item>
-                            {#if fk === 'p' || fk === 'fn'}
-                              <ContextMenu.Item variant="destructive" onclick={() => stmtTab(`Drop ${nm}`, `DROP ${fk === 'p' ? 'PROCEDURE' : 'FUNCTION'} IF EXISTS ${selected ? qualified(selected.system, fsch.name, nm) : nm};`, db.name)}>Drop</ContextMenu.Item>
-                            {:else}
-                              <ContextMenu.Item variant="destructive" onclick={() => stmtTab(`Drop ${nm}`, `DROP ${fk === 'v' ? 'VIEW' : 'TRIGGER'} IF EXISTS ${selected ? qualified(selected.system, fsch.name, nm) : nm};`, db.name)}>Drop</ContextMenu.Item>
-                            {/if}
-                          {/if}
-                          <ContextMenu.Separator />
-                          <ContextMenu.Item onclick={() => copyName(nm)}>Copy Name</ContextMenu.Item>
-                          <ContextMenu.Item onclick={() => selected && copyName(`${quoteIdent(selected.system, fsch.name)}.${quoteIdent(selected.system, nm)}`)}>Copy Qualified Name</ContextMenu.Item>
-                          {#if fk === 't'}
-                            <ContextMenu.Item onclick={() => copyDdl(fsch.name, nm, sub)}>Copy DDL</ContextMenu.Item>
-                          {/if}
-                          <ContextMenu.Item onclick={() => sub && explorer.refresh(sub, fk === 't' ? { kind: 'table', schema: fsch.name, table: nm } : { kind: 'schema', schema: fsch.name })}>Refresh</ContextMenu.Item>
-                          {#if fk === 't'}
                             <ContextMenu.Separator />
-                            <ContextMenu.Item variant="destructive" onclick={() => selected && stmtTab(`Truncate ${nm}`, genTruncate(selected.system, fsch.name, nm), db.name)}>Truncate</ContextMenu.Item>
-                            <ContextMenu.Item variant="destructive" onclick={() => selected && stmtTab(`Drop ${nm}`, genDrop(selected.system, fsch.name, nm), db.name)}>Drop</ContextMenu.Item>
-                          {/if}
-                        </ContextMenu.Content>
+                            <ContextMenu.Item onclick={() => copyName(nm)}>Copy Name</ContextMenu.Item>
+                            <ContextMenu.Item onclick={() => selected && copyName(`${quoteIdent(selected.system, fsch.name)}.${quoteIdent(selected.system, nm)}`)}>Copy Qualified Name</ContextMenu.Item>
+                            <ContextMenu.Item onclick={() => sub && explorer.refresh(sub, { kind: 'schema', schema: fsch.name })}>Refresh</ContextMenu.Item>
+                          </ContextMenu.Content>
+                        {/if}
                       {/snippet}
                       {@const isTblLike = fk === 't' || fk === 'v'}
                       {@render row({
