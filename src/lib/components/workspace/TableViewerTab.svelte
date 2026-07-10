@@ -138,17 +138,17 @@
 
 <div style="flex:1;display:flex;flex-direction:column;min-height:0">
   <!-- toolbar -->
-  <div style="flex:none;display:flex;align-items:center;gap:var(--px-8);padding:var(--px-7) var(--px-12);border-bottom:var(--px-1) solid var(--border);background:var(--surface);font-size:var(--px-12)">
+  <div style="flex:none;display:flex;align-items:center;gap:var(--px-10);padding:var(--px-9) var(--px-14);border-bottom:var(--px-1) solid var(--border);background:var(--surface);font-size:var(--px-13)">
     {#if profile}
       <SystemBadge system={profile.system} />
     {/if}
     <span class="mono">{schema}.{table}</span>
     <span class="tv-btn" style="background:{filtersOpen ? 'var(--hover)' : 'var(--panel)'}" onclick={() => (filtersOpen = !filtersOpen)} onkeydown={(e) => e.key === 'Enter' && (filtersOpen = !filtersOpen)} role="button" tabindex="0">Filters {filters.length ? `(${filters.length})` : ''} ▾</span>
     <div style="margin-left:auto;display:flex;align-items:center;gap:var(--px-8)">
-      <label style="display:flex;align-items:center;gap:var(--px-4);font-size:var(--px-11);color:var(--text2)">
+      <label style="display:flex;align-items:center;gap:var(--px-5);font-size:var(--px-12_5);color:var(--text2)">
         Rows / page
         <select
-          style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-5);padding:var(--px-2) var(--px-4);font-size:var(--px-11);color:var(--text)"
+          style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-5);padding:var(--px-3) var(--px-6);font-size:var(--px-12_5);color:var(--text)"
           bind:value={pageSize}
           onchange={() => { page = 0; void load() }}
         >
@@ -159,7 +159,7 @@
       </label>
       <span class="tv-btn" onclick={() => { page = 0; void load() }} onkeydown={(e) => e.key === 'Enter' && (page = 0, load())} role="button" tabindex="0" title="Refresh">⟳</span>
       {#if data}
-        <span class="mono" style="font-size:var(--px-11);color:var(--muted)">{data.total.toLocaleString()} rows · {durationMs} ms</span>
+        <span class="mono" style="font-size:var(--px-12_5);color:var(--muted)">{data.total.toLocaleString()} rows · {durationMs} ms</span>
       {/if}
     </div>
   </div>
@@ -213,8 +213,8 @@
 
   <!-- sort header bar (click cột để sort; Shift+click thêm cột) -->
   {#if data && columnNames.length > 0}
-    <div style="flex:none;display:flex;gap:var(--px-6);padding:var(--px-4) var(--px-12);border-bottom:var(--px-1) solid var(--border);background:var(--surface);overflow-x:auto">
-      <span style="font-size:var(--px-10);color:var(--muted);flex:none;align-self:center">Sort:</span>
+    <div style="flex:none;display:flex;gap:var(--px-6);padding:var(--px-6) var(--px-14);border-bottom:var(--px-1) solid var(--border);background:var(--surface);overflow-x:auto">
+      <span style="font-size:var(--px-11_5);color:var(--muted);flex:none;align-self:center">Sort:</span>
       {#each columnNames as c (c)}
         <span
           class="tv-sort"
@@ -250,13 +250,13 @@
   <!-- pager — dòng 571-587 -->
   {#if data && (page > 0 || hasMore)}
     <div style="flex:none;display:flex;align-items:center;gap:var(--px-10);padding:var(--px-7) var(--px-12);border-top:var(--px-1) solid var(--border);background:var(--header)">
-      <span class="mono" style="font-size:var(--px-11_5);color:var(--text2)">
+      <span class="mono" style="font-size:var(--px-12_5);color:var(--text2)">
         {(page * pageSize + 1).toLocaleString()}–{(page * pageSize + data.rows.length).toLocaleString()}
       </span>
       <div style="margin-left:auto;display:flex;gap:var(--px-5)">
         <span class="tv-pg" style="opacity:{page > 0 ? 1 : 0.4}" onclick={() => { if (page > 0) { page = 0; void load() } }} onkeydown={(e) => e.key === 'Enter' && page > 0 && (page = 0, load())} role="button" tabindex="0">«</span>
         <span class="tv-pg" style="opacity:{page > 0 ? 1 : 0.4}" onclick={() => { if (page > 0) { page--; void load() } }} onkeydown={(e) => e.key === 'Enter' && page > 0 && (page--, load())} role="button" tabindex="0">‹</span>
-        <span class="mono" style="align-self:center;font-size:var(--px-11_5);color:var(--text2)">trang {page + 1}</span>
+        <span class="mono" style="align-self:center;font-size:var(--px-12_5);color:var(--text2)">trang {page + 1}</span>
         <span class="tv-pg" style="opacity:{hasMore ? 1 : 0.4}" onclick={() => { if (hasMore) { page++; void load() } }} onkeydown={(e) => e.key === 'Enter' && hasMore && (page++, load())} role="button" tabindex="0">›</span>
       </div>
     </div>
@@ -265,12 +265,12 @@
 
 <style>
   .tv-btn {
-    font-size: var(--px-11);
+    font-size: var(--px-12_5);
     color: var(--text2);
     background: var(--panel);
     border: var(--px-1) solid var(--border);
     border-radius: var(--px-6);
-    padding: var(--px-3) var(--px-9);
+    padding: var(--px-5) var(--px-11);
     cursor: pointer;
   }
   .tv-btn:hover {
@@ -281,17 +281,17 @@
     color: var(--text);
     border: var(--px-1) solid var(--border);
     border-radius: var(--px-5);
-    padding: var(--px-4) var(--px-6);
-    font-size: var(--px-11_5);
+    padding: var(--px-5) var(--px-8);
+    font-size: var(--px-12_5);
   }
   .tv-sort {
     flex: none;
-    font-size: var(--px-10_5);
+    font-size: var(--px-12);
     color: var(--text2);
     background: var(--panel);
     border: var(--px-1) solid var(--border);
-    border-radius: var(--px-5);
-    padding: var(--px-2) var(--px-8);
+    border-radius: var(--px-6);
+    padding: var(--px-4) var(--px-10);
     cursor: pointer;
     white-space: nowrap;
   }
@@ -299,8 +299,8 @@
     background: var(--hover);
   }
   .tv-pg {
-    width: var(--px-28);
-    height: var(--px-24);
+    width: var(--px-30);
+    height: var(--px-28);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -308,5 +308,6 @@
     border-radius: var(--px-6);
     cursor: pointer;
     font-family: var(--font-mono);
+    font-size: var(--px-13);
   }
 </style>
