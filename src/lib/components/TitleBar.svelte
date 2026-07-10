@@ -10,6 +10,20 @@
   const themeIcon = $derived(ui.theme === 'dark' ? '☾' : '☀')
   const themeLabel = $derived(ui.theme === 'dark' ? 'Dark' : 'Light')
 
+  // Font-size (UI scale) menu — applies to the whole app via ui.setFontScale.
+  let fontMenuOpen = $state(false)
+  const FONT_OPTIONS: { scale: number; label: string }[] = [
+    { scale: 0.9, label: 'Small' },
+    { scale: 1, label: 'Default' },
+    { scale: 1.1, label: 'Large' },
+    { scale: 1.25, label: 'Larger' },
+    { scale: 1.5, label: 'Huge' },
+  ]
+  function pickFontScale(scale: number) {
+    ui.setFontScale(scale)
+    fontMenuOpen = false
+  }
+
   // Session Monitor (T23) — mở Admin view cho connection đang chọn.
   function openSessions() {
     const id = connections.selectedId
@@ -33,6 +47,50 @@
     <div class="tb-btn" onclick={() => ui.toggleTheme()} onkeydown={(e) => e.key === 'Enter' && ui.toggleTheme()} role="button" tabindex="0" title="Toggle theme">
       <span>{themeIcon}</span><span>{themeLabel}</span>
     </div>
+    <!-- Font size (UI scale) — applies to the whole app -->
+    <div style="position:relative">
+      <div
+        class="tb-btn"
+        onclick={() => (fontMenuOpen = !fontMenuOpen)}
+        onkeydown={(e) => e.key === 'Enter' && (fontMenuOpen = !fontMenuOpen)}
+        role="button"
+        tabindex="0"
+        aria-haspopup="true"
+        aria-expanded={fontMenuOpen}
+        title="Font size (applies to the whole app)"
+      >
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+        <span>Font</span>
+      </div>
+      {#if fontMenuOpen}
+        <!-- transparent backdrop: clicking outside closes the menu (dropdown, not a form) -->
+        <div style="position:fixed;inset:0;z-index:60" role="presentation" onclick={() => (fontMenuOpen = false)} oncontextmenu={(e) => { e.preventDefault(); fontMenuOpen = false }}></div>
+        <div
+          role="menu"
+          tabindex="-1"
+          onkeydown={(e) => e.key === 'Escape' && (fontMenuOpen = false)}
+          style="position:absolute;right:0;top:calc(100% + var(--px-6));z-index:61;min-width:var(--px-180);background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-10);box-shadow:0 var(--px-10) var(--px-28) var(--rgba-0-0-0-_55);overflow:hidden;padding:var(--px-4)"
+        >
+          <div style="padding:var(--px-6) var(--px-10) var(--px-4);font-size:var(--px-10_5);font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em">Font size</div>
+          {#each FONT_OPTIONS as opt (opt.scale)}
+            {@const active = Math.abs(ui.fontScale - opt.scale) < 0.001}
+            <div
+              class="fs-item"
+              role="menuitemradio"
+              aria-checked={active}
+              tabindex="0"
+              onclick={() => pickFontScale(opt.scale)}
+              onkeydown={(e) => e.key === 'Enter' && pickFontScale(opt.scale)}
+              style="display:flex;align-items:center;gap:var(--px-10);padding:var(--px-6) var(--px-10);border-radius:var(--px-7);cursor:pointer;background:{active ? 'var(--hover)' : 'transparent'}"
+            >
+              <span style="width:var(--px-14);color:var(--primary)">{active ? '✓' : ''}</span>
+              <span style="flex:1;color:var(--text)">{opt.label}</span>
+              <span class="mono" style="color:var(--muted);font-size:var(--px-11)">{Math.round(opt.scale * 100)}%</span>
+            </div>
+          {/each}
+        </div>
+      {/if}
+    </div>
   </div>
 </div>
 
@@ -51,6 +109,9 @@
     cursor: pointer;
   }
   .tb-btn:hover {
+    background: var(--hover);
+  }
+  .fs-item:hover {
     background: var(--hover);
   }
 </style>

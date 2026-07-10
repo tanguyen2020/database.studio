@@ -10,6 +10,10 @@ export interface EditConnectedRequest {
 
 class UiStore {
   theme = $state<'dark' | 'light'>('dark')
+  /** Global UI scale ("font size"). The whole app is sized in absolute px tokens,
+   *  so scaling font alone would break layouts — this zooms the entire UI (font +
+   *  spacing proportionally), like a browser zoom. 1 = 100%. */
+  fontScale = $state<number>(1)
 
   // Connection Manager dialogs
   pickerOpen = $state(false)
@@ -66,12 +70,24 @@ class UiStore {
     void ipc.setAppState('theme', this.theme)
   }
 
+  private applyFontScale() {
+    // Chromium/WebView2 `zoom` scales the whole document (font + px-token spacing).
+    document.documentElement.style.zoom = String(this.fontScale)
+  }
+
+  setFontScale(scale: number) {
+    this.fontScale = Math.min(2, Math.max(0.75, scale))
+    this.applyFontScale()
+    void ipc.setAppState('font_scale', String(this.fontScale))
+  }
+
   async loadPersisted() {
     try {
-      const [theme, sizes, groupMode] = await Promise.all([
+      const [theme, sizes, groupMode, fontScale] = await Promise.all([
         ipc.getAppState('theme'),
         ipc.getAppState('layout_sizes'),
         ipc.getAppState('conn_group_mode'),
+        ipc.getAppState('font_scale'),
       ])
       if (theme === 'light' || theme === 'dark') {
         this.theme = theme
@@ -79,6 +95,11 @@ class UiStore {
       if (groupMode === 'type' || groupMode === 'folder') {
         this.connGroupMode = groupMode
       }
+      const fs = Number(fontScale)
+      if (Number.isFinite(fs) && fs >= 0.75 && fs <= 2) {
+        this.fontScale = fs
+      }
+      this.applyFontScale()
       document.documentElement.classList.toggle('dark', this.theme === 'dark')
       if (sizes) {
         const parsed = JSON.parse(sizes)
