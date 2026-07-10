@@ -289,7 +289,7 @@
               <td style="padding:var(--px-5) var(--px-12);border-bottom:var(--px-1) solid var(--border);color:{cellColor(k, 'var(--hex-d19a66)')}">{m.offset}</td>
               <td style="padding:var(--px-5) var(--px-12);border-bottom:var(--px-1) solid var(--border);white-space:nowrap;font-weight:700;color:{cellColor(k, 'var(--warn2)')}">{fmtTs(m.timestamp)}</td>
               <td style="padding:var(--px-5) var(--px-12);border-bottom:var(--px-1) solid var(--border);color:{cellColor(k, 'var(--hex-61afef)')}">{m.key}</td>
-              <td style="padding:var(--px-5) var(--px-12);border-bottom:var(--px-1) solid var(--border);color:{cellColor(k, 'var(--hex-98c379)')};max-width:var(--px-420);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title={decodeVal(m.value)}>{decodeVal(m.value)}</td>
+              <td style="padding:var(--px-5) var(--px-12);border-bottom:var(--px-1) solid var(--border);color:{cellColor(k, 'var(--text)')};max-width:var(--px-420);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title={decodeVal(m.value)}>{decodeVal(m.value)}</td>
               <!-- action icons recolour to white when selected so the blue highlight never hides them -->
               <td style="padding:var(--px-5) var(--px-8);border-bottom:var(--px-1) solid var(--border);white-space:nowrap">
                 <span onclick={(e) => { e.stopPropagation(); viewJson(m) }} onkeydown={(e) => e.key === 'Enter' && viewJson(m)} role="button" tabindex="0" title="View value as JSON" style="cursor:pointer;color:{cellColor(k, 'var(--muted)')};margin-right:var(--px-6)">⛶</span>
