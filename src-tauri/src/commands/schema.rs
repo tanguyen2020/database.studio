@@ -182,6 +182,15 @@ pub fn definition_query(system: &str, kind: &str, schema: &str, name: &str) -> O
         }
         ("mssql", _) => format!("SELECT OBJECT_DEFINITION(OBJECT_ID('{s}.{n}')) AS d"),
         ("sqlite", _) => format!("SELECT sql FROM sqlite_master WHERE name = '{n}'"),
+        // ClickHouse: SHOW CREATE returns the full runnable DDL in a `statement`
+        // column (object_definition falls back to the first column). Views/MVs are
+        // tables in system.tables → SHOW CREATE TABLE; dictionaries have their own.
+        ("clickhouse", kind) => {
+            let bs = schema.replace('`', "``");
+            let bn = name.replace('`', "``");
+            let kw = if kind == "dictionary" { "DICTIONARY" } else { "TABLE" };
+            format!("SHOW CREATE {kw} `{bs}`.`{bn}`")
+        }
         _ => return None,
     };
     Some(q)
@@ -281,5 +290,18 @@ mod tests {
             .contains("a''b"));
         // Cassandra không hỗ trợ
         assert!(definition_query("cassandra", "view", "ks", "v").is_none());
+        // ClickHouse: SHOW CREATE TABLE for views/tables, DICTIONARY for dictionaries
+        assert_eq!(
+            definition_query("clickhouse", "view", "analytics", "v").unwrap(),
+            "SHOW CREATE TABLE `analytics`.`v`"
+        );
+        assert_eq!(
+            definition_query("clickhouse", "table", "analytics", "t").unwrap(),
+            "SHOW CREATE TABLE `analytics`.`t`"
+        );
+        assert_eq!(
+            definition_query("clickhouse", "dictionary", "analytics", "d").unwrap(),
+            "SHOW CREATE DICTIONARY `analytics`.`d`"
+        );
     }
 }

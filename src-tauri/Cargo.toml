@@ -59,7 +59,7 @@ roxmltree = "0.20"
 
 # ClickHouse qua HTTP 8123 + FORMAT JSON (addendum CH §9 — HTTP; dùng reqwest
 # thay crate `clickhouse` vì result set động không hợp API typed-row của crate đó)
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
 
 # Redis (Phase 3) — async tokio + rustls TLS (rediss://). CA tùy chọn qua TlsCertificates.
 redis = { version = "0.27", default-features = false, features = [
@@ -103,6 +103,8 @@ dirs = "5"
 testcontainers = "0.23"
 # Kafka container (tự xử lý advertised.listeners) cho integration test Phase 4
 testcontainers-modules = { version = "0.11", features = ["kafka"] }
+# construct filter values (serde_json::json!) for grid-builder integration tests
+serde_json = "1"
 
 [profile.dev]
 incremental = true

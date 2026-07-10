@@ -35,10 +35,20 @@
           ['users', 'Users & Privileges'],
           ['extensions', 'Extensions'],
         ]
+      case 'clickhouse':
+        return [
+          ['sessions', 'Session Monitor'],
+          ['mutations', 'Mutations'],
+          ['users', 'Users & Privileges'],
+        ]
       default:
         return [['sessions', 'Session Monitor']]
     }
   })
+
+  // Kill targets a numeric backend pid — ClickHouse cancels by query_id (string), a
+  // different flow, so the per-row Kill action is offered only where pid-kill applies.
+  const canKill = $derived(['postgres', 'mysql', 'mariadb', 'mssql'].includes(tab.systemType))
 
   let view = $state<string>((untrack(() => tab.state) as { view?: string }).view ?? 'sessions')
 
@@ -124,7 +134,7 @@
           {#each cols as c (c[0])}
             <th style="position:sticky;top:0;background:var(--header);border-bottom:var(--px-1) solid var(--border2);padding:var(--px-6) var(--px-10);text-align:left;color:var(--text2);font-weight:600">{c[0]}</th>
           {/each}
-          {#if view === 'sessions'}<th style="position:sticky;top:0;background:var(--header);border-bottom:var(--px-1) solid var(--border2);padding:var(--px-6) var(--px-10)"></th>{/if}
+          {#if view === 'sessions' && canKill}<th style="position:sticky;top:0;background:var(--header);border-bottom:var(--px-1) solid var(--border2);padding:var(--px-6) var(--px-10)"></th>{/if}
         </tr></thead>
         <tbody>
           {#each rows as r, ri (ri)}
@@ -132,7 +142,7 @@
               {#each cols as c (c[0])}
                 <td style="padding:var(--px-4) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:var(--text2);white-space:nowrap;max-width:var(--px-320);overflow:hidden;text-overflow:ellipsis">{fmt(r[c[0]])}</td>
               {/each}
-              {#if view === 'sessions'}
+              {#if view === 'sessions' && canKill}
                 <td style="padding:var(--px-4) var(--px-10);border-bottom:var(--px-1) solid var(--border)">
                   <span onclick={() => kill(r['pid'])} onkeydown={(e) => e.key === 'Enter' && kill(r['pid'])} role="button" tabindex="0" style="font-size:var(--px-10);font-weight:700;color:var(--hex-fff);background:var(--error);border-radius:var(--px-4);padding:var(--px-1) var(--px-8);cursor:pointer">Kill</span>
                 </td>

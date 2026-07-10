@@ -118,9 +118,10 @@
   }
 
   // T24 — stream a table export straight to a file (bounded memory) when the
-  // streaming_io setting is on. PG-only + csv/json/sql; else the in-memory path.
+  // streaming_io setting is on. PostgreSQL + ClickHouse + csv/json/sql; else the
+  // in-memory path.
   const canStream = $derived(
-    isTable && IS_TAURI && system === 'postgres' && format !== 'xls' && settings.value.streamingIo,
+    isTable && IS_TAURI && (system === 'postgres' || system === 'clickhouse') && format !== 'xls' && settings.value.streamingIo,
   )
 
   async function runStreaming(headers: string[]) {

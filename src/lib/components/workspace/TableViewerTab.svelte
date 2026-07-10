@@ -42,9 +42,11 @@
   const OPS = ['=', '!=', '>', '>=', '<', '<=', 'LIKE', 'IS NULL', 'IS NOT NULL']
   const noValue = (op: string) => op === 'IS NULL' || op === 'IS NOT NULL'
 
-  const isChSqlite = $derived(profile?.system === 'clickhouse')
+  // Editing is enabled for every relational engine, including ClickHouse — the grid
+  // routes CH edits to "Generate mutation" (async ALTER … UPDATE/DELETE) instead of
+  // an OLTP apply. Only offered on an unfiltered view (PK targeting is unambiguous).
   const editTarget = $derived<EditTarget | undefined>(
-    profile && !isChSqlite && tab.connectionId && filters.length === 0
+    profile && tab.connectionId && filters.length === 0
       ? { connId: tab.connectionId, system: profile.system, schema, table, pkCols, onApplied: () => void load() }
       : undefined,
   )

@@ -55,3 +55,21 @@ describe('toAlterStatement — sqlite', () => {
     )
   })
 })
+
+describe('toAlterStatement — clickhouse', () => {
+  it('view: SHOW CREATE (CREATE VIEW …) → CREATE OR REPLACE VIEW', () => {
+    expect(toAlterStatement('clickhouse', 'view', 'analytics', 'v', 'CREATE VIEW analytics.v AS SELECT 1')).toBe(
+      'CREATE OR REPLACE VIEW analytics.v AS SELECT 1;',
+    )
+  })
+  it('materialized view: leading CREATE → CREATE OR REPLACE (best-effort)', () => {
+    expect(toAlterStatement('clickhouse', 'view', 'analytics', 'mv', 'CREATE MATERIALIZED VIEW analytics.mv TO t AS SELECT 1')).toBe(
+      'CREATE OR REPLACE MATERIALIZED VIEW analytics.mv TO t AS SELECT 1;',
+    )
+  })
+  it('table: no CREATE OR REPLACE — DDL surfaced with a note', () => {
+    const out = toAlterStatement('clickhouse', 'table' as never, 'analytics', 't', 'CREATE TABLE analytics.t (id UInt64) ENGINE = MergeTree ORDER BY id')
+    expect(out).toContain('no CREATE OR REPLACE for tables')
+    expect(out).toContain('CREATE TABLE analytics.t')
+  })
+})

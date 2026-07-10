@@ -135,6 +135,15 @@
         for (const i of ix) if (!i.primary) indexes.push({ name: i.name, table: t.name, columns: i.columns, unique: i.unique })
       }
     }
+    // ClickHouse: list_indexes returns nothing (its data-skipping indexes live in
+    // system.data_skipping_indices) — pull them from the Index Scanner so the
+    // comparison covers them. CH-only branch; every other engine is unaffected.
+    if (connections.byId(connId)?.system === 'clickhouse') {
+      const scan = await ipc.scanIndexes(connId, schema).catch(() => null)
+      for (const i of scan?.indexes ?? []) {
+        if (!i.primary) indexes.push({ name: i.name, table: i.table, columns: i.columns, unique: i.unique })
+      }
+    }
     // procedures / functions / triggers — compared by real DDL text.
     const routines: CmpRoutine[] = []
     const rs = await ipc.listRoutines(connId, schema).catch(() => [])

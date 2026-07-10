@@ -1378,6 +1378,163 @@ async fn clickhouse_roundtrip_types_and_errors() {
     assert!(dicts.iter().any(|d| d == "it_dict"), "dictionaries phải liệt kê it_dict, got {dicts:?}");
 }
 
+/// ClickHouse parity (P1/P2/P3a): the Table Viewer's literal SELECT builder, the
+/// Show Definition query (SHOW CREATE), and the Admin views all RUN on a real
+/// server — proving these previously-broken/missing features now work for CH.
+#[tokio::test]
+async fn clickhouse_parity_grid_showcreate_admin() {
+    use database_studio_lib::commands::admin::admin_query;
+    use database_studio_lib::commands::schema::definition_query;
+    use database_studio_lib::drivers::grid::{build_select_literal, FilterCond, SortSpec};
+    use serde_json::json;
+
+    let c = GenericImage::new("clickhouse/clickhouse-server", "24.8")
+        .with_exposed_port(8123.tcp())
+        .with_env_var("CLICKHOUSE_PASSWORD", PASS)
+        .start()
+        .await
+        .expect("start clickhouse container");
+    let port = c.get_host_port_ipv4(8123).await.unwrap();
+    let params = ChConnParams {
+        host: "localhost".into(),
+        port,
+        database: "default".into(),
+        user: "default".into(),
+        password: PASS.into(),
+        ssl: false,
+    };
+    let mut drv = retry("clickhouse", || ChDriver::connect(&params)).await;
+
+    drv.exec("CREATE TABLE pv (kind String, n UInt64) ENGINE = MergeTree ORDER BY n").await.unwrap();
+    drv.exec("INSERT INTO pv VALUES ('click',1),('view',2),('click',3)").await.unwrap();
+
+    // P1 — Table Viewer literal SELECT (filter + sort + paginate) runs on ClickHouse.
+    let sql = build_select_literal(
+        &Some("default".into()),
+        "pv",
+        &[FilterCond { col: "kind".into(), op: "=".into(), value: json!("click") }],
+        false,
+        &[SortSpec { col: "n".into(), desc: true }],
+        10,
+        0,
+    );
+    let StatementOutcome::Rows { result } = drv.exec(&sql).await.expect("literal select runs") else {
+        panic!("expected rows")
+    };
+    assert_eq!(result.rows.len(), 2, "kind='click' → 2 rows, SQL={sql}");
+    let first_n = result.rows[0]["n"].as_str().and_then(|s| s.parse::<i64>().ok()).or_else(|| result.rows[0]["n"].as_i64());
+    assert_eq!(first_n, Some(3), "ORDER BY n DESC → first row n=3");
+
+    // P2 — Show Definition (SHOW CREATE) returns the view's DDL.
+    drv.exec("CREATE VIEW pv_v AS SELECT kind, n FROM pv").await.unwrap();
+    let defq = definition_query("clickhouse", "view", "default", "pv_v").unwrap();
+    let StatementOutcome::Rows { result } = drv.exec(&defq).await.expect("SHOW CREATE runs") else {
+        panic!("expected rows")
+    };
+    let ddl = result.rows[0].as_object().and_then(|o| o.values().next()).and_then(|v| v.as_str()).unwrap_or("");
+    assert!(ddl.to_uppercase().contains("CREATE"), "SHOW CREATE → DDL, got: {ddl}");
+
+    // P3a — Admin views (sessions / mutations / users) run; users includes 'default'.
+    for view in ["sessions", "mutations", "users"] {
+        let q = admin_query("clickhouse", view).unwrap();
+        drv.exec(&q).await.unwrap_or_else(|e| panic!("admin '{view}' failed: {}", e.message));
+    }
+    let uq = admin_query("clickhouse", "users").unwrap();
+    let StatementOutcome::Rows { result } = drv.exec(&uq).await.unwrap() else { panic!("rows") };
+    assert!(result.rows.iter().any(|r| r["name"].as_str() == Some("default")), "system.users has 'default'");
+
+    eprintln!("CHK ClickHouse parity P1/P2/P3a OK");
+}
+
+/// ClickHouse P3b — streaming export runs on a real server: FORMAT
+/// JSONCompactEachRowWithNames streamed to a writer, one row at a time.
+#[tokio::test]
+async fn clickhouse_stream_export_csv() {
+    use database_studio_lib::drivers::postgres::ExportFormat;
+    use std::sync::atomic::AtomicBool;
+
+    let c = GenericImage::new("clickhouse/clickhouse-server", "24.8")
+        .with_exposed_port(8123.tcp())
+        .with_env_var("CLICKHOUSE_PASSWORD", PASS)
+        .start()
+        .await
+        .expect("start clickhouse container");
+    let port = c.get_host_port_ipv4(8123).await.unwrap();
+    let params = ChConnParams {
+        host: "localhost".into(),
+        port,
+        database: "default".into(),
+        user: "default".into(),
+        password: PASS.into(),
+        ssl: false,
+    };
+    let mut drv = retry("clickhouse", || ChDriver::connect(&params)).await;
+    drv.exec("CREATE TABLE ex (id UInt64, name String) ENGINE = MergeTree ORDER BY id").await.unwrap();
+    drv.exec("INSERT INTO ex VALUES (1,'a'),(2,'b'),(3,'c')").await.unwrap();
+
+    let mut buf: Vec<u8> = Vec::new();
+    let cancel = AtomicBool::new(false);
+    let n = drv
+        .stream_export("SELECT id, name FROM ex ORDER BY id", ExportFormat::Csv, "ex", &mut buf, |_n| {}, &cancel)
+        .await
+        .expect("stream export");
+    assert_eq!(n, 3, "3 rows streamed");
+    let text = String::from_utf8(buf).unwrap();
+    assert!(text.starts_with("id,name"), "CSV header first: {text}");
+    assert!(text.contains("1,a") && text.contains("3,c"), "rows present: {text}");
+    eprintln!("CHK ClickHouse streaming export OK");
+}
+
+/// ClickHouse — New Table (the exact DDL the Table Designer emits: MergeTree +
+/// PARTITION BY + ORDER BY) executes, is introspectable, and its DDL is retrievable
+/// via Show Definition / Copy DDL (SHOW CREATE). Verifies the designer + scripts path.
+#[tokio::test]
+async fn clickhouse_table_designer_create_and_ddl_end_to_end() {
+    use database_studio_lib::commands::schema::definition_query;
+
+    let c = GenericImage::new("clickhouse/clickhouse-server", "24.8")
+        .with_exposed_port(8123.tcp())
+        .with_env_var("CLICKHOUSE_PASSWORD", PASS)
+        .start()
+        .await
+        .expect("start clickhouse container");
+    let port = c.get_host_port_ipv4(8123).await.unwrap();
+    let params = ChConnParams {
+        host: "localhost".into(),
+        port,
+        database: "default".into(),
+        user: "default".into(),
+        password: PASS.into(),
+        ssl: false,
+    };
+    let mut drv = retry("clickhouse", || ChDriver::connect(&params)).await;
+
+    // DDL exactly as buildTableDdl emits for ClickHouse (MergeTree + PARTITION BY + ORDER BY).
+    drv.exec("CREATE TABLE td (id UInt64, d Date, kind String)\nENGINE = MergeTree\nPARTITION BY toYYYYMM(d)\nORDER BY (id)")
+        .await
+        .expect("designer DDL runs");
+
+    // introspection: engine badge, kind, PK on the ORDER BY key
+    let tables = drv.tables("default").await.unwrap();
+    let t = tables.iter().find(|x| x.name == "td").expect("table created");
+    assert_eq!(t.engine.as_deref(), Some("MergeTree"));
+    assert_eq!(t.kind, "table");
+    let cols = drv.columns("default", "td").await.unwrap();
+    assert!(cols.iter().find(|c| c.name == "id").unwrap().is_pk, "ORDER BY id → is_pk");
+
+    // insert → a partition part exists → partitions() (tree node source) sees it
+    drv.exec("INSERT INTO td VALUES (1, '2026-07-01', 'x')").await.unwrap();
+    let parts = drv.partitions("default", "td").await.unwrap();
+    assert!(!parts.is_empty(), "partitioned table → at least one partition, got {parts:?}");
+
+    // Show Definition / Copy DDL backend (SHOW CREATE) returns runnable DDL
+    let defq = definition_query("clickhouse", "table", "default", "td").unwrap();
+    let StatementOutcome::Rows { result } = drv.exec(&defq).await.unwrap() else { panic!("rows") };
+    let ddl = result.rows[0].as_object().and_then(|o| o.values().next()).and_then(|v| v.as_str()).unwrap_or("");
+    assert!(ddl.contains("CREATE TABLE") && ddl.contains("MergeTree"), "SHOW CREATE DDL: {ddl}");
+    eprintln!("CHK ClickHouse table designer + DDL OK");
+}
+
 // ---------------------------------------------------------------------------
 // SQLite — file thật + in-memory, đủ 3 mode (không cần container)
 // ---------------------------------------------------------------------------

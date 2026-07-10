@@ -99,6 +99,21 @@ pub fn admin_query(system: &str, view: &str) -> Option<String> {
              LEFT JOIN sys.dm_hadr_availability_replica_states rs ON rs.group_id = ag.group_id \
              ORDER BY ag.name"
         }
+        // --- ClickHouse: running queries / mutations / users (system.*) ---
+        ("clickhouse", "sessions") => {
+            "SELECT query_id, user, round(elapsed, 3) AS elapsed_s, \
+                    formatReadableSize(memory_usage) AS memory, read_rows, \
+                    substring(query, 1, 160) AS query \
+             FROM system.processes ORDER BY elapsed DESC"
+        }
+        ("clickhouse", "mutations") => {
+            "SELECT database, table, mutation_id, command, is_done, create_time, \
+                    COALESCE(latest_fail_reason, '') AS latest_fail_reason \
+             FROM system.mutations ORDER BY create_time DESC LIMIT 200"
+        }
+        ("clickhouse", "users") => {
+            "SELECT name, storage, auth_type FROM system.users ORDER BY name"
+        }
         // --- PG Extension Manager ---
         ("postgres", "extensions") => {
             "SELECT a.name, a.default_version, i.extversion AS installed_version, a.comment \
@@ -209,6 +224,11 @@ mod tests {
         assert!(admin_query("mssql", "agent_jobs").unwrap().contains("msdb.dbo.sysjobs"));
         assert!(admin_query("mssql", "query_store").unwrap().contains("sys.query_store_query"));
         assert!(admin_query("mssql", "availability_groups").unwrap().contains("sys.availability_groups"));
+        // ClickHouse: running queries / mutations / users from system.*
+        assert!(admin_query("clickhouse", "sessions").unwrap().contains("system.processes"));
+        assert!(admin_query("clickhouse", "mutations").unwrap().contains("system.mutations"));
+        assert!(admin_query("clickhouse", "users").unwrap().contains("system.users"));
+        assert!(admin_query("clickhouse", "extensions").is_none());
     }
 
     #[test]

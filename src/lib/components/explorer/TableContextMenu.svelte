@@ -137,7 +137,11 @@
   <ContextMenu.Separator />
   <ContextMenu.Item onclick={() => tabs.openTableDesigner(connId, schema, table)}>Design Table</ContextMenu.Item>
   <ContextMenu.Item onclick={() => stmtTab(`Alter ${table}`, genAlterTable(system, schema, table))}>Alter Table…</ContextMenu.Item>
-  <ContextMenu.Item onclick={() => tabs.openIndexManager(connId, schema, table)}>Manage Indexes & FKs…</ContextMenu.Item>
+  {#if !isClickhouse}
+    <!-- ClickHouse has no FKs and no btree/unique indexes (only data-skipping
+         indexes, surfaced via the Index Scanner) → the Index/FK manager doesn't apply. -->
+    <ContextMenu.Item onclick={() => tabs.openIndexManager(connId, schema, table)}>Manage Indexes & FKs…</ContextMenu.Item>
+  {/if}
   {#if !isClickhouse && supportsPartitioning(system)}
     <ContextMenu.Sub>
       <ContextMenu.SubTrigger>Partitions</ContextMenu.SubTrigger>

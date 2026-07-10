@@ -43,10 +43,16 @@ pub async fn export_query_to_file(
                     }, &cancel)
                     .await?
                 }
+                LiveConnection::Clickhouse(ch) => {
+                    ch.stream_export(&sql, fmt, &table, &mut w, |n| {
+                        let _ = on_progress.send(n);
+                    }, &cancel)
+                    .await?
+                }
                 _ => {
                     return Err(QueryError::new(
                         "export",
-                        "Streaming export currently supports PostgreSQL",
+                        "Streaming export currently supports PostgreSQL and ClickHouse",
                         "unsupported",
                     ))
                 }

@@ -5,8 +5,11 @@
 
 use regex::Regex;
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{Map, Value};
+use std::io::Write;
 use std::time::{Duration, Instant};
+
+use crate::drivers::postgres::ExportFormat;
 
 use crate::drivers::types::{
     ColumnInfo, PartitionInfo, QueryResultSet, SchemaInfo, StatementOutcome, TableInfo, TestResult,
@@ -401,6 +404,171 @@ impl ChDriver {
             create_sql,
         })
     }
+
+    /// Stream a query's rows to `out` in `format`, one row at a time (bounded
+    /// memory — T24 parity for ClickHouse). Uses HTTP `FORMAT JSONCompactEachRowWithNames`
+    /// (first line = column names, then one compact array per row) and consumes the
+    /// response as a byte stream. Calls `progress` every 10k rows and stops when
+    /// `cancel` is set. Returns rows written. Mirrors PgDriver::stream_export shape.
+    pub async fn stream_export<W: Write>(
+        &self,
+        sql: &str,
+        format: ExportFormat,
+        table: &str,
+        out: &mut W,
+        mut progress: impl FnMut(u64),
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> Result<u64, QueryError> {
+        use futures::StreamExt;
+        use std::sync::atomic::Ordering;
+
+        let base = sql.trim().trim_end_matches(';');
+        let stream_sql = format!("{base}\nFORMAT JSONCompactEachRowWithNames");
+        let query = vec![("database".to_string(), self.params.database.clone())];
+        let res = self
+            .client
+            .post(Self::base_url(&self.params))
+            .query(&query)
+            .header("X-ClickHouse-User", &self.params.user)
+            .header("X-ClickHouse-Key", &self.params.password)
+            .body(stream_sql)
+            .send()
+            .await
+            .map_err(|e| QueryError::new(SYSTEM, format!("Failed to connect to ClickHouse: {e}"), e.to_string()))?;
+        let status = res.status().as_u16();
+        if status != 200 {
+            let body = res.text().await.unwrap_or_default();
+            return Err(parse_ch_error(status, &body));
+        }
+
+        let mut stream = res.bytes_stream();
+        let mut buf: Vec<u8> = Vec::new();
+        let mut cols: Vec<String> = Vec::new();
+        let mut n: u64 = 0;
+        let mut started = false;
+        let mut header_done = false;
+        let mut stopped = false;
+
+        while let Some(chunk) = stream.next().await {
+            if cancel.load(Ordering::Relaxed) {
+                stopped = true;
+                break;
+            }
+            let chunk = chunk.map_err(|e| QueryError::new(SYSTEM, format!("stream error: {e}"), e.to_string()))?;
+            buf.extend_from_slice(&chunk);
+            while let Some(pos) = buf.iter().position(|&b| b == b'\n') {
+                let line: Vec<u8> = buf.drain(..=pos).collect();
+                ch_emit_line(out, &line[..line.len() - 1], format, table, &mut cols, &mut n, &mut started, &mut header_done)?;
+                if n % 10_000 == 0 && n > 0 {
+                    progress(n);
+                }
+                if cancel.load(Ordering::Relaxed) {
+                    stopped = true;
+                    break;
+                }
+            }
+            if stopped {
+                break;
+            }
+        }
+        // trailing line without a final newline (defensive — CH usually terminates rows)
+        if !stopped && !buf.is_empty() {
+            ch_emit_line(out, &buf, format, table, &mut cols, &mut n, &mut started, &mut header_done)?;
+        }
+
+        let werr = |e: std::io::Error| QueryError::new(SYSTEM, format!("write error: {e}"), e.to_string());
+        if let ExportFormat::Json = format {
+            if !started {
+                write!(out, "[").map_err(werr)?;
+            }
+            write!(out, "\n]").map_err(werr)?;
+        }
+        progress(n);
+        Ok(n)
+    }
+}
+
+// ---- streaming-export helpers (ClickHouse-local, mirror the PG formatting) ----
+fn ch_csv_cell(s: &str) -> String {
+    if s.contains([',', '"', '\n', '\r']) {
+        format!("\"{}\"", s.replace('"', "\"\""))
+    } else {
+        s.to_string()
+    }
+}
+
+fn ch_value_text(v: &Value) -> String {
+    match v {
+        Value::Null => String::new(),
+        Value::String(s) => s.clone(),
+        other => other.to_string(),
+    }
+}
+
+fn ch_sql_literal(v: &Value) -> String {
+    match v {
+        Value::Null => "NULL".into(),
+        Value::Number(nu) => nu.to_string(),
+        Value::Bool(b) => if *b { "1" } else { "0" }.into(),
+        Value::String(s) => format!("'{}'", s.replace('\'', "''")),
+        other => format!("'{}'", other.to_string().replace('\'', "''")),
+    }
+}
+
+/// Emit one decoded JSONCompactEachRowWithNames line to `out`. The first line is the
+/// column-names header; every subsequent line is a compact value array.
+#[allow(clippy::too_many_arguments)]
+fn ch_emit_line<W: Write>(
+    out: &mut W,
+    line: &[u8],
+    format: ExportFormat,
+    table: &str,
+    cols: &mut Vec<String>,
+    n: &mut u64,
+    started: &mut bool,
+    header_done: &mut bool,
+) -> Result<(), QueryError> {
+    let werr = |e: std::io::Error| QueryError::new(SYSTEM, format!("write error: {e}"), e.to_string());
+    if line.is_empty() {
+        return Ok(());
+    }
+    let val: Value = serde_json::from_slice(line)
+        .map_err(|e| QueryError::new(SYSTEM, format!("stream parse error: {e}"), String::from_utf8_lossy(line).to_string()))?;
+    if !*header_done {
+        *cols = val
+            .as_array()
+            .map(|a| a.iter().map(|v| v.as_str().unwrap_or("").to_string()).collect())
+            .unwrap_or_default();
+        *header_done = true;
+        *started = true;
+        match format {
+            ExportFormat::Csv => writeln!(out, "{}", cols.iter().map(|c| ch_csv_cell(c)).collect::<Vec<_>>().join(",")).map_err(werr)?,
+            ExportFormat::Json => write!(out, "[").map_err(werr)?,
+            ExportFormat::Sql => {}
+        }
+        return Ok(());
+    }
+    let vals: Vec<Value> = val.as_array().cloned().unwrap_or_default();
+    match format {
+        ExportFormat::Csv => {
+            let l = vals.iter().map(|v| ch_csv_cell(&ch_value_text(v))).collect::<Vec<_>>().join(",");
+            writeln!(out, "{l}").map_err(werr)?;
+        }
+        ExportFormat::Json => {
+            if *n > 0 {
+                write!(out, ",").map_err(werr)?;
+            }
+            let obj: Map<String, Value> = cols.iter().cloned().zip(vals.iter().cloned()).collect();
+            write!(out, "\n{}", Value::Object(obj)).map_err(werr)?;
+        }
+        ExportFormat::Sql => {
+            let colnames = cols.iter().map(|c| format!("`{c}`")).collect::<Vec<_>>().join(", ");
+            let vlits = vals.iter().map(ch_sql_literal).collect::<Vec<_>>().join(", ");
+            writeln!(out, "INSERT INTO `{table}` ({colnames}) VALUES ({vlits});").map_err(werr)?;
+        }
+    }
+    *n += 1;
+    Ok(())
 }
 
 /// Table metadata (ClickHouse-specific) cho explorer + TTL viewer.
