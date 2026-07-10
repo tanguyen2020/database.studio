@@ -32,24 +32,33 @@ describe('genDropIndex', () => {
   })
 })
 
-describe('genAlterIndex — dialect-aware rename/rebuild', () => {
-  it('PG: ALTER INDEX RENAME (schema-qualified) + reindex hint', () => {
-    const s = genAlterIndex('postgres', 'public', 'users', 'ix_email')
-    expect(s).toContain('ALTER INDEX "public"."ix_email" RENAME TO "ix_email_new";')
-    expect(s).toContain('REINDEX INDEX "public"."ix_email"')
+describe('genAlterIndex — real definition as DROP + CREATE (edit & run)', () => {
+  const ix = (over = {}) => ({ name: 'ix_email', table: 'users', columns: ['email'], unique: false, ...over })
+  it('PG: drop (schema-qualified) + recreate with real columns', () => {
+    const s = genAlterIndex('postgres', 'public', ix({ columns: ['a', 'b'], unique: true }))
+    expect(s).toContain('DROP INDEX IF EXISTS "public"."ix_email";')
+    expect(s).toContain('CREATE UNIQUE INDEX "ix_email" ON "public"."users" ("a", "b");')
   })
-  it('MySQL/MariaDB: ALTER TABLE … RENAME INDEX', () => {
-    expect(genAlterIndex('mysql', 'app', 'users', 'ix_name')).toBe('ALTER TABLE `app`.`users` RENAME INDEX `ix_name` TO `ix_name_new`;')
+  it('MySQL: drop (needs table) + recreate, backticks', () => {
+    const s = genAlterIndex('mysql', 'app', ix({ table: 'users', columns: ['first', 'last'] }))
+    expect(s).toContain('DROP INDEX `ix_email` ON `app`.`users`;')
+    expect(s).toContain('CREATE INDEX `ix_email` ON `app`.`users` (`first`, `last`);')
   })
-  it('MSSQL: sp_rename + rebuild hint', () => {
-    const s = genAlterIndex('mssql', 'dbo', 'users', 'ix_name')
-    expect(s).toContain("EXEC sp_rename 'dbo.users.ix_name', 'ix_name_new', 'INDEX';")
-    expect(s).toContain('ALTER INDEX [ix_name] ON [dbo].[users] REBUILD;')
+  it('MSSQL: drop + recreate (brackets) — no sp_rename', () => {
+    const s = genAlterIndex('mssql', 'dbo', ix({ table: 'app_account_device', columns: ['delete_account_id'] }))
+    expect(s).toContain('DROP INDEX [ix_email] ON [dbo].[app_account_device];')
+    expect(s).toContain('CREATE INDEX [ix_email] ON [dbo].[app_account_device] ([delete_account_id]);')
+    expect(s).not.toContain('sp_rename')
   })
-  it('SQLite: drop + recreate note (no ALTER INDEX)', () => {
-    const s = genAlterIndex('sqlite', 'main', 't', 'ix')
-    expect(s).toContain('DROP INDEX IF EXISTS "ix";')
-    expect(s.toLowerCase()).toContain('no alter index')
+  it('SQLite: bare drop + recreate', () => {
+    const s = genAlterIndex('sqlite', 'main', ix({ table: 't', columns: ['a'] }))
+    expect(s).toContain('DROP INDEX IF EXISTS "ix_email";')
+    expect(s).toContain('CREATE INDEX "ix_email" ON "t" ("a");')
+  })
+  it('ClickHouse: data-skipping drop + parameterised add', () => {
+    const s = genAlterIndex('clickhouse', 'db', ix({ table: 'events' }))
+    expect(s).toContain('ALTER TABLE `db`.`events` DROP INDEX `ix_email`;')
+    expect(s.toLowerCase()).toContain('data-skipping')
   })
 })
 

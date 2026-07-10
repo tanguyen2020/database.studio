@@ -2038,7 +2038,7 @@
             {#each ixShown.filter((ix) => folderMatch(ixFolderKey, ix.name)) as ix (ix.table + '.' + ix.name)}
               {#snippet sIdxMenu()}
                 <ContextMenu.Content class="w-48">
-                  <ContextMenu.Item onclick={() => selected && stmtTab(`Alter index ${ix.name}`, genAlterIndex(selected.system, schema.name, ix.table, ix.name))}>Alter…</ContextMenu.Item>
+                  <ContextMenu.Item onclick={() => selected && stmtTab(`Alter index ${ix.name}`, genAlterIndex(selected.system, schema.name, { name: ix.name, table: ix.table, columns: ix.columns, unique: ix.unique }))}>Alter…</ContextMenu.Item>
                   <ContextMenu.Item onclick={() => selected && tabs.openTableViewer(selected.id, schema.name, ix.table)}>Open Table Data</ContextMenu.Item>
                   <ContextMenu.Item onclick={() => copyName(ix.name)}>Copy Name</ContextMenu.Item>
                   <ContextMenu.Item onclick={() => copyName(`${ix.table}.${ix.name}`)}>Copy Qualified Name</ContextMenu.Item>
@@ -2331,7 +2331,7 @@
                   {#each fIxShown.filter((ix) => folderMatch(fIxKey, ix.name)) as ix (ix.table + '.' + ix.name)}
                     {#snippet fSIdxMenu()}
                       <ContextMenu.Content class="w-48">
-                        <ContextMenu.Item onclick={() => sub && stmtTab(`Alter index ${ix.name}`, genAlterIndex(selected!.system, fsch.name, ix.table, ix.name), db.name)}>Alter…</ContextMenu.Item>
+                        <ContextMenu.Item onclick={() => sub && stmtTab(`Alter index ${ix.name}`, genAlterIndex(selected!.system, fsch.name, { name: ix.name, table: ix.table, columns: ix.columns, unique: ix.unique }), db.name)}>Alter…</ContextMenu.Item>
                         <ContextMenu.Item onclick={() => sub && tabs.openTableViewer(sub, fsch.name, ix.table)}>Open Table Data</ContextMenu.Item>
                         <ContextMenu.Item onclick={() => copyName(ix.name)}>Copy Name</ContextMenu.Item>
                         <ContextMenu.Separator />

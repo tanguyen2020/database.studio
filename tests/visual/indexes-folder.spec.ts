@@ -38,8 +38,12 @@ test('explorer: schema-wide Indexes folder + context menus', async ({ page }) =>
   await expect(page.getByRole('menuitem', { name: 'Drop…' })).toBeVisible()
   await page.getByRole('menuitem', { name: 'Alter…' }).click()
   await page.waitForTimeout(300)
-  // Alter opens a SQL tab with an ALTER INDEX statement
-  await expect(page.locator('.cm-content').first()).toContainText('ALTER INDEX')
+  // Alter opens a SQL tab (view/edit — not executed) with the index's real definition
+  // as a re-runnable DROP + CREATE reflecting its actual columns.
+  const editor = page.locator('.cm-content').first()
+  await expect(editor).toContainText('DROP INDEX')
+  await expect(editor).toContainText('CREATE UNIQUE INDEX')
+  await expect(editor).toContainText('idx_students_email')
 
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })

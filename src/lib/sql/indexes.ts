@@ -43,28 +43,43 @@ export function genDropIndex(system: string, schema: string, table: string, name
   }
 }
 
-/** ALTER INDEX — a re-runnable/template statement per dialect (rename is the
- *  portable op; rebuild/recreate shown as a comment where relevant). Opened in the
- *  SQL editor to review/edit before running. */
-export function genAlterIndex(system: string, schema: string, table: string, name: string): string {
+/** The real index (from introspection) to build an ALTER script for. */
+export interface AlterIndexTarget {
+  name: string
+  table: string
+  columns: string[]
+  unique: boolean
+  method?: string
+}
+
+/** ALTER INDEX script = the index's actual definition as a re-runnable DROP +
+ *  CREATE (engines can't change an index's columns in place — you drop & recreate).
+ *  Opened in the SQL editor to view/edit, NOT executed. Reflects the real columns /
+ *  uniqueness from the catalog; edit them and run. */
+export function genAlterIndex(system: string, schema: string, ix: AlterIndexTarget): string {
   const q = (n: string) => quoteIdent(system, n)
-  const t = target(system, schema, table)
-  const nn = `${name}_new`
-  switch (system) {
-    case 'postgres': {
-      const idx = schema ? `${q(schema)}.${q(name)}` : q(name)
-      return `ALTER INDEX ${idx} RENAME TO ${q(nn)};\n-- or rebuild:  REINDEX INDEX ${idx};`
-    }
-    case 'mysql':
-    case 'mariadb':
-      return `ALTER TABLE ${t} RENAME INDEX ${q(name)} TO ${q(nn)};`
-    case 'mssql':
-      return `EXEC sp_rename '${schema}.${table}.${name}', '${nn}', 'INDEX';\n-- or rebuild:  ALTER INDEX ${q(name)} ON ${t} REBUILD;`
-    case 'sqlite':
-      return `-- SQLite has no ALTER INDEX — drop and recreate:\nDROP INDEX IF EXISTS ${q(name)};\n-- CREATE INDEX ${q(name)} ON ${q(table)} (...);`
-    default: // clickhouse — data-skipping index
-      return `-- ClickHouse data-skipping index — drop & re-add via ALTER TABLE:\nALTER TABLE ${t} DROP INDEX ${q(name)};\n-- ALTER TABLE ${t} ADD INDEX ${q(name)} <expr> TYPE <type> GRANULARITY <n>;`
+  if (system === 'clickhouse') {
+    // Data-skipping index — its expression/type/granularity aren't recoverable from
+    // the index list, so show a drop + a parameterised ADD to fill in.
+    const t = target(system, schema, ix.table)
+    return (
+      `-- ClickHouse data-skipping index — drop & re-add with the desired expression/type:\n` +
+      `ALTER TABLE ${t} DROP INDEX ${q(ix.name)};\n` +
+      `-- ALTER TABLE ${t} ADD INDEX ${q(ix.name)} <expr> TYPE <type> GRANULARITY <n>;`
+    )
   }
+  const drop = genDropIndex(system, schema, ix.table, ix.name)
+  const create = genCreateIndex(system, schema, ix.table, {
+    name: ix.name,
+    columns: ix.columns.length ? ix.columns : ['column'],
+    unique: ix.unique,
+    method: ix.method,
+  })
+  return (
+    `-- Alter index: edit the recreate below (columns / uniqueness), then run.\n` +
+    `-- Most engines can't change an index's columns in place — drop & recreate.\n` +
+    `${drop}\n${create}`
+  )
 }
 
 export interface NewForeignKey {
