@@ -145,6 +145,7 @@ pub fn run() {
             commands::schema::list_foreign_keys,
             commands::schema::scan_indexes,
             commands::schema::object_definition,
+            commands::schema::index_definition,
             commands::backup::backup_tool_status,
             commands::backup::backup_database,
             commands::backup::restore_database,

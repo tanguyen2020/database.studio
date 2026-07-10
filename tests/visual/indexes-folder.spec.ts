@@ -44,6 +44,9 @@ test('explorer: schema-wide Indexes folder + context menus', async ({ page }) =>
   await expect(editor).toContainText('DROP INDEX')
   await expect(editor).toContainText('CREATE UNIQUE INDEX')
   await expect(editor).toContainText('idx_students_email')
+  // the REAL definition (not a column-only reconstruction) → keeps INCLUDE + WHERE
+  await expect(editor).toContainText('INCLUDE')
+  await expect(editor).toContainText('WHERE')
 
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })

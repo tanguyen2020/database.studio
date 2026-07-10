@@ -332,6 +332,16 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
         // reserved-word column name — autocomplete must insert it quoted
         { name: 'order', data_type: 'int4', nullable: true, default: null, is_pk: false, is_fk: false },
       ])
+    case 'index_definition': {
+      // Real index DDL (demo): shows INCLUDE + partial WHERE that a column-only
+      // reconstruction would miss.
+      const nm = String(args?.name ?? 'idx')
+      const sch = String(args?.schema ?? 'public')
+      const tbl = String(args?.table ?? 'students')
+      return ok(
+        `CREATE UNIQUE INDEX ${nm} ON ${sch}.${tbl} USING btree (email) INCLUDE (first_name) WHERE deleted_at IS NULL;`,
+      )
+    }
     case 'scan_indexes':
       return ok({
         system: 'postgres',

@@ -533,6 +533,10 @@ export const scanIndexes = (connId: string, schema: string) =>
 /** Show Definition (T18): text định nghĩa thật của view/trigger/procedure/function. */
 export const objectDefinition = (connId: string, schema: string, kind: string, name: string) =>
   invoke<string>('object_definition', { connId, schema, kind, name })
+/** Real CREATE statement for one index (incl. INCLUDE / filtered WHERE / method);
+ *  empty string when unavailable (caller reconstructs from columns). */
+export const indexDefinition = (connId: string, schema: string, table: string, name: string) =>
+  invoke<string>('index_definition', { connId, schema, table, name })
 
 /** Backup & Restore (T22). */
 export interface BackupToolStatus {

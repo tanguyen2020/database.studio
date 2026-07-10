@@ -196,6 +196,109 @@ pub fn definition_query(system: &str, kind: &str, schema: &str, name: &str) -> O
     Some(q)
 }
 
+/// SQL that returns the REAL, complete CREATE statement for one index (a single
+/// text cell). Unlike a column-list reconstruction, this preserves INCLUDE
+/// (covering) columns, filtered/partial WHERE, CLUSTERED/NONCLUSTERED, method,
+/// expressions and column order — straight from each engine's catalog.
+pub fn index_definition_query(system: &str, schema: &str, table: &str, name: &str) -> Option<String> {
+    let s = schema.replace('\'', "''");
+    let t = table.replace('\'', "''");
+    let n = name.replace('\'', "''");
+    let q = match system {
+        // pg_get_indexdef emits the exact CREATE INDEX incl. USING method, INCLUDE,
+        // partial WHERE and expressions. Index names are unique within a schema.
+        "postgres" => format!(
+            "SELECT pg_get_indexdef(i.indexrelid) AS d \
+             FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid \
+             JOIN pg_namespace nsp ON nsp.oid = c.relnamespace \
+             WHERE nsp.nspname = '{s}' AND c.relname = '{n}' LIMIT 1"
+        ),
+        // sqlite_master.sql is the verbatim CREATE INDEX (incl. partial WHERE).
+        "sqlite" => format!("SELECT sql AS d FROM sqlite_master WHERE type = 'index' AND name = '{n}' LIMIT 1"),
+        // MySQL/MariaDB: no INCLUDE / partial indexes → the column list (with DESC)
+        // is the whole definition. Rebuild from information_schema.STATISTICS.
+        "mysql" | "mariadb" => {
+            let bs = schema.replace('`', "``");
+            let bt = table.replace('`', "``");
+            format!(
+                "SELECT CONCAT('CREATE ', IF(MAX(NON_UNIQUE)=0,'UNIQUE ',''), 'INDEX `', INDEX_NAME, \
+                 '` ON `{bs}`.`{bt}` (', GROUP_CONCAT(CONCAT('`',COLUMN_NAME,'`', IF(COLLATION='D',' DESC','')) \
+                 ORDER BY SEQ_IN_INDEX SEPARATOR ', '), ');') AS d \
+                 FROM information_schema.STATISTICS \
+                 WHERE TABLE_SCHEMA='{s}' AND TABLE_NAME='{t}' AND INDEX_NAME='{n}' \
+                 GROUP BY INDEX_NAME"
+            )
+        }
+        // MSSQL: reconstruct with FOR XML PATH + STUFF (all versions). Includes
+        // CLUSTERED/NONCLUSTERED, key cols (with DESC), INCLUDE cols and filtered WHERE.
+        "mssql" => format!(
+            "SELECT 'CREATE ' + CASE WHEN i.is_unique=1 THEN 'UNIQUE ' ELSE '' END + i.type_desc + \
+             ' INDEX [' + i.name + '] ON [' + sch.name + '].[' + t.name + '] (' + \
+             STUFF((SELECT ', [' + c.name + ']' + CASE WHEN ic.is_descending_key=1 THEN ' DESC' ELSE '' END \
+               FROM sys.index_columns ic JOIN sys.columns c ON c.object_id=ic.object_id AND c.column_id=ic.column_id \
+               WHERE ic.object_id=i.object_id AND ic.index_id=i.index_id AND ic.is_included_column=0 \
+               ORDER BY ic.key_ordinal FOR XML PATH('')),1,2,'') + ')' + \
+             ISNULL(' INCLUDE (' + STUFF((SELECT ', [' + c.name + ']' \
+               FROM sys.index_columns ic JOIN sys.columns c ON c.object_id=ic.object_id AND c.column_id=ic.column_id \
+               WHERE ic.object_id=i.object_id AND ic.index_id=i.index_id AND ic.is_included_column=1 \
+               ORDER BY ic.index_column_id FOR XML PATH('')),1,2,'') + ')','') + \
+             ISNULL(' WHERE ' + i.filter_definition,'') + ';' AS d \
+             FROM sys.indexes i JOIN sys.tables t ON t.object_id=i.object_id \
+             JOIN sys.schemas sch ON sch.schema_id=t.schema_id \
+             WHERE sch.name='{s}' AND t.name='{t}' AND i.name='{n}' AND i.type>0"
+        ),
+        // ClickHouse data-skipping index → the ALTER … ADD INDEX with expr/type/granularity.
+        "clickhouse" => {
+            let bs = schema.replace('`', "``");
+            let bt = table.replace('`', "``");
+            format!(
+                "SELECT concat('ALTER TABLE `{bs}`.`{bt}` ADD INDEX ', name, ' ', expr, ' TYPE ', type, \
+                 ' GRANULARITY ', toString(granularity), ';') AS d \
+                 FROM system.data_skipping_indices \
+                 WHERE database='{s}' AND table='{t}' AND name='{n}' LIMIT 1"
+            )
+        }
+        _ => return None,
+    };
+    Some(q)
+}
+
+/// The real CREATE statement for one index (for the "Alter…" script). Falls back to
+/// an empty string when the engine/index yields nothing (frontend then reconstructs).
+#[tauri::command]
+pub async fn index_definition(
+    state: State<'_, AppState>,
+    conn_id: String,
+    schema: String,
+    table: String,
+    name: String,
+) -> Result<String, AppError> {
+    let system = state
+        .registry
+        .system_of(&conn_id)
+        .or_else(|| state.storage.get_connection(&conn_id).ok().map(|p| p.system.as_str().to_string()))
+        .unwrap_or_default();
+    let Some(q) = index_definition_query(&system, &schema, &table, &name) else {
+        return Ok(String::new());
+    };
+    let outcome = state
+        .registry
+        .exec_statement(&conn_id, q)
+        .await?
+        .map_err(|e| AppError::Driver(e.message))?;
+    let def = match outcome {
+        StatementOutcome::Rows { result } => result
+            .rows
+            .first()
+            .and_then(|r| r.as_object())
+            .and_then(|o| o.values().next())
+            .and_then(|v| v.as_str().map(|s| s.to_string()))
+            .unwrap_or_default(),
+        _ => String::new(),
+    };
+    Ok(def)
+}
+
 /// Show Definition: chạy `definition_query` → trả text định nghĩa thật.
 #[tauri::command]
 pub async fn object_definition(
@@ -253,7 +356,34 @@ pub async fn object_definition(
 
 #[cfg(test)]
 mod tests {
-    use super::definition_query;
+    use super::{definition_query, index_definition_query};
+
+    #[test]
+    fn index_definition_query_per_dialect() {
+        // PG: authoritative pg_get_indexdef (covers INCLUDE / partial WHERE / method)
+        assert!(index_definition_query("postgres", "public", "users", "ix_email")
+            .unwrap()
+            .contains("pg_get_indexdef"));
+        // SQLite: verbatim CREATE from sqlite_master (incl. partial WHERE)
+        assert!(index_definition_query("sqlite", "main", "t", "ix")
+            .unwrap()
+            .contains("sqlite_master"));
+        // MySQL: rebuild from STATISTICS
+        assert!(index_definition_query("mysql", "app", "users", "ix")
+            .unwrap()
+            .contains("information_schema.STATISTICS"));
+        // MSSQL: sys.indexes reconstruction with INCLUDE + filtered WHERE + type_desc
+        let mssql = index_definition_query("mssql", "dbo", "app_account_device", "idx").unwrap();
+        assert!(mssql.contains("sys.indexes") && mssql.contains("is_included_column") && mssql.contains("filter_definition") && mssql.contains("type_desc"));
+        // ClickHouse: data-skipping index add
+        assert!(index_definition_query("clickhouse", "db", "events", "ix")
+            .unwrap()
+            .contains("system.data_skipping_indices"));
+        // escape single quotes
+        assert!(index_definition_query("postgres", "public", "t", "a'b").unwrap().contains("a''b"));
+        // Cassandra: not applicable
+        assert!(index_definition_query("cassandra", "ks", "t", "i").is_none());
+    }
 
     #[test]
     fn definition_query_per_dialect() {
