@@ -60,7 +60,7 @@
         title="Font size (applies to the whole app)"
       >
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
-        <span>Font</span>
+        <span>Scale</span>
       </div>
       {#if fontMenuOpen}
         <!-- transparent backdrop: clicking outside closes the menu (dropdown, not a form) -->
@@ -71,7 +71,7 @@
           onkeydown={(e) => e.key === 'Escape' && (fontMenuOpen = false)}
           style="position:absolute;right:0;top:calc(100% + var(--px-6));z-index:61;min-width:var(--px-180);background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-10);box-shadow:0 var(--px-10) var(--px-28) var(--rgba-0-0-0-_55);overflow:hidden;padding:var(--px-4)"
         >
-          <div style="padding:var(--px-6) var(--px-10) var(--px-4);font-size:var(--px-10_5);font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em">Font size</div>
+          <div style="padding:var(--px-6) var(--px-10) var(--px-4);font-size:var(--px-10_5);font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em">Scale size</div>
           {#each FONT_OPTIONS as opt (opt.scale)}
             {@const active = Math.abs(ui.fontScale - opt.scale) < 0.001}
             <div

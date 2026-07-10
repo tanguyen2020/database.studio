@@ -1,9 +1,9 @@
 import { expect, test } from '@playwright/test'
 import { APP_URL, blockRemoteFonts } from './helpers'
 
-// Title-bar "Font" button (right of Light/Dark) sets a global UI scale that applies
+// Title-bar "Scale" button (right of Light/Dark) sets a global UI scale that applies
 // to the whole app via document zoom, and persists.
-test('title bar: font-size menu scales the whole app', async ({ page }) => {
+test('title bar: scale menu scales the whole app', async ({ page }) => {
   const errors: string[] = []
   page.on('pageerror', (e) => errors.push(String(e)))
   await blockRemoteFonts(page)
@@ -11,8 +11,8 @@ test('title bar: font-size menu scales the whole app', async ({ page }) => {
   await page.waitForSelector('#app > *', { timeout: 15_000 })
   await page.waitForTimeout(300)
 
-  // open the font menu (next to the theme toggle) — options identified by % (unique)
-  await page.getByRole('button', { name: 'Font' }).click()
+  // open the scale menu (next to the theme toggle) — options identified by % (unique)
+  await page.getByRole('button', { name: 'Scale' }).click()
   await expect(page.getByRole('menuitemradio', { name: /100%/ })).toBeVisible()
   await expect(page.getByRole('menuitemradio', { name: /110%/ })).toBeVisible()
 
@@ -22,7 +22,7 @@ test('title bar: font-size menu scales the whole app', async ({ page }) => {
   expect(await page.evaluate(() => document.documentElement.style.zoom)).toBe('1.1')
 
   // reopen → the active option is checked
-  await page.getByRole('button', { name: 'Font' }).click()
+  await page.getByRole('button', { name: 'Scale' }).click()
   await expect(page.getByRole('menuitemradio', { name: /110%/ })).toHaveAttribute('aria-checked', 'true')
 
   // reset to Default (100%) so state is clean
