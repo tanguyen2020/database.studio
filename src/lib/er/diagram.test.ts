@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { addTable, flowPosition, removeTable, visibleTables } from './diagram'
+import { addTable, flowPosition, removeTable, visibleTables, relationshipFromConnection, type Rel } from './diagram'
 
 const ALL = [{ name: 'a' }, { name: 'b' }, { name: 'c' }]
 
@@ -31,6 +31,41 @@ describe('removeTable', () => {
   })
   it('subset drops the name', () => {
     expect(removeTable(['a', 'b'], ['a', 'b', 'c'], 'a')).toEqual(['b'])
+  })
+})
+
+describe('relationshipFromConnection (hand-drawn, Phase 3)', () => {
+  const conn = (sh: string | null, th: string | null) => ({ source: 'orders', target: 'users', sourceHandle: sh, targetHandle: th })
+  const existing: Rel[] = [{ from_table: 'orders', from_column: 'user_id', to_table: 'users', to_column: 'id' }]
+
+  it('valid column→column connection → relationship', () => {
+    expect(relationshipFromConnection(conn('customer_id', 'id'), [], [])).toEqual({
+      from_table: 'orders',
+      from_column: 'customer_id',
+      to_table: 'users',
+      to_column: 'id',
+    })
+  })
+  it('missing column anchor (node-level drop) → null', () => {
+    expect(relationshipFromConnection(conn(null, 'id'), [], [])).toBeNull()
+    expect(relationshipFromConnection(conn('customer_id', null), [], [])).toBeNull()
+  })
+  it('duplicate of an existing schema FK → null', () => {
+    expect(relationshipFromConnection(conn('user_id', 'id'), existing, [])).toBeNull()
+  })
+  it('duplicate of a pending relationship → null', () => {
+    const pending: Rel[] = [{ from_table: 'orders', from_column: 'x', to_table: 'users', to_column: 'id' }]
+    expect(relationshipFromConnection(conn('x', 'id'), [], pending)).toBeNull()
+  })
+  it('self-referencing table allowed when columns differ, rejected when identical', () => {
+    const self = { source: 'employees', target: 'employees', sourceHandle: 'manager_id', targetHandle: 'id' }
+    expect(relationshipFromConnection(self, [], [])).toEqual({
+      from_table: 'employees',
+      from_column: 'manager_id',
+      to_table: 'employees',
+      to_column: 'id',
+    })
+    expect(relationshipFromConnection({ ...self, targetHandle: 'manager_id' }, [], [])).toBeNull()
   })
 })
 

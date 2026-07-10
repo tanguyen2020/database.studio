@@ -26,6 +26,7 @@
         "center": true,
         "resizable": true,
         "maximized": true,
+        "dragDropEnabled": false,
         "backgroundColor": "#0f1219"
       }
     ],

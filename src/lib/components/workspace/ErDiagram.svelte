@@ -9,7 +9,7 @@
   import * as ipc from '$lib/ipc'
   import { toasts } from '$lib/stores/toast.svelte'
   import { toMermaid, toSvg, tableSize, type ErTable } from '$lib/er/mermaid'
-  import { addTable, flowPosition, visibleTables, type Viewport } from '$lib/er/diagram'
+  import { addTable, flowPosition, visibleTables, relationshipFromConnection, type Viewport, type RelConnection } from '$lib/er/diagram'
   import ErTableNode from './er/ErTableNode.svelte'
   import { connections } from '$lib/stores/connections.svelte'
   import { tabs } from '$lib/stores/tabs.svelte'
@@ -68,6 +68,21 @@
     relFromCol = ''
     relToCol = ''
     layout()
+  }
+
+  // Phase 3 — hand-drawn relationship. Svelte Flow's connection system (pointer-
+  // based, touch-safe) drives the drag: grabbing a column's source anchor draws a
+  // temp line to the cursor, and dropping on another column's target anchor fires
+  // `onconnect` with the endpoints. We turn that into a pending FK (child.col →
+  // parent.col) — same model + arrow style as the "+ Relationship" builder — so the
+  // existing FK/edge rendering (layout/edgeFor) is reused untouched. An invalid drop
+  // (not on an anchor) never fires onconnect, so the temp line just disappears.
+  function onConnect(conn: RelConnection) {
+    const rel = relationshipFromConnection(conn, fks, pendingFks)
+    if (!rel) return // incomplete (anchor-less drop) or duplicate → ignore
+    pendingFks = [...pendingFks, { name: `fk_${rel.from_table}_${rel.from_column}`, ...rel }]
+    layout()
+    toasts.success(`Relationship ${rel.from_table}.${rel.from_column} → ${rel.to_table}.${rel.to_column} (unsaved — use “Save to DB”)`)
   }
 
   function saveToDb() {
@@ -297,7 +312,7 @@
     {#if error}
       <div style="padding:var(--px-16);color:var(--error);font-size:var(--px-12)">{error}</div>
     {:else}
-      <SvelteFlow bind:nodes bind:edges bind:viewport {nodeTypes} fitView onnodedragstop={saveLayout}>
+      <SvelteFlow bind:nodes bind:edges bind:viewport {nodeTypes} fitView onnodedragstop={saveLayout} onconnect={onConnect}>
         <Background />
         <Controls />
         <MiniMap />
