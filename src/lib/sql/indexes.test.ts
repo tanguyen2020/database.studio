@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { genAddForeignKey, genCreateIndex, genDropForeignKey, genDropIndex } from './indexes'
+import { genAddForeignKey, genAlterIndex, genCreateIndex, genDropForeignKey, genDropIndex } from './indexes'
 
 describe('genCreateIndex', () => {
   it('PG: UNIQUE + USING method before columns', () => {
@@ -29,6 +29,27 @@ describe('genDropIndex', () => {
   })
   it('SQLite: bare index name', () => {
     expect(genDropIndex('sqlite', 'main', 't', 'ix')).toBe('DROP INDEX IF EXISTS "ix";')
+  })
+})
+
+describe('genAlterIndex — dialect-aware rename/rebuild', () => {
+  it('PG: ALTER INDEX RENAME (schema-qualified) + reindex hint', () => {
+    const s = genAlterIndex('postgres', 'public', 'users', 'ix_email')
+    expect(s).toContain('ALTER INDEX "public"."ix_email" RENAME TO "ix_email_new";')
+    expect(s).toContain('REINDEX INDEX "public"."ix_email"')
+  })
+  it('MySQL/MariaDB: ALTER TABLE … RENAME INDEX', () => {
+    expect(genAlterIndex('mysql', 'app', 'users', 'ix_name')).toBe('ALTER TABLE `app`.`users` RENAME INDEX `ix_name` TO `ix_name_new`;')
+  })
+  it('MSSQL: sp_rename + rebuild hint', () => {
+    const s = genAlterIndex('mssql', 'dbo', 'users', 'ix_name')
+    expect(s).toContain("EXEC sp_rename 'dbo.users.ix_name', 'ix_name_new', 'INDEX';")
+    expect(s).toContain('ALTER INDEX [ix_name] ON [dbo].[users] REBUILD;')
+  })
+  it('SQLite: drop + recreate note (no ALTER INDEX)', () => {
+    const s = genAlterIndex('sqlite', 'main', 't', 'ix')
+    expect(s).toContain('DROP INDEX IF EXISTS "ix";')
+    expect(s.toLowerCase()).toContain('no alter index')
   })
 })
 

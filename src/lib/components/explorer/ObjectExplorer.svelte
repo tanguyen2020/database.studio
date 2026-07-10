@@ -36,6 +36,7 @@
   import { quoteIdent, qualified, selectStarSql } from '$lib/sql/dialect'
   import { genAlterTable, genCreate, genDelete, genDrop, genDropDatabase, genForeignKey, genInsert, genRename, genRenameDatabase, genSelect, genTruncate, genUpdate } from '$lib/sql/ddl'
   import { generateScript, type DbObject, type ScriptMode } from '$lib/sql/scripts'
+  import { genCreateIndex, genDropIndex, genAlterIndex } from '$lib/sql/indexes'
   import { createTemplate, type CreateKind } from '$lib/sql/create-templates'
   import {
     createTemplate as cassCreateTemplate,
@@ -86,6 +87,27 @@
 
   let expanded = $state<Set<string>>(new Set())
   let treeSel = $state<string | null>(null)
+
+  // Schema-wide index list (the "Indexes" folder) — loaded on demand via
+  // scan_indexes (same source as the Index Scanner), cached per conn+schema.
+  let schemaIndexes = $state<Record<string, ipc.IndexScanRow[]>>({})
+  let schemaIndexLoading = $state<Set<string>>(new Set())
+  const idxKey = (connId: string, schema: string) => `${connId}:${schema}`
+  async function loadSchemaIndexes(connId: string, schema: string, force = false) {
+    const k = idxKey(connId, schema)
+    if (!force && (schemaIndexes[k] || schemaIndexLoading.has(k))) return
+    schemaIndexLoading = new Set(schemaIndexLoading).add(k)
+    try {
+      const res = await ipc.scanIndexes(connId, schema)
+      schemaIndexes = { ...schemaIndexes, [k]: res.indexes }
+    } catch {
+      schemaIndexes = { ...schemaIndexes, [k]: [] }
+    } finally {
+      const s = new Set(schemaIndexLoading)
+      s.delete(k)
+      schemaIndexLoading = s
+    }
+  }
   // Clear the tree selection when switching connections so the sidebar ER / Generate
   // Scripts buttons stay disabled until a schema/database is picked in the new tree.
   $effect(() => {
@@ -1979,6 +2001,60 @@
               }, trigMenu)}
             {/each}
           {/if}
+          {/if}
+
+          <!-- Indexes (schema-wide): every index across the schema's tables. Data
+               from scan_indexes (same source as the Index Scanner), loaded on expand. -->
+          {@const ixFolderKey = `f:${schema.name}:indexes`}
+          {@const ixKeyC = idxKey(selected?.id ?? '', schema.name)}
+          {@const ixList = schemaIndexes[ixKeyC] ?? []}
+          {#snippet idxFolderMenu()}
+            <ContextMenu.Content class="w-48">
+              <ContextMenu.Item onclick={() => selected && stmtTab('Create index', genCreateIndex(selected.system, schema.name, 'table_name', { name: 'idx_name', columns: ['column'], unique: false }))}>Create Index…</ContextMenu.Item>
+              <ContextMenu.Separator />
+              {@render filterMenuItems(ixFolderKey)}
+              <ContextMenu.Item onclick={() => selected && loadSchemaIndexes(selected.id, schema.name, true)}>Refresh</ContextMenu.Item>
+            </ContextMenu.Content>
+          {/snippet}
+          {@render row({
+            key: ixFolderKey,
+            depth: base + 1,
+            glyph: '⌗',
+            color: C.idx,
+            name: 'Indexes',
+            meta: ixList.length ? String(ixList.length) : '',
+            head: true,
+            expandable: true,
+            onClick: () => { toggle(ixFolderKey); if (selected) void loadSchemaIndexes(selected.id, schema.name) },
+          }, idxFolderMenu)}
+          {#if searching || expanded.has(ixFolderKey)}
+            {@render folderFilter(ixFolderKey, base + 1)}
+            {#if !ixList.length && schemaIndexLoading.has(ixKeyC)}
+              {@render row({ key: `${ixFolderKey}:loading`, depth: base + 2, glyph: '·', color: C.col, name: 'Loading…', meta: '' })}
+            {:else if !ixList.length}
+              {@render row({ key: `${ixFolderKey}:empty`, depth: base + 2, glyph: '·', color: C.col, name: 'No indexes', meta: '' })}
+            {/if}
+            {#each ixList.filter((ix) => folderMatch(ixFolderKey, ix.name)) as ix (ix.table + '.' + ix.name)}
+              {#snippet sIdxMenu()}
+                <ContextMenu.Content class="w-48">
+                  <ContextMenu.Item onclick={() => selected && stmtTab(`Alter index ${ix.name}`, genAlterIndex(selected.system, schema.name, ix.table, ix.name))}>Alter…</ContextMenu.Item>
+                  <ContextMenu.Item onclick={() => selected && tabs.openTableViewer(selected.id, schema.name, ix.table)}>Open Table Data</ContextMenu.Item>
+                  <ContextMenu.Item onclick={() => copyName(ix.name)}>Copy Name</ContextMenu.Item>
+                  <ContextMenu.Item onclick={() => copyName(`${ix.table}.${ix.name}`)}>Copy Qualified Name</ContextMenu.Item>
+                  <ContextMenu.Separator />
+                  <ContextMenu.Item variant="destructive" onclick={() => selected && stmtTab(`Drop index ${ix.name}`, genDropIndex(selected.system, schema.name, ix.table, ix.name))}>Drop…</ContextMenu.Item>
+                  <ContextMenu.Item onclick={() => selected && loadSchemaIndexes(selected.id, schema.name, true)}>Refresh</ContextMenu.Item>
+                </ContextMenu.Content>
+              {/snippet}
+              {@render row({
+                key: `six:${schema.name}.${ix.table}.${ix.name}`,
+                depth: base + 2,
+                glyph: '⌗',
+                color: C.idx,
+                name: ix.name,
+                meta: `${ix.table}${ix.primary ? ' · PK' : ix.unique ? ' · UNIQUE' : ''}`,
+              }, sIdxMenu)}
+            {/each}
           {/if}
 
           {#if isPg}

@@ -43,6 +43,30 @@ export function genDropIndex(system: string, schema: string, table: string, name
   }
 }
 
+/** ALTER INDEX — a re-runnable/template statement per dialect (rename is the
+ *  portable op; rebuild/recreate shown as a comment where relevant). Opened in the
+ *  SQL editor to review/edit before running. */
+export function genAlterIndex(system: string, schema: string, table: string, name: string): string {
+  const q = (n: string) => quoteIdent(system, n)
+  const t = target(system, schema, table)
+  const nn = `${name}_new`
+  switch (system) {
+    case 'postgres': {
+      const idx = schema ? `${q(schema)}.${q(name)}` : q(name)
+      return `ALTER INDEX ${idx} RENAME TO ${q(nn)};\n-- or rebuild:  REINDEX INDEX ${idx};`
+    }
+    case 'mysql':
+    case 'mariadb':
+      return `ALTER TABLE ${t} RENAME INDEX ${q(name)} TO ${q(nn)};`
+    case 'mssql':
+      return `EXEC sp_rename '${schema}.${table}.${name}', '${nn}', 'INDEX';\n-- or rebuild:  ALTER INDEX ${q(name)} ON ${t} REBUILD;`
+    case 'sqlite':
+      return `-- SQLite has no ALTER INDEX — drop and recreate:\nDROP INDEX IF EXISTS ${q(name)};\n-- CREATE INDEX ${q(name)} ON ${q(table)} (...);`
+    default: // clickhouse — data-skipping index
+      return `-- ClickHouse data-skipping index — drop & re-add via ALTER TABLE:\nALTER TABLE ${t} DROP INDEX ${q(name)};\n-- ALTER TABLE ${t} ADD INDEX ${q(name)} <expr> TYPE <type> GRANULARITY <n>;`
+  }
+}
+
 export interface NewForeignKey {
   name: string
   from_table: string
