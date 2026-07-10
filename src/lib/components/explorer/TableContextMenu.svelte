@@ -134,7 +134,6 @@
   <ContextMenu.Item onclick={() => tabs.openTableViewer(connId, schema, table)}>Open Data</ContextMenu.Item>
   <ContextMenu.Item onclick={() => importWizard.show(connId, schema)}>Import Data…</ContextMenu.Item>
   <ContextMenu.Item onclick={() => exportWizard.showTable(connId, schema, table)}>Export Data…</ContextMenu.Item>
-  <ContextMenu.Item onclick={() => testDataWizard.show(connId, schema, table)}>Generate Test Data…</ContextMenu.Item>
   <ContextMenu.Item onclick={() => stmtTab(`${table} · SELECT`, selectStarSql(system, schema, table))}>New Query</ContextMenu.Item>
   <ContextMenu.Separator />
   <!-- Design Table includes a Script tab (the former "Alter Table…" flow). -->
@@ -156,6 +155,7 @@
     </ContextMenu.Sub>
   {/if}
   <ContextMenu.Separator />
+  <ContextMenu.Item onclick={() => testDataWizard.show(connId, schema, table)}>Generate Test Data…</ContextMenu.Item>
   <ContextMenu.Sub>
     <ContextMenu.SubTrigger>Generate SQL</ContextMenu.SubTrigger>
     <ContextMenu.SubContent class="w-44">
@@ -174,6 +174,7 @@
     </ContextMenu.SubContent>
   </ContextMenu.Sub>
   <ContextMenu.Item onclick={() => genSqlTab('ddl')}>View DDL</ContextMenu.Item>
+  <ContextMenu.Item onclick={copyDdl}>Copy DDL</ContextMenu.Item>
   {#if isClickhouse}
     <ContextMenu.Item onclick={() => chTtl.show(connId, schema, table)}>TTL Policy…</ContextMenu.Item>
     <ContextMenu.Item onclick={() => stmtTab(`Optimize ${table}`, chops.optimizeFinal(schema, table))}>Optimize Table (FINAL)</ContextMenu.Item>
@@ -192,7 +193,6 @@
   <ContextMenu.Item onclick={() => stmtTab(`Rename ${table}`, genRename(system, schema, table))}>Rename…</ContextMenu.Item>
   <ContextMenu.Item onclick={() => copyName(table)}>Copy Name</ContextMenu.Item>
   <ContextMenu.Item onclick={() => copyName(`${quoteIdent(system, schema)}.${quoteIdent(system, table)}`)}>Copy Qualified Name</ContextMenu.Item>
-  <ContextMenu.Item onclick={copyDdl}>Copy DDL</ContextMenu.Item>
   <ContextMenu.Separator />
   <ContextMenu.Item onclick={doRefresh}>Refresh</ContextMenu.Item>
   {#if !locked}

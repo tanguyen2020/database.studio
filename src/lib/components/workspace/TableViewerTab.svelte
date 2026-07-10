@@ -21,6 +21,9 @@
   // svelte-ignore state_referenced_locally
   const table = tab.state.table as string
   const profile = $derived(connections.byId(tab.connectionId))
+  // Which database this viewer is bound to (base profile db, or the `db` of a
+  // `{base}::{db}` foreign sub-connection) — surfaced in the toolbar.
+  const dbName = $derived(connections.databaseOf(tab.connectionId))
 
   let data = $state<QueryResultSet | null>(null)
   let error = $state<QueryError | null>(null)
@@ -165,7 +168,11 @@
     {#if profile}
       <SystemBadge system={profile.system} />
     {/if}
-    <span class="mono">{schema}.{table}</span>
+    {#if dbName}
+      <span class="mono" style="color:var(--primary);font-weight:600" title="Database">{dbName}</span>
+      <span style="color:var(--muted)">/</span>
+    {/if}
+    <span class="mono" title={dbName ? `${dbName} · ${schema}.${table}` : `${schema}.${table}`}>{schema}.{table}</span>
     <span class="tv-btn" style="background:{filtersOpen ? 'var(--hover)' : 'var(--panel)'}" onclick={() => (filtersOpen = !filtersOpen)} onkeydown={(e) => e.key === 'Enter' && (filtersOpen = !filtersOpen)} role="button" tabindex="0">Filters {filters.length ? `(${filters.length})` : ''} ▾</span>
     <div style="margin-left:auto;display:flex;align-items:center;gap:var(--px-8)">
       <label style="display:flex;align-items:center;gap:var(--px-5);font-size:var(--px-12_5);color:var(--text2)">
