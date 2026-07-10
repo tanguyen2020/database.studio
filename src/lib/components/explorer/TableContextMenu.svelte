@@ -26,9 +26,10 @@
     genInsert,
     genRename,
     genSelect,
-    genTruncate,
     genUpdate,
   } from '$lib/sql/ddl'
+  import { truncateOptions } from '$lib/sql/truncate'
+  import { truncateWizard } from '$lib/stores/truncate.svelte'
   import { generateScript, type DbObject, type ScriptMode } from '$lib/sql/scripts'
   import { supportsPartitioning } from '$lib/sql/partitions'
   import { buildExportSelect } from '$lib/export/query'
@@ -54,6 +55,9 @@
   let { connId, schema, table, system, locked = false, engine, database, onShowPartitions, onRefresh }: Props = $props()
 
   const isClickhouse = $derived(system === 'clickhouse')
+  // TRUNCATE variants this engine actually supports (PG: +CASCADE/+RESTART IDENTITY;
+  // SQLite: DELETE +restart; others: plain). Never offer an option a DB can't run.
+  const truncateOpts = $derived(truncateOptions(system))
 
   // Open an editable SQL tab (bound to `database` when set) to review before Run.
   function stmtTab(title: string, sql: string) {
@@ -193,7 +197,18 @@
   <ContextMenu.Item onclick={doRefresh}>Refresh</ContextMenu.Item>
   {#if !locked}
     <ContextMenu.Separator />
-    <ContextMenu.Item variant="destructive" onclick={() => stmtTab(`Truncate ${table}`, genTruncate(system, schema, table))}>Truncate</ContextMenu.Item>
+    {#if truncateOpts.length > 1}
+      <ContextMenu.Sub>
+        <ContextMenu.SubTrigger>Truncate</ContextMenu.SubTrigger>
+        <ContextMenu.SubContent class="w-56">
+          {#each truncateOpts as opt (opt.variant)}
+            <ContextMenu.Item variant="destructive" onclick={() => truncateWizard.show(connId, schema, table, system, opt.variant, database, doRefresh)}>{opt.label}</ContextMenu.Item>
+          {/each}
+        </ContextMenu.SubContent>
+      </ContextMenu.Sub>
+    {:else}
+      <ContextMenu.Item variant="destructive" onclick={() => truncateWizard.show(connId, schema, table, system, 'plain', database, doRefresh)}>Truncate</ContextMenu.Item>
+    {/if}
     <ContextMenu.Item variant="destructive" onclick={() => stmtTab(`Drop ${table}`, genDrop(system, schema, table))}>Drop</ContextMenu.Item>
   {/if}
 </ContextMenu.Content>

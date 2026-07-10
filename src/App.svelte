@@ -48,6 +48,7 @@
   import ExecuteRoutineDialog from '$lib/components/ExecuteRoutineDialog.svelte'
   import ClickHouseCreateDialog from '$lib/components/ClickHouseCreateDialog.svelte'
   import AddPartitionDialog from '$lib/components/AddPartitionDialog.svelte'
+  import TruncateDialog from '$lib/components/TruncateDialog.svelte'
   import NewDatabaseDialog from '$lib/components/NewDatabaseDialog.svelte'
   import NatsAddMessageDialog from '$lib/components/NatsAddMessageDialog.svelte'
   import NatsCreateStreamDialog from '$lib/components/NatsCreateStreamDialog.svelte'
@@ -346,6 +347,7 @@
 <ExecuteRoutineDialog />
 <ClickHouseCreateDialog />
 <AddPartitionDialog />
+<TruncateDialog />
 <NewDatabaseDialog />
 <NatsAddMessageDialog />
 <NatsCreateStreamDialog />
