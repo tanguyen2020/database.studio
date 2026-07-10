@@ -23,6 +23,8 @@ test('explorer: schema-wide Indexes folder + context menus', async ({ page }) =>
   // schema-wide indexes render (from scan_indexes)
   await expect(page.getByText('idx_students_email').first()).toBeVisible()
   await expect(page.getByText('idx_enroll_sc').first()).toBeVisible()
+  // primary-key indexes are excluded (only clustered/non-clustered secondary indexes)
+  await expect(page.getByText('students_pkey')).toHaveCount(0)
 
   // folder context menu: Create Index / Refresh
   await page.getByText('Indexes', { exact: true }).first().click({ button: 'right' })
