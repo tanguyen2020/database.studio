@@ -141,6 +141,8 @@ export interface ColumnInfo {
   is_pk: boolean
   is_fk: boolean
   ordinal: number
+  /** server-generated identity/auto-increment column — omitted from generated INSERTs */
+  auto_increment?: boolean
 }
 
 export interface IndexInfo {

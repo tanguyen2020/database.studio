@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { generateRows, type ColumnGen } from './generate'
+import { boolLiteral, generateRows, type ColumnGen } from './generate'
 
 const col = (name: string, kind: ColumnGen['kind'], extra: Partial<ColumnGen> = {}): ColumnGen => ({
   name,
@@ -60,5 +60,38 @@ describe('generateRows', () => {
   it('numbers respect the min/max range', () => {
     const r = generateRows([col('age', 'number', { min: 18, max: 65 })], 100)
     expect(r.rows.every((row) => (row[0] as number) >= 18 && (row[0] as number) <= 65)).toBe(true)
+  })
+
+  it('boolLiteral is dialect-correct (PG quoted true/false, others numeric 1/0)', () => {
+    expect(boolLiteral('postgres', true)).toBe('true')
+    expect(boolLiteral('postgres', false)).toBe('false')
+    for (const sys of ['mysql', 'mariadb', 'mssql', 'sqlite', 'clickhouse']) {
+      expect(boolLiteral(sys, true)).toBe(1)
+      expect(boolLiteral(sys, false)).toBe(0)
+    }
+  })
+
+  it('bool kind renders per-dialect literals', () => {
+    const pg = generateRows([col('flag', 'bool')], 40, 3, 'postgres')
+    expect(pg.rows.every((row) => row[0] === 'true' || row[0] === 'false')).toBe(true)
+    const my = generateRows([col('flag', 'bool')], 40, 3, 'mysql')
+    expect(my.rows.every((row) => row[0] === 1 || row[0] === 0)).toBe(true)
+    const ms = generateRows([col('flag', 'bool')], 40, 3, 'mssql')
+    expect(ms.rows.every((row) => row[0] === 1 || row[0] === 0)).toBe(true)
+  })
+
+  it('bool kind with explicit values picks only from that set (e.g. int 0/1/2)', () => {
+    const values = ['0', '1', '2']
+    const r = generateRows([col('status', 'bool', { values })], 60, 5, 'mssql')
+    expect(r.rows.every((row) => values.includes(String(row[0])))).toBe(true)
+  })
+
+  it('fk explicit values override the parent pool', () => {
+    const pool = [10, 20, 30]
+    const values = ['aaa', 'bbb']
+    const r = generateRows([col('ref', 'fk', { pool, values })], 40)
+    // explicit values win — pool is ignored
+    expect(r.rows.every((row) => values.includes(row[0] as string))).toBe(true)
+    expect(r.rows.some((row) => pool.includes(row[0] as number))).toBe(false)
   })
 })

@@ -326,9 +326,11 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
       ])
     case 'list_columns':
       return ok([
-        { name: 'id', data_type: 'int4', nullable: false, default: null, is_pk: true, is_fk: false },
+        // identity PK — Generate Test Data excludes auto-increment columns by default
+        { name: 'id', data_type: 'int4', nullable: false, default: null, is_pk: true, is_fk: false, auto_increment: true },
         { name: 'first_name', data_type: 'varchar(80)', nullable: false, default: null, is_pk: false, is_fk: false },
         { name: 'status', data_type: 'varchar(20)', nullable: true, default: null, is_pk: false, is_fk: false },
+        { name: 'is_active', data_type: 'bool', nullable: false, default: null, is_pk: false, is_fk: false },
         // reserved-word column name — autocomplete must insert it quoted
         { name: 'order', data_type: 'int4', nullable: true, default: null, is_pk: false, is_fk: false },
       ])

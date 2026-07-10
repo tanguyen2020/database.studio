@@ -239,7 +239,8 @@ impl MySqlDriver {
                              AND CONVERT(k.TABLE_NAME USING utf8mb4) = CONVERT(c.TABLE_NAME USING utf8mb4)
                              AND CONVERT(k.COLUMN_NAME USING utf8mb4) = CONVERT(c.COLUMN_NAME USING utf8mb4)
                              AND k.REFERENCED_TABLE_NAME IS NOT NULL),
-                    c.ORDINAL_POSITION
+                    c.ORDINAL_POSITION,
+                    INSTR(c.EXTRA, 'auto_increment') > 0
              FROM information_schema.COLUMNS c
              WHERE CONVERT(c.TABLE_SCHEMA USING utf8mb4) = CONVERT(? USING utf8mb4)
                AND CONVERT(c.TABLE_NAME USING utf8mb4) = CONVERT(? USING utf8mb4)
@@ -260,6 +261,7 @@ impl MySqlDriver {
                 is_pk: r.try_get::<i64, _>(4).map(|v| v != 0).unwrap_or(false),
                 is_fk: r.try_get::<i64, _>(5).map(|v| v != 0).unwrap_or(false),
                 ordinal: r.try_get::<i64, _>(6).map(|v| v as i32).unwrap_or(0),
+                auto_increment: r.try_get::<i64, _>(7).map(|v| v != 0).unwrap_or(false),
             })
             .collect())
     }

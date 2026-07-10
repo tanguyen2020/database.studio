@@ -19,7 +19,11 @@
   let cols = $state<ColumnInfo[]>([])
   let fks = $state<ForeignKey[]>([])
   let kind = $state<Record<string, GenKind>>({})
-  let enums = $state<Record<string, string>>({})
+  // explicit value set (comma-separated) per column — used by enum / fk / bool
+  let vals = $state<Record<string, string>>({})
+  // whether to generate a value for the column; identity/auto-increment columns
+  // default to OFF so the engine assigns them.
+  let include = $state<Record<string, boolean>>({})
   let count = $state(100)
   let running = $state(false)
   let done = $state(0)
@@ -58,14 +62,31 @@
     done = 0
     result = null
     count = 100
-    enums = {}
+    vals = {}
     const cid = testDataWizard.connId
     if (!cid) return
     cols = await ipc.listColumns(cid, testDataWizard.schema, testDataWizard.table).catch(() => [])
     fks = await ipc.listForeignKeys(cid, testDataWizard.schema).catch(() => [])
     const k: Record<string, GenKind> = {}
-    for (const c of cols) k[c.name] = defaultKind(c)
+    const inc: Record<string, boolean> = {}
+    for (const c of cols) {
+      k[c.name] = defaultKind(c)
+      // Auto-increment/identity columns are excluded by default (the DB fills them).
+      inc[c.name] = !c.auto_increment
+    }
     kind = k
+    include = inc
+  }
+
+  // Columns that will actually be generated + inserted.
+  const activeCols = $derived(cols.filter((c) => include[c.name] !== false))
+  // Kinds that accept an explicit value list (comma-separated).
+  const takesValues = (k: GenKind) => k === 'enum' || k === 'fk' || k === 'bool'
+  function parsedValues(name: string): string[] | undefined {
+    const raw = vals[name]
+    if (!raw) return undefined
+    const arr = raw.split(',').map((s) => s.trim()).filter(Boolean)
+    return arr.length ? arr : undefined
   }
 
   function specFor(c: ColumnInfo, pool?: (string | number)[]): ColumnGen {
@@ -74,40 +95,47 @@
       kind: kind[c.name] ?? 'text',
       nullable: c.nullable,
       unique: c.is_pk,
-      values: enums[c.name] ? enums[c.name].split(',').map((s) => s.trim()).filter(Boolean) : undefined,
+      values: parsedValues(c.name),
       pool,
     }
   }
 
-  // Preview a handful of rows client-side (no DB writes).
+  // Preview a handful of rows client-side (no DB writes). FK columns without an
+  // explicit value list preview against a dummy pool.
   const preview = $derived.by(() => {
-    if (!cols.length) return { columns: [] as string[], rows: [] as (string | number | null)[][] }
-    return generateRows(cols.map((c) => specFor(c, fkOf.has(c.name) ? [1, 2, 3] : undefined)), Math.min(5, count), 7)
+    if (!activeCols.length) return { columns: [] as string[], rows: [] as (string | number | null)[][] }
+    return generateRows(
+      activeCols.map((c) => specFor(c, fkOf.has(c.name) && !parsedValues(c.name) ? [1, 2, 3] : undefined)),
+      Math.min(5, count),
+      7,
+      system,
+    )
   })
 
   async function run() {
     const cid = testDataWizard.connId
-    if (!cid || !cols.length || count < 1) return
+    if (!cid || !activeCols.length || count < 1) return
     running = true
     done = 0
     result = null
     try {
       // Fetch FK parent pools so generated FK values reference real parent rows.
+      // Skipped when the user supplied explicit values for that FK column.
       const pools: Record<string, (string | number)[]> = {}
-      for (const c of cols) {
+      for (const c of activeCols) {
         const fk = fkOf.get(c.name)
-        if (!fk) continue
+        if (!fk || parsedValues(c.name)) continue
         const q = quoteIdent(system, fk.to_column)
         const sql = buildExportSelect({ system, schema: testDataWizard.schema, table: fk.to_table, columns: [fk.to_column], limit: 5000 })
         const res = await ipc.execStatement(cid, `SELECT DISTINCT ${q} FROM (${sql.replace(/;?\s*$/, '')}) _p`, 0)
         pools[c.name] = ((res.result?.rows ?? []) as Record<string, unknown>[]).map((r) => r[fk.to_column] as string | number).filter((v) => v != null)
-        if (fkOf.has(c.name) && pools[c.name].length === 0) {
+        if (pools[c.name].length === 0) {
           result = `✗ ${c.name}: parent ${fk.to_table} has no rows to reference — seed it first`
           return
         }
       }
-      const specs = cols.map((c) => specFor(c, pools[c.name]))
-      const { columns, rows } = generateRows(specs, count, 1)
+      const specs = activeCols.map((c) => specFor(c, pools[c.name]))
+      const { columns, rows } = generateRows(specs, count, 1, system)
       const target = testDataWizard.table
       for (const batch of chunk(rows, 1000)) {
         const insert = buildInsert({ system, schema: testDataWizard.schema, table: target, columns, rows: batch as (string | null)[][], mode: 'error' })
@@ -131,7 +159,7 @@
 {#if dlgOpen}
   <!-- backdrop click does NOT close (avoid losing input); use × / Cancel / Escape -->
   <div onkeydown={(e) => e.key === 'Escape' && !running && testDataWizard.close()} role="presentation" style="position:fixed;inset:0;background:var(--rgba-0-0-0-_5);display:flex;align-items:center;justify-content:center;z-index:56">
-    <div onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.key === 'Escape' && !running && testDataWizard.close()} role="dialog" aria-modal="true" tabindex="-1" style="width:var(--px-640);max-width:95vw;max-height:90vh;background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-14);box-shadow:0 var(--px-30) var(--px-70) var(--rgba-0-0-0-_55);overflow:hidden;display:flex;flex-direction:column">
+    <div onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.key === 'Escape' && !running && testDataWizard.close()} role="dialog" aria-modal="true" tabindex="-1" style="width:var(--px-840);max-width:95vw;max-height:90vh;background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-14);box-shadow:0 var(--px-30) var(--px-70) var(--rgba-0-0-0-_55);overflow:hidden;display:flex;flex-direction:column">
       <div style="flex:none;display:flex;align-items:center;gap:var(--px-10);padding:var(--px-15) var(--px-18);border-bottom:var(--px-1) solid var(--border)">
         <span style="font-weight:700;font-size:var(--px-15)">Generate test data · {testDataWizard.table}</span>
         <span onclick={() => !running && testDataWizard.close()} onkeydown={(e) => e.key === 'Enter' && !running && testDataWizard.close()} role="button" tabindex="0" style="margin-left:auto;cursor:pointer;color:var(--muted);font-size:var(--px-20)">×</span>
@@ -140,16 +168,24 @@
         <label style="font-size:var(--px-12);color:var(--text2)">Rows
           <input type="number" min="1" max="1000000" bind:value={count} style="margin-left:var(--px-8);width:var(--px-110);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-3) var(--px-8);color:var(--text)" />
         </label>
-        <div style="font-size:var(--px-11);color:var(--muted)">Per-column generator</div>
-        <div style="display:flex;flex-direction:column;gap:var(--px-4);max-height:var(--px-220);overflow:auto;border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-8)">
+        <div style="font-size:var(--px-11);color:var(--muted)">Per-column generator <span style="color:var(--muted)">— untick a column to let the database assign it (identity / auto-increment)</span></div>
+        <div style="display:flex;flex-direction:column;gap:var(--px-4);max-height:var(--px-300);overflow:auto;border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-8)">
           {#each cols as c (c.name)}
-            <div style="display:flex;align-items:center;gap:var(--px-8);font-size:var(--px-11_5)">
-              <span class="mono" style="width:var(--px-150);color:var(--text2);overflow:hidden;text-overflow:ellipsis">{c.name} <span style="color:var(--muted)">{c.data_type}{c.is_pk ? ' PK' : ''}{fkOf.has(c.name) ? ' FK' : ''}</span></span>
-              <select bind:value={kind[c.name]} class="mono" style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-4);padding:0 var(--px-4);color:var(--text);font-size:var(--px-11)">
+            {@const off = include[c.name] === false}
+            <div style="display:flex;align-items:center;gap:var(--px-8);font-size:var(--px-11_5);opacity:{off ? 0.5 : 1}">
+              <input type="checkbox" bind:checked={include[c.name]} title="Include this column in the generated INSERT" style="flex:none" />
+              <span class="mono" style="width:var(--px-200);color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="{c.name} {c.data_type}">{c.name} <span style="color:var(--muted)">{c.data_type}{c.is_pk ? ' PK' : ''}{fkOf.has(c.name) ? ' FK' : ''}{c.auto_increment ? ' AUTO' : ''}</span></span>
+              <select bind:value={kind[c.name]} disabled={off} class="mono" style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-4);padding:0 var(--px-4);color:var(--text);font-size:var(--px-11);flex:none">
                 {#each KINDS as k (k)}<option value={k}>{k}</option>{/each}
               </select>
-              {#if kind[c.name] === 'enum'}
-                <input bind:value={enums[c.name]} placeholder="a, b, c" class="mono" style="flex:1;background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-4);padding:0 var(--px-6);color:var(--text);font-size:var(--px-11)" />
+              {#if takesValues(kind[c.name])}
+                <input
+                  bind:value={vals[c.name]}
+                  disabled={off}
+                  placeholder={kind[c.name] === 'enum' ? 'values: a, b, c' : kind[c.name] === 'bool' ? 'true, false' : 'FK values (optional, comma-separated)'}
+                  class="mono"
+                  style="flex:1;min-width:var(--px-160);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-4);padding:0 var(--px-6);color:var(--text);font-size:var(--px-11)"
+                />
               {/if}
             </div>
           {/each}

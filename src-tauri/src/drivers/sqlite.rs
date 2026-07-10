@@ -436,6 +436,9 @@ impl SqliteDriver {
                         default: r.get::<_, Option<String>>(4)?,
                         is_pk: r.get::<_, i32>(5)? > 0,
                         is_fk: false, // filled below
+                        // INTEGER PRIMARY KEY is a rowid alias (auto-assigned).
+                        auto_increment: r.get::<_, i32>(5)? > 0
+                            && r.get::<_, String>(2).unwrap_or_default().trim().eq_ignore_ascii_case("integer"),
                     })
                 })
                 .map_err(|e| map_rusqlite_error(&e))?;

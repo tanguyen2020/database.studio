@@ -183,6 +183,11 @@ pub struct ColumnInfo {
     pub is_pk: bool,
     pub is_fk: bool,
     pub ordinal: i32,
+    /// Server-generated identity/auto-increment column (PG serial/IDENTITY,
+    /// MySQL AUTO_INCREMENT, MSSQL IDENTITY, SQLite INTEGER PRIMARY KEY rowid).
+    /// Such columns should be omitted from generated INSERTs.
+    #[serde(default)]
+    pub auto_increment: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

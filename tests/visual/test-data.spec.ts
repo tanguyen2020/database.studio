@@ -26,6 +26,17 @@ test('generate test data: preview + run', async ({ page }) => {
   await expect(dialog.getByText(/Generate test data · students/)).toBeVisible()
   await expect(dialog.getByText(/Preview/)).toBeVisible()
 
+  // the identity PK is shown as AUTO and excluded by default (DB assigns it)…
+  await expect(dialog.getByText(/id\s+int4 PK AUTO/)).toBeVisible()
+  // …so it is absent from the generated (preview) columns, while others remain
+  const headers = dialog.locator('table.mono thead th')
+  await expect(headers.filter({ hasText: /^id$/ })).toHaveCount(0)
+  await expect(headers.filter({ hasText: 'first_name' })).toHaveCount(1)
+  await expect(headers.filter({ hasText: 'is_active' })).toHaveCount(1)
+
+  // a boolean column offers an explicit value list (true/false or 0/1/2…)
+  await expect(dialog.getByPlaceholder('true, false')).toBeVisible()
+
   await dialog.getByText('Generate', { exact: true }).click()
   await page.waitForTimeout(400)
   await expect(dialog.getByText(/generated .* rows/)).toBeVisible()

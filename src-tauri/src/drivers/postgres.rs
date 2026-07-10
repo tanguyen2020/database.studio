@@ -260,7 +260,8 @@ impl PgDriver {
                     pg_catalog.pg_get_expr(d.adbin, d.adrelid) AS default_expr,
                     COALESCE(pk.is_pk, false) AS is_pk,
                     COALESCE(fk.is_fk, false) AS is_fk,
-                    a.attnum::int AS ordinal
+                    a.attnum::int AS ordinal,
+                    (a.attidentity <> '' OR COALESCE(pg_catalog.pg_get_expr(d.adbin, d.adrelid), '') LIKE 'nextval(%') AS auto_increment
              FROM pg_catalog.pg_attribute a
              JOIN pg_catalog.pg_class c ON c.oid = a.attrelid
              JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
@@ -291,6 +292,7 @@ impl PgDriver {
                 is_pk: r.get(4),
                 is_fk: r.get(5),
                 ordinal: r.get(6),
+                auto_increment: r.try_get(7).unwrap_or(false),
             })
             .collect())
     }

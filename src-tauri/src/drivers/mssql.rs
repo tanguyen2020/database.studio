@@ -320,7 +320,8 @@ impl MssqlDriver {
                         OBJECT_DEFINITION(c.default_object_id),
                         IIF(pk.column_id IS NOT NULL, 1, 0),
                         IIF(fk.parent_column_id IS NOT NULL, 1, 0),
-                        c.column_id
+                        c.column_id,
+                        CAST(c.is_identity AS int)
                  FROM sys.columns c
                  JOIN sys.objects o ON o.object_id = c.object_id
                  JOIN sys.types ty ON ty.user_type_id = c.user_type_id
@@ -351,6 +352,7 @@ impl MssqlDriver {
                 is_pk: r.get::<i32, _>(4).unwrap_or(0) == 1,
                 is_fk: r.get::<i32, _>(5).unwrap_or(0) == 1,
                 ordinal: r.get::<i32, _>(6).unwrap_or(0),
+                auto_increment: r.get::<i32, _>(7).unwrap_or(0) == 1,
             })
             .collect())
     }

@@ -175,18 +175,6 @@
     <span class="mono" title={dbName ? `${dbName} · ${schema}.${table}` : `${schema}.${table}`}>{schema}.{table}</span>
     <span class="tv-btn" style="background:{filtersOpen ? 'var(--hover)' : 'var(--panel)'}" onclick={() => (filtersOpen = !filtersOpen)} onkeydown={(e) => e.key === 'Enter' && (filtersOpen = !filtersOpen)} role="button" tabindex="0">Filters {filters.length ? `(${filters.length})` : ''} ▾</span>
     <div style="margin-left:auto;display:flex;align-items:center;gap:var(--px-8)">
-      <label style="display:flex;align-items:center;gap:var(--px-5);font-size:var(--px-12_5);color:var(--text2)">
-        Rows / page
-        <select
-          style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-5);padding:var(--px-3) var(--px-6);font-size:var(--px-12_5);color:var(--text)"
-          bind:value={pageSize}
-          onchange={() => { page = 0; void load() }}
-        >
-          <option value={100}>100</option>
-          <option value={500}>500</option>
-          <option value={1000}>1000</option>
-        </select>
-      </label>
       <span class="tv-btn" style="display:inline-flex;align-items:center;gap:var(--px-5)" onclick={() => { page = 0; void load() }} onkeydown={(e) => e.key === 'Enter' && (page = 0, load())} role="button" tabindex="0" title="Refresh">⟳ Refresh</span>
       {#if data}
         <span class="mono" style="font-size:var(--px-12_5);color:var(--muted)">{durationMs} ms</span>
@@ -277,9 +265,21 @@
     {/if}
   </div>
 
-  <!-- footer pager — record + page count in English -->
+  <!-- footer pager — rows/page + record + page count in English -->
   {#if data}
     <div style="flex:none;display:flex;align-items:center;gap:var(--px-10);padding:var(--px-7) var(--px-12);border-top:var(--px-1) solid var(--border);background:var(--header)">
+      <label style="display:flex;align-items:center;gap:var(--px-5);font-size:var(--px-12_5);color:var(--text2)">
+        Rows / page
+        <select
+          style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-5);padding:var(--px-3) var(--px-6);font-size:var(--px-12_5);color:var(--text)"
+          bind:value={pageSize}
+          onchange={() => { page = 0; void load() }}
+        >
+          <option value={100}>100</option>
+          <option value={500}>500</option>
+          <option value={1000}>1000</option>
+        </select>
+      </label>
       <span class="mono" style="font-size:var(--px-12_5);color:var(--text2)">
         {#if data.rows.length}
           {(page * pageSize + 1).toLocaleString()}–{(page * pageSize + data.rows.length).toLocaleString()}
@@ -287,7 +287,7 @@
           0
         {/if}
         {#if totalRecords != null}
-          of {totalRecords.toLocaleString()} record{totalRecords === 1 ? '' : 's'}
+          of {totalRecords.toLocaleString()} row{totalRecords === 1 ? '' : 's'}
         {:else}
           (filtered)
         {/if}

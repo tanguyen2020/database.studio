@@ -263,6 +263,7 @@ impl ChDriver {
                     is_fk: false, // ClickHouse không có FK
                     data_type: ty,
                     ordinal: i as i32,
+                    auto_increment: false, // ClickHouse has no identity/auto-increment
                 }
             })
             .collect())

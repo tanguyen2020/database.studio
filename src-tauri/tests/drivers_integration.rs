@@ -381,6 +381,180 @@ async fn pg_test_data_contract_respects_fk_and_unique() {
     assert_eq!(result.rows[0]["n"], serde_json::json!(300));
 }
 
+/// Generate Test Data backend contract: columns() must flag IDENTITY *and* serial
+/// columns as auto_increment (so the wizard omits them), and the exact INSERT the
+/// generator emits — auto-increment columns omitted, FK drawn from a pool, PG
+/// boolean rendered as the quoted literal 'true'/'false' — must run, with the DB
+/// assigning the identity itself.
+#[tokio::test]
+async fn pg_columns_detect_identity_and_generate_contract() {
+    let (_c, port) = start_pg().await;
+    let params = PgConnParams {
+        host: "localhost".into(),
+        port,
+        database: "testdb".into(),
+        user: "postgres".into(),
+        password: PASS.into(),
+        ssl: false,
+        ssl_ca: String::new(),
+        ssl_cert: String::new(),
+        ssl_key: String::new(),
+    };
+    let mut drv = retry("postgres", || PgDriver::connect(&params)).await;
+    drv.exec("CREATE TABLE tdc_p (id int PRIMARY KEY)").await.unwrap();
+    drv.exec("INSERT INTO tdc_p VALUES (1),(2),(3)").await.unwrap();
+    drv.exec(
+        "CREATE TABLE tdc_c (\
+           id int GENERATED ALWAYS AS IDENTITY PRIMARY KEY, \
+           legacy_id serial, \
+           parent_id int NOT NULL REFERENCES tdc_p(id), \
+           is_active boolean NOT NULL, \
+           status int NOT NULL, \
+           name text NOT NULL)",
+    )
+    .await
+    .unwrap();
+
+    // introspection: IDENTITY + serial are auto_increment; ordinary columns are not.
+    let cols = drv.columns("public", "tdc_c").await.unwrap();
+    let get = |n: &str| cols.iter().find(|c| c.name == n).unwrap_or_else(|| panic!("col {n} missing: {cols:?}"));
+    assert!(get("id").auto_increment, "IDENTITY flagged auto_increment: {cols:?}");
+    assert!(get("legacy_id").auto_increment, "serial flagged auto_increment");
+    assert!(!get("parent_id").auto_increment, "FK not auto_increment");
+    assert!(!get("is_active").auto_increment, "bool not auto_increment");
+    assert!(!get("status").auto_increment, "int not auto_increment");
+    assert!(!get("name").auto_increment, "text not auto_increment");
+
+    // The generator's INSERT: auto-increment columns omitted, FK from {1,2,3},
+    // PG boolean as 'true'/'false', status int, name text.
+    let pool = [1, 2, 3];
+    let rows: Vec<String> = (0..300)
+        .map(|i| {
+            let b = if i % 2 == 0 { "'true'" } else { "'false'" };
+            format!("({}, {b}, {}, 'n{i}')", pool[i % 3], i % 3)
+        })
+        .collect();
+    let ins = drv
+        .exec(&format!("INSERT INTO tdc_c (parent_id, is_active, status, name) VALUES {}", rows.join(",")))
+        .await
+        .unwrap();
+    assert!(matches!(ins, StatementOutcome::Affected { affected: 300 }), "300 rows insert cleanly");
+
+    // identity auto-assigned to unique values, FK integrity holds, booleans parsed.
+    let out = drv
+        .exec(
+            "SELECT count(*) AS n, count(DISTINCT tdc_c.id) AS ids, \
+                    count(*) FILTER (WHERE is_active) AS act \
+             FROM tdc_c JOIN tdc_p ON tdc_c.parent_id = tdc_p.id",
+        )
+        .await
+        .unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    assert_eq!(result.rows[0]["n"], serde_json::json!(300), "FK integrity: all rows join a parent");
+    assert_eq!(result.rows[0]["ids"], serde_json::json!(300), "identity assigned 300 distinct ids");
+    assert_eq!(result.rows[0]["act"], serde_json::json!(150), "150 'true' booleans parsed");
+}
+
+/// columns() flags a MySQL AUTO_INCREMENT column so Generate Test Data omits it;
+/// the generator's INSERT (id omitted, tinyint bool as 1/0) then round-trips.
+#[tokio::test]
+async fn mysql_columns_detect_auto_increment() {
+    let c = GenericImage::new("mysql", "8")
+        .with_exposed_port(3306.tcp())
+        .with_env_var("MYSQL_ROOT_PASSWORD", PASS)
+        .with_env_var("MYSQL_DATABASE", "testdb")
+        .start()
+        .await
+        .expect("start mysql container");
+    let port = c.get_host_port_ipv4(3306).await.unwrap();
+    let params = MySqlConnParams {
+        host: "localhost".into(),
+        port,
+        database: "testdb".into(),
+        user: "root".into(),
+        password: PASS.into(),
+        ssl: false,
+        ssl_ca: String::new(),
+        ssl_cert: String::new(),
+        ssl_key: String::new(),
+    };
+    let mut drv = retry("mysql", || MySqlDriver::connect(&params, "mysql")).await;
+    drv.exec("CREATE TABLE tdc_ai (id int AUTO_INCREMENT PRIMARY KEY, is_active tinyint(1) NOT NULL, name varchar(50) NOT NULL)")
+        .await
+        .unwrap();
+    let cols = drv.columns("testdb", "tdc_ai").await.unwrap();
+    assert!(cols.iter().find(|c| c.name == "id").unwrap().auto_increment, "AUTO_INCREMENT flagged: {cols:?}");
+    assert!(!cols.iter().find(|c| c.name == "is_active").unwrap().auto_increment);
+    assert!(!cols.iter().find(|c| c.name == "name").unwrap().auto_increment);
+
+    // generator INSERT — id omitted, bool as 1/0
+    drv.exec("INSERT INTO tdc_ai (is_active, name) VALUES (1,'a'),(0,'b'),(1,'c')").await.unwrap();
+    let out = drv.exec("SELECT id, name FROM tdc_ai ORDER BY id").await.unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    assert_eq!(result.rows.len(), 3, "3 rows inserted");
+    assert!(result.rows.iter().all(|r| !r["id"].is_null()), "AUTO_INCREMENT assigned ids: {:?}", result.rows);
+}
+
+/// columns() flags a SQL Server IDENTITY column as auto_increment; the generator's
+/// INSERT (identity omitted, bit bool as 1/0) round-trips with server-assigned ids.
+#[tokio::test]
+async fn mssql_columns_detect_identity() {
+    let c = GenericImage::new("mcr.microsoft.com/mssql/server", "2022-latest")
+        .with_exposed_port(1433.tcp())
+        .with_env_var("ACCEPT_EULA", "Y")
+        .with_env_var("MSSQL_SA_PASSWORD", MSSQL_PASS)
+        .start()
+        .await
+        .expect("start mssql container");
+    let port = c.get_host_port_ipv4(1433).await.unwrap();
+    let params = MssqlConnParams {
+        host: "localhost".into(),
+        port,
+        database: "".into(),
+        user: "sa".into(),
+        password: MSSQL_PASS.into(),
+        ssl: false,
+        ssl_ca: String::new(),
+        auth: "sql".into(),
+    };
+    let mut drv = retry("mssql", || MssqlDriver::connect(&params)).await;
+    drv.exec("CREATE TABLE dbo.tdc_id (id int IDENTITY(1,1) PRIMARY KEY, is_active bit NOT NULL, name nvarchar(50) NOT NULL)")
+        .await
+        .unwrap();
+    let cols = drv.columns("dbo", "tdc_id").await.unwrap();
+    assert!(cols.iter().find(|c| c.name == "id").unwrap().auto_increment, "IDENTITY flagged: {cols:?}");
+    assert!(!cols.iter().find(|c| c.name == "is_active").unwrap().auto_increment);
+    assert!(!cols.iter().find(|c| c.name == "name").unwrap().auto_increment);
+
+    drv.exec("INSERT INTO dbo.tdc_id (is_active, name) VALUES (1,'a'),(0,'b'),(1,'c')").await.unwrap();
+    let out = drv.exec("SELECT id, name FROM dbo.tdc_id ORDER BY id").await.unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    assert_eq!(result.rows.len(), 3, "3 rows inserted");
+    assert!(result.rows.iter().all(|r| !r["id"].is_null()), "IDENTITY assigned ids: {:?}", result.rows);
+}
+
+/// columns() flags a SQLite INTEGER PRIMARY KEY (rowid alias) as auto_increment;
+/// the generator's INSERT omits it and SQLite assigns the rowid.
+#[tokio::test]
+async fn sqlite_columns_detect_integer_pk_rowid() {
+    let drv = SqliteDriver::connect(&SqliteConnParams { path: String::new(), mode: SqliteMode::InMemory })
+        .await
+        .unwrap();
+    drv.exec("CREATE TABLE tdc_row (id INTEGER PRIMARY KEY, is_active INTEGER NOT NULL, name TEXT NOT NULL)")
+        .await
+        .unwrap();
+    let cols = drv.columns("main", "tdc_row").await.unwrap();
+    assert!(cols.iter().find(|c| c.name == "id").unwrap().auto_increment, "INTEGER PK flagged: {cols:?}");
+    assert!(!cols.iter().find(|c| c.name == "is_active").unwrap().auto_increment);
+    assert!(!cols.iter().find(|c| c.name == "name").unwrap().auto_increment);
+
+    drv.exec("INSERT INTO tdc_row (is_active, name) VALUES (1,'a'),(0,'b'),(1,'c')").await.unwrap();
+    let out = drv.exec("SELECT id, name FROM tdc_row ORDER BY id").await.unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    assert_eq!(result.rows.len(), 3, "3 rows inserted");
+    assert!(result.rows.iter().all(|r| !r["id"].is_null()), "rowid assigned: {:?}", result.rows);
+}
+
 /// T24 — streaming export writes ≥1M rows straight to a file one row at a time,
 /// so memory stays bounded regardless of result size (no fetch_all buffering).
 /// Verifies the exact row count + file line count.

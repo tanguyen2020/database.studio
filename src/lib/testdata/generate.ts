@@ -23,13 +23,23 @@ export interface ColumnGen {
   kind: GenKind
   nullable: boolean
   unique: boolean
-  /** enum values (kind='enum') */
+  /** explicit value set — used by kind='enum' (pick from), kind='bool'
+   *  (pick from, e.g. ['1','0']) and kind='fk' (overrides the parent pool). */
   values?: string[]
   /** parent-key pool (kind='fk') */
   pool?: (string | number)[]
   /** numeric range (kind='number'/'decimal') */
   min?: number
   max?: number
+}
+
+/** Boolean literal appropriate for each engine, in a form that survives
+ *  sqlLiteral() unchanged (see import/plan.ts):
+ *  - Postgres accepts the quoted string 'true'/'false' (cast from unknown).
+ *  - MySQL/MariaDB (tinyint), MSSQL (bit), SQLite, ClickHouse (Bool=UInt8) take 1/0.
+ *  Returning a JS number keeps it unquoted; returning a string gets quoted. */
+export function boolLiteral(system: string | undefined, b: boolean): string | number {
+  return system === 'postgres' ? (b ? 'true' : 'false') : b ? 1 : 0
 }
 
 /** mulberry32 — small deterministic PRNG so generation is reproducible/testable. */
@@ -60,7 +70,7 @@ function hex(r: () => number, n: number): string {
 
 /** Generate one cell for a column at `row` using rng `r`. `unique` columns fold
  *  in the row index so values never collide. */
-function genCell(c: ColumnGen, row: number, r: () => number): string | number | null {
+function genCell(c: ColumnGen, row: number, r: () => number, system?: string): string | number | null {
   switch (c.kind) {
     case 'null':
       return null
@@ -77,7 +87,9 @@ function genCell(c: ColumnGen, row: number, r: () => number): string | number | 
       return Math.round((lo + r() * (hi - lo)) * 100) / 100
     }
     case 'bool':
-      return r() < 0.5 ? 'true' : 'false'
+      // An explicit value set (e.g. ['1','0'] or ['true','false']) wins; otherwise
+      // a random boolean rendered as the dialect's literal.
+      return c.values && c.values.length ? pick(c.values, r()) : boolLiteral(system, r() < 0.5)
     case 'name':
       return `${pick(FIRST, r())} ${pick(LAST, r())}`
     case 'email':
@@ -94,8 +106,12 @@ function genCell(c: ColumnGen, row: number, r: () => number): string | number | 
       return c.values && c.values.length ? pick(c.values, r()) : null
     case 'text':
       return `${pick(WORDS, r())} ${pick(WORDS, r())} ${pick(WORDS, r())}${c.unique ? ` #${row}` : ''}`
-    case 'fk':
-      return c.pool && c.pool.length ? c.pool[Math.floor(r() * c.pool.length) % c.pool.length] : null
+    case 'fk': {
+      // Explicit values override the fetched parent pool (lets the user pin
+      // FK values to a known set); otherwise draw from the parent-key pool.
+      const src: (string | number)[] = c.values && c.values.length ? c.values : (c.pool ?? [])
+      return src.length ? src[Math.floor(r() * src.length) % src.length] : null
+    }
   }
 }
 
@@ -115,14 +131,15 @@ export interface GenResult {
 }
 
 /** Generate `count` rows for `cols`. Deterministic given `seed`. NOT NULL columns
- *  never produce null (a 'null' kind on a NOT NULL column falls back to 'text'). */
-export function generateRows(cols: ColumnGen[], count: number, seed = 1): GenResult {
+ *  never produce null (a 'null' kind on a NOT NULL column falls back to 'text').
+ *  `system` selects dialect-correct literals (currently: boolean rendering). */
+export function generateRows(cols: ColumnGen[], count: number, seed = 1, system?: string): GenResult {
   const r = rng(seed)
   const rows: (string | number | null)[][] = []
   for (let row = 0; row < count; row++) {
     rows.push(
       cols.map((c) => {
-        let v = genCell(c, row, r)
+        let v = genCell(c, row, r, system)
         if (v === null && !c.nullable) {
           // NOT NULL guard: never emit null; substitute a safe non-null value.
           v = c.kind === 'fk' ? (c.pool?.[0] ?? row + 1) : `val_${row}`
