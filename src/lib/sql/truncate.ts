@@ -69,6 +69,11 @@ export function genTruncateStatements(
     return [parts.join(' ') + ';']
   }
 
+  if (system === 'cassandra') {
+    // CQL: TRUNCATE [keyspace.]table — no CASCADE / RESTART IDENTITY.
+    return [`TRUNCATE ${schema}.${table};`]
+  }
+
   // mysql / mariadb / mssql / clickhouse — only plain TRUNCATE is valid.
   return [`TRUNCATE TABLE ${t};`]
 }

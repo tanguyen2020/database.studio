@@ -40,12 +40,12 @@
   import {
     createTemplate as cassCreateTemplate,
     dropStatement as cassDropStmt,
-    truncateStatement as cassTruncateStmt,
     type CassCreateKind,
     type CassDropKind,
   } from '$lib/sql/cassandra'
   import { partitionOps, supportsPartitioning } from '$lib/sql/partitions'
   import { addPartitionWizard } from '$lib/stores/addpartition.svelte'
+  import { truncateWizard } from '$lib/stores/truncate.svelte'
   import { buildExportSelect } from '$lib/export/query'
   import { kafkaTopicRows, natsStreamRows, filterStreamRows, filterTopicRows } from '$lib/stream/explorer'
   import { toAlterStatement, type AlterKind } from '$lib/sql/alter'
@@ -871,11 +871,6 @@
       void cassRunAndRefresh(cassDropStmt(kind, keyspace, name), keyspace, kind === 'keyspace')
     })
   }
-  function cassTruncate(keyspace: string, table: string) {
-    askConfirm('Truncate table', `Remove ALL rows from "${table}"? This cannot be undone.`, () => {
-      void cassRunAndRefresh(cassTruncateStmt(keyspace, table), keyspace, false)
-    })
-  }
 
   function collapseAll() {
     expanded = new Set()
@@ -1195,7 +1190,7 @@
                       <ContextMenu.Item onclick={() => cassCreateTab(ks, 'index', t.name)}>Create Index…</ContextMenu.Item>
                       <ContextMenu.Item onclick={() => cassCopyName(t.name)}>Copy Name</ContextMenu.Item>
                       <ContextMenu.Separator />
-                      <ContextMenu.Item onclick={() => cassTruncate(ks, t.name)}>Truncate</ContextMenu.Item>
+                      <ContextMenu.Item onclick={() => selected && truncateWizard.show(selected.id, ks, t.name, 'cassandra', 'plain', undefined, () => refreshCassKeyspace(ks))}>Truncate</ContextMenu.Item>
                       <ContextMenu.Item onclick={() => cassDrop('table', ks, t.name)}>Drop</ContextMenu.Item>
                     </ContextMenu.Content>
                   {/snippet}

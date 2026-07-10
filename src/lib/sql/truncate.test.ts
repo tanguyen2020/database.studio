@@ -35,6 +35,12 @@ describe('genTruncateStatements — exact per-dialect SQL', () => {
   it('clickhouse plain (backtick-quoted)', () => {
     expect(genTruncateStatements('clickhouse', 'db', 't', 'plain')).toEqual(['TRUNCATE TABLE `db`.`t`;'])
   })
+  it('cassandra: CQL TRUNCATE, plain only', () => {
+    expect(truncateOptions('cassandra').map((o) => o.variant)).toEqual(['plain'])
+    expect(genTruncateStatements('cassandra', 'campus_ks', 'students', 'plain')).toEqual([
+      'TRUNCATE campus_ks.students;',
+    ])
+  })
   it('sqlite: DELETE (main → bare); restart also clears sqlite_sequence', () => {
     expect(genTruncateStatements('sqlite', 'main', 'todos', 'plain')).toEqual(['DELETE FROM "todos";'])
     expect(genTruncateStatements('sqlite', 'main', 'todos', 'restart')).toEqual([
