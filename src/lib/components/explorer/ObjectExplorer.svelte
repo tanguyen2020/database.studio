@@ -1306,9 +1306,13 @@
             {/if}
             <ContextMenu.Item onclick={() => selected && scriptsWizard.show(selected.id, schema.name)}>Generate Scripts…</ContextMenu.Item>
             <ContextMenu.Separator />
-            {#if schemaIsDatabase}
+            {#if schemaNodeIsDatabase}
+              <!-- database-node ops apply to every schema-as-database system (MySQL/
+                   MariaDB/ClickHouse). Unify Collation is MySQL/MariaDB-only. -->
               <ContextMenu.Item onclick={() => selected && tabs.openSchemaCompare(selected.id, { tgtConnId: selected.id, srcDb: schema.name })}>Compare Databases…</ContextMenu.Item>
-              <ContextMenu.Item onclick={() => selected && collationWizard.show(selected.id, schema.name)}>Unify Collation…</ContextMenu.Item>
+              {#if schemaIsDatabase}
+                <ContextMenu.Item onclick={() => selected && collationWizard.show(selected.id, schema.name)}>Unify Collation…</ContextMenu.Item>
+              {/if}
               <ContextMenu.Item onclick={() => selected && stmtTab(`Rename database ${schema.name}`, genRenameDatabase(selected.system, schema.name))}>Rename…</ContextMenu.Item>
               <ContextMenu.Item variant="destructive" onclick={() => selected && stmtTab(`Drop database ${schema.name}`, genDropDatabase(selected.system, schema.name))}>Drop Database…</ContextMenu.Item>
             {/if}
@@ -1318,11 +1322,13 @@
         {@render row({
           key: `s:${schema.name}`,
           depth: base,
-          glyph: schemaIsDatabase ? '' : '▤',
-          svg: schemaIsDatabase ? DB_FOLDER_SVG : undefined,
-          color: schemaIsDatabase ? C.folder : C.schema,
+          // schema-as-database systems (MySQL/MariaDB/ClickHouse) show a database
+          // folder + "database" label; PG/MSSQL real schemas keep the schema glyph.
+          glyph: schemaNodeIsDatabase ? '' : '▤',
+          svg: schemaNodeIsDatabase ? DB_FOLDER_SVG : undefined,
+          color: schemaNodeIsDatabase ? C.folder : C.schema,
           name: schema.name,
-          meta: explorer.isLoading(selected.id, `schema:${schema.name}`) ? '…' : schemaIsDatabase ? 'database' : 'schema',
+          meta: explorer.isLoading(selected.id, `schema:${schema.name}`) ? '…' : schemaNodeIsDatabase ? 'database' : 'schema',
           head: true,
           expandable: true,
           onClick: () => expandSchema(schema.name),

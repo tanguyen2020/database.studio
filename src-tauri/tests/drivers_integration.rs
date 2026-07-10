@@ -1485,6 +1485,56 @@ async fn clickhouse_stream_export_csv() {
     eprintln!("CHK ClickHouse streaming export OK");
 }
 
+/// ClickHouse — New Table (the exact DDL the Table Designer emits: MergeTree +
+/// PARTITION BY + ORDER BY) executes, is introspectable, and its DDL is retrievable
+/// via Show Definition / Copy DDL (SHOW CREATE). Verifies the designer + scripts path.
+#[tokio::test]
+async fn clickhouse_table_designer_create_and_ddl_end_to_end() {
+    use database_studio_lib::commands::schema::definition_query;
+
+    let c = GenericImage::new("clickhouse/clickhouse-server", "24.8")
+        .with_exposed_port(8123.tcp())
+        .with_env_var("CLICKHOUSE_PASSWORD", PASS)
+        .start()
+        .await
+        .expect("start clickhouse container");
+    let port = c.get_host_port_ipv4(8123).await.unwrap();
+    let params = ChConnParams {
+        host: "localhost".into(),
+        port,
+        database: "default".into(),
+        user: "default".into(),
+        password: PASS.into(),
+        ssl: false,
+    };
+    let mut drv = retry("clickhouse", || ChDriver::connect(&params)).await;
+
+    // DDL exactly as buildTableDdl emits for ClickHouse (MergeTree + PARTITION BY + ORDER BY).
+    drv.exec("CREATE TABLE td (id UInt64, d Date, kind String)\nENGINE = MergeTree\nPARTITION BY toYYYYMM(d)\nORDER BY (id)")
+        .await
+        .expect("designer DDL runs");
+
+    // introspection: engine badge, kind, PK on the ORDER BY key
+    let tables = drv.tables("default").await.unwrap();
+    let t = tables.iter().find(|x| x.name == "td").expect("table created");
+    assert_eq!(t.engine.as_deref(), Some("MergeTree"));
+    assert_eq!(t.kind, "table");
+    let cols = drv.columns("default", "td").await.unwrap();
+    assert!(cols.iter().find(|c| c.name == "id").unwrap().is_pk, "ORDER BY id → is_pk");
+
+    // insert → a partition part exists → partitions() (tree node source) sees it
+    drv.exec("INSERT INTO td VALUES (1, '2026-07-01', 'x')").await.unwrap();
+    let parts = drv.partitions("default", "td").await.unwrap();
+    assert!(!parts.is_empty(), "partitioned table → at least one partition, got {parts:?}");
+
+    // Show Definition / Copy DDL backend (SHOW CREATE) returns runnable DDL
+    let defq = definition_query("clickhouse", "table", "default", "td").unwrap();
+    let StatementOutcome::Rows { result } = drv.exec(&defq).await.unwrap() else { panic!("rows") };
+    let ddl = result.rows[0].as_object().and_then(|o| o.values().next()).and_then(|v| v.as_str()).unwrap_or("");
+    assert!(ddl.contains("CREATE TABLE") && ddl.contains("MergeTree"), "SHOW CREATE DDL: {ddl}");
+    eprintln!("CHK ClickHouse table designer + DDL OK");
+}
+
 // ---------------------------------------------------------------------------
 // SQLite — file thật + in-memory, đủ 3 mode (không cần container)
 // ---------------------------------------------------------------------------
