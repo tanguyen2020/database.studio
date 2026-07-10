@@ -259,8 +259,24 @@ impl CassandraDriver {
         page_size: Option<i32>,
         page_token: Option<&str>,
     ) -> Result<CqlOutcome, QueryError> {
+        self.exec_cql_c(cql, page_size, page_token, None).await
+    }
+
+    /// Like `exec_cql` but with an optional per-statement consistency override
+    /// (toolbar). Absent/empty → the connection's default consistency.
+    pub async fn exec_cql_c(
+        &self,
+        cql: &str,
+        page_size: Option<i32>,
+        page_token: Option<&str>,
+        consistency: Option<&str>,
+    ) -> Result<CqlOutcome, QueryError> {
         let mut stmt = Statement::new(cql.to_string());
         stmt.set_page_size(page_size.unwrap_or(DEFAULT_PAGE_SIZE));
+        // Per-statement consistency override (toolbar). Absent → connection default.
+        if let Some(c) = consistency.filter(|s| !s.trim().is_empty()) {
+            stmt.set_consistency(consistency_from_str(c));
+        }
 
         let paging = match page_token {
             Some(tok) if !tok.is_empty() => {
@@ -565,6 +581,11 @@ impl CassandraDriver {
         }
     }
 
+    /// Public accessor for a table/MV's columns (editable viewer PK detection).
+    pub async fn columns_public(&self, keyspace: &str, table: &str) -> Result<Vec<CassColumn>, QueryError> {
+        self.columns_of(keyspace, table).await
+    }
+
     async fn columns_of(&self, keyspace: &str, table: &str) -> Result<Vec<CassColumn>, QueryError> {
         let raw = self
             .rows::<(String, String, String, i32, String)>(
@@ -823,6 +844,137 @@ impl CassandraDriver {
         }
         Ok(format_table_ddl(keyspace, table, &cols))
     }
+
+    /// Editable-grid Apply for Cassandra: run each pending change as CQL by full
+    /// primary key (INSERT/UPDATE/DELETE). CQL has no OLTP transaction — statements
+    /// run sequentially and stop at the first error. Returns the count applied.
+    pub async fn apply_grid(
+        &self,
+        changes: &[crate::drivers::grid::GridChange],
+    ) -> Result<u64, QueryError> {
+        let mut applied = 0u64;
+        for change in changes {
+            let cql = cql_change_sql(change);
+            self.session
+                .query_unpaged(cql.as_str(), &[])
+                .await
+                .map_err(map_exec_err)?;
+            applied += 1;
+        }
+        Ok(applied)
+    }
+
+    /// Read-only DDL viewer for any keyspace object. `kind` ∈
+    /// table | view | type | index | function | aggregate. Reconstructed from
+    /// `system_schema.*` (never a live SHOW; Cassandra has none).
+    pub async fn object_ddl(
+        &self,
+        keyspace: &str,
+        kind: &str,
+        name: &str,
+    ) -> Result<String, QueryError> {
+        match kind {
+            "table" => self.table_ddl(keyspace, name).await,
+            "view" => {
+                let (base, where_clause) = self
+                    .rows::<(String, String)>(
+                        "SELECT base_table_name, where_clause FROM system_schema.views \
+                         WHERE keyspace_name = ? AND view_name = ?",
+                        (keyspace, name),
+                    )
+                    .await?
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| {
+                        QueryError::new("cassandra", format!("View {keyspace}.{name} not found"), "view not found")
+                    })?;
+                let cols = self.columns_of(keyspace, name).await?;
+                Ok(format_view_ddl(keyspace, name, &base, &where_clause, &cols))
+            }
+            "type" => {
+                let (fnames, ftypes) = self
+                    .rows::<(Vec<String>, Vec<String>)>(
+                        "SELECT field_names, field_types FROM system_schema.types \
+                         WHERE keyspace_name = ? AND type_name = ?",
+                        (keyspace, name),
+                    )
+                    .await?
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| {
+                        QueryError::new("cassandra", format!("Type {keyspace}.{name} not found"), "type not found")
+                    })?;
+                let fields: Vec<(String, String)> = fnames.into_iter().zip(ftypes).collect();
+                Ok(format_type_ddl(keyspace, name, &fields))
+            }
+            "index" => {
+                // system_schema.indexes PK = (keyspace_name, table_name, index_name);
+                // index_name can't be restricted without table_name, so list the
+                // keyspace's indexes and pick by name in-process.
+                let (table, ikind, options) = self
+                    .rows::<(String, String, String, std::collections::HashMap<String, String>)>(
+                        "SELECT index_name, table_name, kind, options FROM system_schema.indexes \
+                         WHERE keyspace_name = ?",
+                        (keyspace,),
+                    )
+                    .await?
+                    .into_iter()
+                    .find(|(iname, ..)| iname == name)
+                    .map(|(_, table, ikind, options)| (table, ikind, options))
+                    .ok_or_else(|| {
+                        QueryError::new("cassandra", format!("Index {name} not found"), "index not found")
+                    })?;
+                let target = options.get("target").cloned().unwrap_or_default();
+                Ok(format_index_ddl(keyspace, &table, name, &ikind, &target))
+            }
+            "function" => {
+                let (arg_names, arg_types, called_on_null, return_type, language, body) = self
+                    .rows::<(Vec<String>, Vec<String>, bool, String, String, String)>(
+                        "SELECT argument_names, argument_types, called_on_null_input, return_type, language, body \
+                         FROM system_schema.functions WHERE keyspace_name = ? AND function_name = ?",
+                        (keyspace, name),
+                    )
+                    .await?
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| {
+                        QueryError::new("cassandra", format!("Function {keyspace}.{name} not found"), "function not found")
+                    })?;
+                Ok(format_function_ddl(
+                    keyspace, name, &arg_names, &arg_types, called_on_null, &return_type, &language, &body,
+                ))
+            }
+            "aggregate" => {
+                let (arg_types, state_func, state_type, final_func, initcond, return_type) = self
+                    .rows::<(Vec<String>, String, String, Option<String>, Option<String>, String)>(
+                        "SELECT argument_types, state_func, state_type, final_func, initcond, return_type \
+                         FROM system_schema.aggregates WHERE keyspace_name = ? AND aggregate_name = ?",
+                        (keyspace, name),
+                    )
+                    .await?
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| {
+                        QueryError::new("cassandra", format!("Aggregate {keyspace}.{name} not found"), "aggregate not found")
+                    })?;
+                Ok(format_aggregate_ddl(
+                    keyspace,
+                    name,
+                    &arg_types,
+                    &state_func,
+                    &state_type,
+                    &final_func.unwrap_or_default(),
+                    &initcond.unwrap_or_default(),
+                    &return_type,
+                ))
+            }
+            other => Err(QueryError::new(
+                "cassandra",
+                format!("Cannot show DDL for object kind '{other}'"),
+                "unsupported object kind",
+            )),
+        }
+    }
 }
 
 /// Pure CREATE TABLE builder — composite partition key `((p1, p2), c1, c2)` +
@@ -862,6 +1014,203 @@ pub fn format_table_ddl(keyspace: &str, table: &str, cols: &[CassColumn]) -> Str
             })
             .collect();
         ddl.push_str(&format!("\nWITH CLUSTERING ORDER BY ({})", orders.join(", ")));
+    }
+    ddl.push(';');
+    ddl
+}
+
+/// Render a grid cell value as a CQL literal, keyed on the result-set column type
+/// (the driver's Debug type name — "Uuid", "Text", "Int", "Timestamp", …). UUIDs,
+/// numbers, booleans and blobs are bare; text/timestamp/date/inet are quoted.
+fn cql_literal(col_type: Option<&str>, v: &Value) -> String {
+    if v.is_null() {
+        return "null".to_string();
+    }
+    let raw = match v {
+        Value::Bool(b) => return b.to_string(),
+        Value::Number(n) => return n.to_string(),
+        Value::String(s) => s.clone(),
+        other => other.to_string(),
+    };
+    let t = col_type.unwrap_or("").to_ascii_lowercase();
+    const NUMERIC: [&str; 9] =
+        ["tinyint", "smallint", "bigint", "int", "float", "double", "decimal", "counter", "varint"];
+    if t.contains("uuid") {
+        raw // uuid + timeuuid → bare literal
+    } else if t.contains("bool") {
+        raw.to_ascii_lowercase()
+    } else if t.contains("blob") && raw.starts_with("0x") {
+        raw // hex blob literal
+    } else if NUMERIC.iter().any(|k| t.contains(k)) {
+        raw // numeric literal, unquoted
+    } else {
+        // text / ascii / varchar / timestamp / date / time / inet → quoted
+        format!("'{}'", raw.replace('\'', "''"))
+    }
+}
+
+/// Build a re-runnable CQL statement for one editable-grid change (INSERT/UPDATE/
+/// DELETE by full primary key). Pure — reused by both the preview and the apply.
+/// `schema` carries the keyspace. WHERE uses every pk column with `=` (Cassandra
+/// requires the full primary key for a single-row write).
+pub fn cql_change_sql(change: &crate::drivers::grid::GridChange) -> String {
+    use crate::drivers::grid::{Col, GridChange};
+    let qual = |schema: &Option<String>, table: &str| match schema {
+        Some(s) if !s.is_empty() => format!("{s}.{table}"),
+        _ => table.to_string(),
+    };
+    let where_of = |pk: &[Col]| {
+        pk.iter()
+            .map(|c| format!("{} = {}", c.name, cql_literal(c.col_type.as_deref(), &c.value)))
+            .collect::<Vec<_>>()
+            .join(" AND ")
+    };
+    match change {
+        GridChange::Update { schema, table, pk, set } => {
+            let set_clause = set
+                .iter()
+                .map(|c| format!("{} = {}", c.name, cql_literal(c.col_type.as_deref(), &c.value)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("UPDATE {} SET {set_clause} WHERE {};", qual(schema, table), where_of(pk))
+        }
+        GridChange::Insert { schema, table, values } => {
+            let cols = values.iter().map(|c| c.name.clone()).collect::<Vec<_>>().join(", ");
+            let vals = values
+                .iter()
+                .map(|c| cql_literal(c.col_type.as_deref(), &c.value))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("INSERT INTO {} ({cols}) VALUES ({vals});", qual(schema, table))
+        }
+        GridChange::Delete { schema, table, pk } => {
+            format!("DELETE FROM {} WHERE {};", qual(schema, table), where_of(pk))
+        }
+    }
+}
+
+/// Pure `CREATE TYPE` builder from UDT field (name, type) pairs.
+pub fn format_type_ddl(keyspace: &str, name: &str, fields: &[(String, String)]) -> String {
+    let body = fields
+        .iter()
+        .map(|(fname, ftype)| format!("  {fname} {ftype}"))
+        .collect::<Vec<_>>()
+        .join(",\n");
+    format!("CREATE TYPE {keyspace}.{name} (\n{body}\n);")
+}
+
+/// Pure `CREATE [CUSTOM] INDEX` builder. `kind` = COMPOSITES | KEYS | CUSTOM (SASI).
+pub fn format_index_ddl(keyspace: &str, table: &str, name: &str, kind: &str, target: &str) -> String {
+    if kind.eq_ignore_ascii_case("CUSTOM") {
+        format!(
+            "CREATE CUSTOM INDEX {name} ON {keyspace}.{table} ({target})\n  USING 'org.apache.cassandra.index.sasi.SASIIndex';"
+        )
+    } else {
+        format!("CREATE INDEX {name} ON {keyspace}.{table} ({target});")
+    }
+}
+
+/// Pure `CREATE MATERIALIZED VIEW` builder (best-effort, read-only viewer). Column
+/// list + PRIMARY KEY reconstructed from the view's own columns; base table + WHERE
+/// from `system_schema.views`.
+pub fn format_view_ddl(
+    keyspace: &str,
+    view: &str,
+    base_table: &str,
+    where_clause: &str,
+    cols: &[CassColumn],
+) -> String {
+    let col_list = if cols.is_empty() {
+        "*".to_string()
+    } else {
+        cols.iter().map(|c| c.name.as_str()).collect::<Vec<_>>().join(", ")
+    };
+    let partition: Vec<&str> = cols
+        .iter()
+        .filter(|c| c.kind == "partition_key")
+        .map(|c| c.name.as_str())
+        .collect();
+    let clustering: Vec<&CassColumn> = cols.iter().filter(|c| c.kind == "clustering").collect();
+    let pk = if clustering.is_empty() {
+        format!("({})", partition.join(", "))
+    } else {
+        format!(
+            "({}), {}",
+            partition.join(", "),
+            clustering.iter().map(|c| c.name.as_str()).collect::<Vec<_>>().join(", ")
+        )
+    };
+    let where_line = if where_clause.trim().is_empty() {
+        String::new()
+    } else {
+        format!("\nWHERE {}", where_clause.trim())
+    };
+    let mut ddl = format!(
+        "CREATE MATERIALIZED VIEW {keyspace}.{view} AS\nSELECT {col_list}\nFROM {keyspace}.{base_table}{where_line}\nPRIMARY KEY ({pk})"
+    );
+    if !clustering.is_empty() {
+        let orders: Vec<String> = clustering
+            .iter()
+            .map(|c| {
+                let o = if c.clustering_order == "desc" { "DESC" } else { "ASC" };
+                format!("{} {}", c.name, o)
+            })
+            .collect();
+        ddl.push_str(&format!("\nWITH CLUSTERING ORDER BY ({})", orders.join(", ")));
+    }
+    ddl.push(';');
+    ddl
+}
+
+/// Pure `CREATE FUNCTION` builder from `system_schema.functions` fields.
+pub fn format_function_ddl(
+    keyspace: &str,
+    name: &str,
+    arg_names: &[String],
+    arg_types: &[String],
+    called_on_null: bool,
+    return_type: &str,
+    language: &str,
+    body: &str,
+) -> String {
+    let args = arg_names
+        .iter()
+        .zip(arg_types.iter())
+        .map(|(n, t)| format!("{n} {t}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let null_clause = if called_on_null {
+        "CALLED ON NULL INPUT"
+    } else {
+        "RETURNS NULL ON NULL INPUT"
+    };
+    format!(
+        "CREATE FUNCTION {keyspace}.{name} ({args})\n  {null_clause}\n  RETURNS {return_type}\n  LANGUAGE {language}\n  AS $$ {} $$;",
+        body.trim()
+    )
+}
+
+/// Pure `CREATE AGGREGATE` builder from `system_schema.aggregates` fields.
+pub fn format_aggregate_ddl(
+    keyspace: &str,
+    name: &str,
+    arg_types: &[String],
+    state_func: &str,
+    state_type: &str,
+    final_func: &str,
+    initcond: &str,
+    return_type: &str,
+) -> String {
+    let _ = return_type;
+    let mut ddl = format!(
+        "CREATE AGGREGATE {keyspace}.{name} ({})\n  SFUNC {state_func}\n  STYPE {state_type}",
+        arg_types.join(", ")
+    );
+    if !final_func.trim().is_empty() {
+        ddl.push_str(&format!("\n  FINALFUNC {}", final_func.trim()));
+    }
+    if !initcond.trim().is_empty() {
+        ddl.push_str(&format!("\n  INITCOND {}", initcond.trim()));
     }
     ddl.push(';');
     ddl
@@ -924,6 +1273,111 @@ mod tests {
         let s = format_replication(&m);
         assert!(s.contains("'class': 'NetworkTopologyStrategy'"), "{s}");
         assert!(s.contains("'dc1': '3'"), "{s}");
+    }
+
+    #[test]
+    fn type_ddl_builds_create_type() {
+        let ddl = format_type_ddl("ks", "address", &[
+            ("street".into(), "text".into()),
+            ("zip".into(), "int".into()),
+        ]);
+        assert!(ddl.starts_with("CREATE TYPE ks.address ("), "{ddl}");
+        assert!(ddl.contains("  street text"), "{ddl}");
+        assert!(ddl.contains("  zip int"), "{ddl}");
+        assert!(ddl.ends_with(");"), "{ddl}");
+    }
+
+    #[test]
+    fn index_ddl_normal_and_custom() {
+        let n = format_index_ddl("ks", "users", "users_email_idx", "COMPOSITES", "email");
+        assert_eq!(n, "CREATE INDEX users_email_idx ON ks.users (email);");
+        let c = format_index_ddl("ks", "docs", "docs_body_idx", "CUSTOM", "body");
+        assert!(c.contains("CREATE CUSTOM INDEX docs_body_idx ON ks.docs (body)"), "{c}");
+        assert!(c.contains("SASIIndex"), "{c}");
+    }
+
+    #[test]
+    fn view_ddl_reconstructs_select_where_and_pk() {
+        let cols = vec![
+            col("email", "text", "partition_key", ""),
+            col("id", "uuid", "clustering", "asc"),
+            col("name", "text", "regular", ""),
+        ];
+        let ddl = format_view_ddl("ks", "users_by_email", "users", "email IS NOT NULL AND id IS NOT NULL", &cols);
+        assert!(ddl.contains("CREATE MATERIALIZED VIEW ks.users_by_email AS"), "{ddl}");
+        assert!(ddl.contains("FROM ks.users"), "{ddl}");
+        assert!(ddl.contains("WHERE email IS NOT NULL AND id IS NOT NULL"), "{ddl}");
+        assert!(ddl.contains("PRIMARY KEY ((email), id)"), "{ddl}");
+        assert!(ddl.contains("WITH CLUSTERING ORDER BY (id ASC)"), "{ddl}");
+    }
+
+    #[test]
+    fn function_ddl_builds_create_function() {
+        let ddl = format_function_ddl(
+            "ks", "left",
+            &["s".into(), "l".into()],
+            &["text".into(), "int".into()],
+            true, "text", "java", "return s.substring(0, l);",
+        );
+        assert!(ddl.contains("CREATE FUNCTION ks.left (s text, l int)"), "{ddl}");
+        assert!(ddl.contains("CALLED ON NULL INPUT"), "{ddl}");
+        assert!(ddl.contains("RETURNS text"), "{ddl}");
+        assert!(ddl.contains("LANGUAGE java"), "{ddl}");
+        assert!(ddl.contains("$$ return s.substring(0, l); $$"), "{ddl}");
+    }
+
+    #[test]
+    fn cql_change_update_delete_insert_by_pk() {
+        use crate::drivers::grid::{Col, GridChange};
+        let c = |name: &str, value: serde_json::Value, ty: &str| Col {
+            name: name.into(),
+            value,
+            col_type: Some(ty.into()),
+        };
+        // UPDATE: uuid PK bare, text value quoted
+        let u = cql_change_sql(&GridChange::Update {
+            schema: Some("ks".into()),
+            table: "students_by_id".into(),
+            pk: vec![c("student_id", json!("550e8400-e29b-41d4-a716-446655440000"), "Uuid")],
+            set: vec![c("email", json!("a@b.com"), "Text")],
+        });
+        assert_eq!(
+            u,
+            "UPDATE ks.students_by_id SET email = 'a@b.com' WHERE student_id = 550e8400-e29b-41d4-a716-446655440000;"
+        );
+        // DELETE: composite PK (uuid + text clustering)
+        let d = cql_change_sql(&GridChange::Delete {
+            schema: Some("ks".into()),
+            table: "grades".into(),
+            pk: vec![c("sid", json!("11111111-1111-1111-1111-111111111111"), "Uuid"), c("term", json!("2026S1"), "Text")],
+        });
+        assert_eq!(
+            d,
+            "DELETE FROM ks.grades WHERE sid = 11111111-1111-1111-1111-111111111111 AND term = '2026S1';"
+        );
+        // INSERT: numeric bare, bool lowercased, quotes escaped
+        let i = cql_change_sql(&GridChange::Insert {
+            schema: Some("ks".into()),
+            table: "t".into(),
+            values: vec![
+                c("id", json!("7"), "Int"),
+                c("name", json!("O'Brien"), "Text"),
+                c("active", json!("TRUE"), "Boolean"),
+            ],
+        });
+        assert_eq!(i, "INSERT INTO ks.t (id, name, active) VALUES (7, 'O''Brien', true);");
+    }
+
+    #[test]
+    fn aggregate_ddl_builds_create_aggregate() {
+        let ddl = format_aggregate_ddl(
+            "ks", "average", &["int".into()], "avg_state", "tuple<int,bigint>", "avg_final", "(0, 0)", "double",
+        );
+        assert!(ddl.contains("CREATE AGGREGATE ks.average (int)"), "{ddl}");
+        assert!(ddl.contains("SFUNC avg_state"), "{ddl}");
+        assert!(ddl.contains("STYPE tuple<int,bigint>"), "{ddl}");
+        assert!(ddl.contains("FINALFUNC avg_final"), "{ddl}");
+        assert!(ddl.contains("INITCOND (0, 0)"), "{ddl}");
     }
 }
 

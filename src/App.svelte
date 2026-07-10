@@ -27,6 +27,7 @@
   import KafkaProducer from '$lib/components/workspace/KafkaProducer.svelte'
   import SchemaRegistryWorkspace from '$lib/components/workspace/SchemaRegistryWorkspace.svelte'
   import CassandraRing from '$lib/components/workspace/CassandraRing.svelte'
+  import CassandraTableView from '$lib/components/workspace/CassandraTableView.svelte'
   import TableDesigner from '$lib/components/workspace/TableDesigner.svelte'
   import PlanVisualizer from '$lib/components/workspace/PlanVisualizer.svelte'
   import ErDiagram from '$lib/components/workspace/ErDiagram.svelte'
@@ -235,6 +236,8 @@
             <SchemaRegistryWorkspace tab={t} />
           {:else if t.contentType === 'cassandra-ring'}
             <CassandraRing tab={t} />
+          {:else if t.contentType === 'cassandra-table'}
+            <CassandraTableView tab={t} />
           {:else if t.contentType === 'table-designer'}
             <TableDesigner tab={t} />
           {:else if t.contentType === 'query-plan'}

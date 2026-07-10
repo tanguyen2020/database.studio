@@ -465,8 +465,13 @@ export interface RingNode {
   version: string
 }
 
-export const cqlExec = (connId: string, cql: string, pageSize?: number, pageToken?: string) =>
-  invoke<CqlExecResponse>('cql_exec', { connId, cql, pageSize, pageToken })
+export const cqlExec = (
+  connId: string,
+  cql: string,
+  pageSize?: number,
+  pageToken?: string,
+  consistency?: string,
+) => invoke<CqlExecResponse>('cql_exec', { connId, cql, pageSize, pageToken, consistency })
 export const cassandraKeyspaces = (connId: string) =>
   invoke<string[]>('cassandra_keyspaces', { connId })
 export const cassandraTree = (connId: string, keyspace: string) =>
@@ -474,6 +479,11 @@ export const cassandraTree = (connId: string, keyspace: string) =>
 export const cassandraRing = (connId: string) => invoke<RingNode[]>('cassandra_ring', { connId })
 export const cassandraTableDdl = (connId: string, keyspace: string, table: string) =>
   invoke<string>('cassandra_table_ddl', { connId, keyspace, table })
+/** DDL viewer cho object bất kỳ: kind ∈ table|view|type|index|function|aggregate. */
+export const cassandraObjectDdl = (connId: string, keyspace: string, kind: string, name: string) =>
+  invoke<string>('cassandra_object_ddl', { connId, keyspace, kind, name })
+export const cassandraColumns = (connId: string, keyspace: string, table: string) =>
+  invoke<CassColumn[]>('cassandra_columns', { connId, keyspace, table })
 
 // ---- Foreign keys (ER Diagram · Schema Compare — Phase 5) -------------------
 

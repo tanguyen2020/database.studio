@@ -97,6 +97,22 @@
     tabs.schedulePersist()
   }
 
+  /** QueryEditor executes ONLY against an open connection. If the underlying
+   *  connection was disconnected, block with a clear "reopen" message instead of
+   *  silently (re)opening a per-tab connection — the user must Open Connection
+   *  again first. Returns false (and toasts) when it's not safe to run. */
+  function ensureConnected(): boolean {
+    if (isOrphan) {
+      toasts.error('This tab has no connection — reassign it first.')
+      return false
+    }
+    if (!profile?.connected) {
+      toasts.error(`Connection "${profile?.name ?? ''}" is closed. Please open the connection again.`)
+      return false
+    }
+    return true
+  }
+
   /** Effective connection to run against: the base connection, or an attached
    *  sub-connection when the tab points at a different database. */
   async function resolveRunConn(): Promise<string | null> {
@@ -125,6 +141,16 @@
   // Connection ID the last result was run against — grid edits (apply_grid_changes)
   // must target the same database, not always the base connection.
   let runConnId = $state<string | null>(null)
+
+  // Per-statement consistency (Cassandra only). Seeded from tab.state, persisted
+  // back on change; passed to results.run so cql_exec overrides the default.
+  // svelte-ignore state_referenced_locally
+  let cqlConsistency = $state<string>((tab.state.consistency as string) || 'LOCAL_QUORUM')
+  $effect(() => {
+    if (tab.systemType === 'cassandra') tab.state.consistency = cqlConsistency
+  })
+  const runOpts = () =>
+    tab.systemType === 'cassandra' ? { consistency: cqlConsistency } : undefined
 
   // ---- destructive-statement guard --------------------------------------------
   // A DELETE with no WHERE clause, or a TRUNCATE, wipes a whole table. Before
@@ -393,11 +419,12 @@
       toasts.show('No statement to run')
       return
     }
+    if (!ensureConnected()) return
     if (!(await confirmDangerous(statements))) return
     const cid = await resolveRunConn()
     if (!cid) return
     runConnId = cid
-    await results.run(tab.id, cid, statements)
+    await results.run(tab.id, cid, statements, runOpts())
     showExecErrors()
   }
 
@@ -424,11 +451,12 @@
     const doc = editor.getDoc()
     const stmt = statementAtOffset(doc, editor.getCursorOffset())
     if (!stmt) return
+    if (!ensureConnected()) return
     if (!(await confirmDangerous([stmt]))) return
     const cid = await resolveRunConn()
     if (!cid) return
     runConnId = cid
-    await results.run(tab.id, cid, [stmt])
+    await results.run(tab.id, cid, [stmt], runOpts())
     showExecErrors()
   }
 
@@ -708,6 +736,17 @@
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="20" x2="6" y2="13"></line><line x1="12" y1="20" x2="12" y2="8"></line><line x1="18" y1="20" x2="18" y2="11"></line></svg>Explain
     </div>
     {#if tab.systemType === 'cassandra'}
+      <!-- Per-statement consistency level (CQL only) — overrides the connection default. -->
+      <select
+        class="mono"
+        title="Consistency level for statements run from this editor"
+        bind:value={cqlConsistency}
+        style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-3) var(--px-6);font-size:var(--px-11);color:var(--text)"
+      >
+        {#each ['LOCAL_QUORUM', 'QUORUM', 'ONE', 'TWO', 'THREE', 'ALL', 'LOCAL_ONE', 'EACH_QUORUM', 'ANY', 'SERIAL', 'LOCAL_SERIAL'] as lvl (lvl)}
+          <option value={lvl}>{lvl}</option>
+        {/each}
+      </select>
       <!-- Ring (prototype dòng 257-259) — mở Ring Topology, màu accent Cassandra -->
       <div class="wk-tbtn" style="color:#1287B1" onclick={() => tab.connectionId && tabs.openCassandraRing(tab.connectionId)} onkeydown={(e) => e.key === 'Enter' && tab.connectionId && tabs.openCassandraRing(tab.connectionId)} role="button" tabindex="0" title="Ring Topology">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9" stroke-dasharray="3 3"></circle><circle cx="12" cy="3" r="2" fill="currentColor" stroke="none"></circle><circle cx="20" cy="17" r="2" fill="currentColor" stroke="none"></circle><circle cx="4" cy="17" r="2" fill="currentColor" stroke="none"></circle></svg>Ring
@@ -753,7 +792,7 @@
   <!-- results -->
   <div style="min-height:0;flex:1;display:flex;flex-direction:column">
     {#if exec}
-      <ResultPanel {exec} connId={runConnId ?? tab.connectionId} active={tabs.active?.id === tab.id} accent={systemMeta(tab.systemType).accent} onJump={jump} />
+      <ResultPanel {exec} connId={runConnId ?? tab.connectionId} active={tabs.active?.id === tab.id} accent={systemMeta(tab.systemType).accent} onJump={jump} onLoadMore={(idx) => results.fetchMoreCql(tab.id, idx)} />
     {:else}
       <div style="flex:1;display:flex;align-items:center;justify-content:center;font-size:var(--px-12);color:var(--muted)">
         Run a query (F5) to see results · Ctrl+Enter runs the statement at the cursor

@@ -176,6 +176,11 @@ fn build_where(
 
 /// Render literal cho DIALOG PREVIEW (chỉ hiển thị — không chạy).
 pub fn preview_sql(system: &str, change: &GridChange) -> String {
+    // Cassandra: preview = the exact CQL that Apply will run (INSERT/UPDATE/DELETE
+    // by full primary key), reusing the driver's pure builder.
+    if system == "cassandra" {
+        return crate::drivers::cassandra::cql_change_sql(change);
+    }
     let q = quote_style(system);
     let lit = |v: &Value| -> String {
         match v {

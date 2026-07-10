@@ -215,6 +215,7 @@ export type TabContentType =
   | 'kafka-producer'
   | 'kafka-schema-registry'
   | 'cassandra-ring'
+  | 'cassandra-table'
   | 'table-designer'
   | 'query-plan'
   | 'er-diagram'

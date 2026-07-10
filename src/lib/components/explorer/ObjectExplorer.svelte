@@ -37,6 +37,13 @@
   import { genAlterTable, genCreate, genDelete, genDrop, genDropDatabase, genForeignKey, genInsert, genRename, genRenameDatabase, genSelect, genTruncate, genUpdate } from '$lib/sql/ddl'
   import { generateScript, type DbObject, type ScriptMode } from '$lib/sql/scripts'
   import { createTemplate, type CreateKind } from '$lib/sql/create-templates'
+  import {
+    createTemplate as cassCreateTemplate,
+    dropStatement as cassDropStmt,
+    truncateStatement as cassTruncateStmt,
+    type CassCreateKind,
+    type CassDropKind,
+  } from '$lib/sql/cassandra'
   import { partitionOps, supportsPartitioning } from '$lib/sql/partitions'
   import { addPartitionWizard } from '$lib/stores/addpartition.svelte'
   import { buildExportSelect } from '$lib/export/query'
@@ -305,7 +312,10 @@
   // Cassandra (Phase 4b): cây keyspace lấy qua command chuyên biệt (cassandra_tree),
   // không đi qua explorer store quan hệ.
   const isCassandra = $derived(selected?.system === 'cassandra')
-  let cassTree = $state<ipc.CassKeyspaceTree | null>(null)
+  // Multi-keyspace: list of keyspaces + a lazily-loaded tree per keyspace (loaded
+  // on expand, cached). Replaces the old single-keyspace `cassTree`.
+  let cassKeyspaces = $state<string[]>([])
+  let cassTrees = $state<Record<string, ipc.CassKeyspaceTree>>({})
   let cassError = $state<string | null>(null)
   $effect(() => {
     const s = selected
@@ -316,13 +326,28 @@
   async function loadCass(id: string) {
     cassError = null
     try {
-      const kss = await ipc.cassandraKeyspaces(id)
-      const ks = connections.byId(id)?.database || kss[0]
-      cassTree = ks ? await ipc.cassandraTree(id, ks) : null
+      cassKeyspaces = await ipc.cassandraKeyspaces(id)
+      cassTrees = {}
+      // Preload the default keyspace (connection.database) so its subtree is ready.
+      const def = connections.byId(id)?.database
+      if (def && cassKeyspaces.includes(def)) await loadCassKeyspace(id, def)
     } catch (e) {
       cassError = String(e)
-      cassTree = null
+      cassKeyspaces = []
     }
+  }
+  async function loadCassKeyspace(id: string, ks: string) {
+    if (cassTrees[ks]) return
+    try {
+      cassTrees = { ...cassTrees, [ks]: await ipc.cassandraTree(id, ks) }
+    } catch (e) {
+      cassError = String(e)
+    }
+  }
+  // Expand a keyspace node → ensure its tree is loaded, then toggle.
+  function toggleCassKeyspace(ks: string, key: string) {
+    if (selected && !cassTrees[ks]) void loadCassKeyspace(selected.id, ks)
+    toggle(key)
   }
 
   // Header "⟳ Refresh" — works for EVERY connection type by dispatching to the right
@@ -780,23 +805,75 @@
     return `${r.name}(${params})`
   }
 
-  // Cassandra DDL viewer (Phase 4b · T5) — native CQL sinh từ metadata thật.
-  async function cassDdlTab(table: string) {
-    if (!selected || !cassTree) return
+  // Cassandra DDL viewer (Phase 4b · T5) — native CQL reconstructed from real
+  // metadata for ANY object kind (table/view/type/index/function/aggregate).
+  async function cassObjectDdlTab(keyspace: string, kind: string, name: string) {
+    if (!selected) return
     try {
-      const ddl = await ipc.cassandraTableDdl(selected.id, cassTree.keyspace, table)
-      tabs.openSqlTab({ connectionId: selected.id, title: `${table} DDL`, query: ddl })
+      const ddl = await ipc.cassandraObjectDdl(selected.id, keyspace, kind, name)
+      tabs.openSqlTab({ connectionId: selected.id, title: `${name} DDL`, query: ddl })
     } catch (e) {
       toasts.error(`${e}`)
     }
   }
 
-  function cassSelectTab(table: string) {
-    if (!selected || !cassTree) return
+  function cassSelectTab(keyspace: string, table: string) {
+    if (!selected) return
     tabs.openSqlTab({
       connectionId: selected.id,
       title: table,
-      query: `SELECT * FROM ${cassTree.keyspace}.${table} LIMIT 100;`,
+      query: `SELECT * FROM ${keyspace}.${table} LIMIT 100;`,
+    })
+  }
+
+  function cassCopyName(name: string) {
+    void navigator.clipboard.writeText(name).then(() => toasts.success('Copied name'))
+  }
+
+  // Create: open an editable CQL template in a new editor tab (review + run).
+  function cassCreateTab(keyspace: string, kind: CassCreateKind, table?: string) {
+    if (!selected) return
+    tabs.openSqlTab({
+      connectionId: selected.id,
+      title: `New ${kind}`,
+      query: cassCreateTemplate(kind, keyspace, table),
+    })
+  }
+
+  // Force-reload a keyspace's cached tree (after a DDL change).
+  async function refreshCassKeyspace(keyspace: string) {
+    if (!selected) return
+    const next = { ...cassTrees }
+    delete next[keyspace]
+    cassTrees = next
+    await loadCassKeyspace(selected.id, keyspace)
+  }
+
+  async function cassRunAndRefresh(cql: string, keyspace: string, keyspaceGone: boolean) {
+    if (!selected) return
+    try {
+      const r = await ipc.cqlExec(selected.id, cql)
+      if (r.error) {
+        toasts.error(r.error.message)
+        return
+      }
+      toasts.success('Done')
+      if (keyspaceGone) await loadCass(selected.id)
+      else await refreshCassKeyspace(keyspace)
+    } catch (e) {
+      toasts.error(String(e))
+    }
+  }
+
+  // Drop/Truncate: confirm (in-app; backdrop does not close) then run the CQL.
+  function cassDrop(kind: CassDropKind, keyspace: string, name: string) {
+    askConfirm(`Drop ${kind}`, `Drop ${kind} "${name}"? This cannot be undone.`, () => {
+      void cassRunAndRefresh(cassDropStmt(kind, keyspace, name), keyspace, kind === 'keyspace')
+    })
+  }
+  function cassTruncate(keyspace: string, table: string) {
+    askConfirm('Truncate table', `Remove ALL rows from "${table}"? This cannot be undone.`, () => {
+      void cassRunAndRefresh(cassTruncateStmt(keyspace, table), keyspace, false)
     })
   }
 
@@ -1073,82 +1150,144 @@
     {:else if cache?.error}
       <div style="padding:var(--px-12);font-size:var(--px-11_5);color:var(--error)">{cache.error}</div>
     {:else if isCassandra}
-      <!-- Cassandra keyspace tree (Phase 4b) — cassandra_tree, PK/CK meta -->
+      <!-- Cassandra keyspace tree (Phase 4b) — every keyspace, lazy per-keyspace -->
       {#if cassError}
         <div style="padding:var(--px-12);font-size:var(--px-11_5);color:var(--error)">{cassError}</div>
-      {:else if cassTree}
-        {@const ksKey = `cass:ks`}
-        {@render row({ key: ksKey, depth: 0, glyph: '▤', color: C.schema, name: cassTree.keyspace, meta: 'keyspace', head: true, expandable: true, onClick: () => toggle(ksKey) })}
-        {#if expanded.has(ksKey)}
-          <!-- Tables -->
-          {@const tKey = `cass:tables`}
-          {@render row({ key: tKey, depth: 1, glyph: '▤', color: C.folder, name: 'Tables', meta: String(cassTree.tables.length), head: true, expandable: true, onClick: () => toggle(tKey) })}
-          {#if expanded.has(tKey)}
-            {#each cassTree.tables as t (t.name)}
-              {@const tbKey = `cass:t:${t.name}`}
-              {#snippet cassMenu()}
+      {:else if cassKeyspaces.length}
+        {#each cassKeyspaces as ks (ks)}
+          {@const ksKey = `cass:ks:${ks}`}
+          {@const tree = cassTrees[ks]}
+          {#snippet ksMenu()}
+            <ContextMenu.Content>
+              <ContextMenu.Item onclick={() => tabs.openSqlTab({ connectionId: selected!.id, title: 'Untitled CQL' })}>New Query</ContextMenu.Item>
+              <ContextMenu.Separator />
+              <ContextMenu.Item onclick={() => cassCreateTab(ks, 'table')}>Create Table…</ContextMenu.Item>
+              <ContextMenu.Item onclick={() => cassCreateTab(ks, 'type')}>Create Type…</ContextMenu.Item>
+              <ContextMenu.Item onclick={() => cassCreateTab(ks, 'materialized-view')}>Create Materialized View…</ContextMenu.Item>
+              <ContextMenu.Separator />
+              <ContextMenu.Item onclick={() => cassDrop('keyspace', ks, ks)}>Drop Keyspace</ContextMenu.Item>
+              <ContextMenu.Item onclick={() => selected && refreshCassKeyspace(ks)}>Refresh</ContextMenu.Item>
+            </ContextMenu.Content>
+          {/snippet}
+          {@render row({ key: ksKey, depth: 0, glyph: '▤', color: C.schema, name: ks, meta: 'keyspace', head: true, expandable: true, onClick: () => toggleCassKeyspace(ks, ksKey) }, ksMenu)}
+          {#if expanded.has(ksKey)}
+            {#if !tree}
+              <div style="padding:var(--px-8) var(--px-24);font-size:var(--px-11_5);color:var(--muted)">Loading keyspace…</div>
+            {:else}
+              <!-- Tables -->
+              {@const tKey = `cass:tables:${ks}`}
+              {#snippet tablesFolderMenu()}
                 <ContextMenu.Content>
-                  <ContextMenu.Item onclick={() => cassSelectTab(t.name)}>SELECT * (LIMIT 100)</ContextMenu.Item>
-                  <ContextMenu.Item onclick={() => cassDdlTab(t.name)}>View DDL (CQL)</ContextMenu.Item>
-                  <ContextMenu.Separator />
-                  <ContextMenu.Item onclick={() => selected && loadCass(selected.id)}>Refresh</ContextMenu.Item>
+                  <ContextMenu.Item onclick={() => cassCreateTab(ks, 'table')}>Create Table…</ContextMenu.Item>
+                  <ContextMenu.Item onclick={() => selected && refreshCassKeyspace(ks)}>Refresh</ContextMenu.Item>
                 </ContextMenu.Content>
               {/snippet}
-              {@render row({ key: tbKey, depth: 2, glyph: '▦', color: C.table, name: t.name, expandable: true, onClick: () => toggle(tbKey), onDblClick: () => cassSelectTab(t.name) }, cassMenu)}
-              {#if expanded.has(tbKey)}
-                {#each t.columns as c (c.name)}
-                  {@render row({ key: `cass:c:${t.name}.${c.name}`, depth: 3, glyph: '▸', color: C.col, name: c.name, meta: colMeta(c) })}
+              {@render row({ key: tKey, depth: 1, glyph: '▤', color: C.folder, name: 'Tables', meta: String(tree.tables.length), head: true, expandable: true, onClick: () => toggle(tKey) }, tablesFolderMenu)}
+              {#if expanded.has(tKey)}
+                {#each tree.tables as t (t.name)}
+                  {@const tbKey = `cass:t:${ks}:${t.name}`}
+                  {#snippet cassMenu()}
+                    <ContextMenu.Content>
+                      <ContextMenu.Item onclick={() => tabs.openCassandraTable(selected!.id, ks, t.name)}>Open Data (editable)</ContextMenu.Item>
+                      <ContextMenu.Item onclick={() => cassSelectTab(ks, t.name)}>SELECT * (LIMIT 100)</ContextMenu.Item>
+                      <ContextMenu.Item onclick={() => cassObjectDdlTab(ks, 'table', t.name)}>View DDL (CQL)</ContextMenu.Item>
+                      <ContextMenu.Separator />
+                      <ContextMenu.Item onclick={() => cassCreateTab(ks, 'index', t.name)}>Create Index…</ContextMenu.Item>
+                      <ContextMenu.Item onclick={() => cassCopyName(t.name)}>Copy Name</ContextMenu.Item>
+                      <ContextMenu.Separator />
+                      <ContextMenu.Item onclick={() => cassTruncate(ks, t.name)}>Truncate</ContextMenu.Item>
+                      <ContextMenu.Item onclick={() => cassDrop('table', ks, t.name)}>Drop</ContextMenu.Item>
+                    </ContextMenu.Content>
+                  {/snippet}
+                  {@render row({ key: tbKey, depth: 2, glyph: '▦', color: C.table, name: t.name, expandable: true, onClick: () => toggle(tbKey), onDblClick: () => tabs.openCassandraTable(selected!.id, ks, t.name) }, cassMenu)}
+                  {#if expanded.has(tbKey)}
+                    {#each t.columns as c (c.name)}
+                      {@render row({ key: `cass:c:${ks}:${t.name}.${c.name}`, depth: 3, glyph: '▸', color: C.col, name: c.name, meta: colMeta(c) })}
+                    {/each}
+                  {/if}
                 {/each}
               {/if}
-            {/each}
-          {/if}
-          <!-- Materialized Views -->
-          {#if cassTree.views.length}
-            {@const vKey = `cass:views`}
-            {@render row({ key: vKey, depth: 1, glyph: '◫', color: C.view, name: 'Materialized Views', meta: String(cassTree.views.length), head: true, expandable: true, onClick: () => toggle(vKey) })}
-            {#if expanded.has(vKey)}
-              {#each cassTree.views as v (v.name)}
-                {@render row({ key: `cass:v:${v.name}`, depth: 2, glyph: '◫', color: C.view, name: v.name, meta: v.base_table })}
-              {/each}
+              <!-- Materialized Views -->
+              {#if tree.views.length}
+                {@const vKey = `cass:views:${ks}`}
+                {@render row({ key: vKey, depth: 1, glyph: '◫', color: C.view, name: 'Materialized Views', meta: String(tree.views.length), head: true, expandable: true, onClick: () => toggle(vKey) })}
+                {#if expanded.has(vKey)}
+                  {#each tree.views as v (v.name)}
+                    {#snippet viewMenu()}
+                      <ContextMenu.Content>
+                        <ContextMenu.Item onclick={() => cassObjectDdlTab(ks, 'view', v.name)}>View DDL (CQL)</ContextMenu.Item>
+                        <ContextMenu.Item onclick={() => cassCopyName(v.name)}>Copy Name</ContextMenu.Item>
+                        <ContextMenu.Separator />
+                        <ContextMenu.Item onclick={() => cassDrop('view', ks, v.name)}>Drop</ContextMenu.Item>
+                      </ContextMenu.Content>
+                    {/snippet}
+                    {@render row({ key: `cass:v:${ks}:${v.name}`, depth: 2, glyph: '◫', color: C.view, name: v.name, meta: v.base_table }, viewMenu)}
+                  {/each}
+                {/if}
+              {/if}
+              <!-- User Types -->
+              {#if tree.types.length}
+                {@const uKey = `cass:types:${ks}`}
+                {@render row({ key: uKey, depth: 1, glyph: '▢', color: C.folder, name: 'User Types', meta: String(tree.types.length), head: true, expandable: true, onClick: () => toggle(uKey) })}
+                {#if expanded.has(uKey)}
+                  {#each tree.types as ty (ty.name)}
+                    {#snippet typeMenu()}
+                      <ContextMenu.Content>
+                        <ContextMenu.Item onclick={() => cassObjectDdlTab(ks, 'type', ty.name)}>View DDL (CQL)</ContextMenu.Item>
+                        <ContextMenu.Item onclick={() => cassCopyName(ty.name)}>Copy Name</ContextMenu.Item>
+                        <ContextMenu.Separator />
+                        <ContextMenu.Item onclick={() => cassDrop('type', ks, ty.name)}>Drop</ContextMenu.Item>
+                      </ContextMenu.Content>
+                    {/snippet}
+                    {@render row({ key: `cass:u:${ks}:${ty.name}`, depth: 2, glyph: '▢', color: C.col, name: ty.name, meta: 'udt' }, typeMenu)}
+                  {/each}
+                {/if}
+              {/if}
+              <!-- Functions -->
+              {#if tree.functions.length}
+                {@const fKey = `cass:fns:${ks}`}
+                {@render row({ key: fKey, depth: 1, glyph: 'ƒ', color: C.folder, name: 'Functions', meta: String(tree.functions.length), head: true, expandable: true, onClick: () => toggle(fKey) })}
+                {#if expanded.has(fKey)}
+                  {#each tree.functions as fn (fn.signature)}
+                    {#snippet fnMenu()}
+                      <ContextMenu.Content>
+                        <ContextMenu.Item onclick={() => cassObjectDdlTab(ks, fn.kind === 'aggregate' ? 'aggregate' : 'function', fn.name)}>View DDL (CQL)</ContextMenu.Item>
+                        <ContextMenu.Item onclick={() => cassCopyName(fn.name)}>Copy Name</ContextMenu.Item>
+                        <ContextMenu.Separator />
+                        <ContextMenu.Item onclick={() => cassDrop(fn.kind === 'aggregate' ? 'aggregate' : 'function', ks, fn.name)}>Drop</ContextMenu.Item>
+                      </ContextMenu.Content>
+                    {/snippet}
+                    {@render row({ key: `cass:f:${ks}:${fn.signature}`, depth: 2, glyph: 'ƒ', color: C.col, name: fn.name, meta: fn.kind === 'aggregate' ? 'uda' : 'udf' }, fnMenu)}
+                  {/each}
+                {/if}
+              {/if}
+              <!-- Secondary Indexes -->
+              {#if tree.indexes.length}
+                {@const iKey = `cass:idx:${ks}`}
+                {@render row({ key: iKey, depth: 1, glyph: '⌗', color: C.idx, name: 'Secondary Indexes', meta: String(tree.indexes.length), head: true, expandable: true, onClick: () => toggle(iKey) })}
+                {#if expanded.has(iKey)}
+                  {#each tree.indexes as ix (ix.name)}
+                    {#snippet ixMenu()}
+                      <ContextMenu.Content>
+                        <ContextMenu.Item onclick={() => cassObjectDdlTab(ks, 'index', ix.name)}>View DDL (CQL)</ContextMenu.Item>
+                        <ContextMenu.Item onclick={() => cassCopyName(ix.name)}>Copy Name</ContextMenu.Item>
+                        <ContextMenu.Separator />
+                        <ContextMenu.Item onclick={() => cassDrop('index', ks, ix.name)}>Drop</ContextMenu.Item>
+                      </ContextMenu.Content>
+                    {/snippet}
+                    {@render row({ key: `cass:i:${ks}:${ix.name}`, depth: 2, glyph: '⌗', color: C.idx, name: ix.name, meta: ix.kind === 'CUSTOM' ? 'SASI' : ix.target }, ixMenu)}
+                  {/each}
+                {/if}
+              {/if}
+              <!-- replication (properties) -->
+              {#if tree.replication}
+                {@render row({ key: `cass:repl:${ks}`, depth: 1, glyph: '⚙', color: C.col, name: 'replication', meta: tree.replication })}
+              {/if}
             {/if}
           {/if}
-          <!-- User Types -->
-          {#if cassTree.types.length}
-            {@const uKey = `cass:types`}
-            {@render row({ key: uKey, depth: 1, glyph: '▢', color: C.folder, name: 'User Types', meta: String(cassTree.types.length), head: true, expandable: true, onClick: () => toggle(uKey) })}
-            {#if expanded.has(uKey)}
-              {#each cassTree.types as ty (ty.name)}
-                {@render row({ key: `cass:u:${ty.name}`, depth: 2, glyph: '▢', color: C.col, name: ty.name, meta: 'udt' })}
-              {/each}
-            {/if}
-          {/if}
-          <!-- Functions -->
-          {#if cassTree.functions.length}
-            {@const fKey = `cass:fns`}
-            {@render row({ key: fKey, depth: 1, glyph: 'ƒ', color: C.folder, name: 'Functions', meta: String(cassTree.functions.length), head: true, expandable: true, onClick: () => toggle(fKey) })}
-            {#if expanded.has(fKey)}
-              {#each cassTree.functions as fn (fn.signature)}
-                {@render row({ key: `cass:f:${fn.signature}`, depth: 2, glyph: 'ƒ', color: C.col, name: fn.name, meta: fn.kind === 'aggregate' ? 'uda' : 'udf' })}
-              {/each}
-            {/if}
-          {/if}
-          <!-- Secondary Indexes -->
-          {#if cassTree.indexes.length}
-            {@const iKey = `cass:idx`}
-            {@render row({ key: iKey, depth: 1, glyph: '⌗', color: C.idx, name: 'Secondary Indexes', meta: String(cassTree.indexes.length), head: true, expandable: true, onClick: () => toggle(iKey) })}
-            {#if expanded.has(iKey)}
-              {#each cassTree.indexes as ix (ix.name)}
-                {@render row({ key: `cass:i:${ix.name}`, depth: 2, glyph: '⌗', color: C.idx, name: ix.name, meta: ix.kind === 'CUSTOM' ? 'SASI' : ix.target })}
-              {/each}
-            {/if}
-          {/if}
-          <!-- replication (properties) -->
-          {#if cassTree.replication}
-            {@render row({ key: `cass:repl`, depth: 1, glyph: '⚙', color: C.col, name: 'replication', meta: cassTree.replication })}
-          {/if}
-        {/if}
+        {/each}
       {:else}
-        <div style="padding:var(--px-16) var(--px-12);text-align:center;font-size:var(--px-12);color:var(--muted)">Loading keyspace…</div>
+        <div style="padding:var(--px-16) var(--px-12);text-align:center;font-size:var(--px-12);color:var(--muted)">Loading keyspaces…</div>
       {/if}
     {:else if isKafka}
       <!-- Kafka: each topic (click → messages; ctx: view/clear/delete) -->

@@ -19,6 +19,11 @@ export interface SubResult {
   statement: SplitStatement
   /** tên bảng chính (heuristic FROM) — statusObject của status bar */
   table?: string
+  /** Cassandra only — base64 paging token của trang kế (null/undefined = hết trang).
+   *  Cho phép "Load next page" append thêm rows qua fetchMoreCql. */
+  cqlNextPage?: string | null
+  /** Cassandra only — consistency đã dùng, để fetch trang kế cùng mức. */
+  cqlConsistency?: string
 }
 
 export interface MessageEntry {
@@ -80,7 +85,12 @@ class ResultsStore {
    * Runs statements sequentially against the tab's connection.
    * Stops at the first error (default behavior per spec).
    */
-  async run(tabId: string, connId: string, statements: SplitStatement[]): Promise<void> {
+  async run(
+    tabId: string,
+    connId: string,
+    statements: SplitStatement[],
+    opts?: { consistency?: string },
+  ): Promise<void> {
     if (statements.length === 0) return
     // `connId` may be a per-tab connection (`{base}#tab-{id}`, item 6) and/or a
     // per-database sub-connection (`{base}::{db}`, attach_database). Strip both
@@ -92,11 +102,14 @@ class ResultsStore {
       toasts.error('Tab has no connection')
       return
     }
-    // A real (base) connection may need (re)connecting; an attached sub-connection
-    // was already connected by attach_database, so only guard the base case.
-    if (connId === baseId && !profile.connected) {
-      const ok = await connections.connect(connId)
-      if (!ok) return
+    // The connection must be OPEN to execute. A base connection that was
+    // disconnected — and therefore every per-tab (`{id}#…`) / per-database
+    // (`{id}::…`) connection derived from it, which `disconnect` sweeps — blocks
+    // execution with a clear "reopen" message instead of silently reconnecting,
+    // so a closed connection is explicit and the user must Open Connection again.
+    if (!profile.connected) {
+      toasts.error(`Connection "${profile.name}" is closed. Please open the connection again.`)
+      return
     }
 
     const seed: TabExecution = {
@@ -116,12 +129,40 @@ class ResultsStore {
     // Mutating the raw `seed` object would bypass the proxy → view never updates.
     const exec = this.byTab[tabId] as TabExecution
 
+    const isCassandra = profile.system === 'cassandra'
+
     for (let i = 0; i < statements.length; i++) {
       const stmt = statements[i]
       const index = i + 1
       let response
+      // Cassandra runs through the dedicated `cql_exec` command (paging state +
+      // server warnings). Every other engine keeps the generic `exec_statement`
+      // path unchanged. `cqlWarnings`/`cqlNextPage` are populated only here.
+      let cqlWarnings: string[] = []
+      let cqlNextPage: string | null | undefined
       try {
-        response = await ipc.execStatement(connId, stmt.sql, index)
+        if (isCassandra) {
+          const c = await ipc.cqlExec(connId, stmt.sql, undefined, undefined, opts?.consistency)
+          cqlWarnings = c.warnings ?? []
+          cqlNextPage = c.next_page ?? null
+          response = {
+            ok: c.ok,
+            result: c.result as QueryResultSet | undefined,
+            affected: undefined,
+            duration_ms: c.duration_ms,
+            error: c.error
+              ? ({
+                  system: 'cassandra',
+                  statement_index: c.error.statement_index ?? index,
+                  message: c.error.message,
+                  severity: 'error',
+                  raw: c.error.detail ?? c.error.message,
+                } satisfies QueryError)
+              : undefined,
+          }
+        } else {
+          response = await ipc.execStatement(connId, stmt.sql, index)
+        }
       } catch (e) {
         // IPC/infra-level failure (not a QueryError)
         const err: QueryError = {
@@ -152,6 +193,13 @@ class ResultsStore {
 
       exec.totalMs += response.duration_ms
 
+      // Cassandra server warnings (e.g. ALLOW FILTERING full-scan) are non-fatal —
+      // log them to Messages and toast, without failing the statement.
+      for (const w of cqlWarnings) {
+        exec.messages.push({ index, ok: true, text: `⚠ ${w}`, durationMs: 0, statement: stmt })
+        toasts.show(w, { system: profile.system })
+      }
+
       if (response.ok) {
         if (response.result) {
           const table = mainTableOf(stmt.sql)
@@ -163,6 +211,8 @@ class ResultsStore {
             durationMs: response.duration_ms,
             statement: stmt,
             table,
+            cqlNextPage,
+            cqlConsistency: opts?.consistency,
           })
           exec.messages.push({
             index,
@@ -240,6 +290,30 @@ class ResultsStore {
     if (!exec.cancelled && exec.subResults.every((s) => s.kind !== 'error')) {
       const n = exec.subResults.length
       toasts.success(`Ran ${n} statement(s) · ${exec.totalMs} ms`, profile.system)
+    }
+  }
+
+  /** Cassandra "Load next page": fetch the next paging window for a rows sub-result
+   *  and append it in place (never LIMIT/OFFSET). No-op for other engines / no token. */
+  async fetchMoreCql(tabId: string, subIndex: number): Promise<void> {
+    const exec = this.byTab[tabId]
+    const sub = exec?.subResults[subIndex]
+    if (!exec || !sub || sub.kind !== 'rows' || !sub.result || !sub.cqlNextPage) return
+    try {
+      const c = await ipc.cqlExec(exec.connId, sub.statement.sql, undefined, sub.cqlNextPage, sub.cqlConsistency)
+      if (c.error) {
+        toasts.error(c.error.message)
+        return
+      }
+      if (c.result) {
+        sub.result.rows = [...sub.result.rows, ...c.result.rows]
+        sub.result.total = sub.result.rows.length
+        sub.label = `#${sub.index} ${sub.table ?? 'result'} · ${sub.result.total.toLocaleString()} rows`
+      }
+      sub.cqlNextPage = c.next_page ?? null
+      for (const w of c.warnings ?? []) toasts.show(w)
+    } catch (e) {
+      toasts.error(`Load next page failed: ${e}`)
     }
   }
 

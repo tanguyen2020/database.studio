@@ -38,6 +38,7 @@ pub async fn cql_exec(
     cql: String,
     page_size: Option<i32>,
     page_token: Option<String>,
+    consistency: Option<String>,
 ) -> Result<CqlExecResponse, AppError> {
     let started = std::time::Instant::now();
     let inner = state
@@ -46,7 +47,7 @@ pub async fn cql_exec(
             let d = driver.lock().await;
             match &*d {
                 LiveConnection::Cassandra(c) => {
-                    c.exec_cql(&cql, page_size, page_token.as_deref()).await
+                    c.exec_cql_c(&cql, page_size, page_token.as_deref(), consistency.as_deref()).await
                 }
                 _ => Err(not_cassandra()),
             }
@@ -132,6 +133,51 @@ pub async fn cassandra_ring(
             let d = driver.lock().await;
             match &*d {
                 LiveConnection::Cassandra(c) => c.ring().await,
+                _ => Err(not_cassandra()),
+            }
+        })
+        .await?;
+    inner.map_err(|e| AppError::Driver(e.message))
+}
+
+/// DDL viewer cho object bất kỳ trong keyspace (table/view/type/index/function/
+/// aggregate) — dựng lại từ system_schema.* (read-only, không có SHOW trong CQL).
+#[tauri::command]
+pub async fn cassandra_object_ddl(
+    state: State<'_, AppState>,
+    conn_id: String,
+    keyspace: String,
+    kind: String,
+    name: String,
+) -> Result<String, AppError> {
+    let inner = state
+        .registry
+        .with_driver(&conn_id, move |driver| async move {
+            let d = driver.lock().await;
+            match &*d {
+                LiveConnection::Cassandra(c) => c.object_ddl(&keyspace, &kind, &name).await,
+                _ => Err(not_cassandra()),
+            }
+        })
+        .await?;
+    inner.map_err(|e| AppError::Driver(e.message))
+}
+
+/// Cột của một bảng/MV Cassandra (partition_key/clustering/regular/static) — cho
+/// editable data viewer (lấy primary key) + property panel.
+#[tauri::command]
+pub async fn cassandra_columns(
+    state: State<'_, AppState>,
+    conn_id: String,
+    keyspace: String,
+    table: String,
+) -> Result<Vec<crate::drivers::cassandra::CassColumn>, AppError> {
+    let inner = state
+        .registry
+        .with_driver(&conn_id, move |driver| async move {
+            let d = driver.lock().await;
+            match &*d {
+                LiveConnection::Cassandra(c) => c.columns_public(&keyspace, &table).await,
                 _ => Err(not_cassandra()),
             }
         })

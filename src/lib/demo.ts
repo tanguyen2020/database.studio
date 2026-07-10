@@ -731,6 +731,7 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
     // ---- Cassandra (Phase 4b) ----
     case 'cql_exec': {
       const cql = String((args?.cql as string) ?? '').toLowerCase()
+      const pageToken = (args?.pageToken as string | undefined) ?? undefined
       // JOIN/subquery đã bị lint chặn ở editor; ở đây engine cũng từ chối rõ.
       if (/\bjoin\b/.test(cql)) {
         return ok({
@@ -753,13 +754,19 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
           warnings: [],
         })
       }
-      const rows = Array.from({ length: 25 }, (_, i) => ({
-        student_id: `s${1000 + i}`,
-        email: `student.${i}@student.greenfield.edu`,
-        name: `Student ${i}`,
-        grade_level: 9 + (i % 4),
-        created_at: '2026-05-01T08:00:00+00:00',
-      }))
+      // Page 1 (no token) → 25 rows + a next-page token; page 2 (token present) →
+      // 25 more rows and NO token (paging terminates), so "Load next page" resolves.
+      const base = pageToken ? 25 : 0
+      const rows = Array.from({ length: 25 }, (_, k) => {
+        const i = base + k
+        return {
+          student_id: `s${1000 + i}`,
+          email: `student.${i}@student.greenfield.edu`,
+          name: `Student ${i}`,
+          grade_level: 9 + (i % 4),
+          created_at: '2026-05-01T08:00:00+00:00',
+        }
+      })
       const warnings = /allow\s+filtering/.test(cql)
         ? ['Query uses ALLOW FILTERING and may be slow (full cluster scan)']
         : []
@@ -777,15 +784,15 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
           total: rows.length,
         },
         duration_ms: 12,
-        next_page: 'DEMO_PAGE_2',
+        next_page: pageToken ? undefined : 'DEMO_PAGE_2',
         warnings,
       })
     }
     case 'cassandra_keyspaces':
-      return ok(['campus_ks'])
+      return ok(['campus_ks', 'library_ks'])
     case 'cassandra_tree':
       return ok({
-        keyspace: 'campus_ks',
+        keyspace: String((args?.keyspace as string) ?? 'campus_ks'),
         replication: "{ 'class': 'NetworkTopologyStrategy', 'dc1': '3' }",
         tables: [
           {
@@ -831,6 +838,32 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
       return ok(
         'CREATE TABLE campus_ks.grades_by_student (\n  student_id uuid,\n  term_course text,\n  grade text,\n  points decimal,\n  PRIMARY KEY ((student_id), term_course)\n)\nWITH CLUSTERING ORDER BY (term_course ASC);',
       )
+    case 'cassandra_object_ddl': {
+      const kind = String((args?.kind as string) ?? 'table')
+      const nm = String((args?.name as string) ?? 'obj')
+      const ks = String((args?.keyspace as string) ?? 'campus_ks')
+      if (kind === 'type') return ok(`CREATE TYPE ${ks}.${nm} (\n  street text,\n  city text\n);`)
+      if (kind === 'view')
+        return ok(
+          `CREATE MATERIALIZED VIEW ${ks}.${nm} AS\nSELECT student_id, email\nFROM ${ks}.students_by_id\nWHERE email IS NOT NULL AND student_id IS NOT NULL\nPRIMARY KEY ((email), student_id);`,
+        )
+      if (kind === 'index') return ok(`CREATE INDEX ${nm} ON ${ks}.grades_by_student (grade);`)
+      if (kind === 'function')
+        return ok(`CREATE FUNCTION ${ks}.${nm} (s text)\n  CALLED ON NULL INPUT\n  RETURNS text\n  LANGUAGE java\n  AS $$ return s; $$;`)
+      return ok(
+        `CREATE TABLE ${ks}.${nm} (\n  student_id uuid,\n  email text,\n  PRIMARY KEY ((student_id))\n);`,
+      )
+    }
+    case 'cassandra_columns':
+      // Mirrors the demo `cql_exec` result for students_by_id so the editable grid
+      // targets a real primary key (student_id).
+      return ok([
+        { name: 'student_id', data_type: 'uuid', kind: 'partition_key', clustering_order: '', position: 0 },
+        { name: 'email', data_type: 'text', kind: 'regular', clustering_order: '', position: -1 },
+        { name: 'name', data_type: 'text', kind: 'regular', clustering_order: '', position: -1 },
+        { name: 'grade_level', data_type: 'int', kind: 'regular', clustering_order: '', position: -1 },
+        { name: 'created_at', data_type: 'timestamp', kind: 'regular', clustering_order: '', position: -1 },
+      ])
     case 'explain_plan': {
       const actual = !!(args?.actual as boolean)
       return ok({

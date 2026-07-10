@@ -370,13 +370,9 @@ impl LiveConnection {
             Self::Redis(_) => Err(redis_not_sql()),
             Self::Nats(_) => Err(nats_not_sql()),
             Self::Kafka(_) => Err(kafka_not_sql()),
-            // Editable grid dùng UPDATE/DELETE theo full PK; Cassandra làm qua
-            // CQL editor (INSERT/UPDATE ... IF, không transaction OLTP).
-            Self::Cassandra(_) => Err(QueryError::new(
-                "cassandra",
-                "Editable grid does not support Cassandra — use CQL UPDATE/DELETE by primary key",
-                "editable grid not applicable to cassandra",
-            )),
+            // Editable grid = INSERT/UPDATE/DELETE by full primary key, run as CQL
+            // (no OLTP transaction — statements applied sequentially).
+            Self::Cassandra(d) => d.apply_grid(changes).await,
         }
     }
 

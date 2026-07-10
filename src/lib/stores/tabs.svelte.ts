@@ -609,6 +609,37 @@ class TabsStore {
     return tab
   }
 
+  /** Mở (hoặc focus) tab dữ liệu editable của một bảng Cassandra — 1 tab/(conn,ks,table). */
+  openCassandraTable(connectionId: string, keyspace: string, table: string): TabState {
+    const existing = this.tabs.find(
+      (t) =>
+        t.contentType === 'cassandra-table' &&
+        t.connectionId === connectionId &&
+        t.state.keyspace === keyspace &&
+        t.state.table === table,
+    )
+    if (existing) {
+      this.activeTabId = existing.id
+      return existing
+    }
+    const profile = connections.byId(connectionId)
+    const tab: TabState = {
+      id: uuid(),
+      connectionId,
+      connectionName: profile?.name ?? '',
+      systemType: (profile?.system as SystemType) ?? 'orphan',
+      contentType: 'cassandra-table',
+      title: `${keyspace}.${table}`,
+      isPinned: false,
+      isDirty: false,
+      state: { keyspace, table },
+    }
+    this.tabs.push(tab)
+    this.activeTabId = tab.id
+    this.schedulePersist()
+    return tab
+  }
+
   /** Mở (hoặc focus nếu đã có) một tab tiện ích singleton — History / Saved. */
   openUtilityTab(contentType: 'history' | 'saved', title: string): TabState {
     const existing = this.tabs.find((t) => t.contentType === contentType)

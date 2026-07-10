@@ -3658,6 +3658,138 @@ async fn cassandra_trace_plan_flags_allow_filtering() {
     eprintln!("CHK Cassandra secondary index scan OK");
 }
 
+/// Cassandra feature-completion (Phase C): object DDL viewer for non-table objects
+/// (C2), editable-grid apply by full primary key (C3), and per-statement
+/// consistency override (C4) — all against a real cluster.
+#[tokio::test]
+async fn cassandra_object_ddl_grid_edit_and_consistency() {
+    use database_studio_lib::drivers::cassandra::{CassandraConnParams, CassandraDriver};
+    use database_studio_lib::drivers::grid::{Col, GridChange};
+
+    let (_c, port) = start_cassandra().await;
+    let params = CassandraConnParams {
+        contact_points: vec![format!("127.0.0.1:{port}")],
+        user: String::new(),
+        password: String::new(),
+        datacenter: "datacenter1".into(),
+        consistency: "ONE".into(),
+        keyspace: String::new(),
+        ssl: false,
+        ssl_ca: String::new(),
+    };
+    let drv = {
+        let deadline = Instant::now() + Duration::from_secs(240);
+        let mut last = String::new();
+        loop {
+            match CassandraDriver::connect_translating_to(&params, "127.0.0.1", port).await {
+                Ok(d) => match d.exec_cql("SELECT release_version FROM system.local", None, None).await {
+                    Ok(_) => break d,
+                    Err(e) => last = format!("query: {}", e.message),
+                },
+                Err(e) => last = format!("connect: {}", e.message),
+            }
+            if Instant::now() >= deadline {
+                panic!("cassandra: hết 240s chờ node — lỗi cuối: {last}");
+            }
+            tokio::time::sleep(Duration::from_secs(3)).await;
+        }
+    };
+
+    // setup: keyspace + UDT + table + secondary index
+    drv.exec_cql(
+        "CREATE KEYSPACE IF NOT EXISTS cfeat_ks WITH replication = {'class':'SimpleStrategy','replication_factor':1}",
+        None, None,
+    ).await.expect("create keyspace");
+    drv.exec_cql("CREATE TYPE cfeat_ks.address (street text, city text)", None, None)
+        .await
+        .expect("create type");
+    drv.exec_cql(
+        "CREATE TABLE cfeat_ks.students (id uuid PRIMARY KEY, name text, grade int)",
+        None, None,
+    ).await.expect("create table");
+    drv.exec_cql("CREATE INDEX idx_name ON cfeat_ks.students (name)", None, None)
+        .await
+        .expect("create index");
+
+    // --- C2: object_ddl for non-table objects (reconstructed, re-runnable) ---
+    let type_ddl = drv.object_ddl("cfeat_ks", "type", "address").await.expect("type ddl");
+    assert!(type_ddl.contains("CREATE TYPE cfeat_ks.address"), "{type_ddl}");
+    assert!(type_ddl.contains("street text") && type_ddl.contains("city text"), "{type_ddl}");
+    let idx_ddl = drv.object_ddl("cfeat_ks", "index", "idx_name").await.expect("index ddl");
+    assert!(idx_ddl.contains("CREATE INDEX idx_name ON cfeat_ks.students"), "{idx_ddl}");
+    // Re-create the type into a fresh keyspace from its own DDL → proves round-trip.
+    drv.exec_cql(
+        "CREATE KEYSPACE IF NOT EXISTS cfeat_ks2 WITH replication = {'class':'SimpleStrategy','replication_factor':1}",
+        None, None,
+    ).await.expect("create ks2");
+    let type_ddl2 = type_ddl.replace("cfeat_ks.address", "cfeat_ks2.address");
+    drv.exec_cql(&type_ddl2, None, None).await.expect("recreate type from its DDL");
+    eprintln!("CHK C2 object_ddl (type/index) + round-trip OK");
+
+    // --- C3: editable-grid apply by full primary key (INSERT → UPDATE → DELETE) ---
+    let id = "11111111-1111-1111-1111-111111111111";
+    let uuid_col = |v: &str| Col { name: "id".into(), value: serde_json::json!(v), col_type: Some("Uuid".into()) };
+    let n = drv
+        .apply_grid(&[GridChange::Insert {
+            schema: Some("cfeat_ks".into()),
+            table: "students".into(),
+            values: vec![
+                uuid_col(id),
+                Col { name: "name".into(), value: serde_json::json!("Ada"), col_type: Some("Text".into()) },
+                Col { name: "grade".into(), value: serde_json::json!(10), col_type: Some("Int".into()) },
+            ],
+        }])
+        .await
+        .expect("grid insert");
+    assert_eq!(n, 1);
+    // UPDATE name by PK
+    drv.apply_grid(&[GridChange::Update {
+        schema: Some("cfeat_ks".into()),
+        table: "students".into(),
+        pk: vec![uuid_col(id)],
+        set: vec![Col { name: "name".into(), value: serde_json::json!("Ada Lovelace"), col_type: Some("Text".into()) }],
+    }])
+    .await
+    .expect("grid update");
+    // verify the update landed
+    let sel = drv
+        .exec_cql(&format!("SELECT name FROM cfeat_ks.students WHERE id = {id}"), None, None)
+        .await
+        .expect("select after update");
+    match sel.outcome {
+        StatementOutcome::Rows { result } => {
+            assert_eq!(result.rows.len(), 1);
+            assert!(format!("{:?}", result.rows[0]).contains("Ada Lovelace"), "row: {:?}", result.rows[0]);
+        }
+        _ => panic!("expected rows"),
+    }
+    // DELETE by PK → row gone
+    drv.apply_grid(&[GridChange::Delete {
+        schema: Some("cfeat_ks".into()),
+        table: "students".into(),
+        pk: vec![uuid_col(id)],
+    }])
+    .await
+    .expect("grid delete");
+    let after = drv
+        .exec_cql(&format!("SELECT name FROM cfeat_ks.students WHERE id = {id}"), None, None)
+        .await
+        .expect("select after delete");
+    match after.outcome {
+        StatementOutcome::Rows { result } => assert_eq!(result.rows.len(), 0, "row must be deleted"),
+        _ => panic!("expected rows"),
+    }
+    eprintln!("CHK C3 editable-grid INSERT/UPDATE/DELETE by PK OK");
+
+    // --- C4: per-statement consistency override runs on a single node ---
+    for cl in ["ONE", "QUORUM", "LOCAL_QUORUM"] {
+        drv.exec_cql_c("SELECT * FROM cfeat_ks.students", None, None, Some(cl))
+            .await
+            .unwrap_or_else(|e| panic!("consistency {cl} should run: {}", e.message));
+    }
+    eprintln!("CHK C4 per-statement consistency (ONE/QUORUM/LOCAL_QUORUM) OK");
+}
+
 /// Phase 5 · T22 — SQLite backup/restore round-trip (rusqlite backup API, đảm bảo,
 /// không cần công cụ ngoài). Seed → backup ra file → mở file thấy dữ liệu; xoá →
 /// restore → khôi phục.

@@ -32,9 +32,11 @@
     /** tab đang active — để nhận shortcut result-view/copy (T21) */
     active?: boolean
     onJump?: (line: number, col: number) => void
+    /** Cassandra only — "Load next page" cho result còn paging token. */
+    onLoadMore?: (subIndex: number) => void
   }
 
-  let { exec, accent = 'var(--primary)', editTarget, connId, active = false, onJump }: Props = $props()
+  let { exec, accent = 'var(--primary)', editTarget, connId, active = false, onJump, onLoadMore }: Props = $props()
 
   // T21 — shortcuts Ctrl+Alt+G/J/R (đổi view) + Ctrl+Shift+C (copy JSON) qua ui.
   $effect(() => {
@@ -249,6 +251,16 @@
         {/each}
       </div>
       <span style="font-size:var(--px-11_5);color:var(--muted)">{summary}</span>
+      {#if activeResult?.cqlNextPage}
+        <span
+          onclick={() => onLoadMore?.(exec.activeSub)}
+          onkeydown={(e) => e.key === 'Enter' && onLoadMore?.(exec.activeSub)}
+          role="button"
+          tabindex="0"
+          title="Fetch the next page from Cassandra (paging state)"
+          style="font-size:var(--px-11);color:var(--text2);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-3) var(--px-10);cursor:pointer"
+        >↓ Load next page</span>
+      {/if}
       <div style="margin-left:auto;position:relative">
         <span
           style="font-size:var(--px-11_5);color:var(--text2);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer"
