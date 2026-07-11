@@ -34,6 +34,7 @@ pub async fn mongo_exec(
     state: State<'_, AppState>,
     conn_id: String,
     query: String,
+    database: Option<String>,
     batch_size: Option<i32>,
     cursor_token: Option<String>,
 ) -> Result<MongoExecResponse, AppError> {
@@ -44,7 +45,8 @@ pub async fn mongo_exec(
             let d = driver.lock().await;
             match &*d {
                 LiveConnection::Mongo(m) => {
-                    m.exec_mongo(&query, batch_size, cursor_token.as_deref()).await
+                    m.exec_mongo_in(database.as_deref(), &query, batch_size, cursor_token.as_deref())
+                        .await
                 }
                 _ => Err(not_mongo()),
             }

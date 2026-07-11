@@ -28,6 +28,7 @@
   import SchemaRegistryWorkspace from '$lib/components/workspace/SchemaRegistryWorkspace.svelte'
   import CassandraRing from '$lib/components/workspace/CassandraRing.svelte'
   import CassandraTableView from '$lib/components/workspace/CassandraTableView.svelte'
+  import MongoCollectionView from '$lib/components/workspace/MongoCollectionView.svelte'
   import TableDesigner from '$lib/components/workspace/TableDesigner.svelte'
   import PlanVisualizer from '$lib/components/workspace/PlanVisualizer.svelte'
   import ErDiagram from '$lib/components/workspace/ErDiagram.svelte'
@@ -239,6 +240,8 @@
             <CassandraRing tab={t} />
           {:else if t.contentType === 'cassandra-table'}
             <CassandraTableView tab={t} />
+          {:else if t.contentType === 'mongo-collection'}
+            <MongoCollectionView tab={t} />
           {:else if t.contentType === 'table-designer'}
             <TableDesigner tab={t} />
           {:else if t.contentType === 'query-plan'}

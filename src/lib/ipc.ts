@@ -500,13 +500,23 @@ export interface MongoExecResponse {
   warnings: string[]
 }
 
-/** Run a mongosh-style statement (`db.coll.find({...})`, aggregate, insertOne…). */
+/** Run a mongosh-style statement (`db.coll.find({...})`, aggregate, insertOne…).
+ *  `database` targets a specific DB (the collection viewer); omit to use the
+ *  connection's default database (the query editor). */
 export const mongoExec = (
   connId: string,
   query: string,
+  database?: string,
   batchSize?: number,
   cursorToken?: string,
-) => invoke<MongoExecResponse>('mongo_exec', { connId, query, batchSize, cursorToken })
+) =>
+  invoke<MongoExecResponse>('mongo_exec', {
+    connId,
+    query,
+    database: database ?? null,
+    batchSize,
+    cursorToken,
+  })
 
 // ---- Foreign keys (ER Diagram · Schema Compare — Phase 5) -------------------
 

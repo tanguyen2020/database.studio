@@ -181,6 +181,10 @@ pub fn preview_sql(system: &str, change: &GridChange) -> String {
     if system == "cassandra" {
         return crate::drivers::cassandra::cql_change_sql(change);
     }
+    // MongoDB: preview = the mongosh op Apply will run (insert/update/delete by _id).
+    if system == "mongodb" {
+        return crate::drivers::mongo::mongo_change_preview(change);
+    }
     let q = quote_style(system);
     let lit = |v: &Value| -> String {
         match v {

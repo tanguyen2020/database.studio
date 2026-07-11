@@ -371,6 +371,81 @@ fn check_write_errors(res: &Document) -> Result<(), QueryError> {
     Ok(())
 }
 
+/// JSON → BSON, recognising Extended JSON wrappers so a grid `_id` value that was
+/// serialised as `{"$oid":…}` (or `$date`/`$numberDecimal`) round-trips back to the
+/// real ObjectId/DateTime/Decimal128 — otherwise the update/delete filter wouldn't
+/// match. Plain integers become Int64 (Mongo compares numeric types cross-width).
+fn json_to_bson(v: &Value) -> Bson {
+    match v {
+        Value::Null => Bson::Null,
+        Value::Bool(b) => Bson::Boolean(*b),
+        Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Bson::Int64(i)
+            } else if let Some(f) = n.as_f64() {
+                Bson::Double(f)
+            } else {
+                Bson::Null
+            }
+        }
+        Value::String(s) => Bson::String(s.clone()),
+        Value::Array(a) => Bson::Array(a.iter().map(json_to_bson).collect()),
+        Value::Object(m) => {
+            if m.len() == 1 {
+                if let Some(Value::String(hex)) = m.get("$oid") {
+                    if let Ok(oid) = mongodb::bson::oid::ObjectId::parse_str(hex) {
+                        return Bson::ObjectId(oid);
+                    }
+                }
+                if let Some(Value::String(d)) = m.get("$date") {
+                    if let Ok(dt) = mongodb::bson::DateTime::parse_rfc3339_str(d) {
+                        return Bson::DateTime(dt);
+                    }
+                }
+                if let Some(Value::String(nd)) = m.get("$numberDecimal") {
+                    if let Ok(dec) = nd.parse::<mongodb::bson::Decimal128>() {
+                        return Bson::Decimal128(dec);
+                    }
+                }
+            }
+            let mut doc = Document::new();
+            for (k, val) in m {
+                doc.insert(k.clone(), json_to_bson(val));
+            }
+            Bson::Document(doc)
+        }
+    }
+}
+
+/// Human-readable mongosh preview of a pending grid change (dialog only — Apply
+/// runs the same op through `apply_grid`). Mirrors Cassandra's `cql_change_sql`.
+pub fn mongo_change_preview(change: &grid::GridChange) -> String {
+    let obj = |cols: &[grid::Col]| -> String {
+        let mut m = Map::new();
+        for c in cols {
+            m.insert(c.name.clone(), c.value.clone());
+        }
+        serde_json::to_string(&Value::Object(m)).unwrap_or_else(|_| "{}".into())
+    };
+    match change {
+        grid::GridChange::Insert { table, values, .. } => {
+            format!("db.{table}.insertOne({})", obj(values))
+        }
+        grid::GridChange::Update { table, pk, set, .. } => {
+            let mut s = Map::new();
+            for c in set {
+                s.insert(c.name.clone(), c.value.clone());
+            }
+            let set_json = serde_json::to_string(&json!({ "$set": Value::Object(s) }))
+                .unwrap_or_else(|_| "{}".into());
+            format!("db.{table}.updateOne({}, {set_json})", obj(pk))
+        }
+        grid::GridChange::Delete { table, pk, .. } => {
+            format!("db.{table}.deleteOne({})", obj(pk))
+        }
+    }
+}
+
 impl MongoDriver {
     pub async fn connect(p: &MongoConnParams) -> Result<Self, QueryError> {
         let uri = build_uri(p);
@@ -446,11 +521,23 @@ impl MongoDriver {
         &self,
         query: &str,
         batch_size: Option<i32>,
+        cursor_token: Option<&str>,
+    ) -> Result<MongoOutcome, QueryError> {
+        self.exec_mongo_in(None, query, batch_size, cursor_token).await
+    }
+
+    /// Like `exec_mongo` but against an explicit database (the collection viewer
+    /// targets any database, not just the connection's default).
+    pub async fn exec_mongo_in(
+        &self,
+        database: Option<&str>,
+        query: &str,
+        batch_size: Option<i32>,
         _cursor_token: Option<&str>,
     ) -> Result<MongoOutcome, QueryError> {
         const DEFAULT_LIMIT: i64 = 500;
         let call = parse_mongo_query(query)?;
-        let db = self.client.database(&self.database);
+        let db = self.client.database(database.unwrap_or(&self.database));
         let coll = call.collection.clone();
         let rows_outcome = |batch: &[Bson]| MongoOutcome {
             outcome: StatementOutcome::Rows { result: docs_to_result(batch) },
@@ -812,13 +899,71 @@ impl MongoDriver {
         Ok(out)
     }
 
-    /// M3: editable grid — insert/update/delete documents by `_id`.
-    pub async fn apply_grid(&self, _changes: &[grid::GridChange]) -> Result<u64, QueryError> {
-        Err(QueryError::new(
-            "mongodb",
-            "MongoDB inline edit is not implemented yet (milestone M3)",
-            "apply_grid unimplemented",
-        ))
+    /// Editable grid: insert/update/delete documents by `_id` (the change's `pk`).
+    /// `schema` on each change selects the database. No OLTP transaction — changes
+    /// are applied one command at a time (mirrors Cassandra's `apply_grid`).
+    pub async fn apply_grid(&self, changes: &[grid::GridChange]) -> Result<u64, QueryError> {
+        let mut applied = 0u64;
+        for ch in changes {
+            let dbname = |schema: &Option<String>| -> String {
+                schema.clone().filter(|s| !s.is_empty()).unwrap_or_else(|| self.database.clone())
+            };
+            match ch {
+                grid::GridChange::Insert { schema, table, values } => {
+                    let mut doc = Document::new();
+                    for c in values {
+                        doc.insert(c.name.clone(), json_to_bson(&c.value));
+                    }
+                    let res = self
+                        .client
+                        .database(&dbname(schema))
+                        .run_command(doc! { "insert": table, "documents": [doc] })
+                        .await
+                        .map_err(exec_err)?;
+                    check_write_errors(&res)?;
+                    applied += res.get_i32("n").unwrap_or(0).max(0) as u64;
+                }
+                grid::GridChange::Update { schema, table, pk, set } => {
+                    let mut filter = Document::new();
+                    for c in pk {
+                        filter.insert(c.name.clone(), json_to_bson(&c.value));
+                    }
+                    let mut set_doc = Document::new();
+                    for c in set {
+                        set_doc.insert(c.name.clone(), json_to_bson(&c.value));
+                    }
+                    let res = self
+                        .client
+                        .database(&dbname(schema))
+                        .run_command(doc! {
+                            "update": table,
+                            "updates": [ doc! { "q": filter, "u": doc! { "$set": set_doc }, "multi": false } ],
+                        })
+                        .await
+                        .map_err(exec_err)?;
+                    check_write_errors(&res)?;
+                    applied += res.get_i32("nModified").unwrap_or(0).max(0) as u64;
+                }
+                grid::GridChange::Delete { schema, table, pk } => {
+                    let mut filter = Document::new();
+                    for c in pk {
+                        filter.insert(c.name.clone(), json_to_bson(&c.value));
+                    }
+                    let res = self
+                        .client
+                        .database(&dbname(schema))
+                        .run_command(doc! {
+                            "delete": table,
+                            "deletes": [ doc! { "q": filter, "limit": 1 } ],
+                        })
+                        .await
+                        .map_err(exec_err)?;
+                    check_write_errors(&res)?;
+                    applied += res.get_i32("n").unwrap_or(0).max(0) as u64;
+                }
+            }
+        }
+        Ok(applied)
     }
 
     /// M4: Index Scanner via `$indexStats`.
@@ -920,6 +1065,39 @@ mod tests {
         );
         assert_eq!(bson_to_json(&Bson::Int32(7)), json!(7));
         assert_eq!(bson_to_json(&Bson::Null), Value::Null);
+    }
+
+    #[test]
+    fn json_to_bson_recognises_extended_json_oid() {
+        let v = json!({ "$oid": "507f1f77bcf86cd799439011" });
+        match json_to_bson(&v) {
+            Bson::ObjectId(o) => assert_eq!(o.to_hex(), "507f1f77bcf86cd799439011"),
+            other => panic!("expected ObjectId, got {other:?}"),
+        }
+        // plain integer → Int64 (Mongo compares numeric types cross-width)
+        assert!(matches!(json_to_bson(&json!(100)), Bson::Int64(100)));
+    }
+
+    #[test]
+    fn mongo_change_preview_renders_mongosh() {
+        use crate::drivers::grid::{Col, GridChange};
+        let col = |n: &str, v: Value| Col { name: n.into(), value: v, col_type: None };
+        let upd = GridChange::Update {
+            schema: Some("appdb".into()),
+            table: "users".into(),
+            pk: vec![col("_id", json!(5))],
+            set: vec![col("name", json!("Al"))],
+        };
+        assert_eq!(
+            mongo_change_preview(&upd),
+            "db.users.updateOne({\"_id\":5}, {\"$set\":{\"name\":\"Al\"}})"
+        );
+        let del = GridChange::Delete {
+            schema: None,
+            table: "users".into(),
+            pk: vec![col("_id", json!(5))],
+        };
+        assert_eq!(mongo_change_preview(&del), "db.users.deleteOne({\"_id\":5})");
     }
 
     #[test]

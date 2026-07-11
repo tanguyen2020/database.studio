@@ -640,6 +640,37 @@ class TabsStore {
     return tab
   }
 
+  /** Mở (hoặc focus) tab document viewer của một collection MongoDB — 1 tab/(conn,db,coll). */
+  openMongoCollection(connectionId: string, database: string, collection: string): TabState {
+    const existing = this.tabs.find(
+      (t) =>
+        t.contentType === 'mongo-collection' &&
+        t.connectionId === connectionId &&
+        t.state.database === database &&
+        t.state.collection === collection,
+    )
+    if (existing) {
+      this.activeTabId = existing.id
+      return existing
+    }
+    const profile = connections.byId(connectionId)
+    const tab: TabState = {
+      id: uuid(),
+      connectionId,
+      connectionName: profile?.name ?? '',
+      systemType: (profile?.system as SystemType) ?? 'orphan',
+      contentType: 'mongo-collection',
+      title: `${database}.${collection}`,
+      isPinned: false,
+      isDirty: false,
+      state: { database, collection },
+    }
+    this.tabs.push(tab)
+    this.activeTabId = tab.id
+    this.schedulePersist()
+    return tab
+  }
+
   /** Mở (hoặc focus nếu đã có) một tab tiện ích singleton — History / Saved. */
   openUtilityTab(contentType: 'history' | 'saved', title: string): TabState {
     const existing = this.tabs.find((t) => t.contentType === contentType)

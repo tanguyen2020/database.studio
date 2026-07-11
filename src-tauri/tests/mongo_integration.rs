@@ -6,9 +6,11 @@
 
 use std::time::{Duration, Instant};
 
+use database_studio_lib::drivers::grid::{Col, GridChange};
 use database_studio_lib::drivers::mongo::{MongoConnParams, MongoDriver};
 use database_studio_lib::drivers::types::StatementOutcome;
 use mongodb::bson::{doc, Document};
+use serde_json::json;
 use mongodb::Client;
 use testcontainers::core::IntoContainerPort;
 use testcontainers::runners::AsyncRunner;
@@ -189,4 +191,57 @@ async fn mongo_introspection_databases_collections_indexes_fields() {
         "ObjectId phải serialize dạng Extended JSON {{\"$oid\":…}}: {:?}",
         zed.rows[0]["_id"]
     );
+    let zed_id = zed.rows[0]["_id"].clone();
+
+    // --- apply_grid (inline edit by _id, M3) --------------------------------
+    let col = |name: &str, value: serde_json::Value| Col { name: name.into(), value, col_type: None };
+    let sch = || Some("appdb".to_string());
+
+    // insert by _id
+    let ins = drv
+        .apply_grid(&[GridChange::Insert {
+            schema: sch(),
+            table: "users".into(),
+            values: vec![col("_id", json!(100)), col("name", json!("Grid")), col("email", json!("g@x.com"))],
+        }])
+        .await
+        .unwrap();
+    assert_eq!(ins, 1, "apply_grid insert 1 doc");
+
+    // update by integer _id
+    let upd = drv
+        .apply_grid(&[GridChange::Update {
+            schema: sch(),
+            table: "users".into(),
+            pk: vec![col("_id", json!(100))],
+            set: vec![col("name", json!("GridUp"))],
+        }])
+        .await
+        .unwrap();
+    assert_eq!(upd, 1, "apply_grid update by int _id, nModified=1");
+    let g = rows(drv.exec_mongo("db.users.find({\"_id\":100})", None, None).await.unwrap().outcome);
+    assert_eq!(g.rows[0]["name"], "GridUp", "update áp dụng thật");
+
+    // update by ObjectId _id (serialized {"$oid":…}) — json_to_bson phải convert lại
+    let obj_upd = drv
+        .apply_grid(&[GridChange::Update {
+            schema: sch(),
+            table: "users".into(),
+            pk: vec![col("_id", zed_id.clone())],
+            set: vec![col("email", json!("zed2@x.com"))],
+        }])
+        .await
+        .unwrap();
+    assert_eq!(obj_upd, 1, "update by ObjectId _id phải khớp (Extended JSON round-trip)");
+
+    // delete by _id
+    let del = drv
+        .apply_grid(&[GridChange::Delete {
+            schema: sch(),
+            table: "users".into(),
+            pk: vec![col("_id", json!(100))],
+        }])
+        .await
+        .unwrap();
+    assert_eq!(del, 1, "apply_grid delete 1 doc");
 }
