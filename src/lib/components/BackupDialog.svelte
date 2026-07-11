@@ -21,7 +21,9 @@
     result = null
     confirmRestore = false
     running = false
-    dest = `${backupWizard.system || 'db'}-backup-${Date.now()}.${backupWizard.system === 'sqlite' ? 'db' : 'sql'}`
+    dest = `${backupWizard.system || 'db'}-backup-${Date.now()}.${
+      backupWizard.system === 'sqlite' ? 'db' : backupWizard.system === 'mongodb' ? 'archive' : 'sql'
+    }`
     src = ''
     if (backupWizard.connId) {
       toolStatus = await ipc.backupToolStatus(backupWizard.connId).catch(() => null)

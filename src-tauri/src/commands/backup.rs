@@ -6,7 +6,7 @@ use serde::Serialize;
 use tauri::State;
 
 use crate::storage::crypto;
-use crate::drivers::backup::{backup_tool, external_backup_cmd, BackupTarget};
+use crate::drivers::backup::{backup_tool, external_backup_cmd, mongo_restore_cmd, BackupTarget};
 use crate::drivers::LiveConnection;
 use crate::error::{AppError, QueryError};
 use crate::state::AppState;
@@ -86,7 +86,7 @@ pub async fn backup_database(
             "`{tool}` not found on PATH — install the tool and try again."
         )));
     }
-    let (prog, args) = external_backup_cmd(
+    let (prog, mut args) = external_backup_cmd(
         &system,
         &BackupTarget {
             host: profile.host.clone(),
@@ -98,6 +98,11 @@ pub async fn backup_database(
     )
     .ok_or_else(|| AppError::Driver(format!("Backup is not supported for {system}")))?;
     let password = crypto::decrypt(&profile.password_enc).unwrap_or_default();
+    // mongodump has no password env var — pass it as an arg (only when set) so an
+    // authenticated dump doesn't hang waiting for a prompt on the spawned process.
+    if system == "mongodb" && !password.is_empty() {
+        args.push(format!("--password={password}"));
+    }
     let out = tokio::process::Command::new(&prog)
         .args(&args)
         .env("PGPASSWORD", &password)
@@ -139,6 +144,43 @@ pub async fn restore_database(
             .await?
             .map_err(|e| AppError::Driver(e.message))?;
         return Ok(format!("✓ SQLite restored ← {src}"));
+    }
+    // MongoDB: mongorestore từ file archive do mongodump tạo.
+    if system == "mongodb" {
+        if !tool_available("mongorestore") {
+            return Err(AppError::Driver(
+                "`mongorestore` not found on PATH — install the MongoDB Database Tools and try again.".into(),
+            ));
+        }
+        let profile = state
+            .storage
+            .get_connection(&conn_id)
+            .map_err(|e| AppError::Driver(format!("connection: {e}")))?;
+        let (prog, mut args) = mongo_restore_cmd(
+            &BackupTarget {
+                host: profile.host.clone(),
+                port: profile.port,
+                database: profile.database.clone(),
+                user: profile.user.clone(),
+            },
+            &src,
+        );
+        let password = crypto::decrypt(&profile.password_enc).unwrap_or_default();
+        if !password.is_empty() {
+            args.push(format!("--password={password}"));
+        }
+        let out = tokio::process::Command::new(&prog)
+            .args(&args)
+            .output()
+            .await
+            .map_err(|e| AppError::Driver(format!("Failed to run {prog}: {e}")))?;
+        if !out.status.success() {
+            return Err(AppError::Driver(format!(
+                "{prog} error: {}",
+                String::from_utf8_lossy(&out.stderr)
+            )));
+        }
+        return Ok(format!("✓ MongoDB restored ({prog}) ← {src}"));
     }
     Err(AppError::Driver(format!(
         "Automatic restore is not supported for {system} — open the .sql file in the SQL editor to run it."

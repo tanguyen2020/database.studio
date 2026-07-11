@@ -8,6 +8,7 @@ pub fn backup_tool(system: &str) -> Option<&'static str> {
         "postgres" => Some("pg_dump"),
         "mysql" | "mariadb" => Some("mysqldump"),
         "clickhouse" => Some("clickhouse-client"),
+        "mongodb" => Some("mongodump"),
         _ => None, // sqlite = in-process; redis/kafka/nats/cassandra = N/A
     }
 }
@@ -52,8 +53,40 @@ pub fn external_backup_cmd(system: &str, t: &BackupTarget, dest: &str) -> Option
                 format!("BACKUP DATABASE {} TO Disk('backups', '{dest}')", t.database),
             ],
         )),
+        // mongodump → single-file archive. Password KHÔNG nằm trong args (mongodump
+        // không có env var mật khẩu như PGPASSWORD; auth truyền ở tầng command nếu cần).
+        "mongodb" => Some(("mongodump".into(), {
+            let mut a = vec![
+                "--host".into(), t.host.clone(),
+                "--port".into(), t.port.to_string(),
+            ];
+            if !t.user.is_empty() {
+                a.push("--username".into());
+                a.push(t.user.clone());
+            }
+            if !t.database.is_empty() {
+                a.push("--db".into());
+                a.push(t.database.clone());
+            }
+            a.push(format!("--archive={dest}"));
+            a
+        })),
         _ => None,
     }
+}
+
+/// mongorestore command để khôi phục từ file archive do mongodump tạo.
+pub fn mongo_restore_cmd(t: &BackupTarget, src: &str) -> (String, Vec<String>) {
+    let mut a = vec![
+        "--host".into(), t.host.clone(),
+        "--port".into(), t.port.to_string(),
+    ];
+    if !t.user.is_empty() {
+        a.push("--username".into());
+        a.push(t.user.clone());
+    }
+    a.push(format!("--archive={src}"));
+    ("mongorestore".into(), a)
 }
 
 #[cfg(test)]
@@ -70,8 +103,24 @@ mod tests {
         assert_eq!(backup_tool("mysql"), Some("mysqldump"));
         assert_eq!(backup_tool("mariadb"), Some("mysqldump"));
         assert_eq!(backup_tool("clickhouse"), Some("clickhouse-client"));
+        assert_eq!(backup_tool("mongodb"), Some("mongodump"));
         assert_eq!(backup_tool("sqlite"), None);
         assert_eq!(backup_tool("redis"), None);
+    }
+
+    #[test]
+    fn mongodump_cmd_shape() {
+        let t = BackupTarget { host: "10.0.0.1".into(), port: 27017, database: "app".into(), user: "u".into() };
+        let (prog, args) = external_backup_cmd("mongodb", &t, "/tmp/a.archive").unwrap();
+        assert_eq!(prog, "mongodump");
+        assert!(args.windows(2).any(|w| w == ["--db", "app"]));
+        assert!(args.iter().any(|a| a == "--archive=/tmp/a.archive"));
+        assert!(args.windows(2).any(|w| w == ["--username", "u"]));
+        assert!(!args.iter().any(|a| a.contains("password")), "mật khẩu không nằm trong args");
+        // restore mirrors host/port/username + archive
+        let (rprog, rargs) = mongo_restore_cmd(&t, "/tmp/a.archive");
+        assert_eq!(rprog, "mongorestore");
+        assert!(rargs.iter().any(|a| a == "--archive=/tmp/a.archive"));
     }
 
     #[test]
