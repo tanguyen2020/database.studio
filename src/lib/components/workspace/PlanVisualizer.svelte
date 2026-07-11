@@ -20,6 +20,24 @@
   let error = $state<string | null>(null)
   let actual = $state(false)
   let showRaw = $state(false)
+  let cap = $state<ipc.EngineCapability | null>(null)
+
+  // Chỉ hệ có EXPLAIN ANALYZE thật mới hiện toggle Actual (P1.1 — honesty).
+  const canActual = $derived(cap?.actual_kind === 'analyze')
+
+  async function loadCapability() {
+    if (!tab.connectionId) {
+      cap = null
+      return
+    }
+    try {
+      cap = await ipc.explainCapability(tab.connectionId)
+      // đổi sang connection không hỗ trợ actual → ép về estimated
+      if (cap.actual_kind !== 'analyze' && actual) actual = false
+    } catch {
+      cap = null
+    }
+  }
 
   async function run() {
     if (!tab.connectionId) return
@@ -34,9 +52,14 @@
     }
   }
 
+  async function init() {
+    await loadCapability()
+    await run()
+  }
+
   $effect(() => {
     void tab.connectionId
-    untrack(() => void run())
+    untrack(() => void init())
   })
 
   function toggleActual() {
@@ -60,7 +83,9 @@
       <span style="font-size:var(--px-10);font-weight:700;border-radius:var(--px-3);padding:var(--px-1) var(--px-6);background:var(--panel);color:var(--text2);text-transform:uppercase">{plan.mode}</span>
     {/if}
     <div style="margin-left:auto;display:flex;gap:var(--px-8);align-items:center">
-      <span onclick={toggleActual} onkeydown={(e) => e.key === 'Enter' && toggleActual()} role="button" tabindex="0" style="font-size:var(--px-11_5);background:{actual ? 'var(--primary)' : 'var(--panel)'};color:{actual ? 'var(--hex-fff)' : 'var(--text)'};border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-12);cursor:pointer;font-weight:600">Actual</span>
+      {#if canActual}
+        <span onclick={toggleActual} onkeydown={(e) => e.key === 'Enter' && toggleActual()} role="button" tabindex="0" style="font-size:var(--px-11_5);background:{actual ? 'var(--primary)' : 'var(--panel)'};color:{actual ? 'var(--hex-fff)' : 'var(--text)'};border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-12);cursor:pointer;font-weight:600">Actual</span>
+      {/if}
       <span onclick={() => (showRaw = !showRaw)} onkeydown={(e) => e.key === 'Enter' && (showRaw = !showRaw)} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-12);cursor:pointer">View raw</span>
       <span onclick={run} onkeydown={(e) => e.key === 'Enter' && run()} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-12);cursor:pointer">⟳ Re-explain</span>
     </div>

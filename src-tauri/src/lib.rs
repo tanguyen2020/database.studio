@@ -131,6 +131,7 @@ pub fn run() {
             commands::clickhouse::ch_dictionaries,
             // query plan visualizer (Phase 5)
             commands::plan::explain_plan,
+            commands::plan::explain_capability,
             // schema
             commands::schema::list_schemas,
             commands::schema::list_databases,

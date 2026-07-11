@@ -79,6 +79,21 @@ pub async fn explain_plan(
     parse_for_system(&system, actual, &rows).map_err(AppError::Driver)
 }
 
+/// Năng lực EXPLAIN của connection (UI dùng để bật/tắt toggle Actual, hiển thị
+/// đúng nghĩa mode). Resolve system giống `explain_plan`.
+#[tauri::command]
+pub async fn explain_capability(
+    state: State<'_, AppState>,
+    conn_id: String,
+) -> Result<plan::EngineCapability, AppError> {
+    let system = state
+        .registry
+        .system_of(&conn_id)
+        .or_else(|| state.storage.get_connection(&conn_id).ok().map(|p| p.system.as_str().to_string()))
+        .unwrap_or_else(|| "unknown".into());
+    Ok(plan::capability(&system))
+}
+
 /// MSSQL estimated plan qua `SET SHOWPLAN_XML ON`. Bật → chạy query (server trả
 /// XML plan, không thực thi) → LUÔN tắt lại (kể cả khi query lỗi).
 async fn explain_mssql(

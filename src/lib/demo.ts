@@ -945,6 +945,28 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
         raw: '[{"Plan":{"Node Type":"Hash Join","Total Cost":512.4,"Plan Rows":214}}]',
       })
     }
+    case 'explain_capability': {
+      const cid = String(args?.connId ?? '').split(/::|#/)[0]
+      const sys = DEMO_PROFILES.find((p) => p.id === cid)?.system ?? 'postgres'
+      const cap = (system: string) => {
+        switch (system) {
+          case 'postgres':
+          case 'mariadb':
+            return { has_planner: true, supports_actual: true, actual_kind: 'analyze', cost_basis: 'cost' }
+          case 'mysql':
+          case 'mssql':
+            return { has_planner: true, supports_actual: false, actual_kind: 'none', cost_basis: 'cost' }
+          case 'sqlite':
+          case 'clickhouse':
+            return { has_planner: true, supports_actual: false, actual_kind: 'none', cost_basis: 'rows_proxy' }
+          case 'cassandra':
+            return { has_planner: false, supports_actual: true, actual_kind: 'tracing', cost_basis: 'duration' }
+          default:
+            return { has_planner: false, supports_actual: false, actual_kind: 'none', cost_basis: 'none' }
+        }
+      }
+      return ok(cap(sys))
+    }
     case 'ch_dictionaries':
       return ok(['geo_regions', 'user_agents'])
     case 'ch_table_meta': {

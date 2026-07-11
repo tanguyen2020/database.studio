@@ -76,6 +76,69 @@ impl QueryPlan {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Engine capability descriptor (P1.1) — khai báo năng lực EXPLAIN mỗi hệ để UI
+// biết có bật toggle Actual hay không, và mode "actual" mang nghĩa gì. Đây là
+// NGUỒN DUY NHẤT cho orchestration + UI, thay cho việc suy diễn từ chuỗi rải rác.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum ActualKind {
+    /// Chỉ có estimated, không có chế độ actual.
+    None,
+    /// EXPLAIN ANALYZE thật — số liệu thực thi (PG/MariaDB).
+    Analyze,
+    /// Không có planner tĩnh; chạy tracing/diagnostics (Cassandra).
+    Tracing,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum CostBasis {
+    /// Engine trả cost thật (PG/MySQL/MSSQL).
+    Cost,
+    /// Xếp hạng theo thời gian (tracing).
+    Duration,
+    /// Xấp xỉ theo số rows (SQLite/ClickHouse — không có per-node cost).
+    RowsProxy,
+    /// Không có cơ sở cost.
+    None,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq)]
+pub struct EngineCapability {
+    /// Có planner cost-based (EXPLAIN trả cây operator).
+    pub has_planner: bool,
+    /// Có thể lấy plan "actual" (chạy thật) — tiện cho UI bật/tắt toggle.
+    pub supports_actual: bool,
+    pub actual_kind: ActualKind,
+    pub cost_basis: CostBasis,
+}
+
+/// Năng lực EXPLAIN theo hệ.
+pub fn capability(system: &str) -> EngineCapability {
+    let (has_planner, actual_kind, cost_basis) = match system {
+        "postgres" => (true, ActualKind::Analyze, CostBasis::Cost),
+        "mariadb" => (true, ActualKind::Analyze, CostBasis::Cost),
+        // MySQL/MSSQL có planner nhưng app CHƯA lấy actual (P3.3) → toggle tắt.
+        "mysql" => (true, ActualKind::None, CostBasis::Cost),
+        "mssql" => (true, ActualKind::None, CostBasis::Cost),
+        "sqlite" => (true, ActualKind::None, CostBasis::RowsProxy),
+        "clickhouse" => (true, ActualKind::None, CostBasis::RowsProxy),
+        // Cassandra: không planner tĩnh, chỉ tracing (chạy thật, không có toggle).
+        "cassandra" => (false, ActualKind::Tracing, CostBasis::Duration),
+        // redis/kafka/nats: không áp dụng.
+        _ => (false, ActualKind::None, CostBasis::None),
+    };
+    EngineCapability {
+        has_planner,
+        supports_actual: !matches!(actual_kind, ActualKind::None),
+        actual_kind,
+        cost_basis,
+    }
+}
+
 /// Ngưỡng coi là "bảng lớn" khi cảnh báo full/seq scan.
 const LARGE_ROWS: f64 = 10_000.0;
 
@@ -527,6 +590,27 @@ fn mark_hotspot(node: &mut PlanNode, warnings: &mut Vec<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn capabilities() {
+        assert_eq!(capability("postgres").actual_kind, ActualKind::Analyze);
+        assert!(capability("postgres").supports_actual);
+        assert_eq!(capability("mariadb").actual_kind, ActualKind::Analyze);
+        // engine có planner nhưng chưa lấy actual → toggle phải tắt
+        assert!(!capability("mysql").supports_actual);
+        assert!(!capability("mssql").supports_actual);
+        assert!(!capability("sqlite").supports_actual);
+        assert!(!capability("clickhouse").supports_actual);
+        assert_eq!(capability("clickhouse").cost_basis, CostBasis::RowsProxy);
+        // Cassandra: tracing, không planner tĩnh
+        assert_eq!(capability("cassandra").actual_kind, ActualKind::Tracing);
+        assert!(!capability("cassandra").has_planner);
+        // messaging: không áp dụng
+        for m in ["redis", "kafka", "nats"] {
+            let c = capability(m);
+            assert!(!c.has_planner && !c.supports_actual);
+        }
+    }
 
     #[test]
     fn normalize_ops() {

@@ -580,6 +580,16 @@ export interface QueryPlan {
 export const explainPlan = (connId: string, sql: string, actual: boolean) =>
   invoke<QueryPlan>('explain_plan', { connId, sql, actual })
 
+/** Năng lực EXPLAIN của một connection (P1.1) — UI dùng để bật/tắt toggle Actual. */
+export interface EngineCapability {
+  has_planner: boolean
+  supports_actual: boolean
+  actual_kind: 'none' | 'analyze' | 'tracing'
+  cost_basis: 'cost' | 'duration' | 'rows_proxy' | 'none'
+}
+export const explainCapability = (connId: string) =>
+  invoke<EngineCapability>('explain_capability', { connId })
+
 // ---- ClickHouse advanced (Phase 5 · T7c) -----------------------------------
 
 export interface TtlRule {

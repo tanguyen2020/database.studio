@@ -99,7 +99,9 @@ Khi thêm/đổi field trong `QueryPlan`/`PlanNode` hoặc thêm mode value:
 
 ## P1 — LÒNG TIN (2 High + nền)
 
-### EXP-P1.1 — EngineCapability descriptor + UI toggle honesty (nền)
+### EXP-P1.1 — EngineCapability descriptor + UI toggle honesty (nền) — ✅ DONE
+> Commit `EXP-P1.1`. `drivers/plan.rs`: enum `ActualKind`(none/analyze/tracing) + `CostBasis`(cost/duration/rows_proxy/none) + `EngineCapability{has_planner,supports_actual,actual_kind,cost_basis}` + `capability(system)`. Command `explain_capability` (commands/plan.rs) + register lib.rs. Frontend: `ipc.EngineCapability` + `explainCapability`; demo mock (resolve system từ DEMO_PROFILES); `PlanVisualizer` fetch cap → **chỉ hiện toggle Actual khi `actual_kind==='analyze'`** (ẩn cho MySQL/MSSQL/SQLite/ClickHouse/Cassandra) + ép về estimated khi đổi sang engine không hỗ trợ. Gates: check 0/0, vitest 510, `cargo test --lib plan::` 14 (mới `capabilities`), e2e `query-plan` 2/2 (PG hiện Actual · MySQL ẩn Actual). Full playwright chỉ `table-viewer-footer` fail = **pre-existing** (đã verify fail trên `main` sạch).
+
 **Vì sao:** `mode="actual"` đang gánh 3 nghĩa; toggle Actual hiện cho cả engine không hỗ trợ (MySQL/MSSQL/CH/SQLite) → im lặng trả estimated (phần "misleading" của DEF-MYSQL-ACTUAL-NOOP).
 
 **Backend (`drivers/plan.rs` hoặc `commands/plan.rs`)**
