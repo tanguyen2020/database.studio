@@ -273,6 +273,67 @@ async fn xv_t1_postgres_scan_index_actual_errors() {
 }
 
 // ===========================================================================
+// P0.1 — SAFETY: Actual EXPLAIN on a WRITE statement must not change data.
+// Proves the mechanism of commands/plan.rs::explain_pg_actual_dml:
+//   BEGIN → EXPLAIN (ANALYZE …) <DML> → ROLLBACK   leaves rows intact,
+// while a BARE EXPLAIN ANALYZE <DML> really deletes them (ground truth that
+// the wrap is required). The is_write dispatch itself is unit-tested in
+// commands::plan::tests::write_detection.
+// ===========================================================================
+#[tokio::test]
+async fn xv_p0_postgres_actual_dml_rolls_back() {
+    let (_c, port) = start_pg().await;
+    let params = PgConnParams {
+        host: "localhost".into(),
+        port,
+        database: "testdb".into(),
+        user: "postgres".into(),
+        password: PASS.into(),
+        ssl: false,
+        ssl_ca: String::new(),
+        ssl_cert: String::new(),
+        ssl_key: String::new(),
+    };
+    let mut drv = retry("postgres", || PgDriver::connect(&params)).await;
+    for t in ["p0_wrap", "p0_bare"] {
+        drv.exec(&format!("CREATE TABLE {t} (id serial PRIMARY KEY, note text)")).await.unwrap();
+        drv.exec(&format!("INSERT INTO {t}(note) SELECT 'n' FROM generate_series(1, 100) g")).await.unwrap();
+    }
+
+    // (A) app path: BEGIN → EXPLAIN ANALYZE DELETE → ROLLBACK (rollback ALWAYS runs).
+    drv.exec("BEGIN").await.unwrap();
+    let res = drv
+        .exec("EXPLAIN (ANALYZE, BUFFERS, VERBOSE, FORMAT JSON) DELETE FROM p0_wrap")
+        .await;
+    let _ = drv.exec("ROLLBACK").await;
+    let StatementOutcome::Rows { result } = res.expect("EXPLAIN ANALYZE DELETE returns a plan") else {
+        panic!("rows")
+    };
+    let cell = first_cell(&result.rows);
+    let json = if cell.is_string() { cell.as_str().unwrap().to_string() } else { cell.to_string() };
+    let planned = plan::parse_pg(&json, true).expect("parse pg actual dml");
+    assert_eq!(planned.mode, "actual", "wrapped EXPLAIN ANALYZE → mode actual");
+
+    let StatementOutcome::Rows { result: c1 } =
+        drv.exec("SELECT count(*) AS n FROM p0_wrap").await.unwrap()
+    else {
+        panic!("rows")
+    };
+    assert_eq!(c1.rows[0]["n"].as_i64().unwrap(), 100, "wrapped path: ROLLBACK preserved all 100 rows");
+
+    // (B) ground truth: a BARE EXPLAIN ANALYZE DELETE executes destructively.
+    let _ = drv.exec("EXPLAIN (ANALYZE) DELETE FROM p0_bare").await.unwrap();
+    let StatementOutcome::Rows { result: c2 } =
+        drv.exec("SELECT count(*) AS n FROM p0_bare").await.unwrap()
+    else {
+        panic!("rows")
+    };
+    assert_eq!(c2.rows[0]["n"].as_i64().unwrap(), 0, "bare EXPLAIN ANALYZE DELETE deleted all rows — the transaction wrap is required");
+
+    eprintln!("CHK xv_p0_postgres_actual_dml_rolls_back OK");
+}
+
+// ===========================================================================
 // TIER 1c — MySQL. scan/index + prove "actual" toggle is estimated-only.
 // ===========================================================================
 #[tokio::test]

@@ -31,6 +31,28 @@ pub async fn explain_plan(
         return Ok(QueryPlan::not_applicable(&system));
     }
 
+    // P0.1 — An toàn: EXPLAIN với câu GHI có thể thực thi thật.
+    let writing = is_write_statement(&sql);
+
+    // Cassandra TRACING thực thi câu lệnh ở CẢ 2 mode (không có EXPLAIN tĩnh) →
+    // chặn câu ghi để tránh side-effect không rollback được.
+    if system == "cassandra" && writing {
+        return Err(AppError::Driver(
+            "Explain on Cassandra runs the statement (tracing); write statements are blocked. Analyze a SELECT instead.".into(),
+        ));
+    }
+
+    // Actual chạy query THẬT (ANALYZE). Với câu ghi: PostgreSQL bọc transaction
+    // rồi ROLLBACK (không đổi dữ liệu); các hệ khác chặn (rollback không đảm bảo).
+    if actual && writing {
+        if system == "postgres" {
+            return explain_pg_actual_dml(state.inner(), &conn_id, &sql).await;
+        }
+        return Err(AppError::Driver(
+            "Actual plan on write statements is only supported on PostgreSQL (rolled back). Use Estimated mode.".into(),
+        ));
+    }
+
     // Cassandra: không có EXPLAIN → chạy TRACING, dựng timeline + cờ ALLOW FILTERING.
     if system == "cassandra" {
         return explain_cassandra(state.inner(), &conn_id, &sql).await;
@@ -86,6 +108,33 @@ async fn explain_mssql(
         .and_then(|v| v.as_str())
         .ok_or_else(|| AppError::Driver("SHOWPLAN_XML is empty".into()))?;
     plan::parse_mssql_xml(xml).map_err(AppError::Driver)
+}
+
+/// PostgreSQL Actual plan cho câu GHI (INSERT/UPDATE/DELETE/…): bọc trong
+/// `BEGIN … ROLLBACK` nên `EXPLAIN (ANALYZE)` chạy thật nhưng KHÔNG đổi dữ liệu.
+/// ROLLBACK luôn được gọi (kể cả khi EXPLAIN lỗi) — mirror pattern của SHOWPLAN OFF.
+async fn explain_pg_actual_dml(
+    state: &AppState,
+    conn_id: &str,
+    sql: &str,
+) -> Result<QueryPlan, AppError> {
+    let sql = sql.trim().trim_end_matches(';').to_string();
+    state
+        .registry
+        .exec_statement(conn_id, "BEGIN".into())
+        .await?
+        .map_err(|e| AppError::Driver(e.message))?;
+    let explain_sql = format!("EXPLAIN (ANALYZE, BUFFERS, VERBOSE, FORMAT JSON) {sql}");
+    let res = state.registry.exec_statement(conn_id, explain_sql).await;
+    // best-effort rollback — không để transaction treo / dữ liệu bị đổi.
+    let _ = state.registry.exec_statement(conn_id, "ROLLBACK".into()).await;
+
+    let outcome = res?.map_err(|e| AppError::Driver(e.message))?;
+    let rows = match outcome {
+        StatementOutcome::Rows { result } => result.rows,
+        _ => return Err(AppError::Driver("EXPLAIN did not return a plan".into())),
+    };
+    parse_for_system("postgres", true, &rows).map_err(AppError::Driver)
 }
 
 /// Cassandra query plan qua TRACING (không có EXPLAIN). Chạy CQL với tracing bật
@@ -186,4 +235,120 @@ fn json_i64(row: &serde_json::Value, key: &str) -> i64 {
     row.get(key)
         .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
         .unwrap_or(0)
+}
+
+/// Từ khóa mở đầu một câu GHI dữ liệu (DML) hoặc DDL — EXPLAIN các câu này có thể
+/// thực thi thật (PG ANALYZE, MariaDB ANALYZE, Cassandra tracing).
+const WRITE_KEYWORDS: &[&str] = &[
+    "INSERT", "UPDATE", "DELETE", "MERGE", "REPLACE", "TRUNCATE", "DROP", "ALTER",
+    "CREATE", "GRANT", "REVOKE", "UPSERT",
+];
+
+/// Bỏ comment SQL (`-- …` tới hết dòng và `/* … */`) — heuristic đơn giản đủ dùng
+/// cho lớp bảo vệ an toàn (không cần parser đầy đủ).
+fn strip_sql_comments(sql: &str) -> String {
+    let mut out = String::with_capacity(sql.len());
+    let bytes = sql.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        // line comment
+        if bytes[i] == b'-' && i + 1 < bytes.len() && bytes[i + 1] == b'-' {
+            while i < bytes.len() && bytes[i] != b'\n' {
+                i += 1;
+            }
+            continue;
+        }
+        // block comment
+        if bytes[i] == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
+            i += 2;
+            while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
+                i += 1;
+            }
+            i += 2;
+            out.push(' ');
+            continue;
+        }
+        out.push(bytes[i] as char);
+        i += 1;
+    }
+    out
+}
+
+/// `keyword` xuất hiện như một TỪ độc lập (không dính chữ/số hai bên).
+fn contains_word(haystack: &str, keyword: &str) -> bool {
+    let mut from = 0;
+    while let Some(pos) = haystack[from..].find(keyword) {
+        let start = from + pos;
+        let end = start + keyword.len();
+        let before_ok = start == 0
+            || !haystack.as_bytes()[start - 1].is_ascii_alphanumeric()
+                && haystack.as_bytes()[start - 1] != b'_';
+        let after_ok = end >= haystack.len()
+            || !haystack.as_bytes()[end].is_ascii_alphanumeric() && haystack.as_bytes()[end] != b'_';
+        if before_ok && after_ok {
+            return true;
+        }
+        from = start + 1;
+    }
+    false
+}
+
+/// True nếu câu lệnh GHI dữ liệu / thay đổi schema. Bias về AN TOÀN: thà chặn nhầm
+/// một SELECT hiếm gặp còn hơn chạy thật một DELETE. CTE ghi (`WITH … DELETE`) cũng bắt.
+fn is_write_statement(sql: &str) -> bool {
+    let cleaned = strip_sql_comments(sql);
+    let trimmed = cleaned.trim_start();
+    let upper = trimmed.to_uppercase();
+    let first: String = upper
+        .chars()
+        .take_while(|c| c.is_ascii_alphabetic())
+        .collect();
+    if WRITE_KEYWORDS.contains(&first.as_str()) {
+        return true;
+    }
+    // Data-modifying CTE: WITH … (INSERT|UPDATE|DELETE|MERGE) …
+    if first == "WITH" {
+        for kw in ["INSERT", "UPDATE", "DELETE", "MERGE"] {
+            if contains_word(&upper, kw) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn write_detection() {
+        // reads
+        assert!(!is_write_statement("SELECT * FROM t"));
+        assert!(!is_write_statement("  select 1"));
+        assert!(!is_write_statement("WITH x AS (SELECT 1) SELECT * FROM x"));
+        assert!(!is_write_statement("/* del */ SELECT id FROM users"));
+        assert!(!is_write_statement("EXPLAIN SELECT 1"));
+        // writes
+        assert!(is_write_statement("INSERT INTO t VALUES (1)"));
+        assert!(is_write_statement("  update t set a=1"));
+        assert!(is_write_statement("delete from t where id=1"));
+        assert!(is_write_statement("TRUNCATE TABLE t"));
+        assert!(is_write_statement("DROP TABLE t"));
+        assert!(is_write_statement("CREATE TABLE t AS SELECT * FROM s"));
+        // comment-first write
+        assert!(is_write_statement("-- cleanup\nDELETE FROM t"));
+        assert!(is_write_statement("/* x */ update t set a=1"));
+        // data-modifying CTE
+        assert!(is_write_statement(
+            "WITH d AS (DELETE FROM t RETURNING id) SELECT * FROM d"
+        ));
+    }
+
+    #[test]
+    fn contains_word_boundaries() {
+        assert!(contains_word("A DELETE B", "DELETE"));
+        assert!(!contains_word("UNDELETED ROWS", "DELETE"));
+        assert!(!contains_word("MYDELETE", "DELETE"));
+    }
 }

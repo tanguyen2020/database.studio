@@ -41,8 +41,9 @@
 
   function toggleActual() {
     if (!actual) {
-      // bật actual = query THỰC SỰ chạy (side-effect với DML)
-      if (!confirm('Actual Plan will REALLY run the query (ANALYZE). Continue?')) return
+      // bật actual = query THỰC SỰ chạy (ANALYZE). Câu ghi: PostgreSQL tự rollback,
+      // các hệ khác bị chặn (xem backend guard). SELECT thì an toàn.
+      if (!confirm('Actual Plan runs the query (ANALYZE). Write statements are rolled back on PostgreSQL and blocked on other engines. Continue?')) return
     }
     actual = !actual
     void run()
