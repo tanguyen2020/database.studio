@@ -535,16 +535,17 @@ async fn xv_t2_mssql_scan_index_estimated() {
     assert!(sroot.native_op.contains("Clustered Index Scan"), "no-index → Clustered Index Scan (full scan). native={}", sroot.native_op);
     assert!(iroot.native_op.contains("Seek"), "with-index → Index Seek. native={}", iroot.native_op);
     assert!(xml_scan.contains("EstimatedRowsRead=\"20000\"") || xml_scan.contains("TableCardinality=\"20000\""), "scan reads whole table (20k)");
-    // DEFECT DEF-MSSQL-CLUSTERED-SCAN (High, normalize/DBA): a full table scan
-    // (Clustered Index Scan) and an efficient Index Seek BOTH normalize to
-    // "IndexScan" — the scan→index physical change is invisible in the normalized
-    // operation, and no hotspot is raised for the full scan.
-    assert_eq!(sroot.operation, "IndexScan", "DEFECT: full Clustered Index Scan mislabeled IndexScan");
-    assert_eq!(iroot.operation, "IndexScan", "Index Seek normalized IndexScan");
-    assert!(!sroot.is_hotspot, "DEFECT: full table scan not flagged as hotspot");
+    // P1.2 FIXED (DEF-MSSQL-CLUSTERED-SCAN): a full table scan (Clustered Index
+    // Scan) now normalizes to SeqScan and is flagged as a hotspot (rows READ, not
+    // output), while an efficient Index Seek normalizes to IndexSeek — the
+    // scan→index physical change is visible in the normalized operation.
+    assert_eq!(sroot.operation, "SeqScan", "Clustered Index Scan → SeqScan (full scan visible)");
+    assert_eq!(iroot.operation, "IndexSeek", "Index Seek → IndexSeek (distinct from scan)");
+    assert!(sroot.is_hotspot, "full table scan (reads ~20k) → hotspot");
+    assert!(!iroot.is_hotspot, "index seek → not a hotspot");
     eprintln!(
-        "CHK xv_t2_mssql — DEFECT DEF-MSSQL-CLUSTERED-SCAN: scan.op={} (native='{}') == index.op={} (native='{}'); scan hotspot={}",
-        sroot.operation, sroot.native_op, iroot.operation, iroot.native_op, sroot.is_hotspot
+        "CHK xv_t2_mssql — FIXED: scan.op={} (native='{}') hotspot={}; index.op={} (native='{}')",
+        sroot.operation, sroot.native_op, sroot.is_hotspot, iroot.operation, iroot.native_op
     );
 }
 

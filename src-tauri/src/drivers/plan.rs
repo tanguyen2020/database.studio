@@ -143,16 +143,34 @@ pub fn capability(system: &str) -> EngineCapability {
 const LARGE_ROWS: f64 = 10_000.0;
 
 /// Chuẩn hóa tên operation gốc về tập chung.
+///
+/// Thứ tự nhánh quan trọng (P1.2 — DEF-MSSQL-CLUSTERED-SCAN, DEF-SQLITE-LABEL):
+/// - `seek` → IndexSeek TRƯỚC mọi nhánh scan (Clustered Index Seek ≠ scan).
+/// - "Clustered Index Scan"/"Table Scan" là FULL SCAN dù có chữ "index" → SeqScan.
+/// - Có dùng index (Index Scan, SQLite `SEARCH/SCAN … USING INDEX`) → IndexScan.
+/// - `SCAN t` trần (SQLite, không index) → SeqScan.
 pub fn normalize_op(native: &str) -> String {
     let n = native.to_lowercase();
-    let canon = if n.contains("seq scan") || n == "scan" || n.contains("table scan") || n.contains("full") {
-        "SeqScan"
-    } else if n.contains("index only scan") {
+    let canon = if n.contains("index only scan") {
         "IndexOnlyScan"
+    } else if n.contains("seek") {
+        // Index Seek / Clustered Index Seek (MSSQL) — key access, KHÔNG phải scan.
+        "IndexSeek"
     } else if n.contains("bitmap") {
         "BitmapScan"
-    } else if n.contains("index scan") || n.contains("index range") || n.contains("seek") || (n.contains("search") && n.contains("index")) {
+    } else if n.contains("clustered index scan") || n.contains("table scan") || n.contains("seq scan") {
+        // Full read: Clustered Index Scan / Table Scan (MSSQL), Seq Scan (PG).
+        "SeqScan"
+    } else if n.contains("index scan")
+        || n.contains("index range")
+        || (n.contains("search") && n.contains("index"))
+        || (n.starts_with("scan") && n.contains("index"))
+    {
+        // Có dùng index: Index Scan (PG/MSSQL), SQLite SEARCH/SCAN … USING INDEX.
         "IndexScan"
+    } else if n.starts_with("scan") || n.contains("full") {
+        // Full read trần: SQLite `SCAN t` (không index) / generic "full".
+        "SeqScan"
     } else if n.contains("nested loop") {
         "NestedLoop"
     } else if n.contains("hash join") || n.contains("hash") && n.contains("join") {
@@ -470,6 +488,27 @@ fn build_mssql_node(relop: roxmltree::Node, warnings: &mut Vec<String>) -> PlanN
     {
         node.children.push(build_mssql_node(child, warnings));
     }
+    // Full scan MSSQL: EstimateRows có thể NHỎ (đã trừ predicate) nhưng thực tế đọc
+    // cả bảng → cờ hotspot theo rows ĐỌC (EstimatedRowsRead / TableCardinality),
+    // không dựa vào rows đầu ra như mark_hotspot (P1.2 — DEF-MSSQL-CLUSTERED-SCAN).
+    let rows_read = relop
+        .attribute("EstimatedRowsRead")
+        .and_then(|s| s.parse::<f64>().ok())
+        .or_else(|| {
+            relop
+                .descendants()
+                .find(|n| n.attribute("TableCardinality").is_some() && mssql_parent_relop(*n) == Some(relop.id()))
+                .and_then(|n| n.attribute("TableCardinality"))
+                .and_then(|s| s.parse::<f64>().ok())
+        });
+    if let Some(rr) = rows_read {
+        node.extra.insert("EstimatedRowsRead".into(), Value::from(rr));
+        if node.operation == "SeqScan" && rr > LARGE_ROWS && !node.is_hotspot {
+            node.is_hotspot = true;
+            let rel = node.extra.get("Relation Name").and_then(Value::as_str).unwrap_or("table");
+            warnings.push(format!("Full scan on {rel} (reads ~{} rows)", rr as i64));
+        }
+    }
     mark_hotspot(&mut node, warnings);
     node
 }
@@ -619,6 +658,17 @@ mod tests {
         assert_eq!(normalize_op("Index Only Scan"), "IndexOnlyScan");
         assert_eq!(normalize_op("Hash Join"), "HashJoin");
         assert_eq!(normalize_op("Nested Loop"), "NestedLoop");
+        // P1.2 — MSSQL scan vs seek phải phân biệt được
+        assert_eq!(normalize_op("Clustered Index Scan"), "SeqScan", "full scan, dù có chữ 'index'");
+        assert_eq!(normalize_op("Table Scan"), "SeqScan");
+        assert_eq!(normalize_op("Index Seek"), "IndexSeek");
+        assert_eq!(normalize_op("Clustered Index Seek"), "IndexSeek");
+        // SQLite: SCAN trần → SeqScan (DEF-SQLITE-LABEL); dùng index vẫn IndexScan
+        assert_eq!(normalize_op("SCAN t"), "SeqScan");
+        assert_eq!(normalize_op("SEARCH t USING INDEX ix (a=?)"), "IndexScan");
+        // covering index của SQLite giữ IndexScan như trước (tách IndexOnlyScan
+        // là cải tiến riêng, ngoài scope P1.2)
+        assert_eq!(normalize_op("SCAN t USING COVERING INDEX ix"), "IndexScan");
     }
 
     #[test]
@@ -740,7 +790,9 @@ mod tests {
         assert_eq!(root.children[0].operation, "SeqScan"); // Table Scan
         assert_eq!(root.children[0].extra.get("Relation Name").and_then(|v| v.as_str()), Some("db.dbo.orders"));
         assert!(root.children[0].is_hotspot, "Table Scan 50k rows → hotspot");
-        assert_eq!(root.children[1].operation, "IndexScan"); // Clustered Index Seek
+        // P1.2: Clustered Index Seek phân biệt với scan → IndexSeek (KHÔNG còn IndexScan)
+        assert_eq!(root.children[1].operation, "IndexSeek");
+        assert!(!root.children[1].is_hotspot, "seek 1 row → không hotspot");
         assert_eq!(plan.summary.total_cost, Some(0.55));
     }
 

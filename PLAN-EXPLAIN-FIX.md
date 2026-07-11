@@ -131,7 +131,9 @@ Khi thêm/đổi field trong `QueryPlan`/`PlanNode` hoặc thêm mode value:
 
 ---
 
-### EXP-P1.2 — MSSQL scan vs seek (+ SQLite label)
+### EXP-P1.2 — MSSQL scan vs seek (+ SQLite label) — ✅ DONE
+> Commit `EXP-P1.2`. `normalize_op` viết lại theo thứ tự nhánh an toàn: thêm op **`IndexSeek`** (`seek` bắt trước mọi scan → MSSQL Index/Clustered Index Seek); "Clustered Index Scan"/"Table Scan" → **`SeqScan`** (full scan dù có chữ "index"); dùng index (Index Scan, SQLite `SEARCH/SCAN … USING INDEX`) → `IndexScan`; `SCAN t` trần → `SeqScan` (DEF-SQLITE-LABEL). `build_mssql_node`: flag hotspot theo **rows ĐỌC** (`EstimatedRowsRead`/`TableCardinality`) vì EstimateRows của full scan có thể nhỏ sau predicate. **Scope thu hẹp**: covering-index → IndexOnlyScan bị revert (vượt scope, phá SQLite covering test — SQLite `SELECT id WHERE status` với index = covering) → giữ IndexScan như cũ, ghi follow-up. Tests: unit `normalize_ops` (+7 mapping) + `mssql_showplan_xml_tree` (Clustered Index Seek→IndexSeek). Integration: `xv_t2_mssql_scan_index_estimated` lật sang FIXED (scan→SeqScan+hotspot, seek→IndexSeek) EXIT=0; regression `xv_t1_sqlite`/`xv_t1_postgres`/`xv_t2_clickhouse` EXIT=0. Gates: check 0/0, vitest 510, `cargo test --lib plan::` 14. **Follow-up:** SQLite covering index → IndexOnlyScan (tách riêng).
+
 **Vì sao:** `normalize_op` gộp "Clustered Index Scan" (full scan) và "Index Seek" cùng ra `IndexScan` → thay đổi vật lý vô hình, full scan không flag. SQLite full scan giữ nhãn gốc `"SCAN t"`.
 
 **Backend (`drivers/plan.rs`)**
