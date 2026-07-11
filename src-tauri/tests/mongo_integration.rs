@@ -7,8 +7,11 @@
 use std::time::{Duration, Instant};
 
 use database_studio_lib::drivers::grid::{Col, GridChange};
+use std::sync::atomic::AtomicBool;
+
 use database_studio_lib::drivers::mongo::{MongoConnParams, MongoDriver};
 use database_studio_lib::drivers::plan::parse_mongodb;
+use database_studio_lib::drivers::postgres::ExportFormat;
 use database_studio_lib::drivers::types::StatementOutcome;
 use mongodb::bson::{doc, Document};
 use serde_json::json;
@@ -282,4 +285,18 @@ async fn mongo_introspection_databases_collections_indexes_fields() {
     let sessions = drv.admin_view("sessions").await.unwrap();
     assert!(sessions.cols.iter().any(|(n, _)| n == "pid"), "sessions có cột pid");
     drv.admin_view("users").await.expect("usersInfo Ok");
+
+    // --- streaming export (M5) ----------------------------------------------
+    // find() the whole collection → JSON array (bounded via cursor getMore).
+    let cancel = AtomicBool::new(false);
+    let mut buf: Vec<u8> = Vec::new();
+    let n = drv
+        .stream_export(Some("appdb"), "db.users.find({})", ExportFormat::Json, &mut buf, |_| {}, &cancel)
+        .await
+        .unwrap();
+    assert!(n >= 2, "export ít nhất Ann + Bob");
+    let text = String::from_utf8(buf).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&text).expect("output là JSON array hợp lệ");
+    assert_eq!(parsed.as_array().map(|a| a.len() as u64), Some(n), "số phần tử = số docs");
+    assert!(text.contains("$oid"), "ObjectId _id serialize Extended JSON trong export");
 }

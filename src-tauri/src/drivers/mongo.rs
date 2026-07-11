@@ -10,6 +10,8 @@
 //! can iterate them against a real `mongo:7` testcontainer instead of blind.
 
 use std::collections::HashMap;
+use std::io::Write;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use base64::Engine as _;
@@ -20,8 +22,27 @@ use serde_json::{json, Map, Value};
 
 use crate::drivers::grid;
 use crate::drivers::index_scan;
+use crate::drivers::postgres::ExportFormat;
 use crate::drivers::types::*;
 use crate::error::QueryError;
+
+/// Quote a CSV cell when it contains a delimiter/quote/newline.
+fn csv_cell(s: &str) -> String {
+    if s.contains([',', '"', '\n', '\r']) {
+        format!("\"{}\"", s.replace('"', "\"\""))
+    } else {
+        s.to_string()
+    }
+}
+
+/// Flatten a JSON value to a CSV cell string (objects/arrays → their JSON text).
+fn cell_text(v: &Value) -> String {
+    match v {
+        Value::Null => String::new(),
+        Value::String(s) => s.clone(),
+        other => other.to_string(),
+    }
+}
 
 /// Connection params mapped from a `ConnectionProfile` (reuses existing fields —
 /// no MongoDB-specific columns per the locked decision). `host` may be a bare
@@ -1139,6 +1160,112 @@ impl MongoDriver {
             }
             other => Err(perr(format!("Admin view '{other}' is not supported for MongoDB"))),
         }
+    }
+
+    /// Stream a `find()` to `out` one batch at a time via cursor getMore (bounded
+    /// memory, T24). JSON → an array of Extended-JSON documents; CSV → header from
+    /// the first batch's keys; SQL → `db.<coll>.insertOne(<doc>);` lines. Calls
+    /// `progress` every 5k docs and stops early when `cancel` is set.
+    pub async fn stream_export<W: Write>(
+        &self,
+        database: Option<&str>,
+        query: &str,
+        format: ExportFormat,
+        out: &mut W,
+        mut progress: impl FnMut(u64),
+        cancel: &AtomicBool,
+    ) -> Result<u64, QueryError> {
+        let werr = |e: std::io::Error| QueryError::new("mongodb", format!("write error: {e}"), e.to_string());
+        let call = parse_mongo_query(query)?;
+        if call.method != "find" {
+            return Err(perr("streaming export supports find() only"));
+        }
+        let db = self.client.database(database.unwrap_or(&self.database));
+        const BATCH: i32 = 1000;
+        let mut cmd = doc! { "find": &call.collection, "batchSize": BATCH };
+        if let Some(f) = call.args.first().and_then(value_to_doc) {
+            cmd.insert("filter", f);
+        }
+        if let Some(s) = call.sort.as_ref().and_then(value_to_doc) {
+            cmd.insert("sort", s);
+        }
+        if let Some(sk) = call.skip {
+            cmd.insert("skip", sk);
+        }
+        if let Some(l) = call.limit {
+            cmd.insert("limit", l);
+        }
+        let mut res = db.run_command(cmd).await.map_err(exec_err)?;
+
+        let mut n: u64 = 0;
+        let mut csv_header: Option<Vec<String>> = None;
+        let mut json_started = false;
+        if matches!(format, ExportFormat::Json) {
+            write!(out, "[").map_err(werr)?;
+        }
+        let mut first = true;
+        loop {
+            let cursor = res.get_document("cursor").map_err(exec_err)?;
+            let cursor_id = cursor.get_i64("id").unwrap_or(0);
+            let key = if first { "firstBatch" } else { "nextBatch" };
+            first = false;
+            let batch = cursor.get_array(key).cloned().unwrap_or_default();
+            for b in &batch {
+                if cancel.load(Ordering::Relaxed) {
+                    if matches!(format, ExportFormat::Json) {
+                        write!(out, "]").map_err(werr)?;
+                    }
+                    progress(n);
+                    return Ok(n);
+                }
+                if !matches!(b, Bson::Document(_)) {
+                    continue;
+                }
+                let jv = bson_to_json(b);
+                match format {
+                    ExportFormat::Json => {
+                        if json_started {
+                            write!(out, ",").map_err(werr)?;
+                        }
+                        write!(out, "{}", serde_json::to_string(&jv).unwrap_or_default()).map_err(werr)?;
+                        json_started = true;
+                    }
+                    ExportFormat::Csv => {
+                        let header = csv_header.get_or_insert_with(|| {
+                            jv.as_object().map(|o| o.keys().cloned().collect()).unwrap_or_default()
+                        });
+                        if n == 0 {
+                            writeln!(out, "{}", header.iter().map(|c| csv_cell(c)).collect::<Vec<_>>().join(",")).map_err(werr)?;
+                        }
+                        let line = header
+                            .iter()
+                            .map(|k| csv_cell(&cell_text(jv.get(k).unwrap_or(&Value::Null))))
+                            .collect::<Vec<_>>()
+                            .join(",");
+                        writeln!(out, "{line}").map_err(werr)?;
+                    }
+                    ExportFormat::Sql => {
+                        writeln!(out, "db.{}.insertOne({});", call.collection, serde_json::to_string(&jv).unwrap_or_default()).map_err(werr)?;
+                    }
+                }
+                n += 1;
+                if n % 5000 == 0 {
+                    progress(n);
+                }
+            }
+            if cursor_id == 0 {
+                break;
+            }
+            res = db
+                .run_command(doc! { "getMore": cursor_id, "collection": &call.collection, "batchSize": BATCH })
+                .await
+                .map_err(exec_err)?;
+        }
+        if matches!(format, ExportFormat::Json) {
+            write!(out, "]").map_err(werr)?;
+        }
+        progress(n);
+        Ok(n)
     }
 
     /// Terminate an in-progress operation (`killOp`).

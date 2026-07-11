@@ -21,6 +21,7 @@ pub async fn export_query_to_file(
     path: String,
     format: String,
     table: Option<String>,
+    database: Option<String>,
     export_id: String,
     on_progress: tauri::ipc::Channel<u64>,
 ) -> Result<u64, AppError> {
@@ -49,10 +50,16 @@ pub async fn export_query_to_file(
                     }, &cancel)
                     .await?
                 }
+                LiveConnection::Mongo(m) => {
+                    m.stream_export(database.as_deref(), &sql, fmt, &mut w, |n| {
+                        let _ = on_progress.send(n);
+                    }, &cancel)
+                    .await?
+                }
                 _ => {
                     return Err(QueryError::new(
                         "export",
-                        "Streaming export currently supports PostgreSQL and ClickHouse",
+                        "Streaming export currently supports PostgreSQL, ClickHouse and MongoDB",
                         "unsupported",
                     ))
                 }

@@ -696,10 +696,20 @@ export const exportQueryToFile = (
   table: string | null,
   exportId: string,
   onProgress: (rows: number) => void,
+  database?: string,
 ): Promise<number> => {
   const channel = new Channel<number>()
   channel.onmessage = onProgress
-  return tauriInvoke<number>('export_query_to_file', { connId, sql, path, format, table, exportId, onProgress: channel })
+  return tauriInvoke<number>('export_query_to_file', {
+    connId,
+    sql,
+    path,
+    format,
+    table,
+    database: database ?? null,
+    exportId,
+    onProgress: channel,
+  })
 }
 
 export const cancelExport = (exportId: string) => invoke<void>('cancel_export', { exportId })
