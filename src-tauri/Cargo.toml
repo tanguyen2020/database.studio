@@ -89,6 +89,10 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 # async-trait: impl scylla AddressTranslator (dùng cho Cassandra qua NAT/tunnel/port-forward).
 async-trait = "0.1"
 
+# MongoDB (document store) — official async driver; default features use rustls
+# (no OpenSSL/nasm), đồng bộ TLS toàn repo. bson đi kèm (re-export mongodb::bson).
+mongodb = "3"
+
 # Misc
 uuid = { version = "1", features = ["v4"] }
 thiserror = "2"

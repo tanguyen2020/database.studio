@@ -1,6 +1,6 @@
 /*
  * GENERATED — do not edit by hand.
- * Sinh bởi scripts/extract-tokens.mjs từ "Database Studio.dc.html" (sha256 58b20e0ff5e6).
+ * Sinh bởi scripts/extract-tokens.mjs từ "Database Studio.dc.html" (sha256 af89d4d232c2).
  * Chạy lại: npm run tokens
  */
 
@@ -81,6 +81,10 @@
   --sys-sqlite-bg: #0a1e35;
   --sys-sqlite-border: #12406a;
   --sys-sqlite-fg: #60b8f5;
+  --sys-mongodb-accent: #00ED64;
+  --sys-mongodb-bg: #04231a;
+  --sys-mongodb-border: #0a5c3c;
+  --sys-mongodb-fg: #57e39a;
   --sys-orphan-accent: #5b6473;
   --sys-orphan-bg: #2a2f3a;
   --sys-orphan-border: #3a4150;
@@ -180,9 +184,12 @@
   --px-740: 740px;
   --px-840: 840px;
 
-/* Mọi màu hex literal trong prototype (99 màu) */
+/* Mọi màu hex literal trong prototype (103 màu) */
+  --hex-00ed64: #00ed64;
+  --hex-04231a: #04231a;
   --hex-0a1e35: #0a1e35;
   --hex-0a2030: #0a2030;
+  --hex-0a5c3c: #0a5c3c;
   --hex-0d2e1a: #0d2e1a;
   --hex-0f1219: #0f1219;
   --hex-0f80cc: #0f80cc;
@@ -221,6 +228,7 @@
   --hex-3d2f6b: #3d2f6b;
   --hex-4b5563: #4b5563;
   --hex-56b6c2: #56b6c2;
+  --hex-57e39a: #57e39a;
   --hex-5b6473: #5b6473;
   --hex-5b7cff: #5b7cff;
   --hex-5b9bd5: #5b9bd5;

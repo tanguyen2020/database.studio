@@ -109,6 +109,7 @@ impl ConnectionProfile {
             SystemType::Redis => 6379,
             SystemType::Kafka => 9092,
             SystemType::Nats => 4222,
+            SystemType::Mongodb => 27017,
         }
     }
 }

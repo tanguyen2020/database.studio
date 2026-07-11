@@ -13,6 +13,7 @@ export type SystemType =
   | 'redis'
   | 'kafka'
   | 'nats'
+  | 'mongodb'
 
 export type Environment = 'production' | 'staging' | 'development' | 'local'
 export type SqliteMode = 'read-write' | 'read-only' | 'in-memory'
@@ -218,6 +219,7 @@ export type TabContentType =
   | 'kafka-schema-registry'
   | 'cassandra-ring'
   | 'cassandra-table'
+  | 'mongo-collection'
   | 'table-designer'
   | 'query-plan'
   | 'er-diagram'

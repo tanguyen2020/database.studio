@@ -12,6 +12,7 @@ export type SystemCategory =
   | 'RELATIONAL'
   | 'ANALYTICAL'
   | 'WIDE COLUMN'
+  | 'DOCUMENT'
   | 'CACHE'
   | 'STREAMING'
   | 'EMBEDDED'
@@ -44,6 +45,7 @@ const EXTRA: Record<
   sqlite: { category: 'EMBEDDED', defaultPort: null, quote: 'double', available: true },
   clickhouse: { category: 'ANALYTICAL', defaultPort: 8123, quote: 'backtick', available: true },
   cassandra: { category: 'WIDE COLUMN', defaultPort: 9042, quote: 'double', available: true }, // Phase 4b
+  mongodb: { category: 'DOCUMENT', defaultPort: 27017, quote: null, available: true }, // document store
   redis: { category: 'CACHE', defaultPort: 6379, quote: null, available: true }, // Phase 3
   kafka: { category: 'STREAMING', defaultPort: 9092, quote: null, available: true }, // Phase 4
   nats: { category: 'STREAMING', defaultPort: 4222, quote: null, available: true }, // Phase 3
@@ -66,6 +68,7 @@ export const CATEGORY_ORDER: SystemCategory[] = [
   'RELATIONAL',
   'ANALYTICAL',
   'WIDE COLUMN',
+  'DOCUMENT',
   'CACHE',
   'STREAMING',
   'EMBEDDED',
@@ -78,6 +81,7 @@ export const SYSTEM_ORDER: SystemKey[] = [
   'mssql',
   'clickhouse',
   'cassandra',
+  'mongodb',
   'redis',
   'kafka',
   'nats',

@@ -6,6 +6,7 @@ pub mod clickhouse;
 pub mod grid;
 pub mod index_scan;
 pub mod kafka;
+pub mod mongo;
 pub mod mssql;
 pub mod mysql;
 pub mod nats;
@@ -24,6 +25,7 @@ use crate::error::QueryError;
 use cassandra::{CassandraConnParams, CassandraDriver};
 use clickhouse::{ChConnParams, ChDriver};
 use kafka::{KafkaConnParams, KafkaDriver};
+use mongo::{MongoConnParams, MongoDriver};
 use mssql::{MssqlConnParams, MssqlDriver};
 use mysql::{MySqlConnParams, MySqlDriver};
 use nats::{NatsConnParams, NatsDriver};
@@ -49,6 +51,7 @@ pub enum LiveConnection {
     Nats(NatsDriver),
     Kafka(KafkaDriver),
     Cassandra(CassandraDriver),
+    Mongo(MongoDriver),
 }
 
 fn pg_params(p: &ConnectionProfile, ep: &Endpoint, password: &str) -> PgConnParams {
@@ -209,6 +212,18 @@ fn cassandra_params(p: &ConnectionProfile, ep: &Endpoint, password: &str) -> Cas
     }
 }
 
+fn mongo_params(p: &ConnectionProfile, ep: &Endpoint, password: &str) -> MongoConnParams {
+    MongoConnParams {
+        host: ep.host.clone(),
+        port: ep.port,
+        database: p.database.clone(),
+        user: p.user.clone(),
+        password: password.to_string(),
+        ssl: p.ssl,
+        ssl_ca: p.ssl_ca.clone(),
+    }
+}
+
 impl LiveConnection {
     pub async fn connect(
         profile: &ConnectionProfile,
@@ -246,6 +261,10 @@ impl LiveConnection {
             SystemType::Cassandra => Ok(Self::Cassandra(
                 CassandraDriver::connect(&cassandra_params(profile, endpoint, password)).await?,
             )),
+            SystemType::Mongodb => Ok(Self::Mongo(
+                MongoDriver::connect(&mongo_params(profile, endpoint, password)).await?,
+            )),
+            #[allow(unreachable_patterns)]
             other => Err(QueryError::new(
                 other.as_str(),
                 format!("System {} is not supported yet", other.as_str()),
@@ -276,6 +295,10 @@ impl LiveConnection {
             SystemType::Cassandra => {
                 CassandraDriver::test(&cassandra_params(profile, endpoint, password)).await
             }
+            SystemType::Mongodb => {
+                MongoDriver::test(&mongo_params(profile, endpoint, password)).await
+            }
+            #[allow(unreachable_patterns)]
             other => TestResult {
                 ok: false,
                 latency_ms: None,
@@ -304,6 +327,9 @@ impl LiveConnection {
             // CQL editor: first page only via generic exec (paging + warnings
             // qua command cql_exec chuyên biệt).
             Self::Cassandra(d) => Box::pin(async move { d.exec_cql(sql, None, None).await.map(|o| o.outcome) }),
+            // Mongo editor: first page only via generic exec (paging + warnings
+            // đi qua command mongo_exec chuyên biệt).
+            Self::Mongo(d) => Box::pin(async move { d.exec_mongo(sql, None, None).await.map(|o| o.outcome) }),
         }
     }
 
@@ -318,6 +344,7 @@ impl LiveConnection {
             Self::Nats(d) => d.ping().await,
             Self::Kafka(d) => d.ping().await,
             Self::Cassandra(d) => d.ping().await,
+            Self::Mongo(d) => d.ping().await,
         }
     }
 
@@ -348,6 +375,11 @@ impl LiveConnection {
                 "Filter builder does not support Cassandra — use the CQL editor with WHERE on the key",
                 "cassandra param select not supported",
             )),
+            Self::Mongo(_) => Err(QueryError::new(
+                "mongodb",
+                "Filter builder does not support MongoDB — use the query editor with a find() filter",
+                "mongodb param select not supported",
+            )),
         }
     }
 
@@ -373,6 +405,8 @@ impl LiveConnection {
             // Editable grid = INSERT/UPDATE/DELETE by full primary key, run as CQL
             // (no OLTP transaction — statements applied sequentially).
             Self::Cassandra(d) => d.apply_grid(changes).await,
+            // Mongo: insert/update/delete document by `_id` (no OLTP transaction).
+            Self::Mongo(d) => d.apply_grid(changes).await,
         }
     }
 
@@ -390,6 +424,8 @@ impl LiveConnection {
             Self::Kafka(_) => Ok(Vec::new()),
             // Cassandra: cây keyspace lấy qua command cassandra_tree chuyên biệt.
             Self::Cassandra(_) => Ok(Vec::new()),
+            // Mongo: cây database→collection lấy qua command mongo_* chuyên biệt.
+            Self::Mongo(_) => Ok(Vec::new()),
         }
     }
 
@@ -415,6 +451,7 @@ impl LiveConnection {
             Self::Nats(_) => Ok(Vec::new()),
             Self::Kafka(_) => Ok(Vec::new()),
             Self::Cassandra(_) => Ok(Vec::new()),
+            Self::Mongo(_) => Ok(Vec::new()),
         }
     }
 
@@ -429,6 +466,7 @@ impl LiveConnection {
             Self::Nats(_) => Ok(Vec::new()),
             Self::Kafka(_) => Ok(Vec::new()),
             Self::Cassandra(_) => Ok(Vec::new()),
+            Self::Mongo(_) => Ok(Vec::new()),
         }
     }
 
@@ -443,6 +481,7 @@ impl LiveConnection {
             Self::Nats(_) => Ok(Vec::new()),
             Self::Kafka(_) => Ok(Vec::new()),
             Self::Cassandra(_) => Ok(Vec::new()),
+            Self::Mongo(_) => Ok(Vec::new()),
         }
     }
 
@@ -458,6 +497,7 @@ impl LiveConnection {
             Self::Nats(_) => Ok(Vec::new()),
             Self::Kafka(_) => Ok(Vec::new()),
             Self::Cassandra(_) => Ok(Vec::new()),
+            Self::Mongo(_) => Ok(Vec::new()),
         }
     }
 
@@ -472,6 +512,7 @@ impl LiveConnection {
             Self::Nats(_) => Ok(Vec::new()),
             Self::Kafka(_) => Ok(Vec::new()),
             Self::Cassandra(_) => Ok(Vec::new()),
+            Self::Mongo(_) => Ok(Vec::new()),
         }
     }
 
@@ -486,6 +527,7 @@ impl LiveConnection {
             Self::Nats(_) => Ok(Vec::new()),
             Self::Kafka(_) => Ok(Vec::new()),
             Self::Cassandra(_) => Ok(Vec::new()),
+            Self::Mongo(_) => Ok(Vec::new()),
         }
     }
 
@@ -525,6 +567,8 @@ impl LiveConnection {
             Self::Redis(_) => Ok(Vec::new()),
             Self::Nats(_) => Ok(Vec::new()),
             Self::Kafka(_) => Ok(Vec::new()),
+            // Mongo sharding ≠ declarative partitioning (ngoài parity core).
+            Self::Mongo(_) => Ok(Vec::new()),
         }
     }
 
@@ -548,6 +592,8 @@ impl LiveConnection {
             ),
             Self::Clickhouse(d) => ("clickhouse", d.scan_indexes(schema).await?, Vec::new()),
             Self::Cassandra(d) => ("cassandra", d.scan_indexes(schema).await?, Vec::new()),
+            Self::Mongo(d) => ("mongodb", d.scan_indexes(schema).await?, Vec::new()),
+            #[allow(unreachable_patterns)]
             _ => {
                 return Ok(index_scan::IndexScanResult {
                     system: "unknown".into(),

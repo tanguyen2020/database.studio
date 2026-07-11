@@ -96,6 +96,9 @@
       else if (p.system === 'kafka') { /* explorer shows topics; consumer opens per topic */ }
       // Cassandra: CQL editor (tái dùng SQL editor + result grid, title Untitled CQL)
       else if (p.system === 'cassandra') tabs.openSqlTab({ connectionId: p.id, title: 'Untitled CQL' })
+      // MongoDB: collections live in the ObjectExplorer sidebar — do NOT open a tab
+      // (click a collection to open its document view). Query editor mở qua menu.
+      else if (p.system === 'mongodb') { /* explorer shows collections; view opens per collection */ }
     }
   }
 

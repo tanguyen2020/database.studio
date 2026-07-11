@@ -77,6 +77,10 @@
       <path d="M15 10.5 18 9" />
       <path d="M9 13.5 6 15" />
       <path d="M15 13.5 18 15" />
+    {:else if key === 'mongodb'}
+      <!-- leaf (MongoDB mark) -->
+      <path d="M12 2c3 4 5 7 5 11a5 5 0 0 1-10 0c0-4 2-7 5-11Z" />
+      <path d="M12 6.5V21" />
     {:else if key === 'sqlite'}
       <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
       <polyline points="14 2 14 8 20 8" />

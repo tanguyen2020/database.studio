@@ -29,12 +29,13 @@ const EXPECTED: Record<string, [badge: string, accent: string]> = {
   redis: ['RE', '#D82C20'], // RE — không phải RD (SPEC_v2 ghi sai)
   kafka: ['KF', '#8B5CF6'],
   nats: ['NT', '#27AE60'], // NT — không phải NA
+  mongodb: ['MG', '#00ED64'],
 }
 
 describe('SYSTEMS metadata (từ systems.gen.ts)', () => {
-  it('đủ 10 hệ + orphan', () => {
-    expect(SYSTEM_ORDER).toHaveLength(10)
-    expect(Object.keys(SYSTEMS)).toHaveLength(11)
+  it('đủ 11 hệ + orphan', () => {
+    expect(SYSTEM_ORDER).toHaveLength(11)
+    expect(Object.keys(SYSTEMS)).toHaveLength(12)
   })
 
   for (const [key, [badge, accent]] of Object.entries(EXPECTED)) {
@@ -50,7 +51,7 @@ describe('SYSTEMS metadata (từ systems.gen.ts)', () => {
   })
 
   it('systemMeta fallback về orphan cho hệ lạ/null', () => {
-    expect(systemMeta('mongodb').key).toBe('orphan')
+    expect(systemMeta('couchdb').key).toBe('orphan')
     expect(systemMeta(null).key).toBe('orphan')
   })
 
@@ -109,7 +110,7 @@ describe('SystemIcon (port dbIcon() HTML dòng 3883)', () => {
     expect(img.getAttribute('width')).toBe('16')
   })
 
-  it.each(['redis', 'kafka', 'nats', 'mariadb', 'cassandra', 'sqlite'])(
+  it.each(['redis', 'kafka', 'nats', 'mariadb', 'cassandra', 'sqlite', 'mongodb'])(
     '%s dùng SVG stroke accent, viewBox 24, strokeWidth 1.9',
     (key) => {
       const { container } = render(SystemIcon, { system: key })

@@ -18,6 +18,7 @@ pub enum SystemType {
     Redis,
     Kafka,
     Nats,
+    Mongodb,
 }
 
 impl SystemType {
@@ -33,6 +34,7 @@ impl SystemType {
             SystemType::Redis => "redis",
             SystemType::Kafka => "kafka",
             SystemType::Nats => "nats",
+            SystemType::Mongodb => "mongodb",
         }
     }
 
