@@ -366,4 +366,33 @@ mod tests {
         assert!(!contains_word("UNDELETED ROWS", "DELETE"));
         assert!(!contains_word("MYDELETE", "DELETE"));
     }
+
+    #[test]
+    fn build_explain_per_dialect() {
+        let q = "SELECT 1";
+        // Postgres: estimated không BUFFERS (tránh lỗi PG<16); actual có ANALYZE.
+        assert_eq!(build_explain("postgres", q, false), "EXPLAIN (FORMAT JSON) SELECT 1");
+        assert_eq!(
+            build_explain("postgres", q, true),
+            "EXPLAIN (ANALYZE, BUFFERS, VERBOSE, FORMAT JSON) SELECT 1"
+        );
+        // MySQL: luôn EXPLAIN FORMAT=JSON (actual bị bỏ qua — estimated-only).
+        assert_eq!(build_explain("mysql", q, true), "EXPLAIN FORMAT=JSON SELECT 1");
+        // MariaDB: actual → ANALYZE FORMAT=JSON; estimated → EXPLAIN FORMAT=JSON.
+        assert_eq!(build_explain("mariadb", q, true), "ANALYZE FORMAT=JSON SELECT 1");
+        assert_eq!(build_explain("mariadb", q, false), "EXPLAIN FORMAT=JSON SELECT 1");
+        // SQLite / ClickHouse / fallback.
+        assert_eq!(build_explain("sqlite", q, false), "EXPLAIN QUERY PLAN SELECT 1");
+        assert_eq!(build_explain("clickhouse", q, false), "EXPLAIN indexes = 1 SELECT 1");
+        assert_eq!(build_explain("oracle", q, false), "EXPLAIN SELECT 1");
+        // trailing ';' được cắt.
+        assert_eq!(build_explain("postgres", "SELECT 1;", false), "EXPLAIN (FORMAT JSON) SELECT 1");
+    }
+
+    #[test]
+    fn parse_for_system_non_rows_is_typed_error() {
+        // EXPLAIN không trả rows nào cho PG → lỗi có thông điệp, không panic/rỗng.
+        let err = parse_for_system("postgres", false, &[]).unwrap_err();
+        assert!(err.contains("no rows") || err.to_lowercase().contains("empty"), "typed error: {err}");
+    }
 }

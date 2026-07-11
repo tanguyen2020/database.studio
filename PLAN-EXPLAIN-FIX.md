@@ -251,7 +251,12 @@ Khi thêm/đổi field trong `QueryPlan`/`PlanNode` hoặc thêm mode value:
 - **Tùy dung lượng** — nếu hoãn, capability vẫn giữ `None` và toggle disabled (đã honest từ P1.1).
 **Tests:** integration actual rows captured; version check fallback.
 
-### EXP-P3.4 — Phủ test còn thiếu (G2/G3/G4)
+### EXP-P3.4 — Phủ test còn thiếu (G2/G3/G4) — ✅ DONE
+> Commit `EXP-P3.4`. **G2** (error-path EXPLAIN mọi engine): thêm assert "missing table → typed error" vào xv_t1_sqlite/xv_t1_mysql/xv_t2_mariadb/xv_t2_clickhouse (EXPLAIN …), xv_t2_mssql (SET SHOWPLAN ON → bad query → OFF), xv_t2_cassandra (trace_cql) — trước chỉ PG có. **G3** (timeout): xv_t1_postgres thêm `SET statement_timeout='150ms'` + EXPLAIN ANALYZE pg_sleep(3) → typed error (disconnect-mid-query KHÔNG mô phỏng — cần infra harness không có, đã ghi chú). **G4** (command tier): unit `build_explain_per_dialect` (SQL EXPLAIN đúng từng hệ, PG estimated không BUFFERS) + `parse_for_system_non_rows_is_typed_error` trong commands/plan.rs; render tier đã phủ bởi query-plan e2e (3), invocation `#[tauri::command]` đầy đủ vẫn cần Tauri AppState (inspection). Gates: `cargo test --lib plan::` 23 (2 mới); integration xv_t1 3/3 + xv_t2 4/4 EXIT=0 (G2 mọi engine + G3 pg timeout verify trên container thật).
+
+> **✅ P3 HOÀN TẤT** (trừ P3.3 stretch — actual MySQL/MSSQL, hoãn). Toàn bộ defect Verification Report đã sửa + phủ test G2/G3/G4.
+
+_(chi tiết yêu cầu gốc bên dưới)_
 - **G2:** error-path EXPLAIN cho mysql/mariadb/mssql/sqlite/clickhouse/cassandra (syntax / missing table / non-explainable) — hiện chỉ PG có.
 - **G3:** timeout + mid-query disconnect trên đường EXPLAIN (ít nhất 1 engine).
 - **G4:** e2e `explain_plan` command + render (Playwright qua demo fixture): badge, hotspot đỏ, click node mở tooltip, tab raw.

@@ -159,6 +159,8 @@ async fn xv_t1_sqlite_scan_vs_index() {
     assert!(idx.raw.to_uppercase().contains("INDEX"), "raw must show index usage (SQLite may say USING [COVERING] INDEX)");
     assert!(find_op(&iroot, "IndexScan").is_some(), "index → normalized IndexScan node");
     assert!(!any(&iroot, &|n| n.is_hotspot), "index → no hotspot");
+    // G2: EXPLAIN error path — missing table → typed error, never a silent plan.
+    assert!(drv.exec("EXPLAIN QUERY PLAN SELECT * FROM no_such_table_xyz").await.is_err(), "sqlite EXPLAIN on missing table → typed error");
     eprintln!("CHK xv_t1_sqlite_scan_vs_index OK");
 }
 
@@ -287,6 +289,12 @@ async fn xv_t1_postgres_scan_index_actual_errors() {
     );
     assert!(!err_missing.is_empty(), "missing table → typed error, not empty plan");
     assert!(!err_syntax.is_empty(), "syntax error → typed error, not empty plan");
+    // G3: query timeout during EXPLAIN ANALYZE → typed error (statement_timeout),
+    // never a silent/empty plan. (Disconnect-mid-query is not simulated here.)
+    drv.exec("SET statement_timeout = '150ms'").await.unwrap();
+    let timed = drv.exec("EXPLAIN (ANALYZE, FORMAT JSON) SELECT pg_sleep(3)").await;
+    let _ = drv.exec("SET statement_timeout = 0").await;
+    assert!(timed.is_err(), "PG EXPLAIN ANALYZE exceeding statement_timeout → typed error");
     eprintln!("CHK xv_t1_postgres_scan_index_actual_errors OK");
 }
 
@@ -434,6 +442,8 @@ async fn xv_t1_mysql_scan_index_actual_ignored() {
     let groot = grp.root.clone().unwrap();
     assert!(find_op(&groot, "Sort").is_some(), "ORDER BY → Sort node surfaced: {json_grp}");
     assert!(find_op(&groot, "Aggregate").is_some(), "GROUP BY → Aggregate node surfaced: {json_grp}");
+    // G2: EXPLAIN error path — missing table → typed error.
+    assert!(drv.exec("EXPLAIN FORMAT=JSON SELECT * FROM no_such_table_xyz").await.is_err(), "mysql EXPLAIN on missing table → typed error");
     eprintln!("CHK xv_t1_mysql_scan_index_actual_ignored OK");
 }
 
@@ -500,6 +510,8 @@ async fn xv_t2_mariadb_scan_index_analyze_actual() {
     assert!(find_op(&idx.root.clone().unwrap(), "IndexScan").is_some(), "index → IndexScan");
     assert_eq!(act.mode, "actual", "ANALYZE → mode actual");
     assert!(any(&act.root.clone().unwrap(), &|n| n.actual_rows.is_some()), "MariaDB actual_rows (r_rows) captured");
+    // G2: EXPLAIN error path — missing table → typed error.
+    assert!(drv.exec("EXPLAIN FORMAT=JSON SELECT * FROM no_such_table_xyz").await.is_err(), "mariadb EXPLAIN on missing table → typed error");
     eprintln!("CHK xv_t2_mariadb_scan_index_analyze_actual OK");
 }
 
@@ -587,6 +599,11 @@ async fn xv_t2_mssql_scan_index_estimated() {
     } else {
         eprintln!("NOTE xv_t2_mssql: no MissingIndexes hint emitted for this query");
     }
+    // G2: SHOWPLAN error path — missing table → typed error (SET OFF afterwards).
+    drv.exec("SET SHOWPLAN_XML ON").await.unwrap();
+    let bad_ms = drv.exec("SELECT * FROM no_such_table_xyz").await;
+    let _ = drv.exec("SET SHOWPLAN_XML OFF").await;
+    assert!(bad_ms.is_err(), "mssql SHOWPLAN on missing table → typed error");
     eprintln!(
         "CHK xv_t2_mssql — FIXED: scan.op={} (native='{}') hotspot={}; index.op={} (native='{}')",
         sroot.operation, sroot.native_op, sroot.is_hotspot, iroot.operation, iroot.native_op
@@ -648,6 +665,8 @@ async fn xv_t2_clickhouse_fullread_vs_key() {
     assert!(!key_flagged, "pruned key read (1/6) not flagged");
     // metadata (Condition/Parts/Granules/PrimaryKey) must NOT appear as plan nodes
     assert!(!any(&froot, &|n| n.operation.starts_with("Condition") || n.operation.starts_with("Granules") || n.operation.starts_with("Parts")), "index metadata folded into read node, not separate nodes");
+    // G2: EXPLAIN error path — missing table → typed error.
+    assert!(drv.exec("EXPLAIN indexes = 1 SELECT * FROM no_such_table_xyz").await.is_err(), "clickhouse EXPLAIN on missing table → typed error");
     eprintln!(
         "CHK xv_t2_clickhouse — FIXED: full(6/6) flagged={} vs key(1/6) flagged={}",
         full_flagged, key_flagged
@@ -741,5 +760,7 @@ async fn xv_t2_cassandra_tracing_no_fabricated_cost() {
     // ANALYZE plan.
     assert_eq!(p_filter.mode, "tracing", "Cassandra tracing → mode=tracing (not actual)");
     assert_eq!(p_key.mode, "tracing");
+    // G2: tracing error path — non-existent table → typed error (not empty plan).
+    assert!(drv.trace_cql("SELECT * FROM xv_ks.no_such_table").await.is_err(), "cassandra tracing on missing table → typed error");
     eprintln!("CHK xv_t2_cassandra_tracing OK — mode emitted = '{}'", p_filter.mode);
 }
