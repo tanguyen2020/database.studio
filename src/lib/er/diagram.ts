@@ -55,6 +55,40 @@ export interface Rel {
   to_column: string
 }
 
+/** A table with its column list (name + pk flag) — enough to resolve a default
+ *  anchor column for a forgiving drop. */
+export interface AnchorTable {
+  name: string
+  columns: { name: string; pk?: boolean }[]
+}
+
+/** The column a table anchors on when a drop didn't land on a precise column
+ *  handle: its primary key, else its first column, else empty. Pure. */
+export function keyColumn(tables: AnchorTable[], tableName: string): string {
+  const t = tables.find((x) => x.name === tableName)
+  if (!t) return ''
+  return (t.columns.find((c) => c.pk) ?? t.columns[0])?.name ?? ''
+}
+
+/** Forgiving-drop resolution: fill any anchor-less side of a hand-drawn connection
+ *  with that table's key column, so dropping anywhere on a table node (not a precise
+ *  column dot) still yields a complete connection. A handle that isn't a real column
+ *  of its table (empty, or the full-node `__node__` drop target) is treated as
+ *  anchor-less → defaults to the key column. Pure → unit-testable. */
+export function resolveConnection(conn: RelConnection, tables: AnchorTable[]): RelConnection {
+  const resolveSide = (table: string, handle: string | null | undefined): string => {
+    const t = tables.find((x) => x.name === table)
+    const isColumn = !!handle && !!t?.columns.some((c) => c.name === handle)
+    return isColumn ? (handle as string) : keyColumn(tables, table)
+  }
+  return {
+    source: conn.source,
+    target: conn.target,
+    sourceHandle: resolveSide(conn.source, conn.sourceHandle),
+    targetHandle: resolveSide(conn.target, conn.targetHandle),
+  }
+}
+
 /** Validate a hand-drawn connection (Phase 3) into a relationship, or return null
  *  when it's incomplete (a node-level / anchor-less drop) or a duplicate of an
  *  existing schema FK or an already-pending relationship. Pure → unit-testable.

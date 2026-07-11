@@ -9,7 +9,7 @@
   import * as ipc from '$lib/ipc'
   import { toasts } from '$lib/stores/toast.svelte'
   import { toMermaid, toSvg, tableSize, type ErTable } from '$lib/er/mermaid'
-  import { addTable, flowPosition, visibleTables, relationshipFromConnection, type Viewport, type RelConnection } from '$lib/er/diagram'
+  import { addTable, flowPosition, visibleTables, relationshipFromConnection, resolveConnection, type Viewport, type RelConnection } from '$lib/er/diagram'
   import ErTableNode from './er/ErTableNode.svelte'
   import { connections } from '$lib/stores/connections.svelte'
   import { tabs } from '$lib/stores/tabs.svelte'
@@ -79,8 +79,18 @@
   // existing FK/edge rendering (layout/edgeFor) is reused untouched. An invalid drop
   // (not on an anchor) never fires onconnect, so the temp line just disappears.
   function onConnect(conn: RelConnection) {
-    const rel = relationshipFromConnection(conn, fks, pendingFks)
-    if (!rel) return // incomplete (anchor-less drop) or duplicate → ignore
+    // Forgiving drop: if the pointer landed on a table node (not a precise column
+    // anchor), default the missing side to that table's PK (or first column) so the
+    // relationship still resolves and the arrow persists — i.e. dropping anywhere on
+    // table B works whether or not B already has FKs.
+    const resolved = resolveConnection(conn, tables)
+    const rel = relationshipFromConnection(resolved, fks, pendingFks)
+    if (!rel) {
+      // Already related (schema FK or a pending one) → the arrow is already on the
+      // canvas; nothing to add. Only truly incomplete drops are silent.
+      if (resolved.source && resolved.target) toasts.success('Relationship already exists')
+      return
+    }
     pendingFks = [...pendingFks, { name: `fk_${rel.from_table}_${rel.from_column}`, ...rel }]
     layout()
     toasts.success(`Relationship ${rel.from_table}.${rel.from_column} → ${rel.to_table}.${rel.to_column} (unsaved — use “Save to DB”)`)
@@ -135,6 +145,7 @@
     }
     Dagre.layout(g)
     const saved = (tab.state as { positions?: Record<string, { x: number; y: number }> }).positions ?? {}
+    const savedSizes = (tab.state as { sizes?: Record<string, { width: number; height: number }> }).sizes ?? {}
     const pos: Record<string, { x: number; y: number }> = {}
     nodes = shown.map((t) => {
       const n = g.node(t.name)
@@ -142,7 +153,9 @@
       // Ưu tiên vị trí đã lưu (persist qua tab.state); nếu chưa có → dùng dagre.
       const p = saved[t.name] ?? { x: (n?.x ?? 0) - s.w / 2, y: (n?.y ?? 0) - s.h / 2 }
       pos[t.name] = p
-      return { id: t.name, type: 'table', position: p, data: { table: t, showAll } }
+      // Kích thước đã lưu (resize thủ công) — undefined → auto theo nội dung.
+      const sz = savedSizes[t.name]
+      return { id: t.name, type: 'table', position: p, width: sz?.width, height: sz?.height, data: { table: t, showAll, onResizeEnd: saveLayout } }
     })
     positions = pos
     // Arrow points from the child (FK side, N) to the referenced parent (1).
@@ -170,15 +183,14 @@
   // qua tabs.schedulePersist) → mở lại tab giữ đúng layout cũ.
   function saveLayout() {
     const p: Record<string, { x: number; y: number }> = {}
-    for (const n of nodes) p[n.id] = { x: n.position.x, y: n.position.y }
-    tab.state = { ...(tab.state as object), positions: p }
+    const sz: Record<string, { width: number; height: number }> = {}
+    for (const n of nodes) {
+      p[n.id] = { x: n.position.x, y: n.position.y }
+      // Persist a manually-resized size (skip auto-sized nodes → stay content-sized).
+      if (n.width && n.height) sz[n.id] = { width: n.width, height: n.height }
+    }
+    tab.state = { ...(tab.state as object), positions: p, sizes: sz }
     tabs.schedulePersist()
-  }
-
-  // Auto-layout: xoá vị trí đã lưu rồi tính lại bằng dagre.
-  function autoLayout() {
-    tab.state = { ...(tab.state as object), positions: {} }
-    layout()
   }
 
   // Drop a table dragged from the Object Explorer onto the canvas (AUDIT-3 item 1).
@@ -307,7 +319,6 @@
         <span onclick={saveToDb} onkeydown={(e) => e.key === 'Enter' && saveToDb()} role="button" tabindex="0" style="font-size:var(--px-11_5);background:#27AE60;color:var(--hex-fff);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer;font-weight:600">Save to DB ({pendingFks.length})</span>
       {/if}
       <span onclick={() => { showAll = !showAll; applyShowAll() }} onkeydown={(e) => e.key === 'Enter' && (showAll = !showAll, applyShowAll())} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">{showAll ? 'PK+FK only' : 'Show all columns'}</span>
-      <span onclick={autoLayout} onkeydown={(e) => e.key === 'Enter' && autoLayout()} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">Auto-layout</span>
       <span onclick={downloadPng} onkeydown={(e) => e.key === 'Enter' && downloadPng()} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">PNG</span>
       <span onclick={downloadSvg} onkeydown={(e) => e.key === 'Enter' && downloadSvg()} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">SVG</span>
       <span onclick={copyMermaid} onkeydown={(e) => e.key === 'Enter' && copyMermaid()} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-6);padding:var(--px-4) var(--px-12);cursor:pointer;font-weight:600">Mermaid</span>
@@ -351,7 +362,7 @@
     {#if error}
       <div style="padding:var(--px-16);color:var(--error);font-size:var(--px-12)">{error}</div>
     {:else}
-      <SvelteFlow bind:nodes bind:edges bind:viewport {nodeTypes} fitView onnodedragstop={saveLayout} onconnect={onConnect}>
+      <SvelteFlow bind:nodes bind:edges bind:viewport {nodeTypes} fitView connectionRadius={40} onnodedragstop={saveLayout} onconnect={onConnect}>
         <Background />
         <Controls />
         <MiniMap />

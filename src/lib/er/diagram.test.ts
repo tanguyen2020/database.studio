@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { addTable, flowPosition, removeTable, visibleTables, relationshipFromConnection, type Rel } from './diagram'
+import { addTable, flowPosition, removeTable, visibleTables, relationshipFromConnection, resolveConnection, keyColumn, type Rel } from './diagram'
 
 const ALL = [{ name: 'a' }, { name: 'b' }, { name: 'c' }]
 
@@ -31,6 +31,49 @@ describe('removeTable', () => {
   })
   it('subset drops the name', () => {
     expect(removeTable(['a', 'b'], ['a', 'b', 'c'], 'a')).toEqual(['b'])
+  })
+})
+
+describe('keyColumn / resolveConnection (forgiving drop)', () => {
+  const tables = [
+    { name: 'orders', columns: [{ name: 'id', pk: true }, { name: 'user_id' }] },
+    { name: 'users', columns: [{ name: 'id', pk: true }, { name: 'email' }] },
+    { name: 'logs', columns: [{ name: 'ts' }, { name: 'msg' }] }, // no PK
+  ]
+
+  it('keyColumn → PK, else first column, else empty', () => {
+    expect(keyColumn(tables, 'users')).toBe('id') // PK
+    expect(keyColumn(tables, 'logs')).toBe('ts') // no PK → first column
+    expect(keyColumn(tables, 'missing')).toBe('') // unknown table
+  })
+
+  it('anchor-less target (drop on the node body) fills the target PK', () => {
+    // drag from orders.id, release anywhere on the users node → users.id
+    const resolved = resolveConnection({ source: 'orders', target: 'users', sourceHandle: 'id', targetHandle: null }, tables)
+    expect(resolved.targetHandle).toBe('id')
+    expect(relationshipFromConnection(resolved, [], [])).toEqual({
+      from_table: 'orders',
+      from_column: 'id',
+      to_table: 'users',
+      to_column: 'id',
+    })
+  })
+
+  it('both sides anchor-less → both default to their key columns', () => {
+    const resolved = resolveConnection({ source: 'orders', target: 'logs', sourceHandle: null, targetHandle: null }, tables)
+    expect(resolved.sourceHandle).toBe('id')
+    expect(resolved.targetHandle).toBe('ts')
+  })
+
+  it('full-node drop target (__node__) is treated as anchor-less → key column', () => {
+    const resolved = resolveConnection({ source: 'orders', target: 'users', sourceHandle: 'id', targetHandle: '__node__' }, tables)
+    expect(resolved.targetHandle).toBe('id') // users PK
+  })
+
+  it('explicit column handles are kept as-is', () => {
+    const resolved = resolveConnection({ source: 'orders', target: 'users', sourceHandle: 'user_id', targetHandle: 'email' }, tables)
+    expect(resolved.sourceHandle).toBe('user_id')
+    expect(resolved.targetHandle).toBe('email')
   })
 })
 
