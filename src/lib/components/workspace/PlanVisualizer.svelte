@@ -73,6 +73,8 @@
   }
 
   const notApplicable = $derived(plan?.mode === 'not_applicable')
+  // Cassandra tracing ≠ EXPLAIN ANALYZE — label as diagnostics (P1.3).
+  const isTracing = $derived(plan?.mode === 'tracing')
 </script>
 
 <div style="flex:1;display:flex;flex-direction:column;min-height:0;background:var(--bg)">
@@ -80,7 +82,11 @@
   <div style="flex:none;display:flex;align-items:center;gap:var(--px-10);padding:var(--px-10) var(--px-14);border-bottom:var(--px-1) solid var(--border);background:var(--surface)">
     <span style="font-weight:700;font-size:var(--px-13)">Query Plan</span>
     {#if plan && !notApplicable}
-      <span style="font-size:var(--px-10);font-weight:700;border-radius:var(--px-3);padding:var(--px-1) var(--px-6);background:var(--panel);color:var(--text2);text-transform:uppercase">{plan.mode}</span>
+      {#if isTracing}
+        <span title="Cassandra has no cost planner — this is an execution trace (diagnostics), not a cost-based plan" style="font-size:var(--px-10);font-weight:700;border-radius:var(--px-3);padding:var(--px-1) var(--px-6);background:rgba(224,128,58,.16);color:#e0803a;text-transform:uppercase">TRACING · DIAGNOSTICS</span>
+      {:else}
+        <span style="font-size:var(--px-10);font-weight:700;border-radius:var(--px-3);padding:var(--px-1) var(--px-6);background:var(--panel);color:var(--text2);text-transform:uppercase">{plan.mode}</span>
+      {/if}
     {/if}
     <div style="margin-left:auto;display:flex;gap:var(--px-8);align-items:center">
       {#if canActual}
@@ -102,6 +108,9 @@
       {:else if showRaw}
         <pre class="mono" style="margin:0;font-size:var(--px-12);line-height:1.55;white-space:pre-wrap;color:var(--text)">{plan?.raw}</pre>
       {:else if plan?.root}
+        {#if isTracing}
+          <div style="font-size:var(--px-11_5);color:#e0803a;background:rgba(224,128,58,.1);border:var(--px-1) solid #e0803a;border-radius:var(--px-6);padding:var(--px-6) var(--px-10);margin-bottom:var(--px-10)">This is an execution <b>trace</b> (diagnostics), not a cost-based plan — Cassandra has no query planner. Timings are real; there are no cost/row estimates.</div>
+        {/if}
         <PlanNodeBox node={plan.root} />
       {/if}
     </div>

@@ -157,7 +157,11 @@ Khi thêm/đổi field trong `QueryPlan`/`PlanNode` hoặc thêm mode value:
 
 ---
 
-### EXP-P1.3 — Cassandra tracing badge (không phải "actual")
+### EXP-P1.3 — Cassandra tracing badge (không phải "actual") — ✅ DONE
+> Commit `EXP-P1.3`. `parse_cassandra_trace` mode `"actual"` → **`"tracing"`** (giữ nguyên số liệu, không bịa cost/rows). Frontend: `ipc.QueryPlan.mode` thêm `'tracing'`; `PlanVisualizer` badge **"TRACING · DIAGNOSTICS"** (màu cam) + banner ghi chú "execution trace, không phải cost plan" khi tracing. demo `explain_plan` nhận biết cassandra → trả plan mode tracing. Tests: unit `cassandra_trace_flags_allow_filtering` (mode→tracing); integration `xv_t2_cassandra` assert `mode=="tracing"` EXIT=0; e2e `query-plan` +1 (Cassandra hiện TRACING badge, ẩn Actual). Gates: check 0/0, vitest 510, `cargo test --lib plan::` 14, query-plan e2e 3/3.
+
+> **✅ P1 (LÒNG TIN) HOÀN TẤT** — 2 High (DEF-MSSQL-CLUSTERED-SCAN, DEF-CASS-ACTUAL-BADGE) đóng + capability nền + honesty toggle. Đủ điều kiện DBA sign-off cho phần này.
+
 **Vì sao:** tracing gán `mode="actual"`, UI hiện "ACTUAL" y hệt EXPLAIN ANALYZE thật → hiểu nhầm Cassandra có planner.
 
 **Backend (`drivers/plan.rs`)**

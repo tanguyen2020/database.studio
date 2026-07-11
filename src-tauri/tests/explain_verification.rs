@@ -690,6 +690,10 @@ async fn xv_t2_cassandra_tracing_no_fabricated_cost() {
     assert!(froot.is_hotspot, "ALLOW FILTERING flagged as hotspot");
     assert!(p_filter.summary.warnings.iter().any(|w| w.to_uppercase().contains("ALLOW FILTERING")), "ALLOW FILTERING warning");
     assert!(!p_key.root.clone().unwrap().is_hotspot, "partition-key query → not a hotspot");
-    // OBS-1 evidence: record the mode the app emits (design smell if 'actual').
-    eprintln!("CHK xv_t2_cassandra_tracing OK — OBS-1 mode emitted = '{}'", p_filter.mode);
+    // P1.3 FIXED (DEF-CASS-ACTUAL-BADGE): tracing emits mode="tracing", not
+    // "actual", so the UI can label it diagnostics rather than a real EXPLAIN
+    // ANALYZE plan.
+    assert_eq!(p_filter.mode, "tracing", "Cassandra tracing → mode=tracing (not actual)");
+    assert_eq!(p_key.mode, "tracing");
+    eprintln!("CHK xv_t2_cassandra_tracing OK — mode emitted = '{}'", p_filter.mode);
 }

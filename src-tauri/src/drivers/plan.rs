@@ -552,7 +552,9 @@ pub fn parse_cassandra_trace(
     let total = events.iter().map(|(_, _, e)| *e).max().unwrap_or(0) as f64 / 1000.0;
     QueryPlan {
         system: "cassandra".into(),
-        mode: "actual".into(),
+        // Tracing/diagnostics, KHÔNG phải EXPLAIN ANALYZE thật (P1.3 —
+        // DEF-CASS-ACTUAL-BADGE). UI hiển thị badge "TRACING", không phải "ACTUAL".
+        mode: "tracing".into(),
         summary: PlanSummary {
             total_cost: None,
             total_time_ms: if total > 0.0 { Some(total) } else { None },
@@ -750,7 +752,7 @@ mod tests {
         assert!(plan.summary.warnings.iter().any(|w| w.contains("ALLOW FILTERING")));
         assert_eq!(root.children.len(), 2, "2 trace event → 2 timeline node");
         assert_eq!(plan.summary.total_time_ms, Some(4.2)); // max elapsed 4200us
-        assert_eq!(plan.mode, "actual");
+        assert_eq!(plan.mode, "tracing", "Cassandra tracing ≠ EXPLAIN ANALYZE (P1.3)");
     }
 
     #[test]

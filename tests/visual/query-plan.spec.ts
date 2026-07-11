@@ -63,3 +63,30 @@ test('query plan: Actual toggle hidden for engines without EXPLAIN ANALYZE (MySQ
 
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
+
+test('query plan: Cassandra is shown as TRACING/diagnostics, not an Actual plan', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(String(e)))
+  await blockRemoteFonts(page)
+  await page.goto(APP_URL)
+  await page.waitForSelector('#app > *', { timeout: 15_000 })
+  await page.waitForTimeout(300)
+
+  // open a query console bound to the Cassandra connection (host:port is unique)
+  await page.getByText('10.0.5.3:9042', { exact: false }).first().click({ button: 'right' })
+  await page.waitForTimeout(200)
+  await page.getByText('New Query Console', { exact: true }).first().click()
+  await page.waitForTimeout(700)
+  const editor = page.locator('.cm-content').first()
+  await editor.click()
+  await page.keyboard.type('SELECT * FROM t WHERE v = 1 ALLOW FILTERING')
+  await page.getByRole('button', { name: 'Explain' }).first().click()
+  await page.waitForTimeout(500)
+
+  // P1.3: tracing is labeled diagnostics (not "ACTUAL"), and no Actual toggle
+  await expect(page.getByRole('tab', { name: /Query Plan/ }).first()).toBeVisible()
+  await expect(page.getByText(/TRACING · DIAGNOSTICS/).first()).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Actual' })).toHaveCount(0)
+
+  expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
+})

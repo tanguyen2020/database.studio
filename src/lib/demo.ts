@@ -903,6 +903,27 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
       ])
     case 'explain_plan': {
       const actual = !!(args?.actual as boolean)
+      const epCid = String(args?.connId ?? '').split(/::|#/)[0]
+      const epSys = DEMO_PROFILES.find((p) => p.id === epCid)?.system ?? 'postgres'
+      // Cassandra has no planner → tracing (diagnostics), not a cost-based plan.
+      if (epSys === 'cassandra') {
+        return ok({
+          system: 'cassandra',
+          mode: 'tracing',
+          root: {
+            operation: 'SeqScan',
+            native_op: 'CQL Read',
+            extra: { activity: 'Execute CQL query' },
+            is_hotspot: true,
+            children: [
+              { operation: 'TraceEvent', native_op: 'Parsing CQL query', actual_time_ms: 0.05, extra: { source: '10.0.5.3' }, is_hotspot: false, children: [] },
+              { operation: 'TraceEvent', native_op: 'Scanning all ranges (ALLOW FILTERING)', actual_time_ms: 4.2, extra: { source: '10.0.5.3' }, is_hotspot: false, children: [] },
+            ],
+          },
+          summary: { total_time_ms: 4.2, warnings: ['ALLOW FILTERING: scans all partitions (no partition key) — expensive'] },
+          raw: '50us 10.0.5.3 Parsing CQL query\n4200us 10.0.5.3 Scanning all ranges (ALLOW FILTERING)',
+        })
+      }
       return ok({
         system: 'postgres',
         mode: actual ? 'actual' : 'estimated',

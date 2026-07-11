@@ -571,7 +571,7 @@ export interface PlanNode {
 }
 export interface QueryPlan {
   system: string
-  mode: 'estimated' | 'actual' | 'not_applicable'
+  mode: 'estimated' | 'actual' | 'tracing' | 'not_applicable'
   root?: PlanNode
   summary: { total_cost?: number; total_time_ms?: number; warnings: string[] }
   raw: string
