@@ -140,7 +140,10 @@
     }
     for (const fk of fks) {
       if (shown.some((t) => t.name === fk.to_table) && shown.some((t) => t.name === fk.from_table)) {
-        g.setEdge(fk.to_table, fk.from_table)
+        // Rank the child (FK holder) before the referenced parent (PK) so, in the LR
+        // layout, the child sits left and the parent right — their column anchors
+        // (source on the right, target on the left) then face each other.
+        g.setEdge(fk.from_table, fk.to_table)
       }
     }
     Dagre.layout(g)
@@ -158,12 +161,19 @@
       return { id: t.name, type: 'table', position: p, width: sz?.width, height: sz?.height, data: { table: t, showAll, onResizeEnd: saveLayout } }
     })
     positions = pos
-    // Arrow points from the child (FK side, N) to the referenced parent (1).
+    // Anchor each edge to the ACTUAL columns: the FK column (child, source) → the
+    // referenced PK column (parent, target). The arrowhead sits at the PK end — the
+    // standard "FK references PK" direction. Fall back to the node-level handle only
+    // if a column isn't present (so the edge still renders).
+    const hasCol = (table: string, col: string) =>
+      tables.find((t) => t.name === table)?.columns.some((c) => c.name === col) ?? false
     const edgeFor = (fk: ipc.ForeignKey, i: number, pending: boolean): Edge => ({
       id: pending ? `pfk-${i}` : `fk-${i}`,
       source: fk.from_table,
       target: fk.to_table,
-      label: `${fk.from_column} · N:1`,
+      sourceHandle: hasCol(fk.from_table, fk.from_column) ? fk.from_column : undefined,
+      targetHandle: hasCol(fk.to_table, fk.to_column) ? fk.to_column : undefined,
+      label: `${fk.from_column} → ${fk.to_column} · N:1`,
       animated: pending,
       markerEnd: { type: MarkerType.ArrowClosed, width: 20, height: 20, color: pending ? 'var(--success)' : 'var(--primary)' },
       style: pending ? 'stroke: #27AE60; stroke-dasharray: 5 4' : 'stroke: var(--primary)',

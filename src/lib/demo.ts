@@ -324,7 +324,27 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
         { name: 'vw_active_students', kind: 'view', row_estimate: null, locked: false, engine: 'MaterializedView' },
         { name: 'vw_recent_enrollments', kind: 'view', row_estimate: null, locked: false, engine: 'View' },
       ])
-    case 'list_columns':
+    case 'list_columns': {
+      // Table-aware columns so the ER diagram shows real PK↔FK relationships:
+      // enrollments holds FKs (student_id, course_id) referencing students.id /
+      // courses.id. Other tables keep the generic demo shape.
+      const colTable = String(args?.table ?? '')
+      if (colTable === 'enrollments')
+        return ok([
+          { name: 'id', data_type: 'int4', nullable: false, default: null, is_pk: true, is_fk: false, auto_increment: true },
+          { name: 'student_id', data_type: 'int4', nullable: false, default: null, is_pk: false, is_fk: true },
+          { name: 'course_id', data_type: 'int4', nullable: false, default: null, is_pk: false, is_fk: true },
+          { name: 'grade', data_type: 'varchar(2)', nullable: true, default: null, is_pk: false, is_fk: false },
+          { name: 'enrolled_on', data_type: 'date', nullable: false, default: null, is_pk: false, is_fk: false },
+        ])
+      if (colTable === 'courses')
+        return ok([
+          { name: 'id', data_type: 'int4', nullable: false, default: null, is_pk: true, is_fk: false, auto_increment: true },
+          { name: 'code', data_type: 'varchar(12)', nullable: false, default: null, is_pk: false, is_fk: false },
+          { name: 'title', data_type: 'varchar(120)', nullable: false, default: null, is_pk: false, is_fk: false },
+          { name: 'credits', data_type: 'int4', nullable: false, default: null, is_pk: false, is_fk: false },
+          { name: 'department', data_type: 'varchar(60)', nullable: true, default: null, is_pk: false, is_fk: false },
+        ])
       return ok([
         // identity PK — Generate Test Data excludes auto-increment columns by default
         { name: 'id', data_type: 'int4', nullable: false, default: null, is_pk: true, is_fk: false, auto_increment: true },
@@ -334,6 +354,7 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
         // reserved-word column name — autocomplete must insert it quoted
         { name: 'order', data_type: 'int4', nullable: true, default: null, is_pk: false, is_fk: false },
       ])
+    }
     case 'index_definition': {
       // Real index DDL (demo): shows INCLUDE + partial WHERE that a column-only
       // reconstruction would miss.
