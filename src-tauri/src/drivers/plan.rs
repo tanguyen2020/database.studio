@@ -19,6 +19,12 @@ pub struct PlanNode {
     pub actual_rows: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub estimated_cost: Option<f64>,
+    /// Self-cost = cost node − Σ cost con (P3.1). Cho cumulative-cost engine.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cost_self: Option<f64>,
+    /// % self-cost trên tổng cây (kiểu "Cost: N%" của SSMS).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cost_pct: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub actual_time_ms: Option<f64>,
     /// Chi tiết thô (relation, filter, join cond, buffers, loops…).
@@ -35,6 +41,8 @@ impl PlanNode {
             estimated_rows: None,
             actual_rows: None,
             estimated_cost: None,
+            cost_self: None,
+            cost_pct: None,
             actual_time_ms: None,
             extra: Map::new(),
             children: Vec::new(),
@@ -207,7 +215,8 @@ pub fn parse_pg(json_text: &str, actual: bool) -> Result<QueryPlan, String> {
     let obj = v.as_array().and_then(|a| a.first()).ok_or("PG plan is empty")?;
     let plan = obj.get("Plan").ok_or("missing Plan")?;
     let mut warnings = Vec::new();
-    let root = parse_pg_node(plan, &mut warnings);
+    let mut root = parse_pg_node(plan, &mut warnings);
+    assign_cost_pct(&mut root, true); // PG Total Cost là cumulative
     let total_time = obj.get("Execution Time").and_then(Value::as_f64);
     QueryPlan_ok("postgres", actual, root, total_time, warnings, json_text)
 }
@@ -264,7 +273,8 @@ pub fn parse_mysql(json_text: &str, system: &str, actual: bool) -> Result<QueryP
     let v: Value = serde_json::from_str(json_text).map_err(|e| format!("MySQL plan JSON error: {e}"))?;
     let qb = v.get("query_block").ok_or("missing query_block")?;
     let mut warnings = Vec::new();
-    let root = parse_mysql_block(qb, actual, &mut warnings);
+    let mut root = parse_mysql_block(qb, actual, &mut warnings);
+    assign_cost_pct(&mut root, false); // MySQL read_cost đã là self-cost
     let total_time = qb.get("r_total_time_ms").and_then(Value::as_f64);
     QueryPlan_ok(system, actual, root, total_time, warnings, json_text)
 }
@@ -609,7 +619,8 @@ pub fn parse_mssql_xml(xml: &str) -> Result<QueryPlan, String> {
         .find(|n| n.tag_name().name() == "RelOp")
         .ok_or("no RelOp found in SHOWPLAN_XML")?;
     let mut warnings = Vec::new();
-    let root = build_mssql_node(root_relop, &mut warnings);
+    let mut root = build_mssql_node(root_relop, &mut warnings);
+    assign_cost_pct(&mut root, true); // EstimatedTotalSubtreeCost là cumulative
     let total_cost = root.estimated_cost;
     Ok(QueryPlan {
         system: "mssql".into(),
@@ -766,6 +777,46 @@ fn QueryPlan_ok(
     })
 }
 
+/// Gán `cost_self` + `cost_pct` cho toàn cây (P3.1 — hiển thị "Cost: N%" kiểu SSMS).
+/// `cumulative=true` khi cost node đã gồm con (PG "Total Cost", MSSQL
+/// "EstimatedTotalSubtreeCost") → self = total − Σ con (clamp 0). `false` khi cost
+/// đã là self (MySQL read_cost). cost_pct = self / tổng-self toàn cây × 100.
+fn assign_cost_pct(root: &mut PlanNode, cumulative: bool) {
+    fn set_self(node: &mut PlanNode, cumulative: bool) {
+        for c in node.children.iter_mut() {
+            set_self(c, cumulative);
+        }
+        node.cost_self = if cumulative {
+            node.estimated_cost.map(|total| {
+                let kids: f64 = node.children.iter().filter_map(|c| c.estimated_cost).sum();
+                (total - kids).max(0.0)
+            })
+        } else {
+            node.estimated_cost
+        };
+    }
+    fn sum_self(node: &PlanNode) -> f64 {
+        node.cost_self.unwrap_or(0.0) + node.children.iter().map(sum_self).sum::<f64>()
+    }
+    fn set_pct(node: &mut PlanNode, total: f64) {
+        if let Some(s) = node.cost_self {
+            node.cost_pct = Some((s / total * 1000.0).round() / 10.0);
+        }
+        for c in node.children.iter_mut() {
+            set_pct(c, total);
+        }
+    }
+    set_self(root, cumulative);
+    let total = if cumulative {
+        root.estimated_cost.filter(|t| *t > 0.0).unwrap_or_else(|| sum_self(root))
+    } else {
+        sum_self(root)
+    };
+    if total > 0.0 {
+        set_pct(root, total);
+    }
+}
+
 /// Đánh dấu hotspot + thêm cảnh báo: seq scan bảng lớn; actual lệch estimated >10x.
 fn mark_hotspot(node: &mut PlanNode, warnings: &mut Vec<String>) {
     let rows = node.estimated_rows.or(node.actual_rows).unwrap_or(0.0);
@@ -873,6 +924,24 @@ mod tests {
         assert_eq!(root.operation, "SeqScan");
         assert!(root.is_hotspot, "quét 50k trả 1 → hotspot");
         assert!(plan.summary.warnings.iter().any(|w| w.contains("scans")));
+    }
+
+    #[test]
+    fn pg_cost_pct_self_cost() {
+        // P3.1 — Hash Join total 250.5 gồm con (180 + 8) → self ≈ 62.5; % tổng ~100.
+        let json = r#"[{"Plan":{"Node Type":"Hash Join","Total Cost":250.5,"Plan Rows":100,
+          "Plans":[
+            {"Node Type":"Seq Scan","Relation Name":"o","Total Cost":180.0,"Plan Rows":50},
+            {"Node Type":"Index Scan","Index Name":"pk","Total Cost":8.0,"Plan Rows":1}
+          ]}}]"#;
+        let plan = parse_pg(json, false).unwrap();
+        let root = plan.root.unwrap();
+        assert_eq!(root.cost_self, Some(62.5), "self = 250.5 − (180 + 8)");
+        assert_eq!(root.children[0].cost_self, Some(180.0));
+        // tổng % ≈ 100 (±2 do làm tròn)
+        let sum: f64 = root.cost_pct.unwrap_or(0.0)
+            + root.children.iter().filter_map(|c| c.cost_pct).sum::<f64>();
+        assert!((sum - 100.0).abs() <= 2.0, "tổng cost_pct ≈ 100, got {sum}");
     }
 
     #[test]

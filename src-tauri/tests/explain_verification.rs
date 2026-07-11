@@ -80,6 +80,11 @@ fn any<'a>(node: &'a plan::PlanNode, pred: &dyn Fn(&plan::PlanNode) -> bool) -> 
     pred(node) || node.children.iter().any(|c| any(c, pred))
 }
 
+/// Tổng cost_pct toàn cây (P3.1 — phải ≈ 100).
+fn sum_cost_pct(node: &plan::PlanNode) -> f64 {
+    node.cost_pct.unwrap_or(0.0) + node.children.iter().map(sum_cost_pct).sum::<f64>()
+}
+
 // ===========================================================================
 // TIER 1a — SQLite (no container). Proves the normalize tier cheaply.
 // ===========================================================================
@@ -264,6 +269,9 @@ async fn xv_t1_postgres_scan_index_actual_errors() {
     assert_eq!(act.mode, "actual", "ANALYZE → mode actual");
     assert!(any(&act.root.clone().unwrap(), &|n| n.actual_rows.is_some()), "actual_rows captured");
     assert!(act.summary.total_time_ms.is_some(), "actual → total execution time captured");
+    // P3.1: self-cost % assigned and sums to ~100 across the tree (SSMS-style).
+    let pct_sum = sum_cost_pct(&act.root.clone().unwrap());
+    assert!((pct_sum - 100.0).abs() <= 5.0, "cost_pct sums ~100 across the tree, got {pct_sum}");
 
     // ---- error paths (typed errors, never a silent empty plan) ----
     let missing = drv.exec("EXPLAIN (FORMAT JSON) SELECT * FROM no_such_table_xyz").await;

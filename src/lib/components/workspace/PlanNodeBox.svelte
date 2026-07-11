@@ -34,6 +34,7 @@
       {#if node.extra['Index Name']}<span class="mono" style="font-size:10.5px;color:#56b6c2">{node.extra['Index Name']}</span>{/if}
     </div>
     <div style="display:flex;align-items:center;gap:10px;font-size:10px;color:var(--muted)" class="mono">
+      {#if node.cost_pct != null}<span style="font-weight:700;color:{node.is_hotspot ? '#e0803a' : 'var(--text2)'}">Cost {node.cost_pct}%</span>{/if}
       {#if node.estimated_cost != null}<span>cost {node.estimated_cost.toFixed(1)}</span>{/if}
       {#if node.estimated_rows != null}<span>est {Math.round(node.estimated_rows).toLocaleString()}</span>{/if}
       {#if node.actual_rows != null}<span style="color:var(--text2)">act {Math.round(node.actual_rows).toLocaleString()}</span>{/if}

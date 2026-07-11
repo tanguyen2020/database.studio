@@ -29,6 +29,9 @@ test('query plan: Explain opens normalized tree + hotspot + summary', async ({ p
   // P1.1: Postgres supports EXPLAIN ANALYZE → Actual toggle is shown
   await expect(page.getByRole('button', { name: 'Actual' }).first()).toBeVisible()
 
+  // P3.1: nodes show "Cost N%" (self-cost percentage, SSMS-style)
+  await expect(page.getByText(/Cost 74\.2%/).first()).toBeVisible()
+
   // View raw toggles to raw JSON
   await page.getByRole('button', { name: 'View raw' }).first().click()
   await page.waitForTimeout(200)

@@ -564,6 +564,8 @@ export interface PlanNode {
   estimated_rows?: number
   actual_rows?: number
   estimated_cost?: number
+  cost_self?: number
+  cost_pct?: number
   actual_time_ms?: number
   extra: Record<string, unknown>
   children: PlanNode[]

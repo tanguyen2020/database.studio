@@ -229,7 +229,9 @@ Khi thêm/đổi field trong `QueryPlan`/`PlanNode` hoặc thêm mode value:
 
 ## P3 — GIÁ TRỊ + PHỦ TEST
 
-### EXP-P3.1 — Cost % (self-cost) kiểu SSMS
+### EXP-P3.1 — Cost % (self-cost) kiểu SSMS — ✅ DONE
+> Commit `EXP-P3.1`. PlanNode thêm `cost_self` + `cost_pct`; helper `assign_cost_pct(root, cumulative)`: cumulative (PG Total Cost, MSSQL EstimatedTotalSubtreeCost) → self = total − Σ con clamp 0; non-cumulative (MySQL read_cost) → self = cost; cost_pct = self / tổng × 100 (1 chữ số thập phân). Gọi trong parse_pg/parse_mysql/parse_mssql_xml. Frontend: ipc PlanNode +2 field; PlanNodeBox hiện **"Cost N%"** (đậm, cam nếu hotspot); demo node có cost_pct. Tests: unit `pg_cost_pct_self_cost` (self=62.5, tổng≈100); e2e query-plan assert "Cost 74.2%"; integration PG assert Σ cost_pct≈100 trên plan thật EXIT=0. Gates: check 0/0, vitest 510, `cargo test --lib plan::` 20, e2e 3/3.
+
 **Backend:** thêm `cost_self`/`cost_pct` vào `PlanNode` (Option). Tính self-cost = `estimated_cost(node) − Σ estimated_cost(children)` clamp 0 (PG/MSSQL cumulative); `cost_pct = self / root_total × 100`. MySQL dùng `read_cost+eval_cost`.
 **Frontend:** `PlanNodeBox` hiện `Cost: N%` (khi có); giữ cost tuyệt đối trong tooltip.
 **Tests:** unit tính self-cost + tổng %≈100; e2e hiển thị %.
