@@ -75,6 +75,17 @@
   const notApplicable = $derived(plan?.mode === 'not_applicable')
   // Cassandra tracing ≠ EXPLAIN ANALYZE — label as diagnostics (P1.3).
   const isTracing = $derived(plan?.mode === 'tracing')
+
+  async function copyDdl() {
+    const ddl = plan?.missing_index?.ddl
+    if (!ddl) return
+    try {
+      await navigator.clipboard.writeText(ddl)
+      toasts.success('Index DDL copied')
+    } catch {
+      toasts.error('Copy failed')
+    }
+  }
 </script>
 
 <div style="flex:1;display:flex;flex-direction:column;min-height:0;background:var(--bg)">
@@ -96,6 +107,14 @@
       <span onclick={run} onkeydown={(e) => e.key === 'Enter' && run()} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-12);cursor:pointer">⟳ Re-explain</span>
     </div>
   </div>
+
+  {#if plan?.missing_index && !notApplicable && !showRaw}
+    <div style="flex:none;display:flex;align-items:center;gap:var(--px-10);padding:var(--px-8) var(--px-14);background:rgba(39,174,96,.12);border-bottom:var(--px-1) solid #27AE60">
+      <span style="font-size:var(--px-11_5);color:#27AE60;font-weight:700">Missing index (Impact ~{plan.missing_index.impact_pct}%)</span>
+      <span class="mono" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--px-11);color:var(--text2)" title={plan.missing_index.ddl}>{plan.missing_index.ddl}</span>
+      <span onclick={copyDdl} onkeydown={(e) => e.key === 'Enter' && copyDdl()} role="button" tabindex="0" style="flex:none;font-size:var(--px-11);background:#27AE60;color:var(--hex-fff);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer;font-weight:600">Copy DDL</span>
+    </div>
+  {/if}
 
   <div style="flex:1;display:flex;min-height:0">
     <div style="flex:1;overflow:auto;min-width:0;padding:var(--px-14) var(--px-16)">

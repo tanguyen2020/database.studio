@@ -237,7 +237,9 @@ Khi thêm/đổi field trong `QueryPlan`/`PlanNode` hoặc thêm mode value:
 **Tests:** unit tính self-cost + tổng %≈100; e2e hiển thị %.
 **Checklist §0.5** (đổi shape → ipc/demo/render/unit).
 
-### EXP-P3.2 — MSSQL Missing-Index banner
+### EXP-P3.2 — MSSQL Missing-Index banner — ✅ DONE
+> Commit `EXP-P3.2`. Struct `MissingIndex{impact_pct,table,ddl,reason}` + field `QueryPlan.missing_index` (thêm `missing_index: None` vào 6 literal, Some ở MSSQL). `parse_mssql_missing_index`: chọn `<MissingIndexGroup>` Impact cao nhất → DDL `CREATE NONCLUSTERED INDEX [IX_table_cols] ON [schema].[table] (EQUALITY, INEQUALITY) INCLUDE (INCLUDE);`. Frontend: ipc `MissingIndex`; PlanVisualizer banner xanh lá "Missing index (Impact ~N%)" + DDL + nút **Copy DDL** (clipboard + toast); demo plan có missing_index. Tests: unit `mssql_missing_index_banner` (fixture XML → DDL chính xác); e2e banner + Copy DDL; integration MSSQL best-effort (optimizer không emit cho query test → NOTE, parse đã chứng minh bằng unit) EXIT=0. Gates: check 0/0, vitest 510, `cargo test --lib plan::` 21, e2e 3/3.
+
 **Backend:** `build_mssql_node`/`parse_mssql_xml` trích `<MissingIndexes>` (Impact + EQUALITY/INEQUALITY/INCLUDE) → field mới `missing_index` trong `QueryPlan` hoặc `summary` (Impact% + DDL `CREATE NONCLUSTERED INDEX …`).
 **Frontend:** banner xanh "Missing index (Impact ~N%)" + nút Copy DDL.
 **Tests:** unit parse fixture XML có MissingIndexes; integration MSSQL query thiếu index → banner có DDL.

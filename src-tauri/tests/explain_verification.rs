@@ -577,6 +577,16 @@ async fn xv_t2_mssql_scan_index_estimated() {
     assert_eq!(iroot.operation, "IndexSeek", "Index Seek → IndexSeek (distinct from scan)");
     assert!(sroot.is_hotspot, "full table scan (reads ~20k) → hotspot");
     assert!(!iroot.is_hotspot, "index seek → not a hotspot");
+    // P3.2: if the optimizer emits a MissingIndexes hint, it must be well-formed.
+    // (Emission is optimizer-dependent; the deterministic parse is unit-tested by
+    // mssql_missing_index_banner. Best-effort here.)
+    if let Some(mi) = &scan.missing_index {
+        assert!(mi.ddl.starts_with("CREATE NONCLUSTERED INDEX"), "missing-index DDL well-formed: {}", mi.ddl);
+        assert!(mi.impact_pct > 0.0, "missing-index impact > 0");
+        eprintln!("CHK xv_t2_mssql missing_index: {} (~{}%)", mi.ddl, mi.impact_pct);
+    } else {
+        eprintln!("NOTE xv_t2_mssql: no MissingIndexes hint emitted for this query");
+    }
     eprintln!(
         "CHK xv_t2_mssql — FIXED: scan.op={} (native='{}') hotspot={}; index.op={} (native='{}')",
         sroot.operation, sroot.native_op, sroot.is_hotspot, iroot.operation, iroot.native_op

@@ -966,6 +966,12 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
           total_time_ms: actual ? 8.2 : undefined,
           warnings: ['Seq Scan on enrollments (~50000 rows)'],
         },
+        missing_index: {
+          impact_pct: 92.5,
+          table: 'enrollments',
+          ddl: 'CREATE INDEX ix_enrollments_status ON enrollments (status);',
+          reason: 'A selective filter on status has no supporting index.',
+        },
         raw: '[{"Plan":{"Node Type":"Hash Join","Total Cost":512.4,"Plan Rows":214}}]',
       })
     }

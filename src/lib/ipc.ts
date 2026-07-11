@@ -571,12 +571,19 @@ export interface PlanNode {
   children: PlanNode[]
   is_hotspot: boolean
 }
+export interface MissingIndex {
+  impact_pct: number
+  table: string
+  ddl: string
+  reason: string
+}
 export interface QueryPlan {
   system: string
   mode: 'estimated' | 'actual' | 'tracing' | 'not_applicable'
   root?: PlanNode
   summary: { total_cost?: number; total_time_ms?: number; warnings: string[] }
   raw: string
+  missing_index?: MissingIndex
 }
 
 export const explainPlan = (connId: string, sql: string, actual: boolean) =>

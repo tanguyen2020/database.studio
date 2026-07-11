@@ -32,6 +32,11 @@ test('query plan: Explain opens normalized tree + hotspot + summary', async ({ p
   // P3.1: nodes show "Cost N%" (self-cost percentage, SSMS-style)
   await expect(page.getByText(/Cost 74\.2%/).first()).toBeVisible()
 
+  // P3.2: missing-index banner with the suggested DDL + Copy button
+  await expect(page.getByText(/Missing index \(Impact ~92\.5%\)/).first()).toBeVisible()
+  await expect(page.getByText(/CREATE INDEX ix_enrollments_status/).first()).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Copy DDL' }).first()).toBeVisible()
+
   // View raw toggles to raw JSON
   await page.getByRole('button', { name: 'View raw' }).first().click()
   await page.waitForTimeout(200)

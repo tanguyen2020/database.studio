@@ -60,16 +60,28 @@ pub struct PlanSummary {
     pub warnings: Vec<String>,
 }
 
+/// Đề xuất index còn thiếu (P3.2 — hiện tại chỉ MSSQL từ `<MissingIndexes>`).
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct MissingIndex {
+    pub impact_pct: f64,
+    pub table: String,
+    pub ddl: String,
+    pub reason: String,
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct QueryPlan {
     pub system: String,
-    /// "estimated" | "actual" | "not_applicable"
+    /// "estimated" | "actual" | "tracing" | "not_applicable"
     pub mode: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub root: Option<PlanNode>,
     pub summary: PlanSummary,
     /// Bản gốc (JSON/XML/text/trace) cho nút "View raw".
     pub raw: String,
+    /// Banner "missing index" (kiểu SSMS) — null nếu không có đề xuất.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub missing_index: Option<MissingIndex>,
 }
 
 impl QueryPlan {
@@ -80,6 +92,7 @@ impl QueryPlan {
             root: None,
             summary: PlanSummary { total_cost: None, total_time_ms: None, warnings: Vec::new() },
             raw: String::new(),
+            missing_index: None,
         }
     }
 }
@@ -430,6 +443,7 @@ pub fn parse_sqlite(rows: &[(i64, i64, String)]) -> QueryPlan {
         root: Some(root),
         summary: PlanSummary { total_cost: None, total_time_ms: None, warnings },
         raw: rows.iter().map(|(i, p, d)| format!("{i}|{p}|{d}")).collect::<Vec<_>>().join("\n"),
+        missing_index: None,
     }
 }
 
@@ -598,6 +612,7 @@ pub fn parse_clickhouse(text: &str) -> QueryPlan {
         root,
         summary: PlanSummary { total_cost: None, total_time_ms: None, warnings },
         raw: text.to_string(),
+        missing_index: None,
     }
 }
 
@@ -622,12 +637,62 @@ pub fn parse_mssql_xml(xml: &str) -> Result<QueryPlan, String> {
     let mut root = build_mssql_node(root_relop, &mut warnings);
     assign_cost_pct(&mut root, true); // EstimatedTotalSubtreeCost là cumulative
     let total_cost = root.estimated_cost;
+    let missing_index = parse_mssql_missing_index(&doc);
     Ok(QueryPlan {
         system: "mssql".into(),
         mode: "estimated".into(),
         summary: PlanSummary { total_cost, total_time_ms: None, warnings },
         root: Some(root),
         raw: xml.to_string(),
+        missing_index,
+    })
+}
+
+/// Trích `<MissingIndexes>` (SHOWPLAN XML) → đề xuất index tốt nhất (Impact cao nhất).
+/// DDL đúng cú pháp MSSQL: CREATE NONCLUSTERED INDEX … (eq, ineq) INCLUDE (…).
+fn parse_mssql_missing_index(doc: &roxmltree::Document) -> Option<MissingIndex> {
+    let impact_of = |n: &roxmltree::Node| n.attribute("Impact").and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
+    let group = doc
+        .descendants()
+        .filter(|n| n.tag_name().name() == "MissingIndexGroup")
+        .max_by(|a, b| impact_of(a).partial_cmp(&impact_of(b)).unwrap_or(std::cmp::Ordering::Equal))?;
+    let impact = impact_of(&group);
+    let mi = group.descendants().find(|n| n.tag_name().name() == "MissingIndex")?;
+    let strip = |s: &str| s.replace(['[', ']'], "");
+    let schema = mi.attribute("Schema").map(&strip).unwrap_or_default();
+    let table = mi.attribute("Table").map(&strip).unwrap_or_default();
+    let (mut eq, mut ineq, mut incl) = (Vec::new(), Vec::new(), Vec::new());
+    for cg in mi.descendants().filter(|n| n.tag_name().name() == "ColumnGroup") {
+        let cols: Vec<String> = cg
+            .descendants()
+            .filter(|n| n.tag_name().name() == "Column")
+            .filter_map(|n| n.attribute("Name"))
+            .map(&strip)
+            .collect();
+        match cg.attribute("Usage").unwrap_or("") {
+            "EQUALITY" => eq = cols,
+            "INEQUALITY" => ineq = cols,
+            "INCLUDE" => incl = cols,
+            _ => {}
+        }
+    }
+    let mut key = eq;
+    key.extend(ineq);
+    if key.is_empty() && incl.is_empty() {
+        return None;
+    }
+    let quoted = |cols: &[String]| cols.iter().map(|c| format!("[{c}]")).collect::<Vec<_>>().join(", ");
+    let idx_name = format!("IX_{table}_{}", key.join("_"));
+    let mut ddl = format!("CREATE NONCLUSTERED INDEX [{idx_name}] ON [{schema}].[{table}] ({})", quoted(&key));
+    if !incl.is_empty() {
+        ddl.push_str(&format!(" INCLUDE ({})", quoted(&incl)));
+    }
+    ddl.push(';');
+    Some(MissingIndex {
+        impact_pct: (impact * 10.0).round() / 10.0,
+        table: format!("{schema}.{table}"),
+        ddl,
+        reason: format!("MSSQL estimates ~{impact:.0}% cost reduction for this query."),
     })
 }
 
@@ -734,6 +799,7 @@ pub fn parse_cassandra_trace(
             .map(|(a, s, e)| format!("{e}us {s} {a}"))
             .collect::<Vec<_>>()
             .join("\n"),
+        missing_index: None,
     }
 }
 
@@ -750,6 +816,7 @@ pub fn from_raw_text(system: &str, raw: &str) -> QueryPlan {
         root: Some(root),
         summary: PlanSummary { total_cost: None, total_time_ms: None, warnings: Vec::new() },
         raw: raw.to_string(),
+        missing_index: None,
     }
 }
 
@@ -774,6 +841,7 @@ fn QueryPlan_ok(
         },
         root: Some(root),
         raw: raw.to_string(),
+        missing_index: None,
     })
 }
 
@@ -1083,6 +1151,38 @@ mod tests {
         assert_eq!(root.children[1].operation, "IndexSeek");
         assert!(!root.children[1].is_hotspot, "seek 1 row → không hotspot");
         assert_eq!(plan.summary.total_cost, Some(0.55));
+    }
+
+    #[test]
+    fn mssql_missing_index_banner() {
+        // P3.2 — trích <MissingIndexes> → DDL CREATE NONCLUSTERED INDEX + Impact%.
+        let xml = r#"<?xml version="1.0"?>
+<ShowPlanXML xmlns="http://schemas.microsoft.com/sqlserver/2004/07/showplan">
+  <BatchSequence><Batch><Statements><StmtSimple>
+    <QueryPlan>
+      <MissingIndexes>
+        <MissingIndexGroup Impact="92.5">
+          <MissingIndex Database="[db]" Schema="[dbo]" Table="[orders]">
+            <ColumnGroup Usage="EQUALITY"><Column Name="[status]" ColumnId="2"/></ColumnGroup>
+            <ColumnGroup Usage="INEQUALITY"><Column Name="[created]" ColumnId="3"/></ColumnGroup>
+            <ColumnGroup Usage="INCLUDE"><Column Name="[note]" ColumnId="4"/></ColumnGroup>
+          </MissingIndex>
+        </MissingIndexGroup>
+      </MissingIndexes>
+      <RelOp PhysicalOp="Clustered Index Scan" LogicalOp="Clustered Index Scan" EstimateRows="20000" EstimatedTotalSubtreeCost="1.2" EstimatedRowsRead="20000">
+        <IndexScan><Object Table="[db].[dbo].[orders]"/></IndexScan>
+      </RelOp>
+    </QueryPlan>
+  </StmtSimple></Statements></Batch></BatchSequence>
+</ShowPlanXML>"#;
+        let plan = parse_mssql_xml(xml).unwrap();
+        let mi = plan.missing_index.expect("missing index parsed");
+        assert_eq!(mi.impact_pct, 92.5);
+        assert_eq!(mi.table, "dbo.orders");
+        assert_eq!(
+            mi.ddl,
+            "CREATE NONCLUSTERED INDEX [IX_orders_status_created] ON [dbo].[orders] ([status], [created]) INCLUDE ([note]);"
+        );
     }
 
     #[test]
