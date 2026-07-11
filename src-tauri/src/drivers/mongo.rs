@@ -12,9 +12,11 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-use mongodb::bson::{doc, Bson};
+use base64::Engine as _;
+use mongodb::bson::{self, doc, Bson, Document};
 use mongodb::options::ClientOptions;
 use mongodb::Client;
+use serde_json::{json, Map, Value};
 
 use crate::drivers::grid;
 use crate::drivers::index_scan;
@@ -139,6 +141,236 @@ fn bson_type_name(b: &Bson) -> &'static str {
     }
 }
 
+fn perr(msg: impl Into<String>) -> QueryError {
+    let m = msg.into();
+    QueryError::new("mongodb", m.clone(), m)
+}
+
+/// One parsed mongosh-style call: `db.<collection>.<method>(<args>)` with the
+/// optional `.sort()/.skip()/.limit()` cursor modifiers (find only).
+struct MongoCall {
+    collection: String,
+    method: String, // lowercased
+    args: Vec<Value>,
+    sort: Option<Value>,
+    skip: Option<i64>,
+    limit: Option<i64>,
+}
+
+/// Read a balanced `(...)` group. `s` must start with `(`. Returns the inner
+/// text and the remainder after the matching `)`. Brackets `(){}[]` are counted
+/// together (fine for balanced input); quotes are respected.
+fn read_group(s: &str) -> Result<(&str, &str), QueryError> {
+    let bytes = s.as_bytes();
+    if bytes.first() != Some(&b'(') {
+        return Err(perr("expected '('"));
+    }
+    let mut depth = 0i32;
+    let mut in_str: Option<u8> = None;
+    let mut esc = false;
+    for (i, &b) in bytes.iter().enumerate() {
+        if let Some(q) = in_str {
+            if esc {
+                esc = false;
+            } else if b == b'\\' {
+                esc = true;
+            } else if b == q {
+                in_str = None;
+            }
+            continue;
+        }
+        match b {
+            b'"' | b'\'' => in_str = Some(b),
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Ok((&s[1..i], &s[i + 1..]));
+                }
+            }
+            _ => {}
+        }
+    }
+    Err(perr("unbalanced parentheses in query"))
+}
+
+/// Split a call's argument text at top-level commas and parse each as JSON.
+/// MongoDB filters/documents must be valid JSON (double-quoted keys/strings);
+/// Extended JSON like `{"$oid":"..."}` is accepted as-is.
+fn split_args(inner: &str) -> Result<Vec<Value>, QueryError> {
+    let t = inner.trim();
+    if t.is_empty() {
+        return Ok(Vec::new());
+    }
+    let bytes = t.as_bytes();
+    let mut parts: Vec<&str> = Vec::new();
+    let mut depth = 0i32;
+    let mut in_str: Option<u8> = None;
+    let mut esc = false;
+    let mut start = 0usize;
+    for (i, &b) in bytes.iter().enumerate() {
+        if let Some(q) = in_str {
+            if esc {
+                esc = false;
+            } else if b == b'\\' {
+                esc = true;
+            } else if b == q {
+                in_str = None;
+            }
+            continue;
+        }
+        match b {
+            b'"' | b'\'' => in_str = Some(b),
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => depth -= 1,
+            b',' if depth == 0 => {
+                parts.push(&t[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    parts.push(&t[start..]);
+    let mut out = Vec::with_capacity(parts.len());
+    for p in parts {
+        let p = p.trim();
+        let v: Value = serde_json::from_str(p).map_err(|e| {
+            perr(format!("invalid JSON argument `{p}`: {e} (keys/strings must be double-quoted)"))
+        })?;
+        out.push(v);
+    }
+    Ok(out)
+}
+
+fn parse_mongo_query(q: &str) -> Result<MongoCall, QueryError> {
+    let s = q.trim().trim_end_matches(';').trim();
+    let rest = s
+        .strip_prefix("db.")
+        .ok_or_else(|| perr("query must start with db.<collection>.<method>(...)"))?;
+    let paren = rest.find('(').ok_or_else(|| perr("expected '(' after the method name"))?;
+    let head = &rest[..paren];
+    let dot = head
+        .rfind('.')
+        .ok_or_else(|| perr("expected db.<collection>.<method>(...)"))?;
+    let collection = head[..dot].trim().to_string();
+    let method = head[dot + 1..].trim().to_lowercase();
+    if collection.is_empty() || method.is_empty() {
+        return Err(perr("empty collection or method name"));
+    }
+    let (inner, mut after) = read_group(&rest[paren..])?;
+    let args = split_args(inner)?;
+
+    let (mut sort, mut skip, mut limit) = (None, None, None);
+    after = after.trim();
+    while let Some(chain) = after.strip_prefix('.') {
+        let p = chain.find('(').ok_or_else(|| perr("expected '(' in chained call"))?;
+        let name = chain[..p].trim().to_lowercase();
+        let (cinner, crest) = read_group(&chain[p..])?;
+        match name.as_str() {
+            "sort" => sort = Some(serde_json::from_str(cinner.trim()).unwrap_or(Value::Null)),
+            "skip" => skip = cinner.trim().parse::<i64>().ok(),
+            "limit" => limit = cinner.trim().parse::<i64>().ok(),
+            other => return Err(perr(format!("unsupported chained method .{other}()"))),
+        }
+        after = crest.trim();
+    }
+    Ok(MongoCall { collection, method, args, sort, skip, limit })
+}
+
+/// A JSON value → BSON document (for filters/updates/keys). None if not an object.
+fn value_to_doc(v: &Value) -> Option<Document> {
+    bson::to_bson(v).ok()?.as_document().cloned()
+}
+
+/// BSON → JSON in MongoDB Extended JSON (relaxed-ish): ObjectId → `{"$oid":…}`,
+/// Date → `{"$date":…}`, Decimal128 → `{"$numberDecimal":…}`, Binary → `{"$binary":…}`.
+fn bson_to_json(b: &Bson) -> Value {
+    match b {
+        Bson::Double(f) => json!(f),
+        Bson::String(s) => json!(s),
+        Bson::Boolean(v) => json!(v),
+        Bson::Null | Bson::Undefined => Value::Null,
+        Bson::Int32(i) => json!(i),
+        Bson::Int64(i) => json!(i),
+        Bson::ObjectId(o) => json!({ "$oid": o.to_hex() }),
+        Bson::DateTime(d) => json!({
+            "$date": d.try_to_rfc3339_string().unwrap_or_else(|_| d.timestamp_millis().to_string())
+        }),
+        Bson::Decimal128(d) => json!({ "$numberDecimal": d.to_string() }),
+        Bson::Binary(bin) => json!({
+            "$binary": {
+                "base64": base64::engine::general_purpose::STANDARD.encode(&bin.bytes),
+                "subType": format!("{:02x}", u8::from(bin.subtype)),
+            }
+        }),
+        Bson::RegularExpression(r) => json!({
+            "$regularExpression": { "pattern": r.pattern, "options": r.options }
+        }),
+        Bson::Timestamp(t) => json!({ "$timestamp": { "t": t.time, "i": t.increment } }),
+        Bson::JavaScriptCode(c) => json!({ "$code": c }),
+        Bson::Symbol(s) => json!(s),
+        Bson::MaxKey => json!({ "$maxKey": 1 }),
+        Bson::MinKey => json!({ "$minKey": 1 }),
+        Bson::Array(a) => Value::Array(a.iter().map(bson_to_json).collect()),
+        Bson::Document(d) => {
+            let mut m = Map::new();
+            for (k, v) in d.iter() {
+                m.insert(k.clone(), bson_to_json(v));
+            }
+            Value::Object(m)
+        }
+        // DbPointer / JavaScriptCodeWithScope — rare; stringify to avoid panics.
+        other => json!(format!("{other:?}")),
+    }
+}
+
+/// Build a `QueryResultSet` from a batch of documents: `cols` = union of top-level
+/// keys in first-seen order, typed by the first non-null value seen; `rows` =
+/// documents as Extended JSON.
+fn docs_to_result(docs: &[Bson]) -> QueryResultSet {
+    let mut order: Vec<String> = Vec::new();
+    let mut types: HashMap<String, String> = HashMap::new();
+    let mut rows: Vec<Value> = Vec::with_capacity(docs.len());
+    for b in docs {
+        if let Bson::Document(d) = b {
+            for (k, v) in d.iter() {
+                let tn = bson_type_name(v).to_string();
+                match types.get(k) {
+                    None => {
+                        order.push(k.clone());
+                        types.insert(k.clone(), tn);
+                    }
+                    Some(prev) if prev == "null" && tn != "null" => {
+                        types.insert(k.clone(), tn);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        rows.push(bson_to_json(b));
+    }
+    let cols: Vec<ColumnDef> = order
+        .into_iter()
+        .map(|c| {
+            let t = types.remove(&c).unwrap_or_default();
+            (c, t)
+        })
+        .collect();
+    let total = rows.len() as u64;
+    QueryResultSet { cols, rows, total }
+}
+
+/// Surface a write-command's first `writeErrors` entry as a QueryError.
+fn check_write_errors(res: &Document) -> Result<(), QueryError> {
+    if let Ok(errs) = res.get_array("writeErrors") {
+        if let Some(Bson::Document(e)) = errs.first() {
+            let msg = e.get_str("errmsg").unwrap_or("write error").to_string();
+            return Err(perr(msg));
+        }
+    }
+    Ok(())
+}
+
 impl MongoDriver {
     pub async fn connect(p: &MongoConnParams) -> Result<Self, QueryError> {
         let uri = build_uri(p);
@@ -206,19 +438,210 @@ impl MongoDriver {
 
     // ---- data methods (implemented in later milestones) --------------------
 
-    /// M2: parse a mongosh-style statement and run it, returning documents as
-    /// `QueryResultSet` with `cols` inferred from the union of document keys.
+    /// Run a mongosh-style statement (`db.coll.find({...}).limit(n)`, aggregate,
+    /// count/distinct, and insert/update/delete). Reads return a `QueryResultSet`
+    /// (cols = union of document keys, rows = Extended JSON); writes return the
+    /// affected count. Bounded to a single batch — cursor paging arrives in M3.
     pub async fn exec_mongo(
         &self,
-        _query: &str,
-        _batch_size: Option<i32>,
+        query: &str,
+        batch_size: Option<i32>,
         _cursor_token: Option<&str>,
     ) -> Result<MongoOutcome, QueryError> {
-        Err(QueryError::new(
-            "mongodb",
-            "MongoDB query editor is not implemented yet (milestone M2)",
-            "exec_mongo unimplemented",
-        ))
+        const DEFAULT_LIMIT: i64 = 500;
+        let call = parse_mongo_query(query)?;
+        let db = self.client.database(&self.database);
+        let coll = call.collection.clone();
+        let rows_outcome = |batch: &[Bson]| MongoOutcome {
+            outcome: StatementOutcome::Rows { result: docs_to_result(batch) },
+            next_cursor: None,
+            warnings: Vec::new(),
+        };
+        let affected_outcome = |n: u64| MongoOutcome {
+            outcome: StatementOutcome::Affected { affected: n },
+            next_cursor: None,
+            warnings: Vec::new(),
+        };
+
+        match call.method.as_str() {
+            "find" => {
+                let lim = call
+                    .limit
+                    .or(batch_size.map(|b| b as i64))
+                    .filter(|n| *n > 0)
+                    .unwrap_or(DEFAULT_LIMIT);
+                let mut cmd = doc! { "find": &coll, "limit": lim, "batchSize": lim };
+                if let Some(f) = call.args.first().and_then(value_to_doc) {
+                    cmd.insert("filter", f);
+                }
+                if let Some(p) = call.args.get(1).and_then(value_to_doc) {
+                    cmd.insert("projection", p);
+                }
+                if let Some(s) = call.sort.as_ref().and_then(value_to_doc) {
+                    cmd.insert("sort", s);
+                }
+                if let Some(sk) = call.skip {
+                    cmd.insert("skip", sk);
+                }
+                let res = db.run_command(cmd).await.map_err(exec_err)?;
+                let batch = res
+                    .get_document("cursor")
+                    .and_then(|c| c.get_array("firstBatch"))
+                    .map_err(exec_err)?;
+                Ok(rows_outcome(batch))
+            }
+            "aggregate" => {
+                let pipeline = call.args.first().cloned().unwrap_or(Value::Array(vec![]));
+                let arr = bson::to_bson(&pipeline)
+                    .map_err(exec_err)?
+                    .as_array()
+                    .cloned()
+                    .ok_or_else(|| perr("aggregate([...]) requires a pipeline array"))?;
+                let bs = batch_size.unwrap_or(500);
+                let cmd = doc! { "aggregate": &coll, "pipeline": arr, "cursor": doc! { "batchSize": bs } };
+                let res = db.run_command(cmd).await.map_err(exec_err)?;
+                let batch = res
+                    .get_document("cursor")
+                    .and_then(|c| c.get_array("firstBatch"))
+                    .map_err(exec_err)?;
+                Ok(rows_outcome(batch))
+            }
+            "countdocuments" | "count" => {
+                let filter = call.args.first().and_then(value_to_doc).unwrap_or_default();
+                let cmd = doc! { "count": &coll, "query": filter };
+                let res = db.run_command(cmd).await.map_err(exec_err)?;
+                let n = res
+                    .get_i32("n")
+                    .map(|v| v as i64)
+                    .or_else(|_| res.get_i64("n"))
+                    .unwrap_or(0);
+                Ok(MongoOutcome {
+                    outcome: StatementOutcome::Rows {
+                        result: QueryResultSet {
+                            cols: vec![("count".into(), "long".into())],
+                            rows: vec![json!({ "count": n })],
+                            total: 1,
+                        },
+                    },
+                    next_cursor: None,
+                    warnings: Vec::new(),
+                })
+            }
+            "distinct" => {
+                let key = call
+                    .args
+                    .first()
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| perr("distinct(\"key\") requires a string key"))?
+                    .to_string();
+                let filter = call.args.get(1).and_then(value_to_doc).unwrap_or_default();
+                let cmd = doc! { "distinct": &coll, "key": &key, "query": filter };
+                let res = db.run_command(cmd).await.map_err(exec_err)?;
+                let vals = res.get_array("values").cloned().unwrap_or_default();
+                let rows: Vec<Value> = vals
+                    .iter()
+                    .map(|b| {
+                        let mut m = Map::new();
+                        m.insert(key.clone(), bson_to_json(b));
+                        Value::Object(m)
+                    })
+                    .collect();
+                let total = rows.len() as u64;
+                Ok(MongoOutcome {
+                    outcome: StatementOutcome::Rows {
+                        result: QueryResultSet { cols: vec![(key, String::new())], rows, total },
+                    },
+                    next_cursor: None,
+                    warnings: Vec::new(),
+                })
+            }
+            "insertone" | "insertmany" => {
+                let docs: Vec<Bson> = if call.method == "insertone" {
+                    let v = call
+                        .args
+                        .first()
+                        .ok_or_else(|| perr("insertOne(doc) requires a document"))?;
+                    vec![bson::to_bson(v).map_err(exec_err)?]
+                } else {
+                    match call.args.first() {
+                        Some(Value::Array(a)) => a
+                            .iter()
+                            .map(|v| bson::to_bson(v).map_err(exec_err))
+                            .collect::<Result<_, _>>()?,
+                        _ => return Err(perr("insertMany([...]) requires an array of documents")),
+                    }
+                };
+                let res = db
+                    .run_command(doc! { "insert": &coll, "documents": docs })
+                    .await
+                    .map_err(exec_err)?;
+                check_write_errors(&res)?;
+                Ok(affected_outcome(res.get_i32("n").unwrap_or(0) as u64))
+            }
+            "updateone" | "updatemany" => {
+                let filter = call.args.first().and_then(value_to_doc).unwrap_or_default();
+                let update = call
+                    .args
+                    .get(1)
+                    .and_then(value_to_doc)
+                    .ok_or_else(|| perr("updateOne/Many(filter, update) requires two documents"))?;
+                let multi = call.method == "updatemany";
+                let res = db
+                    .run_command(doc! {
+                        "update": &coll,
+                        "updates": [ doc! { "q": filter, "u": update, "multi": multi } ],
+                    })
+                    .await
+                    .map_err(exec_err)?;
+                check_write_errors(&res)?;
+                Ok(affected_outcome(res.get_i32("nModified").unwrap_or(0) as u64))
+            }
+            "deleteone" | "deletemany" => {
+                let filter = call.args.first().and_then(value_to_doc).unwrap_or_default();
+                let limit = if call.method == "deleteone" { 1 } else { 0 };
+                let res = db
+                    .run_command(doc! {
+                        "delete": &coll,
+                        "deletes": [ doc! { "q": filter, "limit": limit } ],
+                    })
+                    .await
+                    .map_err(exec_err)?;
+                check_write_errors(&res)?;
+                Ok(affected_outcome(res.get_i32("n").unwrap_or(0) as u64))
+            }
+            "drop" => {
+                db.run_command(doc! { "drop": &coll }).await.map_err(exec_err)?;
+                Ok(MongoOutcome { outcome: StatementOutcome::Ok, next_cursor: None, warnings: Vec::new() })
+            }
+            "createindex" => {
+                let keys = call
+                    .args
+                    .first()
+                    .and_then(value_to_doc)
+                    .ok_or_else(|| perr("createIndex(keys) requires a keys document"))?;
+                let mut idx = doc! { "key": keys.clone() };
+                if let Some(opts) = call.args.get(1).and_then(value_to_doc) {
+                    for (k, v) in opts {
+                        idx.insert(k, v);
+                    }
+                }
+                if !idx.contains_key("name") {
+                    let name = keys
+                        .iter()
+                        .map(|(k, v)| format!("{k}_{}", v.as_i32().unwrap_or(1)))
+                        .collect::<Vec<_>>()
+                        .join("_");
+                    idx.insert("name", if name.is_empty() { "idx".to_string() } else { name });
+                }
+                db.run_command(doc! { "createIndexes": &coll, "indexes": [idx] })
+                    .await
+                    .map_err(exec_err)?;
+                Ok(MongoOutcome { outcome: StatementOutcome::Ok, next_cursor: None, warnings: Vec::new() })
+            }
+            other => Err(perr(format!(
+                "unsupported MongoDB method `{other}` — try find / aggregate / countDocuments / distinct / insertOne / insertMany / updateOne / updateMany / deleteOne / deleteMany / createIndex / drop"
+            ))),
+        }
     }
 
     /// Databases on the server (`listDatabases`). `current` marks the connection's
@@ -450,5 +873,66 @@ mod tests {
     fn build_uri_passthrough_full_connection_string() {
         let u = build_uri(&params("mongodb+srv://cluster0.abcd.mongodb.net", "", "", "", false));
         assert_eq!(u, "mongodb+srv://cluster0.abcd.mongodb.net");
+    }
+
+    #[test]
+    fn parse_find_with_filter_and_chain() {
+        let c = parse_mongo_query("db.users.find({\"age\":{\"$gt\":18}}).sort({\"age\":-1}).skip(5).limit(10);")
+            .unwrap();
+        assert_eq!(c.collection, "users");
+        assert_eq!(c.method, "find");
+        assert_eq!(c.args.len(), 1);
+        assert_eq!(c.args[0]["age"]["$gt"], 18);
+        assert_eq!(c.skip, Some(5));
+        assert_eq!(c.limit, Some(10));
+        assert!(c.sort.is_some());
+    }
+
+    #[test]
+    fn parse_find_no_args() {
+        let c = parse_mongo_query("db.orders.find()").unwrap();
+        assert_eq!(c.collection, "orders");
+        assert_eq!(c.method, "find");
+        assert!(c.args.is_empty());
+    }
+
+    #[test]
+    fn parse_insert_and_update() {
+        let ins = parse_mongo_query("db.c.insertOne({\"x\":1})").unwrap();
+        assert_eq!(ins.method, "insertone");
+        let upd = parse_mongo_query("db.c.updateMany({\"a\":1},{\"$set\":{\"b\":2}})").unwrap();
+        assert_eq!(upd.method, "updatemany");
+        assert_eq!(upd.args.len(), 2);
+    }
+
+    #[test]
+    fn parse_rejects_non_db_prefix() {
+        assert!(parse_mongo_query("users.find({})").is_err());
+    }
+
+    #[test]
+    fn bson_to_json_extended_json() {
+        use mongodb::bson::oid::ObjectId;
+        let oid = ObjectId::parse_str("507f1f77bcf86cd799439011").unwrap();
+        assert_eq!(
+            bson_to_json(&Bson::ObjectId(oid)),
+            json!({ "$oid": "507f1f77bcf86cd799439011" })
+        );
+        assert_eq!(bson_to_json(&Bson::Int32(7)), json!(7));
+        assert_eq!(bson_to_json(&Bson::Null), Value::Null);
+    }
+
+    #[test]
+    fn docs_to_result_unions_keys_and_types() {
+        let docs = vec![
+            Bson::Document(doc! { "_id": 1, "name": "Ann", "age": 30 }),
+            Bson::Document(doc! { "_id": 2, "name": "Bob", "email": "b@x.com" }),
+        ];
+        let rs = docs_to_result(&docs);
+        let names: Vec<&str> = rs.cols.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, vec!["_id", "name", "age", "email"]);
+        assert_eq!(rs.total, 2);
+        // _id typed as int from the first document.
+        assert_eq!(rs.cols[0].1, "int");
     }
 }

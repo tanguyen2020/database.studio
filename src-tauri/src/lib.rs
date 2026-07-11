@@ -126,6 +126,8 @@ pub fn run() {
             commands::cassandra::cassandra_table_ddl,
             commands::cassandra::cassandra_object_ddl,
             commands::cassandra::cassandra_columns,
+            // mongodb
+            commands::mongo::mongo_exec,
             // clickhouse advanced (Phase 5)
             commands::clickhouse::ch_table_meta,
             commands::clickhouse::ch_dictionaries,

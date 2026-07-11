@@ -9,6 +9,7 @@ pub mod grid;
 pub mod kafka;
 pub mod library;
 pub mod lint;
+pub mod mongo;
 pub mod nats;
 pub mod plan;
 pub mod query;

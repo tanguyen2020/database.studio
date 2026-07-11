@@ -15,6 +15,8 @@ import type {
   PartitionInfo,
   ProfileDraft,
   ProfilePublic,
+  QueryError,
+  QueryResultSet,
   RoutineInfo,
   SchemaInfo,
   SequenceInfo,
@@ -484,6 +486,27 @@ export const cassandraObjectDdl = (connId: string, keyspace: string, kind: strin
   invoke<string>('cassandra_object_ddl', { connId, keyspace, kind, name })
 export const cassandraColumns = (connId: string, keyspace: string, table: string) =>
   invoke<CassColumn[]>('cassandra_columns', { connId, keyspace, table })
+
+// ---- MongoDB (document store) ----------------------------------------------
+
+export interface MongoExecResponse {
+  ok: boolean
+  result?: QueryResultSet
+  affected?: number
+  error?: QueryError
+  duration_ms: number
+  /** Cursor token for the next page (undefined = single batch / finished). */
+  next_cursor?: string
+  warnings: string[]
+}
+
+/** Run a mongosh-style statement (`db.coll.find({...})`, aggregate, insertOne…). */
+export const mongoExec = (
+  connId: string,
+  query: string,
+  batchSize?: number,
+  cursorToken?: string,
+) => invoke<MongoExecResponse>('mongo_exec', { connId, query, batchSize, cursorToken })
 
 // ---- Foreign keys (ER Diagram · Schema Compare — Phase 5) -------------------
 

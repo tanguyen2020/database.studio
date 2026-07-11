@@ -170,6 +170,7 @@ class ResultsStore {
     const exec = this.byTab[tabId] as TabExecution
 
     const isCassandra = profile.system === 'cassandra'
+    const isMongo = profile.system === 'mongodb'
 
     for (let i = 0; i < statements.length; i++) {
       const stmt = statements[i]
@@ -198,6 +199,22 @@ class ResultsStore {
                   severity: 'error',
                   raw: c.error.detail ?? c.error.message,
                 } satisfies QueryError)
+              : undefined,
+          }
+        } else if (isMongo) {
+          // MongoDB runs through the dedicated `mongo_exec` command (mongosh-style
+          // parser + Extended JSON). Warnings and a cursor token share the same
+          // fields as Cassandra so the Result panel wiring is unchanged.
+          const m = await ipc.mongoExec(connId, stmt.sql)
+          cqlWarnings = m.warnings ?? []
+          cqlNextPage = m.next_cursor ?? null
+          response = {
+            ok: m.ok,
+            result: m.result,
+            affected: m.affected,
+            duration_ms: m.duration_ms,
+            error: m.error
+              ? ({ ...m.error, statement_index: m.error.statement_index ?? index } satisfies QueryError)
               : undefined,
           }
         } else {
