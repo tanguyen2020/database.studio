@@ -142,9 +142,9 @@ pub fn capability(system: &str) -> EngineCapability {
     let (has_planner, actual_kind, cost_basis) = match system {
         "postgres" => (true, ActualKind::Analyze, CostBasis::Cost),
         "mariadb" => (true, ActualKind::Analyze, CostBasis::Cost),
-        // MySQL/MSSQL có planner nhưng app CHƯA lấy actual (P3.3) → toggle tắt.
-        "mysql" => (true, ActualKind::None, CostBasis::Cost),
-        "mssql" => (true, ActualKind::None, CostBasis::Cost),
+        // P3.3 — MySQL EXPLAIN ANALYZE (TREE) + MSSQL SET STATISTICS XML → actual.
+        "mysql" => (true, ActualKind::Analyze, CostBasis::Cost),
+        "mssql" => (true, ActualKind::Analyze, CostBasis::Cost),
         "sqlite" => (true, ActualKind::None, CostBasis::RowsProxy),
         "clickhouse" => (true, ActualKind::None, CostBasis::RowsProxy),
         // Cassandra: không planner tĩnh, chỉ tracing (chạy thật, không có toggle).
@@ -411,6 +411,138 @@ fn parse_mysql_table(table: &Value, actual: bool, warnings: &mut Vec<String>) ->
 }
 
 // ---------------------------------------------------------------------------
+// MySQL — EXPLAIN ANALYZE (TREE text, MySQL 8.0.18+). P3.3 — actual metrics.
+// ---------------------------------------------------------------------------
+
+/// Nhóm ngoặc bắt đầu bằng `marker` (vd "(cost=", "(actual") tới `)` gần nhất.
+/// Các nhóm này KHÔNG lồng ngoặc nên cắt tới `)` đầu tiên là an toàn.
+fn mysql_group<'a>(line: &'a str, marker: &str) -> Option<&'a str> {
+    let start = line.find(marker)?;
+    let end = line[start..].find(')')? + start;
+    Some(&line[start..=end])
+}
+
+/// Float ngay sau `key` trong `s` (vd `rows=` → 123.0).
+fn mysql_num(s: &str, key: &str) -> Option<f64> {
+    let i = s.find(key)? + key.len();
+    let t: String = s[i..]
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '.' || *c == '-' || *c == '+' || *c == 'e' || *c == 'E')
+        .collect();
+    t.parse().ok()
+}
+
+/// `B` trong "actual time=A..B" (thời gian tới dòng cuối, mỗi loop).
+fn mysql_time_b(actual_group: &str) -> Option<f64> {
+    let i = actual_group.find("time=")? + "time=".len();
+    let rest = &actual_group[i..];
+    let dd = rest.find("..")? + 2;
+    mysql_num(&format!("={}", &rest[dd..]), "=")
+}
+
+/// Bảng chính trong nhãn TREE ("Table scan on t", "… lookup on u using PRIMARY").
+fn mysql_rel(label: &str) -> Option<String> {
+    let i = label.find(" on ")? + 4;
+    let tok = label[i..].split_whitespace().next()?;
+    Some(tok.trim_matches('`').to_string())
+}
+
+/// Map nhãn TREE của MySQL → operation chuẩn (đồng bộ với parser JSON: ref/range/
+/// lookup → IndexScan; covering → IndexOnlyScan; table scan → SeqScan).
+fn mysql_tree_op(label: &str) -> String {
+    let l = label.to_lowercase();
+    let c = if l.contains("table scan") {
+        "SeqScan"
+    } else if l.contains("covering index") {
+        "IndexOnlyScan"
+    } else if l.contains("index lookup") || l.contains("index range") || l.contains("index scan") || l.contains("index skip scan") {
+        "IndexScan"
+    } else if l.contains("hash join") {
+        "HashJoin"
+    } else if l.contains("nested loop") {
+        "NestedLoop"
+    } else if l.contains("sort") {
+        "Sort"
+    } else if l.contains("aggregate") || l.contains("group") {
+        "Aggregate"
+    } else if l.contains("materialize") {
+        "Materialize"
+    } else if l.starts_with("filter") {
+        "Filter"
+    } else if l.contains("limit") {
+        "Limit"
+    } else {
+        return normalize_op(label);
+    };
+    c.to_string()
+}
+
+/// Parse output `EXPLAIN ANALYZE` (TREE text). Mỗi dòng có `->`; số cột trước `->`
+/// = độ sâu (stack-based). Nhãn = phần trước `(cost=`/`(actual`; metric lấy từ 2
+/// nhóm ngoặc. actual_rows = rows × loops; actual_time_ms = B × loops.
+pub fn parse_mysql_tree(text: &str, actual: bool) -> Result<QueryPlan, String> {
+    let mut nodes: Vec<PlanNode> = Vec::new();
+    let mut parent_of: Vec<Option<usize>> = Vec::new();
+    let mut stack: Vec<(usize, usize)> = Vec::new(); // (indent, node idx)
+    let mut warnings = Vec::new();
+
+    for line in text.lines() {
+        let Some(arrow) = line.find("->") else { continue };
+        let indent = arrow;
+        let content = line[arrow + 2..].trim();
+        if content.is_empty() {
+            continue;
+        }
+        let label_end = content.find("(cost=").or_else(|| content.find("(actual")).unwrap_or(content.len());
+        let label = content[..label_end].trim().to_string();
+        let mut node = PlanNode::leaf(&mysql_tree_op(&label), &label);
+
+        if let Some(cg) = mysql_group(content, "(cost=") {
+            node.estimated_cost = mysql_num(cg, "cost=");
+            node.estimated_rows = mysql_num(cg, "rows=");
+        }
+        if actual {
+            if let Some(ag) = mysql_group(content, "(actual") {
+                let r = mysql_num(ag, "rows=").unwrap_or(0.0);
+                let l = mysql_num(ag, "loops=").unwrap_or(1.0);
+                node.actual_rows = Some(r * l);
+                if let Some(b) = mysql_time_b(ag) {
+                    node.actual_time_ms = Some(b * l);
+                }
+            }
+        }
+        if let Some(rel) = mysql_rel(&label) {
+            node.extra.insert("Relation Name".into(), Value::String(rel));
+        }
+        mark_hotspot(&mut node, &mut warnings);
+
+        while stack.last().map(|(d, _)| *d >= indent).unwrap_or(false) {
+            stack.pop();
+        }
+        let parent = stack.last().map(|(_, i)| *i);
+        let idx = nodes.len();
+        nodes.push(node);
+        parent_of.push(parent);
+        stack.push((indent, idx));
+    }
+    if nodes.is_empty() {
+        return Err("EXPLAIN ANALYZE returned no plan tree".into());
+    }
+    let mut built: Vec<Option<PlanNode>> = nodes.into_iter().map(Some).collect();
+    for i in (0..built.len()).rev() {
+        if let Some(p) = parent_of[i] {
+            let child = built[i].take().unwrap();
+            if let Some(parent) = built[p].as_mut() {
+                parent.children.insert(0, child);
+            }
+        }
+    }
+    let mut root = built.into_iter().find_map(|n| n).ok_or("no root in EXPLAIN ANALYZE tree")?;
+    assign_cost_pct(&mut root, true); // TREE cost là cumulative (như PG)
+    QueryPlan_ok("mysql", actual, root, None, warnings, text)
+}
+
+// ---------------------------------------------------------------------------
 // SQLite — EXPLAIN QUERY PLAN (id, parent, notused, detail)
 // ---------------------------------------------------------------------------
 
@@ -627,21 +759,23 @@ fn mssql_parent_relop(n: roxmltree::Node) -> Option<roxmltree::NodeId> {
 
 /// Parse SHOWPLAN_XML: mỗi `<RelOp>` là 1 node; con là các `<RelOp>` lồng bên
 /// trong (không có RelOp trung gian). PhysicalOp → operation chuẩn hóa.
-pub fn parse_mssql_xml(xml: &str) -> Result<QueryPlan, String> {
+pub fn parse_mssql_xml(xml: &str, actual: bool) -> Result<QueryPlan, String> {
     let doc = roxmltree::Document::parse(xml).map_err(|e| format!("SHOWPLAN_XML error: {e}"))?;
     let root_relop = doc
         .descendants()
         .find(|n| n.tag_name().name() == "RelOp")
         .ok_or("no RelOp found in SHOWPLAN_XML")?;
     let mut warnings = Vec::new();
-    let mut root = build_mssql_node(root_relop, &mut warnings);
+    let mut root = build_mssql_node(root_relop, &mut warnings, actual);
     assign_cost_pct(&mut root, true); // EstimatedTotalSubtreeCost là cumulative
     let total_cost = root.estimated_cost;
+    let total_time_ms = if actual { root.actual_time_ms } else { None };
     let missing_index = parse_mssql_missing_index(&doc);
     Ok(QueryPlan {
+        // STATISTICS XML (actual) chứa <RunTimeInformation>; SHOWPLAN_XML là estimated.
         system: "mssql".into(),
-        mode: "estimated".into(),
-        summary: PlanSummary { total_cost, total_time_ms: None, warnings },
+        mode: if actual { "actual".into() } else { "estimated".into() },
+        summary: PlanSummary { total_cost, total_time_ms, warnings },
         root: Some(root),
         raw: xml.to_string(),
         missing_index,
@@ -696,7 +830,7 @@ fn parse_mssql_missing_index(doc: &roxmltree::Document) -> Option<MissingIndex> 
     })
 }
 
-fn build_mssql_node(relop: roxmltree::Node, warnings: &mut Vec<String>) -> PlanNode {
+fn build_mssql_node(relop: roxmltree::Node, warnings: &mut Vec<String>, actual: bool) -> PlanNode {
     let phys = relop.attribute("PhysicalOp").unwrap_or("Unknown");
     let logical = relop.attribute("LogicalOp").unwrap_or("");
     let mut node = PlanNode::leaf(&normalize_op(phys), phys);
@@ -704,6 +838,27 @@ fn build_mssql_node(relop: roxmltree::Node, warnings: &mut Vec<String>) -> PlanN
     node.estimated_cost = relop.attribute("EstimatedTotalSubtreeCost").and_then(|s| s.parse().ok());
     if !logical.is_empty() {
         node.extra.insert("LogicalOp".into(), Value::String(logical.into()));
+    }
+    // STATISTICS XML (actual): <RunTimeInformation><RunTimeCountersPerThread …
+    // ActualRows=… ActualElapsedms=…/>>. Cộng ActualRows các thread, lấy max
+    // ActualElapsedms (elapsed là wall-clock, không cộng dồn). Chỉ của RelOp này.
+    if actual {
+        let counters: Vec<_> = relop
+            .descendants()
+            .filter(|n| n.tag_name().name() == "RunTimeCountersPerThread" && mssql_parent_relop(*n) == Some(relop.id()))
+            .collect();
+        if !counters.is_empty() {
+            let arows: f64 = counters.iter().filter_map(|n| n.attribute("ActualRows")).filter_map(|s| s.parse::<f64>().ok()).sum();
+            node.actual_rows = Some(arows);
+            let ams = counters
+                .iter()
+                .filter_map(|n| n.attribute("ActualElapsedms"))
+                .filter_map(|s| s.parse::<f64>().ok())
+                .fold(0.0_f64, f64::max);
+            if ams > 0.0 {
+                node.actual_time_ms = Some(ams);
+            }
+        }
     }
     // Tên bảng: <Object Table="[db].[schema].[t]"> thuộc chính RelOp này.
     if let Some(obj) = relop
@@ -719,7 +874,7 @@ fn build_mssql_node(relop: roxmltree::Node, warnings: &mut Vec<String>) -> PlanN
         .descendants()
         .filter(|n| n.tag_name().name() == "RelOp" && mssql_parent_relop(*n) == Some(relop.id()))
     {
-        node.children.push(build_mssql_node(child, warnings));
+        node.children.push(build_mssql_node(child, warnings, actual));
     }
     // Full scan MSSQL: EstimateRows có thể NHỎ (đã trừ predicate) nhưng thực tế đọc
     // cả bảng → cờ hotspot theo rows ĐỌC (EstimatedRowsRead / TableCardinality),
@@ -913,9 +1068,12 @@ mod tests {
         assert_eq!(capability("postgres").actual_kind, ActualKind::Analyze);
         assert!(capability("postgres").supports_actual);
         assert_eq!(capability("mariadb").actual_kind, ActualKind::Analyze);
-        // engine có planner nhưng chưa lấy actual → toggle phải tắt
-        assert!(!capability("mysql").supports_actual);
-        assert!(!capability("mssql").supports_actual);
+        // P3.3 — MySQL/MSSQL now support actual (EXPLAIN ANALYZE / STATISTICS XML)
+        assert_eq!(capability("mysql").actual_kind, ActualKind::Analyze);
+        assert!(capability("mysql").supports_actual);
+        assert_eq!(capability("mssql").actual_kind, ActualKind::Analyze);
+        assert!(capability("mssql").supports_actual);
+        // no actual mode for these
         assert!(!capability("sqlite").supports_actual);
         assert!(!capability("clickhouse").supports_actual);
         assert_eq!(capability("clickhouse").cost_basis, CostBasis::RowsProxy);
@@ -1140,7 +1298,7 @@ mod tests {
     </QueryPlan>
   </StmtSimple></Statements></Batch></BatchSequence>
 </ShowPlanXML>"#;
-        let plan = parse_mssql_xml(xml).unwrap();
+        let plan = parse_mssql_xml(xml, false).unwrap();
         let root = plan.root.unwrap();
         assert_eq!(root.operation, "NestedLoop");
         assert_eq!(root.children.len(), 2, "2 RelOp con lồng trong NestedLoops");
@@ -1175,7 +1333,7 @@ mod tests {
     </QueryPlan>
   </StmtSimple></Statements></Batch></BatchSequence>
 </ShowPlanXML>"#;
-        let plan = parse_mssql_xml(xml).unwrap();
+        let plan = parse_mssql_xml(xml, false).unwrap();
         let mi = plan.missing_index.expect("missing index parsed");
         assert_eq!(mi.impact_pct, 92.5);
         assert_eq!(mi.table, "dbo.orders");
@@ -1183,6 +1341,54 @@ mod tests {
             mi.ddl,
             "CREATE NONCLUSTERED INDEX [IX_orders_status_created] ON [dbo].[orders] ([status], [created]) INCLUDE ([note]);"
         );
+    }
+
+    #[test]
+    fn mysql_explain_analyze_tree() {
+        // P3.3 — EXPLAIN ANALYZE (TREE). Depth theo indent; actual = rows×loops.
+        let text = "-> Nested loop inner join  (cost=1.15 rows=1) (actual time=0.045..0.052 rows=1 loops=1)\n    -> Filter: (c.status = 'rare')  (cost=0.85 rows=1) (actual time=0.030..0.035 rows=1 loops=1)\n        -> Table scan on c  (cost=0.85 rows=5) (actual time=0.020..0.028 rows=5 loops=1)\n    -> Single-row index lookup on s using PRIMARY (id=c.sid)  (cost=0.30 rows=1) (actual time=0.010..0.011 rows=1 loops=2)";
+        let plan = parse_mysql_tree(text, true).unwrap();
+        assert_eq!(plan.mode, "actual");
+        let root = plan.root.unwrap();
+        assert_eq!(root.operation, "NestedLoop");
+        assert_eq!(root.children.len(), 2, "Filter + index lookup là con của join");
+        // nhánh 0: Filter → Table scan
+        assert_eq!(root.children[0].operation, "Filter");
+        assert_eq!(root.children[0].children[0].operation, "SeqScan");
+        assert_eq!(root.children[0].children[0].extra.get("Relation Name").and_then(|v| v.as_str()), Some("c"));
+        assert_eq!(root.children[0].children[0].actual_rows, Some(5.0)); // 5 × 1 loop
+        // nhánh 1: index lookup, actual rows = 1 × 2 loops = 2
+        assert_eq!(root.children[1].operation, "IndexScan");
+        assert_eq!(root.children[1].actual_rows, Some(2.0));
+        assert_eq!(root.children[1].estimated_rows, Some(1.0));
+    }
+
+    #[test]
+    fn mssql_statistics_xml_actual() {
+        // P3.3 — STATISTICS XML: RunTimeInformation → actual rows (sum threads) +
+        // actual time (max ActualElapsedms). mode=actual.
+        let xml = r#"<?xml version="1.0"?>
+<ShowPlanXML xmlns="http://schemas.microsoft.com/sqlserver/2004/07/showplan">
+  <BatchSequence><Batch><Statements><StmtSimple>
+    <QueryPlan>
+      <RelOp PhysicalOp="Table Scan" LogicalOp="Table Scan" EstimateRows="20000" EstimatedTotalSubtreeCost="0.4" EstimatedRowsRead="20000">
+        <TableScan><Object Table="[db].[dbo].[orders]"/></TableScan>
+        <RunTimeInformation>
+          <RunTimeCountersPerThread Thread="0" ActualRows="12000" ActualElapsedms="7"/>
+          <RunTimeCountersPerThread Thread="1" ActualRows="8000" ActualElapsedms="9"/>
+        </RunTimeInformation>
+      </RelOp>
+    </QueryPlan>
+  </StmtSimple></Statements></Batch></BatchSequence>
+</ShowPlanXML>"#;
+        let plan = parse_mssql_xml(xml, true).unwrap();
+        assert_eq!(plan.mode, "actual");
+        let root = plan.root.unwrap();
+        assert_eq!(root.operation, "SeqScan");
+        assert_eq!(root.actual_rows, Some(20000.0), "sum ActualRows across threads");
+        assert_eq!(root.actual_time_ms, Some(9.0), "max ActualElapsedms");
+        assert!(root.is_hotspot, "full scan reads 20k → hotspot");
+        assert_eq!(plan.summary.total_time_ms, Some(9.0));
     }
 
     #[test]

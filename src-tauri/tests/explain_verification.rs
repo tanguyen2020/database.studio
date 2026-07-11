@@ -363,7 +363,7 @@ async fn xv_p0_postgres_actual_dml_rolls_back() {
 // TIER 1c — MySQL. scan/index + prove "actual" toggle is estimated-only.
 // ===========================================================================
 #[tokio::test]
-async fn xv_t1_mysql_scan_index_actual_ignored() {
+async fn xv_t1_mysql_scan_index_and_actual() {
     let c = GenericImage::new("mysql", "8")
         .with_exposed_port(3306.tcp())
         .with_env_var("MYSQL_ROOT_PASSWORD", PASS)
@@ -406,10 +406,18 @@ async fn xv_t1_mysql_scan_index_actual_ignored() {
     let json_idx = cell2.as_str().map(String::from).unwrap_or_else(|| cell2.to_string());
     let idx = plan::parse_mysql(&json_idx, "mysql", false).expect("parse mysql index");
 
-    // Prove the "Actual" UI toggle is estimated-only for MySQL: even if a caller
-    // passed actual=true, the command computes `actual && system=="mariadb"` = false,
-    // AND build_explain still emits EXPLAIN FORMAT=JSON (no ANALYZE) → no r_rows.
-    let idx_as_if_actual = plan::parse_mysql(&json_idx, "mysql", true && "mysql" == "mariadb").expect("mysql actual-ignored");
+    // P3.3 — MySQL actual = EXPLAIN ANALYZE → TREE text with real rows/time.
+    // build_explain mysql+actual emits "EXPLAIN ANALYZE"; parse via parse_mysql_tree.
+    // Runs on the SELECT (safe; DML + actual is blocked by the P0.1 guard).
+    let StatementOutcome::Rows { result: ra } = drv.exec(&format!("EXPLAIN ANALYZE {q}")).await.unwrap() else { panic!("rows") };
+    let tree = ra
+        .rows
+        .iter()
+        .filter_map(|r| r.as_object().and_then(|o| o.values().next()))
+        .filter_map(|v| v.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let act = plan::parse_mysql_tree(&tree, true).expect("parse mysql EXPLAIN ANALYZE tree");
 
     artifact(
         "mysql-scan-index",
@@ -418,14 +426,17 @@ async fn xv_t1_mysql_scan_index_actual_ignored() {
             ("SCAN — app normalized", pretty(&scan)),
             ("INDEX — raw engine", json_idx.clone()),
             ("INDEX — app normalized", pretty(&idx)),
-            ("ACTUAL-toggle path (system=mysql) — app normalized (proves estimated-only)", pretty(&idx_as_if_actual)),
+            ("ACTUAL — raw engine (EXPLAIN ANALYZE tree)", tree.clone()),
+            ("ACTUAL — app normalized", pretty(&act)),
         ],
     );
 
     assert!(find_op(&scan.root.clone().unwrap(), "SeqScan").is_some(), "scan → SeqScan (access_type ALL)");
     assert!(find_op(&idx.root.clone().unwrap(), "IndexScan").is_some(), "index → IndexScan (access_type ref/range)");
-    assert_eq!(idx_as_if_actual.mode, "estimated", "MySQL 'Actual' toggle stays estimated");
-    assert!(!any(&idx_as_if_actual.root.clone().unwrap(), &|n| n.actual_rows.is_some()), "MySQL never captures actual_rows");
+    // P3.3: EXPLAIN ANALYZE → mode actual + real actual_rows parsed from the tree.
+    assert_eq!(act.mode, "actual", "EXPLAIN ANALYZE → mode actual");
+    assert!(act.raw.contains("actual time"), "raw tree carries actual timings");
+    assert!(any(&act.root.clone().unwrap(), &|n| n.actual_rows.is_some()), "actual_rows captured from the tree");
 
     // P2.3 (DEF-MYSQL-TREE-PARTIAL): GROUP BY + ORDER BY surface Aggregate + Sort
     // nodes (the parser previously followed only nested_loop/table and dropped them).
@@ -444,7 +455,7 @@ async fn xv_t1_mysql_scan_index_actual_ignored() {
     assert!(find_op(&groot, "Aggregate").is_some(), "GROUP BY → Aggregate node surfaced: {json_grp}");
     // G2: EXPLAIN error path — missing table → typed error.
     assert!(drv.exec("EXPLAIN FORMAT=JSON SELECT * FROM no_such_table_xyz").await.is_err(), "mysql EXPLAIN on missing table → typed error");
-    eprintln!("CHK xv_t1_mysql_scan_index_actual_ignored OK");
+    eprintln!("CHK xv_t1_mysql_scan_index_and_actual OK");
 }
 
 // ===========================================================================
@@ -519,7 +530,7 @@ async fn xv_t2_mariadb_scan_index_analyze_actual() {
 // TIER 2b — MSSQL. SHOWPLAN_XML (estimated). scan/index. Confirm estimated-only.
 // ===========================================================================
 #[tokio::test]
-async fn xv_t2_mssql_scan_index_estimated() {
+async fn xv_t2_mssql_scan_index_and_actual() {
     let c = GenericImage::new("mcr.microsoft.com/mssql/server", "2022-latest")
         .with_exposed_port(1433.tcp())
         .with_env_var("ACCEPT_EULA", "Y")
@@ -557,11 +568,29 @@ async fn xv_t2_mssql_scan_index_estimated() {
         result.rows.first().and_then(|r| r.as_object()).and_then(|o| o.values().next()).and_then(|v| v.as_str()).unwrap_or("").to_string()
     }
 
+    // Actual plan via STATISTICS XML: executes the query, returns data + plan XML
+    // mixed across result sets → scan for the "<ShowPlanXML" cell (mirrors explain_mssql).
+    async fn analyze_xml(drv: &mut MssqlDriver, q: &str) -> String {
+        drv.exec("SET STATISTICS XML ON").await.unwrap();
+        let out = drv.exec(q).await;
+        let _ = drv.exec("SET STATISTICS XML OFF").await;
+        let StatementOutcome::Rows { result } = out.unwrap() else { panic!("STATISTICS XML rows") };
+        result
+            .rows
+            .iter()
+            .filter_map(|r| r.as_object())
+            .flat_map(|o| o.values())
+            .filter_map(|v| v.as_str())
+            .find(|s| s.contains("<ShowPlanXML"))
+            .unwrap_or("")
+            .to_string()
+    }
+
     let xml_scan = showplan(&mut drv, q).await;
-    let scan = plan::parse_mssql_xml(&xml_scan).expect("parse mssql scan");
+    let scan = plan::parse_mssql_xml(&xml_scan, false).expect("parse mssql scan");
     drv.exec("CREATE INDEX ix_ms_status ON it_ms(status)").await.unwrap();
     let xml_idx = showplan(&mut drv, q).await;
-    let idx = plan::parse_mssql_xml(&xml_idx).expect("parse mssql index");
+    let idx = plan::parse_mssql_xml(&xml_idx, false).expect("parse mssql index");
 
     artifact(
         "mssql-scan-index",
@@ -589,6 +618,13 @@ async fn xv_t2_mssql_scan_index_estimated() {
     assert_eq!(iroot.operation, "IndexSeek", "Index Seek → IndexSeek (distinct from scan)");
     assert!(sroot.is_hotspot, "full table scan (reads ~20k) → hotspot");
     assert!(!iroot.is_hotspot, "index seek → not a hotspot");
+    // P3.3 — actual plan via STATISTICS XML: executes the SELECT, plan carries
+    // RunTimeInformation → mode=actual + real actual_rows.
+    let xml_act = analyze_xml(&mut drv, q).await;
+    let act = plan::parse_mssql_xml(&xml_act, true).expect("parse mssql actual");
+    assert_eq!(act.mode, "actual", "STATISTICS XML → mode actual");
+    assert!(xml_act.contains("RunTimeInformation"), "actual plan carries RunTimeInformation");
+    assert!(any(&act.root.clone().unwrap(), &|n| n.actual_rows.is_some()), "actual_rows captured from RunTimeInformation");
     // P3.2: if the optimizer emits a MissingIndexes hint, it must be well-formed.
     // (Emission is optimizer-dependent; the deterministic parse is unit-tested by
     // mssql_missing_index_banner. Best-effort here.)

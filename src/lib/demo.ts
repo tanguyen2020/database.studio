@@ -982,10 +982,10 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
         switch (system) {
           case 'postgres':
           case 'mariadb':
-            return { has_planner: true, supports_actual: true, actual_kind: 'analyze', cost_basis: 'cost' }
           case 'mysql':
           case 'mssql':
-            return { has_planner: true, supports_actual: false, actual_kind: 'none', cost_basis: 'cost' }
+            // P3.3 — MySQL (EXPLAIN ANALYZE) + MSSQL (STATISTICS XML) now support actual
+            return { has_planner: true, supports_actual: true, actual_kind: 'analyze', cost_basis: 'cost' }
           case 'sqlite':
           case 'clickhouse':
             return { has_planner: true, supports_actual: false, actual_kind: 'none', cost_basis: 'rows_proxy' }

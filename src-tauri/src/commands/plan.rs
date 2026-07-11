@@ -58,10 +58,10 @@ pub async fn explain_plan(
         return explain_cassandra(state.inner(), &conn_id, &sql).await;
     }
 
-    // MSSQL: SHOWPLAN_XML phải là statement duy nhất của batch → bật, chạy query
-    // (KHÔNG thực thi — chỉ sinh plan), rồi tắt (best-effort, luôn tắt).
+    // MSSQL: estimated qua SHOWPLAN_XML (không thực thi); actual qua STATISTICS XML
+    // (thực thi query, lấy plan kèm RunTimeInformation). DML+actual đã bị chặn ở trên.
     if system == "mssql" {
-        return explain_mssql(state.inner(), &conn_id, &sql).await;
+        return explain_mssql(state.inner(), &conn_id, &sql, actual).await;
     }
 
     let explain_sql = build_explain(&system, &sql, actual);
@@ -94,35 +94,44 @@ pub async fn explain_capability(
     Ok(plan::capability(&system))
 }
 
-/// MSSQL estimated plan qua `SET SHOWPLAN_XML ON`. Bật → chạy query (server trả
-/// XML plan, không thực thi) → LUÔN tắt lại (kể cả khi query lỗi).
+/// MSSQL query plan. estimated: `SET SHOWPLAN_XML ON` → chạy query (server chỉ
+/// SINH plan, KHÔNG thực thi). actual: `SET STATISTICS XML ON` → THỰC THI query,
+/// trả data + plan XML (kèm RunTimeInformation). SET được bật/tắt như batch riêng;
+/// tắt LUÔN chạy (kể cả khi query lỗi). Với STATISTICS XML, plan XML nằm lẫn trong
+/// các result set (đã flatten) → quét tìm cell chứa `<ShowPlanXML`.
 async fn explain_mssql(
     state: &AppState,
     conn_id: &str,
     sql: &str,
+    actual: bool,
 ) -> Result<QueryPlan, AppError> {
     let sql = sql.trim().trim_end_matches(';').to_string();
+    let set_on = if actual { "SET STATISTICS XML ON" } else { "SET SHOWPLAN_XML ON" };
+    let set_off = if actual { "SET STATISTICS XML OFF" } else { "SET SHOWPLAN_XML OFF" };
     state
         .registry
-        .exec_statement(conn_id, "SET SHOWPLAN_XML ON".into())
+        .exec_statement(conn_id, set_on.into())
         .await?
         .map_err(|e| AppError::Driver(e.message))?;
     let res = state.registry.exec_statement(conn_id, sql).await;
-    // best-effort tắt lại — không để connection kẹt ở chế độ SHOWPLAN.
-    let _ = state.registry.exec_statement(conn_id, "SET SHOWPLAN_XML OFF".into()).await;
+    // best-effort tắt lại — không để connection kẹt ở chế độ SHOWPLAN/STATISTICS.
+    let _ = state.registry.exec_statement(conn_id, set_off.into()).await;
 
     let outcome = res?.map_err(|e| AppError::Driver(e.message))?;
     let rows = match outcome {
         StatementOutcome::Rows { result } => result.rows,
-        _ => return Err(AppError::Driver("SHOWPLAN_XML did not return a plan".into())),
+        _ => return Err(AppError::Driver("MSSQL plan query did not return a plan".into())),
     };
+    // Estimated: XML là ô đầu. Actual: data rows đứng trước, plan XML là ô chứa
+    // "<ShowPlanXML" (quét mọi ô để robust với thứ tự result set).
     let xml = rows
-        .first()
-        .and_then(|r| r.as_object())
-        .and_then(|o| o.values().next())
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| AppError::Driver("SHOWPLAN_XML is empty".into()))?;
-    plan::parse_mssql_xml(xml).map_err(AppError::Driver)
+        .iter()
+        .filter_map(|r| r.as_object())
+        .flat_map(|o| o.values())
+        .filter_map(|v| v.as_str())
+        .find(|s| s.contains("<ShowPlanXML"))
+        .ok_or_else(|| AppError::Driver("MSSQL plan XML is empty".into()))?;
+    plan::parse_mssql_xml(xml, actual).map_err(AppError::Driver)
 }
 
 /// PostgreSQL Actual plan cho câu GHI (INSERT/UPDATE/DELETE/…): bọc trong
@@ -188,6 +197,8 @@ fn build_explain(system: &str, sql: &str, actual: bool) -> String {
         }
         // MariaDB hỗ trợ ANALYZE FORMAT=JSON (số liệu thực tế r_rows/r_total_time_ms).
         "mariadb" if actual => format!("ANALYZE FORMAT=JSON {sql}"),
+        // MySQL 8.0.18+ EXPLAIN ANALYZE → TREE text với actual time/rows (P3.3).
+        "mysql" if actual => format!("EXPLAIN ANALYZE {sql}"),
         "mysql" | "mariadb" => format!("EXPLAIN FORMAT=JSON {sql}"),
         "sqlite" => format!("EXPLAIN QUERY PLAN {sql}"),
         "clickhouse" => format!("EXPLAIN indexes = 1 {sql}"),
@@ -209,6 +220,16 @@ fn parse_for_system(
                 serde_json::to_string(cell).map_err(|e| e.to_string())?
             };
             plan::parse_pg(&json, actual)
+        }
+        // MySQL actual = EXPLAIN ANALYZE → TREE text (join mọi cell/dòng), parser riêng.
+        "mysql" if actual => {
+            let text = rows
+                .iter()
+                .filter_map(|r| r.as_object().and_then(|o| o.values().next()))
+                .filter_map(|v| v.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            plan::parse_mysql_tree(&text, true)
         }
         "mysql" | "mariadb" => {
             let cell = first_cell(rows).ok_or("MySQL EXPLAIN returned no rows")?;
@@ -376,8 +397,9 @@ mod tests {
             build_explain("postgres", q, true),
             "EXPLAIN (ANALYZE, BUFFERS, VERBOSE, FORMAT JSON) SELECT 1"
         );
-        // MySQL: luôn EXPLAIN FORMAT=JSON (actual bị bỏ qua — estimated-only).
-        assert_eq!(build_explain("mysql", q, true), "EXPLAIN FORMAT=JSON SELECT 1");
+        // MySQL: estimated → FORMAT=JSON; actual → EXPLAIN ANALYZE (TREE, P3.3).
+        assert_eq!(build_explain("mysql", q, false), "EXPLAIN FORMAT=JSON SELECT 1");
+        assert_eq!(build_explain("mysql", q, true), "EXPLAIN ANALYZE SELECT 1");
         // MariaDB: actual → ANALYZE FORMAT=JSON; estimated → EXPLAIN FORMAT=JSON.
         assert_eq!(build_explain("mariadb", q, true), "ANALYZE FORMAT=JSON SELECT 1");
         assert_eq!(build_explain("mariadb", q, false), "EXPLAIN FORMAT=JSON SELECT 1");

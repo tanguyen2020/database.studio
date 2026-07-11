@@ -83,7 +83,7 @@ test('query plan: Run closes the plan and focuses results; Explain reopens it', 
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
 
-test('query plan: Actual toggle hidden for engines without EXPLAIN ANALYZE (MySQL)', async ({ page }) => {
+test('query plan: Actual toggle hidden for engines without EXPLAIN ANALYZE (ClickHouse)', async ({ page }) => {
   const errors: string[] = []
   page.on('pageerror', (e) => errors.push(String(e)))
   await blockRemoteFonts(page)
@@ -91,21 +91,45 @@ test('query plan: Actual toggle hidden for engines without EXPLAIN ANALYZE (MySQ
   await page.waitForSelector('#app > *', { timeout: 15_000 })
   await page.waitForTimeout(300)
 
-  // open a query console bound to the MySQL connection via its context menu
-  // (the generic New-SQL-tab button binds to the active tab's connection instead).
-  await page.getByText('localhost:3306', { exact: false }).first().click({ button: 'right' })
+  // open a query console bound to the ClickHouse connection (actual_kind='none')
+  // via its context menu (the generic New-SQL-tab button binds to the active tab).
+  await page.getByText('10.0.4.2:8123', { exact: false }).first().click({ button: 'right' })
   await page.waitForTimeout(200)
   await page.getByText('New Query Console', { exact: true }).first().click()
   await page.waitForTimeout(700)
   const editor = page.locator('.cm-content').first()
   await editor.click()
+  await page.keyboard.type('SELECT * FROM events')
+  await page.getByRole('button', { name: 'Explain' }).first().click()
+  await page.waitForTimeout(500)
+
+  // plan shows, but the Actual toggle must NOT be offered (ClickHouse has no actual)
+  await expect(page.getByRole('tab', { name: /Query Plan/ }).first()).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Actual' })).toHaveCount(0)
+
+  expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
+})
+
+test('query plan: MySQL now offers the Actual toggle (EXPLAIN ANALYZE)', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(String(e)))
+  await blockRemoteFonts(page)
+  await page.goto(APP_URL)
+  await page.waitForSelector('#app > *', { timeout: 15_000 })
+  await page.waitForTimeout(300)
+
+  await page.getByText('localhost:3306', { exact: false }).first().click({ button: 'right' })
+  await page.waitForTimeout(200)
+  await page.getByText('New Query Console', { exact: true }).first().click()
+  await page.waitForTimeout(700)
+  await page.locator('.cm-content').first().click()
   await page.keyboard.type('SELECT * FROM books')
   await page.getByRole('button', { name: 'Explain' }).first().click()
   await page.waitForTimeout(500)
 
-  // plan tab opens, but the Actual toggle must NOT be offered (P1.1 honesty)
+  // P3.3 — MySQL supports actual now → the Actual toggle IS shown.
   await expect(page.getByRole('tab', { name: /Query Plan/ }).first()).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Actual' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Actual' }).first()).toBeVisible()
 
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
