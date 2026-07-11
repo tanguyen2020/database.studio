@@ -436,6 +436,7 @@ impl LiveConnection {
         match self {
             Self::Postgres(d) => d.databases().await,
             Self::Mssql(d) => d.databases().await,
+            Self::Mongo(d) => d.databases().await,
             _ => Ok(Vec::new()),
         }
     }
@@ -451,7 +452,8 @@ impl LiveConnection {
             Self::Nats(_) => Ok(Vec::new()),
             Self::Kafka(_) => Ok(Vec::new()),
             Self::Cassandra(_) => Ok(Vec::new()),
-            Self::Mongo(_) => Ok(Vec::new()),
+            // Mongo: "schema" = database, "table" = collection.
+            Self::Mongo(d) => d.collections(schema).await,
         }
     }
 
@@ -466,7 +468,7 @@ impl LiveConnection {
             Self::Nats(_) => Ok(Vec::new()),
             Self::Kafka(_) => Ok(Vec::new()),
             Self::Cassandra(_) => Ok(Vec::new()),
-            Self::Mongo(_) => Ok(Vec::new()),
+            Self::Mongo(d) => d.collection_fields(schema, table).await,
         }
     }
 
@@ -481,7 +483,7 @@ impl LiveConnection {
             Self::Nats(_) => Ok(Vec::new()),
             Self::Kafka(_) => Ok(Vec::new()),
             Self::Cassandra(_) => Ok(Vec::new()),
-            Self::Mongo(_) => Ok(Vec::new()),
+            Self::Mongo(d) => d.indexes(schema, table).await,
         }
     }
 

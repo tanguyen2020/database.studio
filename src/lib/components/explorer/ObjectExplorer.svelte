@@ -11,6 +11,7 @@
   import * as ipc from '$lib/ipc'
   import SystemIcon from '$lib/components/SystemIcon.svelte'
   import RedisExplorer from '$lib/components/explorer/RedisExplorer.svelte'
+  import MongoExplorer from '$lib/components/explorer/MongoExplorer.svelte'
   import TableContextMenu from '$lib/components/explorer/TableContextMenu.svelte'
   import { connections } from '$lib/stores/connections.svelte'
   import { explorer } from '$lib/stores/explorer.svelte'
@@ -435,6 +436,8 @@
         explorer.bumpRedis(s.id) // RedisExplorer reloads its key list on the tick
       } else if (s.system === 'cassandra') {
         await loadCass(s.id)
+      } else if (s.system === 'mongodb') {
+        mongoRefresh++ // MongoExplorer reloads its tree when the key changes
       } else {
         // relational + ClickHouse: rebuild the schema cache; PG/MSSQL also re-list DBs
         await explorer.refresh(s.id, { kind: 'connection' })
@@ -452,6 +455,9 @@
   const isKafka = $derived(selected?.system === 'kafka')
   const isNats = $derived(selected?.system === 'nats')
   const isRedis = $derived(selected?.system === 'redis')
+  const isMongo = $derived(selected?.system === 'mongodb')
+  // Bumped by the header Refresh button → MongoExplorer reloads its tree.
+  let mongoRefresh = $state(0)
   const streamCache = $derived(selected ? explorer.streaming[selected.id] : undefined)
   const topicRows = $derived(streamCache?.kafkaTopics ? kafkaTopicRows(streamCache.kafkaTopics) : [])
   // Kafka explorer filter — matches topic names (case-insensitive substring).
@@ -1472,6 +1478,9 @@
     {:else if isRedis}
       <!-- Redis: key browser (DB selector + SCAN + pattern + tree + Add key). -->
       <RedisExplorer connId={selected.id} />
+    {:else if isMongo}
+      <!-- MongoDB: database → collection → (fields, indexes) tree. -->
+      <MongoExplorer connId={selected.id} defaultDb={selected.database} refreshKey={mongoRefresh} />
     {:else}
       {#if pgMssqlMultiDb}
         <!-- current database header (PG/MSSQL bind one DB per connection); its -->

@@ -9,9 +9,10 @@
 //! introspection, scan_indexes) are stubs implemented in later milestones so we
 //! can iterate them against a real `mongo:7` testcontainer instead of blind.
 
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-use mongodb::bson::doc;
+use mongodb::bson::{doc, Bson};
 use mongodb::options::ClientOptions;
 use mongodb::Client;
 
@@ -112,6 +113,32 @@ fn conn_err(e: impl std::fmt::Display) -> QueryError {
     QueryError::new("mongodb", format!("MongoDB connection failed: {e}"), e.to_string())
 }
 
+fn exec_err(e: impl std::fmt::Display) -> QueryError {
+    QueryError::new("mongodb", format!("MongoDB error: {e}"), e.to_string())
+}
+
+/// MongoDB (BSON) type name for the Explorer field type badge.
+fn bson_type_name(b: &Bson) -> &'static str {
+    match b {
+        Bson::Double(_) => "double",
+        Bson::String(_) => "string",
+        Bson::Document(_) => "object",
+        Bson::Array(_) => "array",
+        Bson::Boolean(_) => "bool",
+        Bson::Null => "null",
+        Bson::Int32(_) => "int",
+        Bson::Int64(_) => "long",
+        Bson::ObjectId(_) => "objectId",
+        Bson::DateTime(_) => "date",
+        Bson::Decimal128(_) => "decimal",
+        Bson::Binary(_) => "binData",
+        Bson::RegularExpression(_) => "regex",
+        Bson::Timestamp(_) => "timestamp",
+        Bson::JavaScriptCode(_) | Bson::JavaScriptCodeWithScope(_) => "javascript",
+        _ => "mixed",
+    }
+}
+
 impl MongoDriver {
     pub async fn connect(p: &MongoConnParams) -> Result<Self, QueryError> {
         let uri = build_uri(p);
@@ -194,9 +221,172 @@ impl MongoDriver {
         ))
     }
 
-    /// M1: `listDatabases`.
-    pub async fn databases(&mut self) -> Result<Vec<DatabaseInfo>, QueryError> {
-        Ok(Vec::new())
+    /// Databases on the server (`listDatabases`). `current` marks the connection's
+    /// default database.
+    pub async fn databases(&self) -> Result<Vec<DatabaseInfo>, QueryError> {
+        let d = self
+            .client
+            .database("admin")
+            .run_command(doc! { "listDatabases": 1 })
+            .await
+            .map_err(exec_err)?;
+        let mut out = Vec::new();
+        if let Ok(arr) = d.get_array("databases") {
+            for b in arr {
+                if let Bson::Document(doc) = b {
+                    let name = doc.get_str("name").unwrap_or_default().to_string();
+                    if name.is_empty() {
+                        continue;
+                    }
+                    out.push(DatabaseInfo { current: name == self.database, name });
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// Collections in a database (`listCollections`). `schema` is the database
+    /// name; a MongoDB view is reported as `kind = "view"`.
+    pub async fn collections(&self, database: &str) -> Result<Vec<TableInfo>, QueryError> {
+        let d = self
+            .client
+            .database(database)
+            .run_command(doc! { "listCollections": 1 })
+            .await
+            .map_err(exec_err)?;
+        let mut out = Vec::new();
+        if let Ok(batch) = d
+            .get_document("cursor")
+            .and_then(|c| c.get_array("firstBatch"))
+        {
+            for b in batch {
+                if let Bson::Document(c) = b {
+                    let name = c.get_str("name").unwrap_or_default().to_string();
+                    if name.is_empty() {
+                        continue;
+                    }
+                    let kind = if c.get_str("type").unwrap_or("collection") == "view" {
+                        "view"
+                    } else {
+                        "table"
+                    };
+                    out.push(TableInfo {
+                        schema: database.to_string(),
+                        name,
+                        kind: kind.to_string(),
+                        row_estimate: None,
+                        locked: false,
+                        engine: None,
+                        data_length: None,
+                    });
+                }
+            }
+        }
+        out.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(out)
+    }
+
+    /// Indexes on a collection (`listIndexes`). `_id_` is the implicit primary key.
+    pub async fn indexes(
+        &self,
+        database: &str,
+        collection: &str,
+    ) -> Result<Vec<IndexInfo>, QueryError> {
+        let d = self
+            .client
+            .database(database)
+            .run_command(doc! { "listIndexes": collection })
+            .await
+            .map_err(exec_err)?;
+        let mut out = Vec::new();
+        if let Ok(batch) = d
+            .get_document("cursor")
+            .and_then(|c| c.get_array("firstBatch"))
+        {
+            for b in batch {
+                if let Bson::Document(idx) = b {
+                    let name = idx.get_str("name").unwrap_or_default().to_string();
+                    let unique = idx.get_bool("unique").unwrap_or(false);
+                    let mut columns = Vec::new();
+                    // Default access method is a B-tree; a special index encodes its
+                    // type as the key value ("text" / "2dsphere" / "hashed").
+                    let mut method = "btree".to_string();
+                    if let Ok(key) = idx.get_document("key") {
+                        for (k, v) in key.iter() {
+                            columns.push(k.clone());
+                            if let Bson::String(s) = v {
+                                method = s.clone();
+                            }
+                        }
+                    }
+                    let primary = name == "_id_";
+                    out.push(IndexInfo { name, method, columns, unique, primary });
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// Fields of a collection, inferred by sampling documents (union of top-level
+    /// keys in first-seen order). MongoDB is schemaless, so this is best-effort.
+    pub async fn collection_fields(
+        &self,
+        database: &str,
+        collection: &str,
+    ) -> Result<Vec<ColumnInfo>, QueryError> {
+        const SAMPLE: i64 = 50;
+        let d = self
+            .client
+            .database(database)
+            .run_command(doc! { "find": collection, "limit": SAMPLE })
+            .await
+            .map_err(exec_err)?;
+        let mut names: Vec<String> = Vec::new();
+        let mut types: HashMap<String, String> = HashMap::new();
+        if let Ok(batch) = d
+            .get_document("cursor")
+            .and_then(|c| c.get_array("firstBatch"))
+        {
+            for b in batch {
+                if let Bson::Document(doc) = b {
+                    for (k, v) in doc.iter() {
+                        let tn = bson_type_name(v).to_string();
+                        match types.get(k) {
+                            None => {
+                                names.push(k.clone());
+                                types.insert(k.clone(), tn);
+                            }
+                            // Refine a previously-null field once a real value appears.
+                            Some(prev) if prev == "null" && tn != "null" => {
+                                types.insert(k.clone(), tn);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+        let mut out: Vec<ColumnInfo> = names
+            .into_iter()
+            .enumerate()
+            .map(|(i, name)| {
+                let is_pk = name == "_id";
+                let data_type = types.remove(&name).unwrap_or_else(|| "mixed".into());
+                ColumnInfo {
+                    name,
+                    data_type,
+                    nullable: !is_pk,
+                    default: None,
+                    is_pk,
+                    is_fk: false,
+                    ordinal: i as i32,
+                    auto_increment: false,
+                }
+            })
+            .collect();
+        // `_id` first, then first-seen order.
+        out.sort_by_key(|c| if c.is_pk { 0 } else { 1 });
+        Ok(out)
     }
 
     /// M3: editable grid — insert/update/delete documents by `_id`.
