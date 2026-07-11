@@ -1027,6 +1027,129 @@ impl MongoDriver {
     ) -> Result<Vec<index_scan::IndexScanRow>, QueryError> {
         Ok(Vec::new())
     }
+
+    /// Admin views (Session Monitor). `sessions` = currentOp, `server` =
+    /// serverStatus metrics, `users` = usersInfo. Returns a `QueryResultSet` so it
+    /// renders in the generic Admin grid (like Redis' INFO).
+    pub async fn admin_view(&self, view: &str) -> Result<QueryResultSet, QueryError> {
+        let admin = self.client.database("admin");
+        match view {
+            "sessions" => {
+                let res = admin
+                    .run_command(doc! { "currentOp": 1i32, "$all": false })
+                    .await
+                    .map_err(exec_err)?;
+                let cols = vec![
+                    ("pid".to_string(), "long".to_string()),
+                    ("op".to_string(), "text".to_string()),
+                    ("ns".to_string(), "text".to_string()),
+                    ("secs_running".to_string(), "long".to_string()),
+                    ("client".to_string(), "text".to_string()),
+                    ("desc".to_string(), "text".to_string()),
+                ];
+                let mut rows = Vec::new();
+                if let Ok(inprog) = res.get_array("inprog") {
+                    for b in inprog {
+                        if let Bson::Document(d) = b {
+                            rows.push(json!({
+                                "pid": bson_to_json(d.get("opid").unwrap_or(&Bson::Null)),
+                                "op": d.get_str("op").unwrap_or(""),
+                                "ns": d.get_str("ns").unwrap_or(""),
+                                "secs_running": bson_to_json(d.get("secs_running").unwrap_or(&Bson::Null)),
+                                "client": d.get_str("client").unwrap_or(""),
+                                "desc": d.get_str("desc").unwrap_or(""),
+                            }));
+                        }
+                    }
+                }
+                let total = rows.len() as u64;
+                Ok(QueryResultSet { cols, rows, total })
+            }
+            "server" => {
+                let res = admin.run_command(doc! { "serverStatus": 1i32 }).await.map_err(exec_err)?;
+                let j = bson_to_json(&Bson::Document(res));
+                let mut rows = Vec::new();
+                let mut push = |metric: &str, v: Value| {
+                    rows.push(json!({ "metric": metric, "value": v }));
+                };
+                push("version", j.get("version").cloned().unwrap_or(Value::Null));
+                push("uptime_secs", j.get("uptime").cloned().unwrap_or(Value::Null));
+                push("connections.current", j.pointer("/connections/current").cloned().unwrap_or(Value::Null));
+                push("connections.available", j.pointer("/connections/available").cloned().unwrap_or(Value::Null));
+                push("mem.resident_mb", j.pointer("/mem/resident").cloned().unwrap_or(Value::Null));
+                push("mem.virtual_mb", j.pointer("/mem/virtual").cloned().unwrap_or(Value::Null));
+                push("network.bytesIn", j.pointer("/network/bytesIn").cloned().unwrap_or(Value::Null));
+                push("network.bytesOut", j.pointer("/network/bytesOut").cloned().unwrap_or(Value::Null));
+                push("opcounters.query", j.pointer("/opcounters/query").cloned().unwrap_or(Value::Null));
+                push("opcounters.insert", j.pointer("/opcounters/insert").cloned().unwrap_or(Value::Null));
+                push("opcounters.update", j.pointer("/opcounters/update").cloned().unwrap_or(Value::Null));
+                push("opcounters.delete", j.pointer("/opcounters/delete").cloned().unwrap_or(Value::Null));
+                let total = rows.len() as u64;
+                Ok(QueryResultSet {
+                    cols: vec![
+                        ("metric".to_string(), "text".to_string()),
+                        ("value".to_string(), "text".to_string()),
+                    ],
+                    rows,
+                    total,
+                })
+            }
+            "users" => {
+                let res = self
+                    .client
+                    .database(&self.database)
+                    .run_command(doc! { "usersInfo": 1i32 })
+                    .await
+                    .map_err(exec_err)?;
+                let cols = vec![
+                    ("user".to_string(), "text".to_string()),
+                    ("db".to_string(), "text".to_string()),
+                    ("roles".to_string(), "text".to_string()),
+                ];
+                let mut rows = Vec::new();
+                if let Ok(users) = res.get_array("users") {
+                    for b in users {
+                        if let Bson::Document(u) = b {
+                            let roles = u
+                                .get_array("roles")
+                                .map(|rs| {
+                                    rs.iter()
+                                        .filter_map(|r| r.as_document())
+                                        .map(|r| {
+                                            format!(
+                                                "{}@{}",
+                                                r.get_str("role").unwrap_or(""),
+                                                r.get_str("db").unwrap_or("")
+                                            )
+                                        })
+                                        .collect::<Vec<_>>()
+                                        .join(", ")
+                                })
+                                .unwrap_or_default();
+                            rows.push(json!({
+                                "user": u.get_str("user").unwrap_or(""),
+                                "db": u.get_str("db").unwrap_or(""),
+                                "roles": roles,
+                            }));
+                        }
+                    }
+                }
+                let total = rows.len() as u64;
+                Ok(QueryResultSet { cols, rows, total })
+            }
+            other => Err(perr(format!("Admin view '{other}' is not supported for MongoDB"))),
+        }
+    }
+
+    /// Terminate an in-progress operation (`killOp`).
+    pub async fn kill_op(&self, opid: i64) -> Result<(), QueryError> {
+        self.client
+            .database("admin")
+            .run_command(doc! { "killOp": 1i32, "op": opid })
+            .await
+            .map_err(exec_err)?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]

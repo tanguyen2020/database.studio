@@ -168,6 +168,22 @@ pub async fn admin_view(
         return Ok(parse_redis_info(&text));
     }
 
+    // MongoDB không phải SQL: currentOp / serverStatus / usersInfo qua driver.
+    if system == "mongodb" {
+        let v = view.clone();
+        return state
+            .registry
+            .with_driver(&conn_id, move |d| async move {
+                let g = d.lock().await;
+                match &*g {
+                    LiveConnection::Mongo(m) => m.admin_view(&v).await,
+                    _ => Err(QueryError::new("mongodb", "not mongodb", "not mongodb")),
+                }
+            })
+            .await?
+            .map_err(|e| AppError::Driver(e.message));
+    }
+
     let sql = admin_query(&system, &view)
         .ok_or_else(|| AppError::Driver(format!("Admin view '{view}' is not supported for {system}")))?;
     let outcome = state
@@ -192,6 +208,20 @@ pub async fn kill_session(
         .system_of(&conn_id)
         .or_else(|| state.storage.get_connection(&conn_id).ok().map(|p| p.system.as_str().to_string()))
         .unwrap_or_default();
+    // MongoDB: killOp qua driver (không phải SQL).
+    if system == "mongodb" {
+        return state
+            .registry
+            .with_driver(&conn_id, move |d| async move {
+                let g = d.lock().await;
+                match &*g {
+                    LiveConnection::Mongo(m) => m.kill_op(pid).await,
+                    _ => Err(QueryError::new("mongodb", "not mongodb", "not mongodb")),
+                }
+            })
+            .await?
+            .map_err(|e| AppError::Driver(e.message));
+    }
     let sql = kill_query(&system, pid)
         .ok_or_else(|| AppError::Driver(format!("Kill session is not supported for {system}")))?;
     state

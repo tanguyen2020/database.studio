@@ -41,6 +41,12 @@
           ['mutations', 'Mutations'],
           ['users', 'Users & Privileges'],
         ]
+      case 'mongodb':
+        return [
+          ['sessions', 'Session Monitor'],
+          ['server', 'Server Status'],
+          ['users', 'Users & Privileges'],
+        ]
       default:
         return [['sessions', 'Session Monitor']]
     }
@@ -48,7 +54,7 @@
 
   // Kill targets a numeric backend pid — ClickHouse cancels by query_id (string), a
   // different flow, so the per-row Kill action is offered only where pid-kill applies.
-  const canKill = $derived(['postgres', 'mysql', 'mariadb', 'mssql'].includes(tab.systemType))
+  const canKill = $derived(['postgres', 'mysql', 'mariadb', 'mssql', 'mongodb'].includes(tab.systemType))
 
   let view = $state<string>((untrack(() => tab.state) as { view?: string }).view ?? 'sessions')
 

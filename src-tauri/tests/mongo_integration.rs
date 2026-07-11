@@ -259,6 +259,10 @@ async fn mongo_introspection_databases_collections_indexes_fields() {
         || proot.children.iter().any(|c| c.operation == "SeqScan");
     assert!(has_collscan, "find không index → COLLSCAN (SeqScan): {:?}", proot.operation);
     assert!(!plan.summary.warnings.is_empty(), "COLLSCAN sinh cảnh báo");
+    // Missing-index (M5): COLLSCAN + filter age → gợi ý createIndex trên users.age.
+    let mi = plan.missing_index.expect("missing-index suggestion cho COLLSCAN có filter");
+    assert_eq!(mi.table, "users");
+    assert!(mi.ddl.contains("createIndex") && mi.ddl.contains("age"), "ddl: {}", mi.ddl);
 
     // executionStats (actual) runs the query and reports timing.
     let act = drv.explain_mongo("db.users.find({\"age\":{\"$gt\":18}})", true).await.unwrap();
@@ -266,4 +270,16 @@ async fn mongo_introspection_databases_collections_indexes_fields() {
     let plan_a = parse_mongodb(&act, true);
     assert_eq!(plan_a.mode, "actual");
     assert!(plan_a.root.is_some());
+
+    // --- admin views (M5) ---------------------------------------------------
+    // serverStatus → metric/value rows incl. version.
+    let server = drv.admin_view("server").await.unwrap();
+    assert!(
+        server.rows.iter().any(|r| r["metric"] == "version" && !r["value"].is_null()),
+        "server status có metric version"
+    );
+    // currentOp + usersInfo → Ok (rows may be empty on a quiet standalone).
+    let sessions = drv.admin_view("sessions").await.unwrap();
+    assert!(sessions.cols.iter().any(|(n, _)| n == "pid"), "sessions có cột pid");
+    drv.admin_view("users").await.expect("usersInfo Ok");
 }

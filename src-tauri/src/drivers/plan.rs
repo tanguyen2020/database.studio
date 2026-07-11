@@ -990,13 +990,63 @@ pub fn parse_mongodb(json: &Value, actual: bool) -> QueryPlan {
     } else {
         None
     };
+    // Missing-index suggestion: a COLLSCAN carrying a filter would benefit from an
+    // index on the filtered field(s).
+    let coll = json
+        .get("queryPlanner")
+        .and_then(|q| q.get("namespace"))
+        .and_then(|v| v.as_str())
+        .and_then(|n| n.split_once('.').map(|(_, c)| c.to_string()));
+    let missing_index = root.as_ref().and_then(collscan_filter).and_then(|filter| {
+        let mut fields = Vec::new();
+        collect_filter_fields(filter, &mut fields);
+        if fields.is_empty() {
+            return None;
+        }
+        let coll = coll.clone().unwrap_or_else(|| "collection".into());
+        let keys = fields.iter().map(|f| format!("\"{f}\": 1")).collect::<Vec<_>>().join(", ");
+        Some(MissingIndex {
+            impact_pct: 0.0,
+            table: coll.clone(),
+            ddl: format!("db.{coll}.createIndex({{ {keys} }})"),
+            reason: "Collection scan (COLLSCAN) with a filter — an index on the filtered field(s) avoids a full scan.".into(),
+        })
+    });
     QueryPlan {
         system: "mongodb".into(),
         mode: if actual { "actual".into() } else { "estimated".into() },
         root,
         summary: PlanSummary { total_cost: None, total_time_ms, warnings },
         raw: serde_json::to_string_pretty(json).unwrap_or_default(),
-        missing_index: None,
+        missing_index,
+    }
+}
+
+/// Find the `filter` object on the first COLLSCAN in the tree (if any).
+fn collscan_filter(node: &PlanNode) -> Option<&Value> {
+    if node.native_op == "COLLSCAN" {
+        if let Some(f @ Value::Object(_)) = node.extra.get("filter") {
+            return Some(f);
+        }
+    }
+    node.children.iter().find_map(collscan_filter)
+}
+
+/// Collect the field names referenced by a Mongo query filter (top-level fields;
+/// descends into `$and`/`$or`/`$nor` arrays; skips other `$`-operators).
+fn collect_filter_fields(filter: &Value, out: &mut Vec<String>) {
+    if let Value::Object(m) = filter {
+        for (k, v) in m {
+            if k.starts_with('$') {
+                if let Value::Array(arr) = v {
+                    for sub in arr {
+                        collect_filter_fields(sub, out);
+                    }
+                }
+            } else if !out.contains(k) {
+                out.push(k.clone());
+            }
+        }
     }
 }
 
@@ -1200,6 +1250,28 @@ mod tests {
         assert_eq!(hr.actual_rows, Some(3.0));
         assert_eq!(hot.summary.total_time_ms, Some(12.0));
         assert!(!hot.summary.warnings.is_empty());
+    }
+
+    #[test]
+    fn mongo_missing_index_from_collscan_filter() {
+        use serde_json::json;
+        let plan = parse_mongodb(
+            &json!({
+                "queryPlanner": {
+                    "namespace": "appdb.users",
+                    "winningPlan": {
+                        "stage": "COLLSCAN",
+                        "filter": { "age": { "$gt": 18 }, "status": { "$eq": "active" } }
+                    }
+                }
+            }),
+            false,
+        );
+        let mi = plan.missing_index.expect("missing_index suggestion");
+        assert_eq!(mi.table, "users");
+        assert!(mi.ddl.contains("db.users.createIndex("));
+        assert!(mi.ddl.contains("\"age\": 1"));
+        assert!(mi.ddl.contains("\"status\": 1"));
     }
 
     #[test]
