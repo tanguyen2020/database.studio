@@ -31,6 +31,12 @@ pub async fn explain_plan(
         return Ok(QueryPlan::not_applicable(&system));
     }
 
+    // MongoDB: .explain() (queryPlanner / executionStats) — không phải SQL EXPLAIN,
+    // nên xử lý trước các guard câu-ghi kiểu SQL. Driver chỉ cho phép read op.
+    if system == "mongodb" {
+        return explain_mongo(state.inner(), &conn_id, &sql, actual).await;
+    }
+
     // P0.1 — An toàn: EXPLAIN với câu GHI có thể thực thi thật.
     let writing = is_write_statement(&sql);
 
@@ -182,6 +188,29 @@ async fn explain_cassandra(
         .await?
         .map_err(|e| AppError::Driver(e.message))?;
     Ok(plan::parse_cassandra_trace(&cql_owned, &warnings, &events))
+}
+
+/// MongoDB query plan qua `.explain()`. Driver dựng explain command + verbosity
+/// (queryPlanner/executionStats) → JSON; parse_mongodb map winningPlan → cây.
+async fn explain_mongo(
+    state: &AppState,
+    conn_id: &str,
+    query: &str,
+    actual: bool,
+) -> Result<QueryPlan, AppError> {
+    let q = query.to_string();
+    let json = state
+        .registry
+        .with_driver(conn_id, move |driver| async move {
+            let d = driver.lock().await;
+            match &*d {
+                LiveConnection::Mongo(m) => m.explain_mongo(&q, actual).await,
+                _ => Err(QueryError::new("mongodb", "Connection is not MongoDB", "not mongo")),
+            }
+        })
+        .await?
+        .map_err(|e| AppError::Driver(e.message))?;
+    Ok(plan::parse_mongodb(&json, actual))
 }
 
 /// Câu EXPLAIN native theo hệ.

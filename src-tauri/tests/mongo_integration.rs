@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 
 use database_studio_lib::drivers::grid::{Col, GridChange};
 use database_studio_lib::drivers::mongo::{MongoConnParams, MongoDriver};
+use database_studio_lib::drivers::plan::parse_mongodb;
 use database_studio_lib::drivers::types::StatementOutcome;
 use mongodb::bson::{doc, Document};
 use serde_json::json;
@@ -244,4 +245,25 @@ async fn mongo_introspection_databases_collections_indexes_fields() {
         .await
         .unwrap();
     assert_eq!(del, 1, "apply_grid delete 1 doc");
+
+    // --- explain (M4a) ------------------------------------------------------
+    // No index on `age` → COLLSCAN. queryPlanner (estimated) does not run the query.
+    let est = drv.explain_mongo("db.users.find({\"age\":{\"$gt\":18}})", false).await.unwrap();
+    assert!(est.get("queryPlanner").is_some(), "explain có queryPlanner");
+    let plan = parse_mongodb(&est, false);
+    assert_eq!(plan.system, "mongodb");
+    assert_eq!(plan.mode, "estimated");
+    let proot = plan.root.expect("plan root");
+    // FETCH→COLLSCAN or plain COLLSCAN → a SeqScan somewhere + hotspot warning.
+    let has_collscan = proot.operation == "SeqScan"
+        || proot.children.iter().any(|c| c.operation == "SeqScan");
+    assert!(has_collscan, "find không index → COLLSCAN (SeqScan): {:?}", proot.operation);
+    assert!(!plan.summary.warnings.is_empty(), "COLLSCAN sinh cảnh báo");
+
+    // executionStats (actual) runs the query and reports timing.
+    let act = drv.explain_mongo("db.users.find({\"age\":{\"$gt\":18}})", true).await.unwrap();
+    assert!(act.get("executionStats").is_some(), "explain actual có executionStats");
+    let plan_a = parse_mongodb(&act, true);
+    assert_eq!(plan_a.mode, "actual");
+    assert!(plan_a.root.is_some());
 }

@@ -899,6 +899,60 @@ impl MongoDriver {
         Ok(out)
     }
 
+    /// `.explain()` a read statement (find/aggregate/count/distinct) →
+    /// raw explain JSON (parsed by `plan::parse_mongodb`). `actual` picks
+    /// `executionStats` (runs the query) vs `queryPlanner` (plan only).
+    pub async fn explain_mongo(&self, query: &str, actual: bool) -> Result<Value, QueryError> {
+        let call = parse_mongo_query(query)?;
+        let inner = match call.method.as_str() {
+            "find" => {
+                let mut c = doc! { "find": &call.collection };
+                if let Some(f) = call.args.first().and_then(value_to_doc) {
+                    c.insert("filter", f);
+                }
+                if let Some(s) = call.sort.as_ref().and_then(value_to_doc) {
+                    c.insert("sort", s);
+                }
+                if let Some(l) = call.limit {
+                    c.insert("limit", l);
+                }
+                if let Some(sk) = call.skip {
+                    c.insert("skip", sk);
+                }
+                c
+            }
+            "aggregate" => {
+                let arr = bson::to_bson(&call.args.first().cloned().unwrap_or(Value::Array(vec![])))
+                    .ok()
+                    .and_then(|b| b.as_array().cloned())
+                    .unwrap_or_default();
+                doc! { "aggregate": &call.collection, "pipeline": arr, "cursor": doc! {} }
+            }
+            "countdocuments" | "count" => {
+                let f = call.args.first().and_then(value_to_doc).unwrap_or_default();
+                doc! { "count": &call.collection, "query": f }
+            }
+            "distinct" => {
+                let key = call.args.first().and_then(|v| v.as_str()).unwrap_or_default();
+                let f = call.args.get(1).and_then(value_to_doc).unwrap_or_default();
+                doc! { "distinct": &call.collection, "key": key, "query": f }
+            }
+            other => {
+                return Err(perr(format!(
+                    "explain supports read operations (find/aggregate/countDocuments/distinct), not {other}"
+                )))
+            }
+        };
+        let verbosity = if actual { "executionStats" } else { "queryPlanner" };
+        let res = self
+            .client
+            .database(&self.database)
+            .run_command(doc! { "explain": inner, "verbosity": verbosity })
+            .await
+            .map_err(exec_err)?;
+        Ok(bson_to_json(&Bson::Document(res)))
+    }
+
     /// Editable grid: insert/update/delete documents by `_id` (the change's `pk`).
     /// `schema` on each change selects the database. No OLTP transaction — changes
     /// are applied one command at a time (mirrors Cassandra's `apply_grid`).

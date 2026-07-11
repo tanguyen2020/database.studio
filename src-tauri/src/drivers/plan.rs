@@ -147,6 +147,9 @@ pub fn capability(system: &str) -> EngineCapability {
         "mssql" => (true, ActualKind::Analyze, CostBasis::Cost),
         "sqlite" => (true, ActualKind::None, CostBasis::RowsProxy),
         "clickhouse" => (true, ActualKind::None, CostBasis::RowsProxy),
+        // MongoDB: planner tĩnh (queryPlanner) + executionStats (actual). Không có
+        // per-stage cost số → xếp hạng theo rows (RowsProxy).
+        "mongodb" => (true, ActualKind::Analyze, CostBasis::RowsProxy),
         // Cassandra: không planner tĩnh, chỉ tracing (chạy thật, không có toggle).
         "cassandra" => (false, ActualKind::Tracing, CostBasis::Duration),
         // redis/kafka/nats: không áp dụng.
@@ -174,6 +177,12 @@ pub fn normalize_op(native: &str) -> String {
     let n = native.to_lowercase();
     let canon = if n.contains("index only scan") {
         "IndexOnlyScan"
+    } else if n.contains("collscan") {
+        // MongoDB full collection scan.
+        "SeqScan"
+    } else if n.contains("ixscan") {
+        // MongoDB index scan.
+        "IndexScan"
     } else if n.contains("seek") {
         // Index Seek / Clustered Index Seek (MSSQL) — key access, KHÔNG phải scan.
         "IndexSeek"
@@ -962,6 +971,64 @@ pub fn parse_cassandra_trace(
 // Fallback text (ClickHouse/khác trước khi có parser chuyên biệt): 1 node raw.
 // ---------------------------------------------------------------------------
 
+/// MongoDB `.explain()` JSON → QueryPlan. Reads `queryPlanner.winningPlan`
+/// (estimated) or `executionStats.executionStages` (actual, with runtime counts).
+/// The stage tree descends via `inputStage` (single) / `inputStages` (array).
+/// COLLSCAN marks a hotspot + warning. No per-stage cost (Mongo exposes none).
+pub fn parse_mongodb(json: &Value, actual: bool) -> QueryPlan {
+    let winning = json.get("queryPlanner").and_then(|q| q.get("winningPlan"));
+    let exec = json.get("executionStats");
+    let root_stage = if actual {
+        exec.and_then(|e| e.get("executionStages")).or(winning)
+    } else {
+        winning
+    };
+    let mut warnings: Vec<String> = Vec::new();
+    let root = root_stage.map(|s| build_mongo_node(s, &mut warnings));
+    let total_time_ms = if actual {
+        exec.and_then(|e| e.get("executionTimeMillis")).and_then(|v| v.as_f64())
+    } else {
+        None
+    };
+    QueryPlan {
+        system: "mongodb".into(),
+        mode: if actual { "actual".into() } else { "estimated".into() },
+        root,
+        summary: PlanSummary { total_cost: None, total_time_ms, warnings },
+        raw: serde_json::to_string_pretty(json).unwrap_or_default(),
+        missing_index: None,
+    }
+}
+
+fn build_mongo_node(stage: &Value, warnings: &mut Vec<String>) -> PlanNode {
+    let name = stage
+        .get("stage")
+        .and_then(|v| v.as_str())
+        .or_else(|| stage.get("type").and_then(|v| v.as_str()))
+        .unwrap_or("STAGE");
+    let mut node = PlanNode::leaf(&normalize_op(name), name);
+    node.actual_rows = stage.get("nReturned").and_then(|v| v.as_f64());
+    node.actual_time_ms = stage.get("executionTimeMillisEstimate").and_then(|v| v.as_f64());
+    for key in ["indexName", "direction", "keyPattern", "filter", "docsExamined", "keysExamined", "indexBounds"] {
+        if let Some(v) = stage.get(key) {
+            node.extra.insert(key.to_string(), v.clone());
+        }
+    }
+    if name == "COLLSCAN" {
+        node.is_hotspot = true;
+        warnings.push("Collection scan (COLLSCAN) — no index used; consider creating one.".into());
+    }
+    if let Some(input) = stage.get("inputStage") {
+        node.children.push(build_mongo_node(input, warnings));
+    }
+    if let Some(Value::Array(arr)) = stage.get("inputStages") {
+        for s in arr {
+            node.children.push(build_mongo_node(s, warnings));
+        }
+    }
+    node
+}
+
 pub fn from_raw_text(system: &str, raw: &str) -> QueryPlan {
     let mut root = PlanNode::leaf("Plan", "Plan");
     root.extra.insert("text".into(), Value::String(raw.to_string()));
@@ -1085,6 +1152,54 @@ mod tests {
             let c = capability(m);
             assert!(!c.has_planner && !c.supports_actual);
         }
+        // MongoDB: planner tĩnh + executionStats (actual), cost theo rows-proxy.
+        assert_eq!(capability("mongodb").actual_kind, ActualKind::Analyze);
+        assert!(capability("mongodb").has_planner && capability("mongodb").supports_actual);
+        assert_eq!(capability("mongodb").cost_basis, CostBasis::RowsProxy);
+    }
+
+    #[test]
+    fn mongo_normalize_and_parse() {
+        use serde_json::json;
+        assert_eq!(normalize_op("COLLSCAN"), "SeqScan");
+        assert_eq!(normalize_op("IXSCAN"), "IndexScan");
+        // queryPlanner: FETCH → IXSCAN (index used)
+        let plan = parse_mongodb(
+            &json!({
+                "queryPlanner": {
+                    "winningPlan": {
+                        "stage": "FETCH",
+                        "inputStage": { "stage": "IXSCAN", "indexName": "age_1", "keyPattern": {"age": 1} }
+                    }
+                }
+            }),
+            false,
+        );
+        assert_eq!(plan.mode, "estimated");
+        let root = plan.root.unwrap();
+        assert_eq!(root.native_op, "FETCH");
+        assert_eq!(root.children[0].operation, "IndexScan");
+        assert_eq!(root.children[0].extra.get("indexName").unwrap(), "age_1");
+        assert!(plan.summary.warnings.is_empty());
+
+        // COLLSCAN → hotspot + warning; actual mode reads executionStats.
+        let hot = parse_mongodb(
+            &json!({
+                "queryPlanner": { "winningPlan": { "stage": "COLLSCAN" } },
+                "executionStats": {
+                    "executionTimeMillis": 12,
+                    "executionStages": { "stage": "COLLSCAN", "nReturned": 3, "docsExamined": 1000 }
+                }
+            }),
+            true,
+        );
+        assert_eq!(hot.mode, "actual");
+        let hr = hot.root.unwrap();
+        assert_eq!(hr.operation, "SeqScan");
+        assert!(hr.is_hotspot);
+        assert_eq!(hr.actual_rows, Some(3.0));
+        assert_eq!(hot.summary.total_time_ms, Some(12.0));
+        assert!(!hot.summary.warnings.is_empty());
     }
 
     #[test]
