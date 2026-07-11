@@ -32,7 +32,14 @@
   })
   const srcSystem = $derived(connections.byId(copyWizard.srcConnId)?.system ?? 'postgres')
   const destSystem = $derived(connections.byId(destConnId)?.system ?? 'postgres')
-  const destTargets = $derived(connections.profiles.filter((p) => p.connected && REL.includes(p.system)))
+  // MongoDB copies collection→collection between Mongo connections (schemaless, no
+  // CREATE DDL; documents round-trip via Extended JSON so _id/types are preserved).
+  const isMongo = $derived(srcSystem === 'mongodb')
+  const destTargets = $derived(
+    connections.profiles.filter((p) =>
+      p.connected && (isMongo ? p.system === 'mongodb' : REL.includes(p.system)),
+    ),
+  )
   const ddl = $derived(
     srcCols.length && destConnId
       ? buildCopyDdl(destSystem, destSchema, destTable || copyWizard.srcTable, srcCols)
@@ -71,6 +78,46 @@
     cancelFlag = false
     copied = 0
     result = null
+    // MongoDB: copy documents collection→collection (find paged → insertMany).
+    if (isMongo) {
+      const srcDb = copyWizard.srcSchema
+      const coll = copyWizard.srcTable
+      const destDb = destSchema
+      const destColl = table
+      try {
+        let skip = 0
+        for (;;) {
+          if (cancelFlag) {
+            result = `✗ cancelled after ${copied.toLocaleString()} docs`
+            return
+          }
+          const read = await ipc.mongoExec(src, `db.${coll}.find({}).skip(${skip}).limit(${PAGE})`, srcDb, PAGE)
+          if (read.error) {
+            result = `✗ read failed: ${read.error.message}`
+            return
+          }
+          const docs = read.result?.rows ?? []
+          if (docs.length === 0) break
+          const ins = await ipc.mongoExec(destConnId, `db.${destColl}.insertMany(${JSON.stringify(docs)})`, destDb, PAGE)
+          if (ins.error) {
+            result = `✗ insert failed after ${copied.toLocaleString()} docs: ${ins.error.message}`
+            return
+          }
+          copied += docs.length
+          if (docs.length < PAGE) break
+          skip += docs.length
+        }
+        const cnt = await ipc.mongoExec(destConnId, `db.${destColl}.countDocuments({})`, destDb)
+        const destCount = Number((cnt.result?.rows?.[0] as Record<string, unknown>)?.count ?? -1)
+        result = `✓ copied ${copied.toLocaleString()} docs → ${destColl} (destination count: ${destCount.toLocaleString()})`
+        toasts.success(result)
+      } catch (e) {
+        result = `✗ ${e}`
+      } finally {
+        running = false
+      }
+      return
+    }
     try {
       // 1. Create the destination table (translated DDL).
       const create = await ipc.execStatement(destConnId, ddl, 0)
@@ -142,8 +189,12 @@
             <input bind:value={destTable} class="mono" style="display:block;margin-top:var(--px-5);width:var(--px-150);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-8);color:var(--text);font-size:var(--px-12)" />
           </label>
         </div>
-        <div style="font-size:var(--px-12);color:var(--text2)">DDL preview (destination dialect)</div>
-        <pre class="selectable mono" style="max-height:var(--px-200);overflow:auto;border-radius:var(--px-8);background:var(--panel);border:var(--px-1) solid var(--border);padding:var(--px-12);font-size:var(--px-11_5);line-height:1.5;margin:0">{ddl}</pre>
+        {#if isMongo}
+          <div style="font-size:var(--px-12);color:var(--text2)">MongoDB is schemaless — the destination collection is created on first insert. Documents copy via Extended JSON (ObjectId/_id and types preserved).</div>
+        {:else}
+          <div style="font-size:var(--px-12);color:var(--text2)">DDL preview (destination dialect)</div>
+          <pre class="selectable mono" style="max-height:var(--px-200);overflow:auto;border-radius:var(--px-8);background:var(--panel);border:var(--px-1) solid var(--border);padding:var(--px-12);font-size:var(--px-11_5);line-height:1.5;margin:0">{ddl}</pre>
+        {/if}
         {#if running}
           <div style="font-size:var(--px-12);color:var(--text2)">Copying… {copied.toLocaleString()} rows</div>
         {/if}
