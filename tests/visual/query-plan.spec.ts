@@ -19,8 +19,10 @@ test('query plan: Explain opens normalized tree + hotspot + summary', async ({ p
   await page.getByRole('button', { name: 'Explain' }).first().click()
   await page.waitForTimeout(500)
 
-  // query-plan tab renders normalized nodes + hotspot + summary
+  // Plan shows in the SAME tab's Result panel (a "Query Plan" sub-tab), not a new
+  // editor tab — the SQL editor stays visible below/above the plan.
   await expect(page.getByRole('tab', { name: /Query Plan/ }).first()).toBeVisible()
+  await expect(page.locator('.cm-content').first()).toBeVisible()
   await expect(page.getByText('HashJoin').first()).toBeVisible()
   await expect(page.getByText('SeqScan').first()).toBeVisible()
   await expect(page.getByText('HOTSPOT').first()).toBeVisible()

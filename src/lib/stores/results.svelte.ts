@@ -35,6 +35,17 @@ export interface MessageEntry {
   statement: SplitStatement
 }
 
+/** Query-plan state shown inside the Result panel (not a separate tab). One per
+ *  SQL tab; replaced on each Explain. */
+export interface ExplainState {
+  loading: boolean
+  plan?: ipc.QueryPlan
+  error?: string
+  sql: string
+  actual: boolean
+  connId: string
+}
+
 export interface TabExecution {
   running: boolean
   cancelled: boolean
@@ -61,13 +72,41 @@ function mainTableOf(sql: string): string {
 
 class ResultsStore {
   byTab = $state<Record<string, TabExecution>>({})
+  /** Query plan per tab — rendered as a sub-view of the Result panel (Explain). */
+  explainByTab = $state<Record<string, ExplainState>>({})
 
   get(tabId: string): TabExecution | undefined {
     return this.byTab[tabId]
   }
 
+  explainOf(tabId: string): ExplainState | undefined {
+    return this.explainByTab[tabId]
+  }
+
   clear(tabId: string) {
     delete this.byTab[tabId]
+    delete this.explainByTab[tabId]
+  }
+
+  clearExplain(tabId: string) {
+    delete this.explainByTab[tabId]
+  }
+
+  /** Run EXPLAIN for a statement and stash the plan in the tab's Result panel.
+   *  Does NOT open a new tab. `connId` is the tab's resolved run-connection so the
+   *  plan targets the same database/schema the query runs on. */
+  async runExplain(tabId: string, connId: string, sql: string, actual: boolean): Promise<void> {
+    this.explainByTab[tabId] = { loading: true, sql, actual, connId }
+    const st = this.explainByTab[tabId] as ExplainState
+    try {
+      st.plan = await ipc.explainPlan(connId, sql, actual)
+      st.error = undefined
+    } catch (e) {
+      st.error = String(e)
+      st.plan = undefined
+    } finally {
+      st.loading = false
+    }
   }
 
   /** Cancel a tab's in-flight query (if any) and drop its execution state. Called
@@ -79,6 +118,7 @@ class ResultsStore {
       void ipc.cancelQuery(exec.connId).catch(() => {})
     }
     delete this.byTab[tabId]
+    delete this.explainByTab[tabId]
   }
 
   /**

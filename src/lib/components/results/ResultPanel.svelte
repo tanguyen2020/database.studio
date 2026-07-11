@@ -9,7 +9,8 @@
   import ResultJsonView from './ResultJsonView.svelte'
   import ResultSingleRow from './ResultSingleRow.svelte'
   import ResultChart from './ResultChart.svelte'
-  import type { SubResult, TabExecution } from '$lib/stores/results.svelte'
+  import ResultPlanView from './ResultPlanView.svelte'
+  import type { SubResult, TabExecution, ExplainState } from '$lib/stores/results.svelte'
   import { mapErrorToDocument } from '$lib/sql/errors'
   import { toJson, download, csvCell, sqlLiteral } from '$lib/export/rows'
   import { exportWizard } from '$lib/stores/export.svelte'
@@ -22,7 +23,7 @@
   type ViewMode = 'grid' | 'json' | 'single' | 'chart'
 
   interface Props {
-    exec: TabExecution
+    exec?: TabExecution
     /** accent của hệ tab đang chạy — underline sub-tab active (as.accent trong HTML) */
     accent?: string
     /** editable grid khi result đến từ 1 bảng đã biết (Table Viewer) */
@@ -34,9 +35,37 @@
     onJump?: (line: number, col: number) => void
     /** Cassandra only — "Load next page" cho result còn paging token. */
     onLoadMore?: (subIndex: number) => void
+    /** Query plan shown as a sub-view of this panel (Explain — no new tab). */
+    explain?: ExplainState | null
+    capability?: import('$lib/ipc').EngineCapability | null
+    onExplainActual?: (actual: boolean) => void
+    onExplainReExplain?: () => void
+    onExplainClose?: () => void
   }
 
-  let { exec, accent = 'var(--primary)', editTarget, connId, active = false, onJump, onLoadMore }: Props = $props()
+  let {
+    exec,
+    accent = 'var(--primary)',
+    editTarget,
+    connId,
+    active = false,
+    onJump,
+    onLoadMore,
+    explain,
+    capability,
+    onExplainActual,
+    onExplainReExplain,
+    onExplainClose,
+  }: Props = $props()
+
+  // Show the plan sub-view. Auto-activates when a fresh Explain arrives (the
+  // explain object is replaced on each run → this effect re-fires).
+  let planActive = $state(false)
+  $effect(() => {
+    void explain
+    if (explain) untrack(() => (planActive = true))
+    else untrack(() => (planActive = false))
+  })
 
   // T21 — shortcuts Ctrl+Alt+G/J/R (đổi view) + Ctrl+Shift+C (copy JSON) qua ui.
   $effect(() => {
@@ -167,7 +196,7 @@
   const MESSAGES = -1
 
   const activeResult = $derived(
-    exec.activeSub >= 0 ? exec.subResults[exec.activeSub] : undefined,
+    exec && exec.activeSub >= 0 ? exec.subResults[exec.activeSub] : undefined,
   )
 
   function stripN(label: string): string {
@@ -175,6 +204,8 @@
   }
 
   function selectSub(idx: number) {
+    if (!exec) return
+    planActive = false
     exec.activeSub = idx
     const sub = exec.subResults[idx]
     if (sub?.kind === 'error') {
@@ -200,8 +231,8 @@
 <div style="flex:1;display:flex;flex-direction:column;min-height:0;background:var(--surface)">
   <!-- sub tabs — dòng 332-340 -->
   <div style="flex:none;display:flex;align-items:center;gap:0;border-bottom:var(--px-1) solid var(--border);background:var(--header);overflow-x:auto">
-    {#each exec.subResults as sub, idx (sub.index)}
-      {@const on = exec.activeSub === idx}
+    {#each exec?.subResults ?? [] as sub, idx (sub.index)}
+      {@const on = !planActive && exec?.activeSub === idx}
       {@const statusColor = sub.kind === 'error' ? 'var(--hex-e06c75)' : sub.kind === 'affected' || sub.kind === 'ok' ? 'var(--hex-27ae60)' : 'var(--muted)'}
       <div
         onclick={() => selectSub(idx)}
@@ -216,11 +247,11 @@
         <span style="font-weight:{on ? 700 : 500};color:{sub.kind === 'error' ? 'var(--hex-e06c75)' : 'inherit'}">{stripN(sub.label)}</span>
       </div>
     {/each}
-    {#if exec.subResults.length > 0}
-      {@const on = exec.activeSub === MESSAGES}
+    {#if (exec?.subResults.length ?? 0) > 0}
+      {@const on = !planActive && exec?.activeSub === MESSAGES}
       <div
-        onclick={() => (exec.activeSub = MESSAGES)}
-        onkeydown={(e) => e.key === 'Enter' && (exec.activeSub = MESSAGES)}
+        onclick={() => { if (exec) { planActive = false; exec.activeSub = MESSAGES } }}
+        onkeydown={(e) => { if (e.key === 'Enter' && exec) { planActive = false; exec.activeSub = MESSAGES } }}
         role="tab"
         aria-selected={on}
         tabindex="0"
@@ -230,13 +261,26 @@
         <span style="font-weight:{on ? 700 : 500}">Messages</span>
       </div>
     {/if}
-    {#if exec.running}
+    {#if explain}
+      <div
+        onclick={() => (planActive = true)}
+        onkeydown={(e) => e.key === 'Enter' && (planActive = true)}
+        role="tab"
+        aria-selected={planActive}
+        tabindex="0"
+        style="display:flex;align-items:center;gap:var(--px-6);padding:var(--px-7) var(--px-13);cursor:pointer;font-size:var(--px-11_5);white-space:nowrap;border-bottom:var(--px-2) solid {planActive ? accent : 'transparent'};background:{planActive ? 'var(--surface)' : 'transparent'};color:{planActive ? 'var(--text)' : 'var(--text2)'}"
+      >
+        <span style="color:var(--muted)">⚡</span>
+        <span style="font-weight:{planActive ? 700 : 500}">Query Plan</span>
+      </div>
+    {/if}
+    {#if exec?.running}
       <span style="display:flex;align-items:center;padding:0 var(--px-13);font-size:var(--px-11);color:var(--text2)">Running…</span>
     {/if}
   </div>
 
   <!-- result toolbar — dòng 342-349 -->
-  {#if activeResult?.kind === 'rows' && activeResult.result}
+  {#if !planActive && activeResult?.kind === 'rows' && activeResult.result}
     <div style="flex:none;display:flex;align-items:center;gap:var(--px-10);padding:var(--px-6) var(--px-12);border-bottom:var(--px-1) solid var(--border)">
       <div style="display:flex;background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-7);overflow:hidden">
         {#each [['grid', 'Grid'], ['json', 'JSON'], ['single', 'Single Row'], ['chart', 'Chart']] as [mode, label], i (mode)}
@@ -253,8 +297,8 @@
       <span style="font-size:var(--px-11_5);color:var(--muted)">{summary}</span>
       {#if activeResult?.cqlNextPage}
         <span
-          onclick={() => onLoadMore?.(exec.activeSub)}
-          onkeydown={(e) => e.key === 'Enter' && onLoadMore?.(exec.activeSub)}
+          onclick={() => exec && onLoadMore?.(exec.activeSub)}
+          onkeydown={(e) => e.key === 'Enter' && exec && onLoadMore?.(exec.activeSub)}
           role="button"
           tabindex="0"
           title="Fetch the next page from Cassandra (paging state)"
@@ -283,9 +327,20 @@
 
   <!-- content -->
   <div style="min-height:0;flex:1;display:flex;flex-direction:column;background:var(--surface)">
-    {#if exec.activeSub === MESSAGES}
+    {#if planActive && explain}
+      <ResultPlanView
+        {explain}
+        {capability}
+        onToggleActual={onExplainActual}
+        onReExplain={onExplainReExplain}
+        onClose={() => {
+          planActive = false
+          onExplainClose?.()
+        }}
+      />
+    {:else if exec?.activeSub === MESSAGES}
       <div class="selectable" style="flex:1;overflow-y:auto;padding:var(--px-4);font-size:var(--px-12)">
-        {#each exec.messages as msg (msg.index)}
+        {#each exec?.messages ?? [] as msg (msg.index)}
           <div
             class="mono msg-row"
             onclick={() => {
@@ -337,7 +392,7 @@
             {/if}
           </div>
         {/each}
-        {#if exec.messages.length === 0}
+        {#if (exec?.messages.length ?? 0) === 0}
           <div style="padding:var(--px-8) var(--px-12);color:var(--muted)">No messages yet</div>
         {/if}
       </div>

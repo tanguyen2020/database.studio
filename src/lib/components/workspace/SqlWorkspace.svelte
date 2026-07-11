@@ -523,19 +523,51 @@
     if (ui.formatTick > 0 && tabs.active?.id === tab.id) untrack(() => doFormat())
   })
 
-  // Explain (Ctrl+Shift+E) — open the Query Plan Visualizer (normalized tree).
-  // Must EXPLAIN on the SAME connection/database/schema the query actually runs
-  // on (resolveRunConn) — otherwise it targets the base connection's default
-  // database and can't see the picked tables ("relation ... does not exist").
+  // Explain (Ctrl+Shift+E) — show the Query Plan INSIDE the Result panel (a
+  // "Query Plan" sub-tab), not a new editor tab. Runs on the SAME connection/
+  // database/schema the query runs on (resolveRunConn) so it sees the right tables.
+  async function runExplainSql(sql: string, actual: boolean) {
+    if (!ensureConnected()) return
+    const cid = await resolveRunConn()
+    if (!cid) return
+    await results.runExplain(tab.id, cid, sql, actual)
+  }
   async function doExplain() {
     if (!editor || !tab.connectionId) return
     const doc = editor.getDoc()
     const stmt = statementAtOffset(doc, editor.getCursorOffset())
     if (!stmt) return
-    if (!ensureConnected()) return
-    const cid = await resolveRunConn()
-    if (!cid) return
-    tabs.openQueryPlan(cid, stmt.sql)
+    await runExplainSql(stmt.sql, false)
+  }
+  const explain = $derived(results.explainOf(tab.id))
+  // Capability drives the Actual toggle visibility inside the plan view.
+  let explainCap = $state<ipc.EngineCapability | null>(null)
+  $effect(() => {
+    void tab.connectionId
+    untrack(async () => {
+      if (!tab.connectionId) {
+        explainCap = null
+        return
+      }
+      try {
+        explainCap = await ipc.explainCapability(tab.connectionId)
+      } catch {
+        explainCap = null
+      }
+    })
+  })
+  function explainSetActual(actual: boolean) {
+    const st = results.explainOf(tab.id)
+    if (!st) return
+    if (actual && !confirm('Actual Plan runs the query (ANALYZE). Write statements are rolled back on PostgreSQL and blocked on other engines. Continue?')) return
+    void runExplainSql(st.sql, actual)
+  }
+  function explainReExplain() {
+    const st = results.explainOf(tab.id)
+    if (st) void runExplainSql(st.sql, st.actual)
+  }
+  function explainClose() {
+    results.clearExplain(tab.id)
   }
 
   // Ctrl+S / Cmd+S — save the editor content to a .sql file via a native save
@@ -797,8 +829,20 @@
 
   <!-- results -->
   <div style="min-height:0;flex:1;display:flex;flex-direction:column">
-    {#if exec}
-      <ResultPanel {exec} connId={runConnId ?? tab.connectionId} active={tabs.active?.id === tab.id} accent={systemMeta(tab.systemType).accent} onJump={jump} onLoadMore={(idx) => results.fetchMoreCql(tab.id, idx)} />
+    {#if exec || explain}
+      <ResultPanel
+        {exec}
+        connId={runConnId ?? tab.connectionId}
+        active={tabs.active?.id === tab.id}
+        accent={systemMeta(tab.systemType).accent}
+        onJump={jump}
+        onLoadMore={(idx) => results.fetchMoreCql(tab.id, idx)}
+        {explain}
+        capability={explainCap}
+        onExplainActual={explainSetActual}
+        onExplainReExplain={explainReExplain}
+        onExplainClose={explainClose}
+      />
     {:else}
       <div style="flex:1;display:flex;align-items:center;justify-content:center;font-size:var(--px-12);color:var(--muted)">
         Run a query (F5) to see results · Ctrl+Enter runs the statement at the cursor
