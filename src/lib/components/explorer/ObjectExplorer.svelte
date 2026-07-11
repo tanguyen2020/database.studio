@@ -183,27 +183,51 @@
   // Per-folder object filter (SSMS-style): the search box is hidden until the
   // user picks "Filter…" from the folder's context menu, keyed by the folder tree
   // key. `folderFilterOpen` = the box is shown; `folderFilters` = the query text.
-  const folderFilters = $state<Record<string, string>>({})
+  const folderFilters = $state<Record<string, string>>({}) // committed → drives filtering (debounced)
   const folderFilterOpen = $state<Record<string, boolean>>({})
+  // Raw input text — drives the <input> so keystrokes echo instantly, while the
+  // committed value (which triggers the expensive tree re-render) is debounced.
+  // Without this, every keystroke rebuilt the whole folder (each row wraps a
+  // ContextMenu.Root), so clearing characters felt laggy.
+  const folderFilterRaw = $state<Record<string, string>>({})
+  const folderFilterTimers: Record<string, ReturnType<typeof setTimeout>> = {}
   function folderMatch(key: string, name: string): boolean {
     return objectFilterMatch(folderFilters[key] ?? '', name)
+  }
+  /** Type handler: echo the character immediately, commit (filter) after a pause. */
+  function setFolderFilter(key: string, value: string) {
+    folderFilterRaw[key] = value
+    clearTimeout(folderFilterTimers[key])
+    folderFilterTimers[key] = setTimeout(() => (folderFilters[key] = value), 120)
+  }
+  /** Reset both raw + committed at once (cancel any pending debounce). */
+  function resetFolderFilter(key: string) {
+    clearTimeout(folderFilterTimers[key])
+    folderFilterRaw[key] = ''
+    folderFilters[key] = ''
   }
   /** Open the filter box for a folder (expand it first so the box is visible). */
   function openFolderFilter(key: string) {
     if (!expanded.has(key)) expanded = new Set([...expanded, key])
+    folderFilterRaw[key] = folderFilters[key] ?? ''
     folderFilterOpen[key] = true
   }
   /** Clear the query but keep the box open (list restored, ready to re-filter). */
   function clearFolderFilterText(key: string) {
-    folderFilters[key] = ''
+    resetFolderFilter(key)
   }
   /** Clear Filter: clear the query AND hide the box (never leaves a hidden active
    *  filter, since folderMatch keys off the query text). */
   function clearFolderFilter(key: string) {
-    folderFilters[key] = ''
+    resetFolderFilter(key)
     folderFilterOpen[key] = false
   }
   const hasFolderFilter = (key: string) => (folderFilters[key] ?? '').trim() !== ''
+  /** Toggle the filter box from the folder header's funnel icon. */
+  function toggleFolderFilter(key: string) {
+    if (folderFilterOpen[key]) clearFolderFilter(key)
+    else openFolderFilter(key)
+  }
   /** Focus the filter input when it appears. */
   function focusFilter(node: HTMLInputElement) {
     node.focus()
@@ -947,6 +971,10 @@
   const DB_FOLDER_SVG =
     '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M3 7a1 1 0 0 1 1-1h5l2 2h8a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V7Z"/></svg>'
 
+  // Funnel icon for the per-folder filter toggle (shown on the right of folder headers).
+  const FILTER_ICON =
+    '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4h18l-7 8v6l-4 2v-8z"/></svg>'
+
   interface RowProps {
     key: string
     depth: number
@@ -965,6 +993,9 @@
     dragData?: string
     /** leaf rows (Kafka topic / NATS subject) act on a single click, not dbl */
     openOnSingleClick?: boolean
+    /** folder headers: show a funnel icon on the right that toggles the filter box
+     *  (uses `key` as the folder-filter key) */
+    filterable?: boolean
     onClick?: () => void
     onDblClick?: () => void
   }
@@ -1012,6 +1043,19 @@
       <span class="mono" style="font-size:var(--px-12_5);font-weight:{p.head ? 700 : 500};color:{p.nameColor ?? (sel || p.head ? 'var(--text)' : 'var(--text2)')};overflow:hidden;text-overflow:ellipsis">{p.name}</span>
       {#if p.locked}<span style="font-size:var(--px-9)" title="System table — read-only">🔒</span>{/if}
       <span class="mono" style="font-size:var(--px-10);color:var(--muted);margin-left:auto">{p.meta ?? ''}</span>
+      {#if p.filterable}
+        {@const active = hasFolderFilter(p.key) || folderFilterOpen[p.key]}
+        <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
+        <span
+          role="button"
+          tabindex="0"
+          onclick={(e) => { e.stopPropagation(); treeSel = p.key; toggleFolderFilter(p.key) }}
+          onkeydown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); toggleFolderFilter(p.key) } }}
+          title={active ? 'Clear filter' : 'Filter items'}
+          aria-label="Filter items"
+          style="flex:none;display:flex;align-items:center;justify-content:center;width:var(--px-15);color:{active ? 'var(--primary)' : 'var(--muted)'};cursor:pointer;opacity:{active ? 1 : 0.55}"
+        >{@html FILTER_ICON}</span>
+      {/if}
     </div>
   {/snippet}
   {#if menu}
@@ -1031,8 +1075,8 @@
     <div style="display:flex;align-items:center;gap:var(--px-4);padding:var(--px-2) var(--px-6) var(--px-3);padding-left:calc(var(--px-6) + {depth} * var(--px-15))">
       <input
         use:focusFilter
-        value={folderFilters[key] ?? ''}
-        oninput={(e) => (folderFilters[key] = e.currentTarget.value)}
+        value={folderFilterRaw[key] ?? ''}
+        oninput={(e) => setFolderFilter(key, e.currentTarget.value)}
         onclick={(e) => e.stopPropagation()}
         onkeydown={(e) => e.key === 'Escape' && clearFolderFilter(key)}
         placeholder="Filter…"
@@ -1554,6 +1598,7 @@
             meta: String(tables.length),
             head: true,
             expandable: true,
+            filterable: true,
             onClick: () => toggle(`f:${schema.name}:tables`),
           }, tablesFolderMenu)}
           {#if searching || expanded.has(`f:${schema.name}:tables`)}
@@ -1724,6 +1769,7 @@
             meta: String(views.length),
             head: true,
             expandable: true,
+            filterable: true,
             onClick: () => toggle(`f:${schema.name}:views`),
           }, isClickhouse ? undefined : viewsFolderMenu)}
           {#if searching || expanded.has(`f:${schema.name}:views`)}
@@ -1822,6 +1868,7 @@
               meta: String(procs.length),
               head: true,
               expandable: true,
+              filterable: true,
               onClick: () => toggle(`f:${schema.name}:procs`),
             }, procsFolderMenu)}
             {#if searching || expanded.has(`f:${schema.name}:procs`)}
@@ -1876,6 +1923,7 @@
                 meta: String(tvfs.length),
                 head: true,
                 expandable: true,
+                filterable: true,
                 onClick: () => toggle(`f:${schema.name}:tvf`),
               }, tvfFolderMenu)}
               {#if searching || expanded.has(`f:${schema.name}:tvf`)}
@@ -1905,6 +1953,7 @@
                 meta: String(scalarFns.length),
                 head: true,
                 expandable: true,
+                filterable: true,
                 onClick: () => toggle(`f:${schema.name}:scalar`),
               }, scalarFolderMenu)}
               {#if searching || expanded.has(`f:${schema.name}:scalar`)}
@@ -1950,6 +1999,7 @@
                 name: 'Functions',
                 meta: String(fns.length),
                 head: true,
+                filterable: true,
                 expandable: true,
                 onClick: () => toggle(`f:${schema.name}:fns`),
               }, fnsFolderMenu)}
@@ -2000,6 +2050,7 @@
             meta: String(sc.triggers?.length ?? 0),
             head: true,
             expandable: true,
+            filterable: true,
             onClick: () => toggle(`f:${schema.name}:triggers`),
           }, trigsFolderMenu)}
           {#if searching || expanded.has(`f:${schema.name}:triggers`)}
@@ -2050,6 +2101,7 @@
             meta: ixShown.length ? String(ixShown.length) : '',
             head: true,
             expandable: true,
+            filterable: true,
             onClick: () => { toggle(ixFolderKey); if (selected) void loadSchemaIndexes(selected.id, schema.name) },
           }, idxFolderMenu)}
           {#if searching || expanded.has(ixFolderKey)}
@@ -2100,6 +2152,7 @@
               meta: String(sc.sequences?.length ?? 0),
               head: true,
               expandable: true,
+              filterable: true,
               onClick: () => toggle(`f:${schema.name}:seqs`),
             }, seqsFolderMenu)}
             {#if searching || expanded.has(`f:${schema.name}:seqs`)}
@@ -2198,7 +2251,7 @@
                       <ContextMenu.Item onclick={() => sub && explorer.refresh(sub, { kind: 'schema', schema: fsch.name })}>Refresh</ContextMenu.Item>
                     </ContextMenu.Content>
                   {/snippet}
-                  {@render row({ key: folderKey, depth: 2, glyph: glyph as string, color: C.folder, name: label as string, meta: String((items as unknown[]).length), head: true, expandable: true, onClick: () => toggle(folderKey) }, fFolderMenu)}
+                  {@render row({ key: folderKey, depth: 2, glyph: glyph as string, color: C.folder, name: label as string, meta: String((items as unknown[]).length), head: true, expandable: true, filterable: true, onClick: () => toggle(folderKey) }, fFolderMenu)}
                   {#if expanded.has(folderKey)}
                     {@render folderFilter(folderKey, 2)}
                     {#each (items as { name: string }[]).filter((it) => folderMatch(folderKey, it.name)) as it (('name' in (it as object) ? (it as { name: string }).name : String(it)))}
@@ -2342,6 +2395,7 @@
                   meta: fIxShown.length ? String(fIxShown.length) : '',
                   head: true,
                   expandable: true,
+                  filterable: true,
                   onClick: () => { toggle(fIxKey); if (sub) void loadSchemaIndexes(sub, fsch.name) },
                 }, fIdxFolderMenu)}
                 {#if expanded.has(fIxKey)}

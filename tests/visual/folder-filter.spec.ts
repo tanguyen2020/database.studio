@@ -49,6 +49,38 @@ test('folder filter: reveal via context menu, narrow, then Clear restores list',
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
 
+test('folder filter: funnel icon on the folder header reveals the box, then clears', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(String(e)))
+  await openExplorer(page)
+  await page.getByText('Functions', { exact: true }).first().dblclick()
+  await page.waitForTimeout(200)
+  await expect(page.getByText('add_one').first()).toBeVisible()
+  await expect(page.getByText('current_load').first()).toBeVisible()
+
+  // no box until the funnel icon is clicked (no right-click needed)
+  await expect(page.getByPlaceholder('Filter…')).toHaveCount(0)
+  const fnRow = page.getByRole('treeitem').filter({ hasText: 'Functions' }).first()
+  await fnRow.getByLabel('Filter items').click()
+  await page.waitForTimeout(150)
+
+  const box = page.getByPlaceholder('Filter…').first()
+  await expect(box).toBeVisible()
+  await box.fill('add')
+  await page.waitForTimeout(150)
+  await expect(page.getByText('add_one').first()).toBeVisible()
+  await expect(page.getByText('current_load')).toHaveCount(0)
+
+  // clicking the icon again (now titled "Clear filter") clears + hides the box
+  await fnRow.getByLabel('Filter items').click()
+  await page.waitForTimeout(150)
+  await expect(page.getByPlaceholder('Filter…')).toHaveCount(0)
+  await expect(page.getByText('add_one').first()).toBeVisible()
+  await expect(page.getByText('current_load').first()).toBeVisible()
+
+  expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
+})
+
 // Clear works in every object folder the user named: Views, Stored Procedures,
 // Functions, Triggers. Each demo folder has two items; filtering hides one and
 // clearing (context-menu "Clear Filter") restores both.
