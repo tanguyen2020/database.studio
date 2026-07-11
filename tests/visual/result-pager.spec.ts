@@ -23,5 +23,11 @@ test('result grid pager: row range + page size', async ({ page }) => {
   await expect(page.getByText(/Rows 1–3 of 3/).first()).toBeVisible()
   await expect(page.getByText('Page size').first()).toBeVisible()
 
+  // Export ▾ dropdown closes when clicking outside it.
+  await page.getByRole('button', { name: 'Export ▾' }).first().click()
+  await expect(page.getByText('SQL INSERT').first()).toBeVisible()
+  await page.mouse.click(8, 8) // click outside the menu
+  await expect(page.getByText('SQL INSERT')).toHaveCount(0)
+
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })

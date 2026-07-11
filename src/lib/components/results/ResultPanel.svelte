@@ -314,6 +314,8 @@
           tabindex="0"
         >Export ▾</span>
         {#if exportOpen}
+          <!-- click-outside backdrop: closes the Export menu (dropdown = close on outside click) -->
+          <div role="presentation" style="position:fixed;inset:0;z-index:19" onclick={() => (exportOpen = false)}></div>
           <div style="position:absolute;right:0;top:calc(100% + var(--px-4));z-index:20;background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-8);box-shadow:0 var(--px-8) var(--px-24) rgba(0,0,0,.4);overflow:hidden;min-width:var(--px-120)">
             {#each [['csv', 'CSV'], ['json', 'JSON'], ['sql', 'SQL INSERT'], ['xls', 'Excel (.xls)']] as [fmt, label] (fmt)}
               <div class="exp-item" onclick={() => doExport(fmt as 'csv' | 'json' | 'sql' | 'xls')} onkeydown={(e) => e.key === 'Enter' && doExport(fmt as 'csv' | 'json' | 'sql' | 'xls')} role="button" tabindex="0" style="padding:var(--px-7) var(--px-12);font-size:var(--px-12);cursor:pointer;color:var(--text2)">{label}</div>

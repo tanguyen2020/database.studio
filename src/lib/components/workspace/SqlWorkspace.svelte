@@ -424,6 +424,7 @@
     const cid = await resolveRunConn()
     if (!cid) return
     runConnId = cid
+    results.clearExplain(tab.id) // Run closes the Query Plan sub-tab, focuses results
     await results.run(tab.id, cid, statements, runOpts())
     showExecErrors()
   }
@@ -456,6 +457,7 @@
     const cid = await resolveRunConn()
     if (!cid) return
     runConnId = cid
+    results.clearExplain(tab.id) // Run closes the Query Plan sub-tab, focuses results
     await results.run(tab.id, cid, [stmt], runOpts())
     showExecErrors()
   }
@@ -662,6 +664,7 @@
     <SqliteFileHeader
       connId={tab.connectionId}
       onRunSql={(sqlText) => {
+        results.clearExplain(tab.id)
         void results.run(tab.id, tab.connectionId!, splitStatements(sqlText))
       }}
     />

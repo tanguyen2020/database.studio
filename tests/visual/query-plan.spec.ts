@@ -52,6 +52,37 @@ test('query plan: Explain opens normalized tree + hotspot + summary', async ({ p
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
 
+test('query plan: Run closes the plan and focuses results; Explain reopens it', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(String(e)))
+  await blockRemoteFonts(page)
+  await page.goto(APP_URL)
+  await page.waitForSelector('#app > *', { timeout: 15_000 })
+  await page.waitForTimeout(300)
+
+  await page.getByRole('button', { name: /Postgres/ }).first().dblclick()
+  await page.waitForTimeout(500)
+  await page.locator('.cm-content').first().click()
+  await page.keyboard.type('SELECT * FROM students')
+
+  // Explain → the "Query Plan" sub-tab appears
+  await page.getByRole('button', { name: 'Explain' }).first().click()
+  await page.waitForTimeout(400)
+  await expect(page.getByRole('tab', { name: /Query Plan/ })).toHaveCount(1)
+
+  // Run → the plan sub-tab closes and results are focused
+  await page.getByRole('button', { name: 'Run' }).first().click()
+  await page.waitForTimeout(500)
+  await expect(page.getByRole('tab', { name: /Query Plan/ })).toHaveCount(0)
+
+  // Explain again → the plan reopens
+  await page.getByRole('button', { name: 'Explain' }).first().click()
+  await page.waitForTimeout(400)
+  await expect(page.getByRole('tab', { name: /Query Plan/ })).toHaveCount(1)
+
+  expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
+})
+
 test('query plan: Actual toggle hidden for engines without EXPLAIN ANALYZE (MySQL)', async ({ page }) => {
   const errors: string[] = []
   page.on('pageerror', (e) => errors.push(String(e)))
