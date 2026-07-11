@@ -30,6 +30,8 @@ test('query plan: Explain opens normalized tree + hotspot + summary', async ({ p
 
   // P1.1: Postgres supports EXPLAIN ANALYZE → Actual toggle is shown
   await expect(page.getByRole('button', { name: 'Actual' }).first()).toBeVisible()
+  // Explain defaults to Actual on engines that support it → mode badge = "actual".
+  await expect(page.getByText('actual', { exact: true }).first()).toBeVisible()
 
   // P3.1: nodes show "Cost N%" (self-cost percentage, SSMS-style)
   await expect(page.getByText(/Cost 74\.2%/).first()).toBeVisible()

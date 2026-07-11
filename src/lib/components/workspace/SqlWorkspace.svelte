@@ -539,7 +539,18 @@
     const doc = editor.getDoc()
     const stmt = statementAtOffset(doc, editor.getCursorOffset())
     if (!stmt) return
-    await runExplainSql(stmt.sql, false)
+    // Default to Actual on engines that support EXPLAIN ANALYZE (PG/MariaDB/MySQL/
+    // MSSQL); engines without an actual mode fall back to estimated. DML + actual is
+    // guarded by the backend (rolled back on PG, blocked elsewhere).
+    let cap = explainCap
+    if (!cap) {
+      try {
+        cap = await ipc.explainCapability(tab.connectionId)
+      } catch {
+        cap = null
+      }
+    }
+    await runExplainSql(stmt.sql, cap?.actual_kind === 'analyze')
   }
   const explain = $derived(results.explainOf(tab.id))
   // Capability drives the Actual toggle visibility inside the plan view.
@@ -559,10 +570,10 @@
     })
   })
   function explainSetActual(actual: boolean) {
+    // Actual is the default mode; toggling just re-runs. DML safety is enforced by
+    // the backend (rolled back on PostgreSQL, blocked on other engines).
     const st = results.explainOf(tab.id)
-    if (!st) return
-    if (actual && !confirm('Actual Plan runs the query (ANALYZE). Write statements are rolled back on PostgreSQL and blocked on other engines. Continue?')) return
-    void runExplainSql(st.sql, actual)
+    if (st) void runExplainSql(st.sql, actual)
   }
   function explainReExplain() {
     const st = results.explainOf(tab.id)
