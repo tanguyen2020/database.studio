@@ -256,6 +256,9 @@ Khi thêm/đổi field trong `QueryPlan`/`PlanNode` hoặc thêm mode value:
 
 > **✅ P3 HOÀN TẤT** (trừ P3.3 stretch — actual MySQL/MSSQL, hoãn). Toàn bộ defect Verification Report đã sửa + phủ test G2/G3/G4.
 
+### FIX — Explain chạy sai database (user báo: `relation "classes" does not exist`) — ✅ DONE
+> Commit `EXP-FIX-explain-db`. **Root cause**: `SqlWorkspace.doExplain` mở Query Plan bằng `tab.connectionId` (connection GỐC, database mặc định) trong khi Run dùng `resolveRunConn()` (per-tab connection `{base}#tab-{id}` trỏ đúng database đã chọn ở dropdown + `SET search_path` cho PG). ⇒ Query chạy Run OK nhưng Explain chạy trên DB gốc → không thấy bảng (`classes` ở DB/schema khác). **Fix**: `doExplain` giờ `async` → `ensureConnected()` + `await resolveRunConn()` rồi `openQueryPlan(cid, sql)` với đúng cid (giống hệt đường Run). `connections.byId` đã resolve sub-id về base profile nên tab plan có systemType đúng; backend `explain_plan(system_of)` + `explainCapability` dùng registry sub-connection. e2e: PG test assert `window.__ipcCalls.open_tab_connection > 0` sau khi Explain (chứng minh đi qua resolver database/schema). Gates: check 0/0, query-plan e2e 3/3 (frontend-only, không đụng backend).
+
 _(chi tiết yêu cầu gốc bên dưới)_
 - **G2:** error-path EXPLAIN cho mysql/mariadb/mssql/sqlite/clickhouse/cassandra (syntax / missing table / non-explainable) — hiện chỉ PG có.
 - **G3:** timeout + mid-query disconnect trên đường EXPLAIN (ít nhất 1 engine).

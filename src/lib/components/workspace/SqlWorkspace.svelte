@@ -524,12 +524,18 @@
   })
 
   // Explain (Ctrl+Shift+E) — open the Query Plan Visualizer (normalized tree).
-  function doExplain() {
+  // Must EXPLAIN on the SAME connection/database/schema the query actually runs
+  // on (resolveRunConn) — otherwise it targets the base connection's default
+  // database and can't see the picked tables ("relation ... does not exist").
+  async function doExplain() {
     if (!editor || !tab.connectionId) return
     const doc = editor.getDoc()
     const stmt = statementAtOffset(doc, editor.getCursorOffset())
     if (!stmt) return
-    tabs.openQueryPlan(tab.connectionId, stmt.sql)
+    if (!ensureConnected()) return
+    const cid = await resolveRunConn()
+    if (!cid) return
+    tabs.openQueryPlan(cid, stmt.sql)
   }
 
   // Ctrl+S / Cmd+S — save the editor content to a .sql file via a native save

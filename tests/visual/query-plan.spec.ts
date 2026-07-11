@@ -37,6 +37,11 @@ test('query plan: Explain opens normalized tree + hotspot + summary', async ({ p
   await expect(page.getByText(/CREATE INDEX ix_enrollments_status/).first()).toBeVisible()
   await expect(page.getByRole('button', { name: 'Copy DDL' }).first()).toBeVisible()
 
+  // Fix: Explain resolves the SAME per-tab connection Run uses (open_tab_connection),
+  // so it targets the picked database/schema — not the base connection's default DB.
+  const otc = await page.evaluate(() => (window as unknown as { __ipcCalls?: Record<string, number> }).__ipcCalls?.open_tab_connection ?? 0)
+  expect(otc).toBeGreaterThan(0)
+
   // View raw toggles to raw JSON
   await page.getByRole('button', { name: 'View raw' }).first().click()
   await page.waitForTimeout(200)
