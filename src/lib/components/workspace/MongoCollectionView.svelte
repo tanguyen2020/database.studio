@@ -8,6 +8,7 @@
   import SystemBadge from '$lib/components/SystemBadge.svelte'
   import { mongoExec } from '$lib/ipc'
   import { connections } from '$lib/stores/connections.svelte'
+  import { exportWizard } from '$lib/stores/export.svelte'
   import { toasts } from '$lib/stores/toast.svelte'
   import type { QueryError, QueryResultSet, TabState } from '$lib/types'
   import { untrack } from 'svelte'
@@ -97,6 +98,13 @@
     }
   }
 
+  // Export the loaded documents (CSV/JSON/…) via the shared result-mode wizard.
+  function exportDocs() {
+    if (!tab.connectionId || !data) return
+    const headers = data.cols.map((c) => c[0])
+    exportWizard.showResult(tab.connectionId, headers, data.rows)
+  }
+
   $effect(() => {
     void tab.connectionId
     untrack(() => void load())
@@ -120,6 +128,7 @@
     <div style="margin-left:auto;display:flex;align-items:center;gap:var(--px-8)">
       {#if data}
         <span class="mono" style="font-size:var(--px-11);color:var(--muted)">{data.total.toLocaleString()} docs · {durationMs} ms</span>
+        <span class="mv-btn" onclick={exportDocs} onkeydown={(e) => e.key === 'Enter' && exportDocs()} role="button" tabindex="0" title="Export the loaded documents (CSV/JSON)">Export…</span>
       {/if}
       {#if hasMore}
         <span class="mv-btn" onclick={loadMore} onkeydown={(e) => e.key === 'Enter' && loadMore()} role="button" tabindex="0" title="Fetch the next page (skip/limit)">↓ Load next page</span>

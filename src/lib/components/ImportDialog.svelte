@@ -41,6 +41,9 @@
   let progress = $state({ done: 0, total: 0 }) // rows inserted / total
 
   const system = $derived(connections.byId(importWizard.connId)?.system ?? 'postgres')
+  // MongoDB is schemaless: the target collection is pre-set and CSV/JSON headers
+  // become document fields directly (no column mapping against a fixed schema).
+  const isMongo = $derived(system === 'mongodb')
   const conflictOk = $derived(conflictSupported(system))
   const cache = $derived(importWizard.connId ? explorer.cache[importWizard.connId] : undefined)
   const tables = $derived(cache?.bySchema[importWizard.schema]?.tables ?? [])
@@ -67,7 +70,7 @@
     delimiter = ','
     encoding = 'utf-8'
     hasHeader = true
-    targetTable = ''
+    targetTable = importWizard.table // MongoDB: pre-set collection; relational: '' (chosen below)
     mapping = {}
     onConflict = 'error'
     batchSize = 1000
@@ -115,6 +118,13 @@
 
   async function goMapping() {
     if (!importWizard.connId || !targetTable) return
+    // MongoDB: no fixed columns — map each header to itself and skip the mapping
+    // step; the fields go straight into the documents.
+    if (isMongo) {
+      mapping = Object.fromEntries(headers.map((h) => [h, h]))
+      step = 3
+      return
+    }
     await explorer.loadTableDetail(importWizard.connId, importWizard.schema, targetTable)
     const cols = targetCols
     const m: Record<string, string> = {}
@@ -145,6 +155,40 @@
     progress = { done: 0, total: mappedRows.length }
     const batches = chunk(mappedRows, batchSize)
     let inserted = 0
+    // MongoDB: batched insertMany of documents built from header→value pairs.
+    // Light coercion so numbers/booleans/null aren't stored as strings.
+    if (isMongo) {
+      const coerce = (v: string): unknown => {
+        if (v === '') return null
+        if (v === 'true') return true
+        if (v === 'false') return false
+        if (/^-?\d+$/.test(v)) return Number(v)
+        if (/^-?\d*\.\d+$/.test(v)) return Number(v)
+        return v
+      }
+      try {
+        for (const batch of batches) {
+          const docs = batch.map((r) =>
+            Object.fromEntries(columns.map((c, i) => [c, coerce(String(r[i] ?? ''))])),
+          )
+          const q = `db.${targetTable}.insertMany(${JSON.stringify(docs)})`
+          const res = await ipc.mongoExec(importWizard.connId, q, importWizard.schema)
+          if (res.error) {
+            result = `✗ ${res.error.message} (sau ${inserted} docs)`
+            return
+          }
+          inserted += res.affected ?? batch.length
+          progress = { done: inserted, total: mappedRows.length }
+        }
+        result = `✓ ${inserted} documents inserted (${batches.length} batch)`
+        toasts.success(result)
+      } catch (e) {
+        result = `✗ ${e} (sau ${inserted} docs)`
+      } finally {
+        running = false
+      }
+      return
+    }
     try {
       for (const batch of batches) {
         const sql = buildInsert({
@@ -244,12 +288,16 @@
                 <tbody>{#each rows.slice(0, 5) as r, ri (ri)}<tr>{#each r as cell, ci (ci)}<td style="padding:var(--px-3) var(--px-8);border-bottom:var(--px-1) solid var(--border);color:var(--muted)">{cell}</td>{/each}</tr>{/each}</tbody>
               </table>
             </div>
-            <label style="font-size:var(--px-12);color:var(--text2)">Target table
-              <select bind:value={targetTable} style="margin-left:var(--px-8);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-3) var(--px-8);color:var(--text)">
-                <option value="">—</option>
-                {#each tables as t (t.name)}<option value={t.name}>{t.name}</option>{/each}
-              </select>
-            </label>
+            {#if isMongo}
+              <div style="font-size:var(--px-12);color:var(--text2)">Target collection <span class="mono" style="color:var(--text)">{targetTable}</span> — headers become document fields</div>
+            {:else}
+              <label style="font-size:var(--px-12);color:var(--text2)">Target table
+                <select bind:value={targetTable} style="margin-left:var(--px-8);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-3) var(--px-8);color:var(--text)">
+                  <option value="">—</option>
+                  {#each tables as t (t.name)}<option value={t.name}>{t.name}</option>{/each}
+                </select>
+              </label>
+            {/if}
           {/if}
         {:else if step === 2}
           <div style="font-size:var(--px-12);color:var(--text2)">Map columns → {targetTable}</div>

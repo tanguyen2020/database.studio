@@ -3,11 +3,14 @@ class ImportStore {
   open = $state(false)
   connId = $state<string | null>(null)
   schema = $state('')
+  /** Pre-set target (MongoDB: the collection right-clicked; schemaless → no mapping). */
+  table = $state('')
 
-  show(connId: string, schema: string) {
+  show(connId: string, schema: string, table = '') {
     this.open = true
     this.connId = connId
     this.schema = schema
+    this.table = table
   }
   close() {
     this.open = false
