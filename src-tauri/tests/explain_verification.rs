@@ -410,6 +410,22 @@ async fn xv_t1_mysql_scan_index_actual_ignored() {
     assert!(find_op(&idx.root.clone().unwrap(), "IndexScan").is_some(), "index → IndexScan (access_type ref/range)");
     assert_eq!(idx_as_if_actual.mode, "estimated", "MySQL 'Actual' toggle stays estimated");
     assert!(!any(&idx_as_if_actual.root.clone().unwrap(), &|n| n.actual_rows.is_some()), "MySQL never captures actual_rows");
+
+    // P2.3 (DEF-MYSQL-TREE-PARTIAL): GROUP BY + ORDER BY surface Aggregate + Sort
+    // nodes (the parser previously followed only nested_loop/table and dropped them).
+    let StatementOutcome::Rows { result: rg } = drv
+        .exec("EXPLAIN FORMAT=JSON SELECT status, count(*) c FROM it_my GROUP BY status ORDER BY c DESC")
+        .await
+        .unwrap()
+    else {
+        panic!("rows")
+    };
+    let cellg = first_cell(&rg.rows);
+    let json_grp = cellg.as_str().map(String::from).unwrap_or_else(|| cellg.to_string());
+    let grp = plan::parse_mysql(&json_grp, "mysql", false).expect("parse mysql group/order");
+    let groot = grp.root.clone().unwrap();
+    assert!(find_op(&groot, "Sort").is_some(), "ORDER BY → Sort node surfaced: {json_grp}");
+    assert!(find_op(&groot, "Aggregate").is_some(), "GROUP BY → Aggregate node surfaced: {json_grp}");
     eprintln!("CHK xv_t1_mysql_scan_index_actual_ignored OK");
 }
 

@@ -212,7 +212,11 @@ Khi thêm/đổi field trong `QueryPlan`/`PlanNode` hoặc thêm mode value:
 
 ---
 
-### EXP-P2.3 — MySQL parser đủ nhánh
+### EXP-P2.3 — MySQL parser đủ nhánh — ✅ DONE
+> Commit `EXP-P2.3`. `parse_mysql_block` phủ thêm wrapper: `union_result` → node Union (mỗi query_specification 1 nhánh); `ordering_operation` → Sort (+warning filesort khi input >10k); `grouping_operation` → Aggregate (+warning temp table); `query_block` lồng → đệ quy. `parse_mysql_table` thêm `attached_condition` → Filter, và subquery con (`materialized_from_subquery` → Materialize, `attached_subqueries`). Tests: unit `mysql_filesort_and_temp_table` + `mysql_subquery_and_union`; integration `xv_t1_mysql` thêm GROUP BY+ORDER BY → Sort+Aggregate surfaced trên MySQL 8 thật EXIT=0. Gates: `cargo test --lib plan::` 19 (backend-only).
+
+> **✅ P2 (ĐỘ ĐÚNG) HOÀN TẤT** — DEF-PG-HOTSPOT/LOOPS, DEF-CH-GRANULE-BLIND/METADATA-NODES, DEF-MYSQL-TREE-PARTIAL đóng.
+
 **Backend (`drivers/plan.rs` `parse_mysql_block`)**
 - Mở rộng đệ quy các khối bỏ sót: `ordering_operation` (→ node `Sort`, warning filesort nếu input lớn), `grouping_operation` (→ `Aggregate`/`Materialize`, warning temp table), `materialized_from_subquery`, `attached_subqueries`, `union_result`. Giữ nhánh `nested_loop`/`table` hiện có.
 - `attached_condition` → `extra["Filter"]`.

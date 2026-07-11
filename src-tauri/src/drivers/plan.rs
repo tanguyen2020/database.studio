@@ -269,23 +269,80 @@ pub fn parse_mysql(json_text: &str, system: &str, actual: bool) -> Result<QueryP
     QueryPlan_ok(system, actual, root, total_time, warnings, json_text)
 }
 
+/// Rows lớn nhất trong subtree (để cảnh báo filesort/temp trên tập lớn).
+fn mysql_subtree_rows(node: &PlanNode) -> f64 {
+    let self_rows = node.actual_rows.or(node.estimated_rows).unwrap_or(0.0);
+    node.children.iter().fold(self_rows, |m, c| m.max(mysql_subtree_rows(c)))
+}
+
+/// Parse một khối MySQL/MariaDB. Ngoài nested_loop/table, xử lý các wrapper
+/// thường gặp (P2.3 — DEF-MYSQL-TREE-PARTIAL): ordering_operation (filesort),
+/// grouping_operation (temp table), union_result, và subquery lồng.
 fn parse_mysql_block(block: &Value, actual: bool, warnings: &mut Vec<String>) -> PlanNode {
-    // nested_loop → join; table → scan
+    // UNION
+    if let Some(u) = block.get("union_result") {
+        let mut node = PlanNode::leaf("Union", "union_result");
+        if let Some(specs) = u.get("query_specifications").and_then(Value::as_array) {
+            node.children = specs
+                .iter()
+                .filter_map(|s| s.get("query_block"))
+                .map(|qb| parse_mysql_block(qb, actual, warnings))
+                .collect();
+        }
+        return node;
+    }
+    // ORDER BY → Sort (filesort)
+    if let Some(ord) = block.get("ordering_operation") {
+        let mut node = PlanNode::leaf("Sort", "ordering_operation");
+        let filesort = ord.get("using_filesort").and_then(Value::as_bool).unwrap_or(false);
+        let child = parse_mysql_block(ord, actual, warnings);
+        if filesort {
+            node.extra.insert("using_filesort".into(), Value::Bool(true));
+            let rows = mysql_subtree_rows(&child);
+            if rows > LARGE_ROWS {
+                node.is_hotspot = true;
+                warnings.push(format!("Using filesort over ~{} rows", rows as i64));
+            }
+        }
+        node.children.push(child);
+        return node;
+    }
+    // GROUP BY → Aggregate (temp table)
+    if let Some(grp) = block.get("grouping_operation") {
+        let mut node = PlanNode::leaf("Aggregate", "grouping_operation");
+        let temp = grp.get("using_temporary_table").and_then(Value::as_bool).unwrap_or(false);
+        let child = parse_mysql_block(grp, actual, warnings);
+        if temp {
+            node.extra.insert("using_temporary_table".into(), Value::Bool(true));
+            let rows = mysql_subtree_rows(&child);
+            if rows > LARGE_ROWS {
+                node.is_hotspot = true;
+                warnings.push(format!("Using temporary table over ~{} rows", rows as i64));
+            }
+        }
+        node.children.push(child);
+        return node;
+    }
+    // JOIN
     if let Some(nested) = block.get("nested_loop").and_then(Value::as_array) {
         let mut node = PlanNode::leaf("NestedLoop", "nested_loop");
         node.children = nested.iter().map(|t| parse_mysql_block(t, actual, warnings)).collect();
         return node;
     }
+    // TABLE
     if let Some(table) = block.get("table") {
         return parse_mysql_table(table, actual, warnings);
     }
-    if let Some(cost) = block.get("cost_info").and_then(|c| c.get("query_cost")).and_then(Value::as_str) {
-        let mut n = PlanNode::leaf("QueryBlock", "query_block");
-        n.estimated_cost = cost.parse().ok();
-        // đệ quy vào table nếu có
-        return n;
+    // query_block lồng (subquery)
+    if let Some(qb) = block.get("query_block") {
+        return parse_mysql_block(qb, actual, warnings);
     }
-    PlanNode::leaf("QueryBlock", "query_block")
+    // fallback
+    let mut n = PlanNode::leaf("QueryBlock", "query_block");
+    if let Some(cost) = block.get("cost_info").and_then(|c| c.get("query_cost")).and_then(Value::as_str) {
+        n.estimated_cost = cost.parse().ok();
+    }
+    n
 }
 
 fn parse_mysql_table(table: &Value, actual: bool, warnings: &mut Vec<String>) -> PlanNode {
@@ -310,7 +367,23 @@ fn parse_mysql_table(table: &Value, actual: bool, warnings: &mut Vec<String>) ->
     if let Some(cost) = table.get("cost_info").and_then(|c| c.get("read_cost")).and_then(Value::as_str) {
         node.estimated_cost = cost.parse().ok();
     }
+    if let Some(cond) = table.get("attached_condition").and_then(Value::as_str) {
+        node.extra.insert("Filter".into(), Value::String(cond.into()));
+    }
     mark_hotspot(&mut node, warnings);
+    // Subquery lồng dưới table (P2.3): materialized_from_subquery + attached_subqueries.
+    if let Some(mat) = table.get("materialized_from_subquery").and_then(|m| m.get("query_block")) {
+        let mut m = PlanNode::leaf("Materialize", "materialized_from_subquery");
+        m.children.push(parse_mysql_block(mat, actual, warnings));
+        node.children.push(m);
+    }
+    if let Some(subs) = table.get("attached_subqueries").and_then(Value::as_array) {
+        for s in subs {
+            if let Some(qb) = s.get("query_block") {
+                node.children.push(parse_mysql_block(qb, actual, warnings));
+            }
+        }
+    }
     node
 }
 
@@ -823,6 +896,41 @@ mod tests {
         let root = plan.root.unwrap();
         assert_eq!(root.operation, "SeqScan");
         assert!(root.is_hotspot);
+    }
+
+    #[test]
+    fn mysql_filesort_and_temp_table() {
+        // P2.3 — ORDER BY (filesort) + GROUP BY (temp table) trên tập lớn.
+        let json = r#"{"query_block":{
+          "ordering_operation":{"using_filesort":true,
+            "grouping_operation":{"using_temporary_table":true,
+              "table":{"table_name":"orders","access_type":"ALL","rows_examined_per_scan":50000}}}}}"#;
+        let plan = parse_mysql(json, "mysql", false).unwrap();
+        let root = plan.root.unwrap();
+        assert_eq!(root.operation, "Sort");
+        assert_eq!(root.children[0].operation, "Aggregate");
+        assert_eq!(root.children[0].children[0].operation, "SeqScan");
+        assert!(plan.summary.warnings.iter().any(|w| w.to_lowercase().contains("filesort")));
+        assert!(plan.summary.warnings.iter().any(|w| w.to_lowercase().contains("temporary")));
+    }
+
+    #[test]
+    fn mysql_subquery_and_union() {
+        // subquery gắn dưới table → node con xuất hiện
+        let json_sub = r#"{"query_block":{"table":{"table_name":"a","access_type":"ALL","rows_examined_per_scan":10,
+          "attached_subqueries":[{"query_block":{"table":{"table_name":"b","access_type":"ref"}}}]}}}"#;
+        let root = parse_mysql(json_sub, "mysql", false).unwrap().root.unwrap();
+        assert!(
+            root.children.iter().any(|c| c.extra.get("Relation Name").and_then(|v| v.as_str()) == Some("b")),
+            "subquery table 'b' phải hiện trong cây"
+        );
+        // UNION → node Union với 2 nhánh
+        let json_u = r#"{"query_block":{"union_result":{"query_specifications":[
+          {"query_block":{"table":{"table_name":"x","access_type":"ALL"}}},
+          {"query_block":{"table":{"table_name":"y","access_type":"ALL"}}}]}}}"#;
+        let uroot = parse_mysql(json_u, "mysql", false).unwrap().root.unwrap();
+        assert_eq!(uroot.operation, "Union");
+        assert_eq!(uroot.children.len(), 2);
     }
 
     #[test]
