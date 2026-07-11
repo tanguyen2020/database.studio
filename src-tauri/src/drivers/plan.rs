@@ -215,16 +215,38 @@ pub fn parse_pg(json_text: &str, actual: bool) -> Result<QueryPlan, String> {
 fn parse_pg_node(plan: &Value, warnings: &mut Vec<String>) -> PlanNode {
     let native = plan.get("Node Type").and_then(Value::as_str).unwrap_or("Unknown").to_string();
     let mut node = PlanNode::leaf(&normalize_op(&native), &native);
-    node.estimated_rows = plan.get("Plan Rows").and_then(Value::as_f64);
-    node.actual_rows = plan.get("Actual Rows").and_then(Value::as_f64);
+    // rows/time trong EXPLAIN là số MỖI LOOP → nhân "Actual Loops" để ra tổng thực
+    // tế (nhánh trong Nested Loop chạy nhiều lần). P2.1 — DEF-PG-LOOPS.
+    let loops = plan.get("Actual Loops").and_then(Value::as_f64).unwrap_or(1.0);
+    node.estimated_rows = plan.get("Plan Rows").and_then(Value::as_f64).map(|r| r * loops);
+    node.actual_rows = plan.get("Actual Rows").and_then(Value::as_f64).map(|r| r * loops);
     node.estimated_cost = plan.get("Total Cost").and_then(Value::as_f64);
-    node.actual_time_ms = plan.get("Actual Total Time").and_then(Value::as_f64);
-    for key in ["Relation Name", "Index Name", "Filter", "Join Type", "Hash Cond", "Index Cond", "Sort Key"] {
+    node.actual_time_ms = plan.get("Actual Total Time").and_then(Value::as_f64).map(|t| t * loops);
+    for key in [
+        "Relation Name", "Index Name", "Filter", "Join Type", "Hash Cond", "Index Cond",
+        "Sort Key", "Rows Removed by Filter", "Actual Loops",
+    ] {
         if let Some(val) = plan.get(key) {
             node.extra.insert(key.to_string(), val.clone());
         }
     }
     mark_hotspot(&mut node, warnings);
+    // P2.1 — DEF-PG-HOTSPOT: full scan quét NHIỀU nhưng trả ÍT là dấu hiệu thiếu
+    // index. Đánh giá theo rows QUÉT (output + "Rows Removed by Filter"), không
+    // phải rows đầu ra. Chỉ khả dụng ở actual mode (EXPLAIN ANALYZE mới có số này).
+    if node.operation == "SeqScan" && !node.is_hotspot {
+        let removed = plan.get("Rows Removed by Filter").and_then(Value::as_f64).unwrap_or(0.0) * loops;
+        let scanned = node.actual_rows.unwrap_or(0.0) + removed;
+        if scanned > LARGE_ROWS {
+            node.is_hotspot = true;
+            let rel = node.extra.get("Relation Name").and_then(Value::as_str).unwrap_or("table");
+            let out = node.actual_rows.unwrap_or(0.0) as i64;
+            warnings.push(format!(
+                "Seq Scan on {rel} scans ~{} rows to return {} (missing index?)",
+                scanned as i64, out
+            ));
+        }
+    }
     if let Some(children) = plan.get("Plans").and_then(Value::as_array) {
         node.children = children.iter().map(|c| parse_pg_node(c, warnings)).collect();
     }
@@ -690,6 +712,32 @@ mod tests {
         assert_eq!(root.children[1].operation, "IndexScan");
         assert_eq!(plan.summary.total_time_ms, Some(12.3));
         assert!(plan.summary.warnings.iter().any(|w| w.contains("orders")));
+    }
+
+    #[test]
+    fn pg_loops_multiply_rows_and_time() {
+        // Nhánh trong Nested Loop: Actual Rows=1/loop × 50000 loops = 50000 tổng.
+        let json = r#"[{"Plan":{"Node Type":"Nested Loop","Total Cost":100,"Plan Rows":50000,"Actual Rows":50000,"Actual Loops":1,
+          "Plans":[
+            {"Node Type":"Index Scan","Index Name":"ix","Total Cost":5,"Plan Rows":1,"Actual Rows":1,"Actual Total Time":0.002,"Actual Loops":50000}
+          ]}}]"#;
+        let plan = parse_pg(json, true).unwrap();
+        let inner = &plan.root.unwrap().children[0];
+        assert_eq!(inner.actual_rows, Some(50000.0), "actual rows × loops");
+        assert_eq!(inner.estimated_rows, Some(50000.0), "estimated rows × loops");
+        assert_eq!(inner.actual_time_ms, Some(100.0), "time × loops (0.002 × 50000)");
+    }
+
+    #[test]
+    fn pg_selective_seqscan_flagged_by_rows_scanned() {
+        // Seq Scan trả 1 dòng nhưng quét 50k (Rows Removed by Filter) → hotspot,
+        // dù rows đầu ra nhỏ (DEF-PG-HOTSPOT).
+        let json = r#"[{"Plan":{"Node Type":"Seq Scan","Relation Name":"t","Total Cost":900,"Plan Rows":1,"Actual Rows":1,"Actual Loops":1,"Rows Removed by Filter":49999}}]"#;
+        let plan = parse_pg(json, true).unwrap();
+        let root = plan.root.unwrap();
+        assert_eq!(root.operation, "SeqScan");
+        assert!(root.is_hotspot, "quét 50k trả 1 → hotspot");
+        assert!(plan.summary.warnings.iter().any(|w| w.contains("scans")));
     }
 
     #[test]

@@ -184,7 +184,9 @@ Khi thêm/đổi field trong `QueryPlan`/`PlanNode` hoặc thêm mode value:
 
 ## P2 — ĐỘ ĐÚNG (Medium normalize)
 
-### EXP-P2.1 — PG hotspot theo rows quét + nhân loops
+### EXP-P2.1 — PG hotspot theo rows quét + nhân loops — ✅ DONE
+> Commit `EXP-P2.1`. `parse_pg_node`: đọc `Actual Loops` → `estimated_rows`/`actual_rows`/`actual_time_ms` nhân loops (tổng thực tế cho nhánh Nested Loop — DEF-PG-LOOPS); lưu `Rows Removed by Filter` + `Actual Loops` vào extra; SeqScan quét nhiều (`actual_rows + Rows Removed by Filter × loops > 10k`) nhưng trả ít → hotspot + warning "missing index?" (DEF-PG-HOTSPOT). Estimated mode vẫn thiếu rows-scanned nên chỉ actual mode flag được (đã ghi chú, chấp nhận). Tests: unit `pg_loops_multiply_rows_and_time` + `pg_selective_seqscan_flagged_by_rows_scanned`; integration `xv_t1_postgres` thêm assert actual-no-index → selective SeqScan hotspot EXIT=0. Gates: `cargo test --lib plan::` 16 (backend-only, không đụng frontend).
+
 **Backend (`drivers/plan.rs` `parse_pg_node` + `mark_hotspot`)**
 1. `actual_rows = "Actual Rows" × "Actual Loops"` (đọc thêm `Actual Loops`, mặc định 1). Áp cả `actual_time_ms` self nếu tính về sau.
 2. Đọc thêm `"Rows Removed by Filter"` vào `extra`.

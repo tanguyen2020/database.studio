@@ -208,6 +208,17 @@ async fn xv_t1_postgres_scan_index_actual_errors() {
     let json_scan = if cell.is_string() { cell.as_str().unwrap().to_string() } else { cell.to_string() };
     let scan = plan::parse_pg(&json_scan, false).expect("parse pg scan");
 
+    // actual plan BEFORE the index: a selective Seq Scan (reads 50k, returns 1) is
+    // now flagged from rows SCANNED (Rows Removed by Filter), not output rows (P2.1).
+    let StatementOutcome::Rows { result: rna } = drv.exec(&act_sql).await.unwrap() else { panic!("rows") };
+    let cellna = first_cell(&rna.rows);
+    let json_act_noidx = if cellna.is_string() { cellna.as_str().unwrap().to_string() } else { cellna.to_string() };
+    let act_noidx = plan::parse_pg(&json_act_noidx, true).expect("parse pg actual no-index");
+    assert!(
+        any(&act_noidx.root.clone().unwrap(), &|n| n.operation == "SeqScan" && n.is_hotspot),
+        "P2.1: selective Seq Scan flagged as hotspot in actual mode (reads 50k, returns 1)"
+    );
+
     // index
     drv.exec("CREATE INDEX ix_pg_status ON it_pg(status)").await.unwrap();
     drv.exec("ANALYZE it_pg").await.unwrap();
@@ -237,11 +248,10 @@ async fn xv_t1_postgres_scan_index_actual_errors() {
     let sroot = scan.root.clone().expect("scan root");
     assert!(find_op(&sroot, "SeqScan").is_some(), "scan → normalized SeqScan");
     assert!(scan.raw.contains("Seq Scan"), "raw preserves 'Seq Scan'");
-    // FINDING (DEF-PG-HOTSPOT, Medium): mark_hotspot (plan.rs:510) keys on estimated
-    // OUTPUT rows (Plan Rows). This selective Seq Scan reads 50k rows but Plan Rows=1
-    // → NOT flagged. The SeqScan node IS surfaced (required behavior); the hotspot
-    // heuristic simply under-warns selective full scans. Recorded, not asserted.
-    eprintln!("PG scan hotspot flagged = {} (Plan Rows selective → heuristic under-warns)", any(&sroot, &|n| n.is_hotspot));
+    // DEF-PG-HOTSPOT (P2.1): ESTIMATED mode lacks a rows-scanned figure, so a
+    // selective Seq Scan (Plan Rows=1) still under-warns here; the SeqScan node is
+    // surfaced. In ACTUAL mode it IS flagged now (asserted on act_noidx above).
+    eprintln!("PG estimated scan hotspot = {} (estimated lacks rows-scanned; actual mode flags it)", any(&sroot, &|n| n.is_hotspot));
 
     let iroot = idx.root.clone().expect("index root");
     assert!(
