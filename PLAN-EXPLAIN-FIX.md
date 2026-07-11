@@ -198,7 +198,9 @@ Khi thêm/đổi field trong `QueryPlan`/`PlanNode` hoặc thêm mode value:
 
 ---
 
-### EXP-P2.2 — ClickHouse granule ratio + gộp metadata
+### EXP-P2.2 — ClickHouse granule ratio + gộp metadata — ✅ DONE
+> Commit `EXP-P2.2`. `parse_clickhouse` viết lại: dòng metadata index-analysis (Indexes/PrimaryKey/Condition/Parts/Granules/Keys…) được **gộp vào `extra` của ReadFromMergeTree gần nhất** (helper `ch_is_index_meta`), KHÔNG tạo node (DEF-CH-METADATA-NODES); parse `Granules: x/y` (`ch_ratio`) → hotspot khi tỉ lệ đọc ≥50% (full read) hoặc không có index để prune; prune tốt (<50%) → không hotspot (DEF-CH-GRANULE-BLIND). Tests: unit `clickhouse_granule_ratio_hotspot` + `clickhouse_explain_with_index_no_hotspot` (assert metadata gộp, không thành node); integration `xv_t2_clickhouse` lật sang FIXED (full 6/6→hotspot, key 1/6→không, metadata không phải node) EXIT=0. Gates: `cargo test --lib plan::` 17 (backend-only).
+
 **Backend (`drivers/plan.rs` `parse_clickhouse`)**
 1. Parse `"Granules: x/y"` và `"Parts: a/b"` theo node ReadFromMergeTree; lưu vào `extra`.
 2. `uses_index` xét **per-node theo tỉ lệ**: đọc ≥ ~50% granule **hoặc** thấy `Condition: true` → coi là full read → `SeqScan` + `is_hotspot=true` + warning "reads x/y granules"; tỉ lệ thấp → không flag.

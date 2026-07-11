@@ -373,64 +373,126 @@ fn ch_op(op: &str) -> String {
     }
 }
 
-/// Parse output `EXPLAIN indexes = 1` của ClickHouse. Mỗi dòng non-empty là 1
-/// node; số space đầu dòng / 2 = độ sâu. Tên op = phần trước dấu '('.
+/// Một dòng metadata phân tích index (thuộc tính của ReadFromMergeTree, KHÔNG
+/// phải một bước plan) → gộp vào node đọc thay vì tạo node riêng
+/// (P2.2 — DEF-CH-METADATA-NODES).
+fn ch_is_index_meta(content: &str) -> bool {
+    let c = content.trim();
+    [
+        "Indexes", "PrimaryKey", "MinMax", "Partition", "Skip", "Keys:", "Key:",
+        "Condition:", "Parts:", "Granules:", "Ranges:", "Search algorithm", "Name:",
+        "Type:", "Description:",
+    ]
+    .iter()
+    .any(|p| c.starts_with(p))
+}
+
+/// Parse "x/y" trong dòng "Granules: x/y" / "Parts: x/y" → (x, y).
+fn ch_ratio(content: &str) -> Option<(f64, f64)> {
+    let after = content.split(':').nth(1)?.trim();
+    let frac = after.split_whitespace().next()?;
+    let (a, b) = frac.split_once('/')?;
+    Some((a.trim().parse().ok()?, b.trim().parse().ok()?))
+}
+
+/// Parse output `EXPLAIN indexes = 1` của ClickHouse. Mỗi dòng plan là 1 node
+/// (indent/2 = độ sâu). Các dòng metadata index-analysis (Indexes/PrimaryKey/
+/// Granules/Parts/Condition…) được GỘP vào ReadFromMergeTree gần nhất, không tạo
+/// node. Hotspot theo tỉ lệ granule đọc (P2.2 — DEF-CH-GRANULE-BLIND).
 pub fn parse_clickhouse(text: &str) -> QueryPlan {
-    struct Raw {
-        depth: usize,
-        op: String,
-        detail: String,
-    }
-    let mut raws: Vec<Raw> = Vec::new();
-    let mut uses_index = false;
+    let mut warnings = Vec::new();
+    let mut nodes: Vec<PlanNode> = Vec::new();
+    let mut parent_of: Vec<Option<usize>> = Vec::new();
+    let mut stack: Vec<(usize, usize)> = Vec::new(); // (depth, node index)
+    let mut last_read: Option<usize> = None;
+
     for line in text.lines() {
         if line.trim().is_empty() {
             continue;
         }
         let indent = line.chars().take_while(|c| *c == ' ').count();
-        let content = line.trim();
-        if content.contains("PrimaryKey") || content.contains("Skip") || content.contains("MinMax") {
-            uses_index = true;
-        }
-        let op = content.split('(').next().unwrap_or(content).trim().trim_end_matches(':').to_string();
-        raws.push(Raw { depth: indent / 2, op, detail: content.to_string() });
-    }
+        let depth = indent / 2;
+        let content = line.trim().to_string();
 
-    let mut warnings = Vec::new();
-    // Stack-based tree build theo depth.
-    // Mỗi phần tử stack: (depth, index trong flat Vec<PlanNode> tạm) — dùng đệ quy chỉ số cha.
-    let mut nodes: Vec<PlanNode> = Vec::new();
-    let mut parent_of: Vec<Option<usize>> = Vec::new();
-    let mut stack: Vec<(usize, usize)> = Vec::new(); // (depth, node index)
-    for r in &raws {
-        while stack.last().map(|(d, _)| *d >= r.depth).unwrap_or(false) {
+        // Metadata index-analysis → gộp vào ReadFromMergeTree gần nhất.
+        if ch_is_index_meta(&content) {
+            if let Some(ri) = last_read {
+                let node = &mut nodes[ri];
+                let prev = node.extra.get("index_analysis").and_then(Value::as_str).unwrap_or("").to_string();
+                let combined = if prev.is_empty() { content.clone() } else { format!("{prev}\n{content}") };
+                node.extra.insert("index_analysis".into(), Value::String(combined));
+                if content.starts_with("Granules:") {
+                    if let Some((r, t)) = ch_ratio(&content) {
+                        node.extra.insert("granules_read".into(), Value::from(r));
+                        node.extra.insert("granules_total".into(), Value::from(t));
+                    }
+                }
+                if content.starts_with("Parts:") {
+                    if let Some((r, t)) = ch_ratio(&content) {
+                        node.extra.insert("parts_read".into(), Value::from(r));
+                        node.extra.insert("parts_total".into(), Value::from(t));
+                    }
+                }
+                if ["PrimaryKey", "MinMax", "Skip", "Partition"].iter().any(|p| content.starts_with(p)) {
+                    node.extra.insert("has_index".into(), Value::Bool(true));
+                }
+            }
+            continue; // KHÔNG tạo node cho dòng metadata
+        }
+
+        let op_name = content.split('(').next().unwrap_or(&content).trim().trim_end_matches(':').to_string();
+        while stack.last().map(|(d, _)| *d >= depth).unwrap_or(false) {
             stack.pop();
         }
         let parent = stack.last().map(|(_, i)| *i);
-        let op = ch_op(&r.op);
-        let mut node = PlanNode::leaf(&op, &r.op);
-        node.extra.insert("detail".into(), Value::String(r.detail.clone()));
-        // relation trong ngoặc của ReadFrom…
-        if r.op.to_lowercase().starts_with("readfrom") {
-            if let (Some(a), Some(b)) = (r.detail.find('('), r.detail.rfind(')')) {
+        let mut node = PlanNode::leaf(&ch_op(&op_name), &op_name);
+        node.extra.insert("detail".into(), Value::String(content.clone()));
+        let is_read = op_name.to_lowercase().starts_with("readfrom");
+        if is_read {
+            if let (Some(a), Some(b)) = (content.find('('), content.rfind(')')) {
                 if b > a + 1 {
-                    node.extra.insert("relation".into(), Value::String(r.detail[a + 1..b].to_string()));
+                    node.extra.insert("relation".into(), Value::String(content[a + 1..b].to_string()));
                 }
             }
         }
         let idx = nodes.len();
         nodes.push(node);
         parent_of.push(parent);
-        stack.push((r.depth, idx));
+        stack.push((depth, idx));
+        if is_read {
+            last_read = Some(idx);
+        }
     }
 
-    // Full scan không dùng index → hotspot + cảnh báo.
-    if !uses_index {
-        for n in nodes.iter_mut() {
-            if n.operation == "SeqScan" {
+    // Hotspot mỗi ReadFromMergeTree theo tỉ lệ granule đọc: ≥50% granule (hoặc
+    // không có index để prune) = full read → hotspot; prune tốt → không.
+    const FULL_GRANULE_RATIO: f64 = 0.5;
+    for n in nodes.iter_mut() {
+        if n.operation != "SeqScan" {
+            continue;
+        }
+        let rel = n.extra.get("relation").and_then(Value::as_str).unwrap_or("table").to_string();
+        let ratio = match (
+            n.extra.get("granules_read").and_then(Value::as_f64),
+            n.extra.get("granules_total").and_then(Value::as_f64),
+        ) {
+            (Some(r), Some(t)) if t > 0.0 => Some(r / t),
+            _ => None,
+        };
+        match ratio {
+            Some(r) if r >= FULL_GRANULE_RATIO => {
                 n.is_hotspot = true;
-                let rel = n.extra.get("relation").and_then(Value::as_str).unwrap_or("table");
-                warnings.push(format!("ClickHouse reads all of {rel} (no index used)"));
+                let gr = n.extra.get("granules_read").and_then(Value::as_f64).unwrap_or(0.0) as i64;
+                let gt = n.extra.get("granules_total").and_then(Value::as_f64).unwrap_or(0.0) as i64;
+                warnings.push(format!("ClickHouse reads {gr}/{gt} granules of {rel} (no effective pruning)"));
+            }
+            Some(_) => {} // prune tốt → không hotspot
+            None => {
+                // Không có số granule: fallback theo có index metadata hay không.
+                if !n.extra.get("has_index").and_then(Value::as_bool).unwrap_or(false) {
+                    n.is_hotspot = true;
+                    warnings.push(format!("ClickHouse reads all of {rel} (no index used)"));
+                }
             }
         }
     }
@@ -874,5 +936,24 @@ mod tests {
         assert_eq!(read.operation, "SeqScan");
         assert!(!read.is_hotspot, "dùng PrimaryKey → không hotspot");
         assert!(plan.summary.warnings.is_empty());
+        // metadata (Indexes/PrimaryKey/Condition/Parts) gộp vào read node, KHÔNG tạo node
+        assert!(read.children.is_empty(), "metadata không thành node con");
+        assert!(read.extra.contains_key("index_analysis"), "metadata gộp vào extra");
+    }
+
+    #[test]
+    fn clickhouse_granule_ratio_hotspot() {
+        // P2.2 — full-granule read (6/6) → hotspot; pruned (1/6) → không.
+        let full = "Expression (Projection)\n  ReadFromMergeTree (db.t)\n  Indexes:\n    PrimaryKey\n      Condition: true\n      Parts: 1/1\n      Granules: 6/6";
+        let pf = parse_clickhouse(full);
+        let rf = pf.root.unwrap().children.into_iter().find(|n| n.native_op == "ReadFromMergeTree").unwrap();
+        assert!(rf.is_hotspot, "6/6 granules → full read → hotspot");
+        assert!(pf.summary.warnings.iter().any(|w| w.contains("6/6")));
+
+        let key = "Expression (Projection)\n  ReadFromMergeTree (db.t)\n  Indexes:\n    PrimaryKey\n      Condition: (id in [42, 42])\n      Parts: 1/1\n      Granules: 1/6";
+        let pk = parse_clickhouse(key);
+        let rk = pk.root.unwrap().children.into_iter().find(|n| n.native_op == "ReadFromMergeTree").unwrap();
+        assert!(!rk.is_hotspot, "1/6 granules → prune tốt → không hotspot");
+        assert!(pk.summary.warnings.is_empty());
     }
 }

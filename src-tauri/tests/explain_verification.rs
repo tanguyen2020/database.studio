@@ -604,16 +604,18 @@ async fn xv_t2_clickhouse_fullread_vs_key() {
     // raw PRESERVES the physical truth (this part is honest):
     assert!(full.raw.contains("Granules: 6/6") && full.raw.contains("Condition: true"), "full read scans ALL granules (no pruning): {}", full.raw);
     assert!(key.raw.contains("Granules: 1/6"), "key read prunes to 1/6 granules: {}", key.raw);
-    // DEFECT DEF-CH-GRANULE-BLIND (Medium, DBA): parse_clickhouse (plan.rs:289) sets
-    // uses_index=true on the mere presence of a "PrimaryKey" block and ignores
-    // Condition:true / Granules N/N. So the full-granule read (6/6) is NOT flagged
-    // — identical hotspot/warning state to the efficient 1/6-granule key lookup.
+    // P2.2 FIXED (DEF-CH-GRANULE-BLIND): hotspot keys on the granule ratio, not the
+    // mere presence of a PrimaryKey block. The full-granule read (6/6) is flagged;
+    // the pruned key lookup (1/6) is not. Index-analysis metadata lines are folded
+    // into the read node (DEF-CH-METADATA-NODES), not turned into plan nodes.
     let full_flagged = any(&froot, &|n| n.is_hotspot) || !full.summary.warnings.is_empty();
     let key_flagged = any(&kroot, &|n| n.is_hotspot) || !key.summary.warnings.is_empty();
-    assert!(!full_flagged, "observed: full-granule read not flagged (documents the defect)");
-    assert!(!key_flagged, "key read not flagged (correct)");
+    assert!(full_flagged, "full-granule read (6/6) flagged as hotspot");
+    assert!(!key_flagged, "pruned key read (1/6) not flagged");
+    // metadata (Condition/Parts/Granules/PrimaryKey) must NOT appear as plan nodes
+    assert!(!any(&froot, &|n| n.operation.starts_with("Condition") || n.operation.starts_with("Granules") || n.operation.starts_with("Parts")), "index metadata folded into read node, not separate nodes");
     eprintln!(
-        "CHK xv_t2_clickhouse — DEFECT DEF-CH-GRANULE-BLIND: full(6/6 granules) flagged={} vs key(1/6) flagged={} — indistinguishable",
+        "CHK xv_t2_clickhouse — FIXED: full(6/6) flagged={} vs key(1/6) flagged={}",
         full_flagged, key_flagged
     );
 }
