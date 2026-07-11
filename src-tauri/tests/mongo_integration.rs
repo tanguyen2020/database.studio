@@ -197,6 +197,38 @@ async fn mongo_introspection_databases_collections_indexes_fields() {
     );
     let zed_id = zed.rows[0]["_id"].clone();
 
+    // --- M1 fix: exec_mongo phải khớp ObjectId _id qua Extended JSON ------------
+    let hex = zed_id["$oid"].as_str().expect("zed _id $oid").to_string();
+    let up = affected(
+        drv.exec_mongo(
+            &format!("db.users.updateOne({{\"_id\":{{\"$oid\":\"{hex}\"}}}}, {{\"$set\":{{\"note\":\"via-editor\"}}}})"),
+            None,
+            None,
+        )
+        .await
+        .unwrap()
+        .outcome,
+    );
+    assert_eq!(up, 1, "updateOne theo ObjectId _id qua editor phải match (Extended JSON)");
+    let f = rows(
+        drv.exec_mongo(&format!("db.users.find({{\"_id\":{{\"$oid\":\"{hex}\"}}}})"), None, None)
+            .await
+            .unwrap()
+            .outcome,
+    );
+    assert_eq!(f.total, 1, "find theo ObjectId _id qua editor phải trả đúng 1 doc");
+    assert_eq!(f.rows[0]["note"], "via-editor");
+
+    // --- C1 fix: delete/update thiếu filter → LỖI (không wipe toàn bộ collection) --
+    assert!(
+        drv.exec_mongo("db.users.deleteMany()", None, None).await.is_err(),
+        "deleteMany() không filter phải trả lỗi, KHÔNG xoá toàn bộ"
+    );
+    assert!(
+        drv.exec_mongo("db.users.updateMany(5, {\"$set\":{\"x\":1}})", None, None).await.is_err(),
+        "updateMany với filter không phải object phải trả lỗi"
+    );
+
     // --- apply_grid (inline edit by _id, M3) --------------------------------
     let col = |name: &str, value: serde_json::Value| Col { name: name.into(), value, col_type: None };
     let sch = || Some("appdb".to_string());

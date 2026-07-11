@@ -155,32 +155,49 @@
     progress = { done: 0, total: mappedRows.length }
     const batches = chunk(mappedRows, batchSize)
     let inserted = 0
-    // MongoDB: batched insertMany of documents built from header→value pairs.
-    // Light coercion so numbers/booleans/null aren't stored as strings.
+    // MongoDB: batched insertMany. JSON is re-parsed from the file so nested
+    // objects/arrays and real types survive (the header/row pipeline flattens
+    // them to strings). CSV cells are coerced conservatively — leading-zero
+    // strings (zip/ids) and integers beyond 2^53 stay strings to avoid silent loss.
     if (isMongo) {
       const coerce = (v: string): unknown => {
         if (v === '') return null
         if (v === 'true') return true
         if (v === 'false') return false
-        if (/^-?\d+$/.test(v)) return Number(v)
-        if (/^-?\d*\.\d+$/.test(v)) return Number(v)
+        if (v === '0' || /^-?[1-9]\d*$/.test(v)) {
+          const n = Number(v)
+          return Number.isSafeInteger(n) ? n : v
+        }
+        if (/^-?(?:0|[1-9]\d*)\.\d+$/.test(v)) return Number(v)
         return v
       }
+      let docs: unknown[]
+      if (format === 'json' && fileBuf) {
+        try {
+          const parsed = JSON.parse(new TextDecoder(encoding).decode(fileBuf))
+          docs = Array.isArray(parsed) ? parsed : [parsed]
+        } catch (e) {
+          result = `✗ invalid JSON: ${e}`
+          running = false
+          return
+        }
+      } else {
+        docs = mappedRows.map((r) => Object.fromEntries(columns.map((c, i) => [c, coerce(String(r[i] ?? ''))])))
+      }
+      progress = { done: 0, total: docs.length }
       try {
-        for (const batch of batches) {
-          const docs = batch.map((r) =>
-            Object.fromEntries(columns.map((c, i) => [c, coerce(String(r[i] ?? ''))])),
-          )
-          const q = `db.${targetTable}.insertMany(${JSON.stringify(docs)})`
+        for (let i = 0; i < docs.length; i += batchSize) {
+          const batch = docs.slice(i, i + batchSize)
+          const q = `db.${targetTable}.insertMany(${JSON.stringify(batch)})`
           const res = await ipc.mongoExec(importWizard.connId, q, importWizard.schema)
           if (res.error) {
             result = `✗ ${res.error.message} (sau ${inserted} docs)`
             return
           }
           inserted += res.affected ?? batch.length
-          progress = { done: inserted, total: mappedRows.length }
+          progress = { done: inserted, total: docs.length }
         }
-        result = `✓ ${inserted} documents inserted (${batches.length} batch)`
+        result = `✓ ${inserted} documents inserted`
         toasts.success(result)
       } catch (e) {
         result = `✗ ${e} (sau ${inserted} docs)`

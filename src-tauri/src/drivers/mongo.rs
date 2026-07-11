@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use base64::Engine as _;
-use mongodb::bson::{self, doc, Bson, Document};
+use mongodb::bson::{doc, Bson, Document};
 use mongodb::options::ClientOptions;
 use mongodb::Client;
 use serde_json::{json, Map, Value};
@@ -299,8 +299,13 @@ fn parse_mongo_query(q: &str) -> Result<MongoCall, QueryError> {
 }
 
 /// A JSON value → BSON document (for filters/updates/keys). None if not an object.
+/// Uses `json_to_bson` so Extended JSON (`{"$oid":…}`, `{"$date":…}`) in a filter
+/// round-trips to the real ObjectId/DateTime — otherwise `_id` filters never match.
 fn value_to_doc(v: &Value) -> Option<Document> {
-    bson::to_bson(v).ok()?.as_document().cloned()
+    match json_to_bson(v) {
+        Bson::Document(d) => Some(d),
+        _ => None,
+    }
 }
 
 /// BSON → JSON in MongoDB Extended JSON (relaxed-ish): ObjectId → `{"$oid":…}`,
@@ -600,11 +605,10 @@ impl MongoDriver {
             }
             "aggregate" => {
                 let pipeline = call.args.first().cloned().unwrap_or(Value::Array(vec![]));
-                let arr = bson::to_bson(&pipeline)
-                    .map_err(exec_err)?
-                    .as_array()
-                    .cloned()
-                    .ok_or_else(|| perr("aggregate([...]) requires a pipeline array"))?;
+                let arr = match json_to_bson(&pipeline) {
+                    Bson::Array(a) => a,
+                    _ => return Err(perr("aggregate([...]) requires a pipeline array")),
+                };
                 let bs = batch_size.unwrap_or(500);
                 let cmd = doc! { "aggregate": &coll, "pipeline": arr, "cursor": doc! { "batchSize": bs } };
                 let res = db.run_command(cmd).await.map_err(exec_err)?;
@@ -622,6 +626,7 @@ impl MongoDriver {
                     .get_i32("n")
                     .map(|v| v as i64)
                     .or_else(|_| res.get_i64("n"))
+                    .or_else(|_| res.get_f64("n").map(|f| f as i64))
                     .unwrap_or(0);
                 Ok(MongoOutcome {
                     outcome: StatementOutcome::Rows {
@@ -669,13 +674,10 @@ impl MongoDriver {
                         .args
                         .first()
                         .ok_or_else(|| perr("insertOne(doc) requires a document"))?;
-                    vec![bson::to_bson(v).map_err(exec_err)?]
+                    vec![json_to_bson(v)]
                 } else {
                     match call.args.first() {
-                        Some(Value::Array(a)) => a
-                            .iter()
-                            .map(|v| bson::to_bson(v).map_err(exec_err))
-                            .collect::<Result<_, _>>()?,
+                        Some(Value::Array(a)) => a.iter().map(json_to_bson).collect(),
                         _ => return Err(perr("insertMany([...]) requires an array of documents")),
                     }
                 };
@@ -687,12 +689,18 @@ impl MongoDriver {
                 Ok(affected_outcome(res.get_i32("n").unwrap_or(0) as u64))
             }
             "updateone" | "updatemany" => {
-                let filter = call.args.first().and_then(value_to_doc).unwrap_or_default();
+                // Filter is REQUIRED: `updateMany({}, …)` (explicit {}) matches all, but a
+                // missing/non-object filter must NOT silently become {} and update everything.
+                let filter = call
+                    .args
+                    .first()
+                    .and_then(value_to_doc)
+                    .ok_or_else(|| perr("updateOne/updateMany(filter, update) requires a filter — pass {} to match all documents"))?;
                 let update = call
                     .args
                     .get(1)
                     .and_then(value_to_doc)
-                    .ok_or_else(|| perr("updateOne/Many(filter, update) requires two documents"))?;
+                    .ok_or_else(|| perr("updateOne/updateMany(filter, update) requires an update document"))?;
                 let multi = call.method == "updatemany";
                 let res = db
                     .run_command(doc! {
@@ -705,7 +713,13 @@ impl MongoDriver {
                 Ok(affected_outcome(res.get_i32("nModified").unwrap_or(0) as u64))
             }
             "deleteone" | "deletemany" => {
-                let filter = call.args.first().and_then(value_to_doc).unwrap_or_default();
+                // Filter is REQUIRED (see update): a missing/non-object arg must not
+                // become {} and delete the whole collection. `deleteMany({})` is explicit.
+                let filter = call
+                    .args
+                    .first()
+                    .and_then(value_to_doc)
+                    .ok_or_else(|| perr("deleteOne/deleteMany(filter) requires a filter — pass {} to match all documents"))?;
                 let limit = if call.method == "deleteone" { 1 } else { 0 };
                 let res = db
                     .run_command(doc! {
@@ -943,10 +957,10 @@ impl MongoDriver {
                 c
             }
             "aggregate" => {
-                let arr = bson::to_bson(&call.args.first().cloned().unwrap_or(Value::Array(vec![])))
-                    .ok()
-                    .and_then(|b| b.as_array().cloned())
-                    .unwrap_or_default();
+                let arr = match json_to_bson(&call.args.first().cloned().unwrap_or(Value::Array(vec![]))) {
+                    Bson::Array(a) => a,
+                    _ => Vec::new(),
+                };
                 doc! { "aggregate": &call.collection, "pipeline": arr, "cursor": doc! {} }
             }
             "countdocuments" | "count" => {
