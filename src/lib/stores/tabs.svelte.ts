@@ -117,9 +117,12 @@ class TabsStore {
           : this.active?.connectionId ?? connections.selectedId
     const database =
       opts?.useSelection !== false && dbSel && dbSel.base === connId ? dbSel.database : undefined
+    // MongoDB consoles are mongosh (db.<coll>.find(…)) — title them so they read as
+    // Mongo, matching the Explorer's "New Query" (Ctrl/Cmd+N opens the right editor).
+    const title = connections.byId(connId)?.system === 'mongodb' ? 'Untitled Mongo' : 'Untitled query'
     return this.openSqlTab({
       connectionId: connId,
-      title: 'Untitled query',
+      title,
       ...(database ? { database } : {}),
     })
   }

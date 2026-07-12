@@ -41,6 +41,11 @@
   let progress = $state({ done: 0, total: 0 }) // rows inserted / total
 
   const system = $derived(connections.byId(importWizard.connId)?.system ?? 'postgres')
+  // Header shows the target as db.schema (schema-as-database engines already show the db).
+  const db = $derived(connections.databaseOf(importWizard.connId))
+  const target = $derived(
+    db && db !== importWizard.schema ? `${db}.${importWizard.schema}` : importWizard.schema || 'table',
+  )
   // MongoDB is schemaless: the target collection is pre-set and CSV/JSON headers
   // become document fields directly (no column mapping against a fixed schema).
   const isMongo = $derived(system === 'mongodb')
@@ -240,7 +245,7 @@
   <div onkeydown={(e) => e.key === 'Escape' && !running && importWizard.close()} role="presentation" style="position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:56">
     <div onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.key === 'Escape' && !running && importWizard.close()} role="dialog" aria-modal="true" tabindex="-1" style="width:var(--px-640);max-width:95vw;max-height:90vh;background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-14);box-shadow:0 var(--px-30) var(--px-70) rgba(0,0,0,.55);overflow:hidden;display:flex;flex-direction:column">
       <div style="flex:none;display:flex;align-items:center;gap:var(--px-10);padding:var(--px-15) var(--px-18);border-bottom:var(--px-1) solid var(--border)">
-        <span style="font-weight:700;font-size:var(--px-15)">Import {format.toUpperCase()} → {importWizard.schema || 'table'}</span>
+        <span style="font-weight:700;font-size:var(--px-15)">Import {format.toUpperCase()} → {target}</span>
         <span style="font-size:var(--px-11_5);color:var(--muted)">Step {step} / 3</span>
         <span onclick={() => !running && importWizard.close()} onkeydown={(e) => e.key === 'Enter' && !running && importWizard.close()} role="button" tabindex="0" style="margin-left:auto;cursor:pointer;color:var(--muted);font-size:var(--px-20)">×</span>
       </div>

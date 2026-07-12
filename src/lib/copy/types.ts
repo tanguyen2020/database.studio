@@ -9,7 +9,7 @@ export type TypeFamily = 'int' | 'bigint' | 'float' | 'decimal' | 'bool' | 'text
 
 export function classifyType(srcType: string): TypeFamily {
   const t = srcType.toLowerCase().trim()
-  if (/\b(bigint|int8|bigserial)\b/.test(t)) return 'bigint'
+  if (/\b(bigint|int8|bigserial|long)\b/.test(t)) return 'bigint'
   if (/\b(smallint|int2|integer|int4|int|serial|mediumint|tinyint)\b/.test(t)) return 'int'
   if (/\b(numeric|decimal|money)\b/.test(t)) return 'decimal'
   if (/\b(real|double|float|float4|float8)\b/.test(t)) return 'float'

@@ -65,6 +65,10 @@
           </div>
         {/each}
       </div>
+      <!-- footer: Close button (same action as the × / Escape) -->
+      <div style="display:flex;justify-content:flex-end;gap:var(--px-8);padding:var(--px-14) var(--px-20);border-top:var(--px-1) solid var(--border)">
+        <span onclick={close} onkeydown={(e) => e.key === 'Enter' && close()} role="button" tabindex="0" class="pk-btn">Close</span>
+      </div>
     </div>
   </div>
 {/if}
@@ -74,5 +78,19 @@
   .picker-card:hover {
     border-color: var(--border2) !important;
     background: var(--hover) !important;
+  }
+  /* footer Close button */
+  .pk-btn {
+    font-size: var(--px-12_5);
+    color: var(--text2);
+    background: var(--panel);
+    border: var(--px-1) solid var(--border);
+    border-radius: var(--px-7);
+    padding: var(--px-6) var(--px-16);
+    cursor: pointer;
+    font-weight: 600;
+  }
+  .pk-btn:hover {
+    background: var(--hover);
   }
 </style>

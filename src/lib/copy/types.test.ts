@@ -24,6 +24,14 @@ describe('classifyType', () => {
     expect(classifyType('bytea')).toBe('bytes')
     expect(classifyType('date')).toBe('date')
   })
+  it('maps MongoDB BSON numeric types (int/long/double/decimal)', () => {
+    expect(classifyType('int')).toBe('int')
+    expect(classifyType('long')).toBe('bigint') // Mongo Int64 → numeric (grid coloring)
+    expect(classifyType('double')).toBe('float')
+    expect(classifyType('decimal')).toBe('decimal')
+    expect(classifyType('string')).toBe('text')
+    expect(classifyType('objectId')).toBe('text')
+  })
 })
 
 describe('mapColumnType', () => {

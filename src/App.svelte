@@ -51,6 +51,7 @@
   import AddPartitionDialog from '$lib/components/AddPartitionDialog.svelte'
   import TruncateDialog from '$lib/components/TruncateDialog.svelte'
   import NewDatabaseDialog from '$lib/components/NewDatabaseDialog.svelte'
+  import DesignDocumentDialog from '$lib/components/DesignDocumentDialog.svelte'
   import NatsAddMessageDialog from '$lib/components/NatsAddMessageDialog.svelte'
   import NatsCreateStreamDialog from '$lib/components/NatsCreateStreamDialog.svelte'
   import KafkaCreateTopicDialog from '$lib/components/KafkaCreateTopicDialog.svelte'
@@ -355,6 +356,7 @@
 <AddPartitionDialog />
 <TruncateDialog />
 <NewDatabaseDialog />
+<DesignDocumentDialog />
 <NatsAddMessageDialog />
 <NatsCreateStreamDialog />
 <KafkaCreateTopicDialog />

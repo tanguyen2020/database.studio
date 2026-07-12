@@ -30,9 +30,16 @@
   let loading = $state(false)
   let durationMs = $state(0)
   let filterText = $state('{}')
-  let loaded = $state(0)
-  let hasMore = $state(false)
-  const PAGE = 100
+  // Page-based pagination (skip/limit) — consistent with the relational Table Viewer:
+  // a total from countDocuments(filter) drives Page X of Y + first/prev/next/last.
+  let page = $state(0)
+  let pageSize = $state(100)
+  let totalRecords = $state<number | null>(null)
+  const PAGE_SIZES = [100, 200, 500, 1000]
+  const totalPages = $derived(
+    totalRecords != null ? Math.max(1, Math.ceil(totalRecords / pageSize)) : null,
+  )
+  const canNext = $derived(totalPages != null ? page + 1 < totalPages : (data?.rows.length ?? 0) >= pageSize)
 
   // Editing enabled once connected. Apply/Preview route through
   // applyGridChanges/previewGridChanges → Mongo arms (by `_id`).
@@ -49,22 +56,37 @@
       : undefined,
   )
 
-  function query(skip: number): string {
-    const f = filterText.trim() || '{}'
-    return `db.${collection}.find(${f}).skip(${skip}).limit(${PAGE})`
+  const filterArg = () => filterText.trim() || '{}'
+  function query(): string {
+    return `db.${collection}.find(${filterArg()}).skip(${page * pageSize}).limit(${pageSize})`
   }
 
-  async function load() {
+  // The exact document count for the current filter → drives the pager's Page X of Y.
+  async function loadCount() {
+    if (!tab.connectionId) return
+    try {
+      const res = await mongoExec(tab.connectionId, `db.${collection}.countDocuments(${filterArg()})`, database, 1)
+      const c = res.ok ? (res.result?.rows?.[0] as { count?: unknown } | undefined)?.count : undefined
+      const n = typeof c === 'number' ? c : Number(c)
+      totalRecords = Number.isFinite(n) ? n : null
+    } catch {
+      totalRecords = null
+    }
+  }
+
+  // Run the filter (resets to page 0 + recounts). `keepPage` is used by the pager
+  // buttons to reload a specific page without re-counting/resetting.
+  async function load(keepPage = false) {
     if (!tab.connectionId || !profile) return
+    if (!keepPage) page = 0
     loading = true
     error = null
+    if (!keepPage) void loadCount()
     try {
-      const res = await mongoExec(tab.connectionId, query(0), database, PAGE)
+      const res = await mongoExec(tab.connectionId, query(), database, pageSize)
       durationMs = res.duration_ms
       if (res.ok && res.result) {
         data = res.result
-        loaded = res.result.rows.length
-        hasMore = res.result.rows.length >= PAGE
         for (const w of res.warnings ?? []) toasts.show(w, { system: 'mongodb' })
       } else if (res.error) {
         error = res.error
@@ -77,26 +99,18 @@
     }
   }
 
-  async function loadMore() {
-    if (!tab.connectionId || !data || !hasMore) return
-    try {
-      const res = await mongoExec(tab.connectionId, query(loaded), database, PAGE)
-      if (res.error) {
-        toasts.error(res.error.message)
-        return
-      }
-      if (res.result) {
-        data = {
-          ...data,
-          rows: [...data.rows, ...res.result.rows],
-          total: data.rows.length + res.result.rows.length,
-        }
-        loaded += res.result.rows.length
-        hasMore = res.result.rows.length >= PAGE
-      }
-    } catch (e) {
-      toasts.error(`Load next page failed: ${e}`)
-    }
+  function gotoPage(p: number) {
+    const max = totalPages != null ? totalPages - 1 : p
+    const next = Math.max(0, Math.min(p, max))
+    if (next === page) return
+    page = next
+    void load(true)
+  }
+  function setPageSize(n: number) {
+    if (n === pageSize) return
+    pageSize = n
+    page = 0
+    void load(true)
   }
 
   // Export the loaded documents (CSV/JSON/…) via the shared result-mode wizard.
@@ -137,11 +151,8 @@
     <span class="mv-btn" onclick={() => load()} onkeydown={(e) => e.key === 'Enter' && load()} role="button" tabindex="0">Run</span>
     <div style="margin-left:auto;display:flex;align-items:center;gap:var(--px-8)">
       {#if data}
-        <span class="mono" style="font-size:var(--px-11);color:var(--muted)">{data.total.toLocaleString()} docs · {durationMs} ms</span>
+        <span class="mono" style="font-size:var(--px-11);color:var(--muted)">{durationMs} ms</span>
         <span class="mv-btn" onclick={exportDocs} onkeydown={(e) => e.key === 'Enter' && exportDocs()} role="button" tabindex="0" title="Export the loaded documents (CSV/JSON)">Export…</span>
-      {/if}
-      {#if hasMore}
-        <span class="mv-btn" onclick={loadMore} onkeydown={(e) => e.key === 'Enter' && loadMore()} role="button" tabindex="0" title="Fetch the next page (skip/limit)">↓ Load next page</span>
       {/if}
     </div>
   </div>
@@ -152,13 +163,44 @@
     {:else if error}
       <div class="selectable" style="padding:var(--px-16);font-size:var(--px-12_5);color:var(--error)">✗ {error.message}</div>
     {:else if data}
-      <ResultGrid {data} {editTarget} />
+      <ResultGrid {data} {editTarget} system="mongodb" />
     {:else}
       <div style="flex:1;display:flex;align-items:center;justify-content:center;font-size:var(--px-12);color:var(--muted)">
         {profile ? 'No documents' : 'Connection not found'}
       </div>
     {/if}
   </div>
+
+  <!-- footer pager — docs range + page count + first/prev/next/last + page size,
+       consistent with the relational Table Viewer. -->
+  {#if data}
+    <div class="mono" style="flex:none;display:flex;align-items:center;gap:var(--px-10);padding:var(--px-5) var(--px-12);border-top:var(--px-1) solid var(--border);background:var(--header);font-size:var(--px-11_5);color:var(--text2)">
+      <span>
+        {#if data.rows.length}
+          {(page * pageSize + 1).toLocaleString()}–{(page * pageSize + data.rows.length).toLocaleString()}
+        {:else}0{/if}
+        {#if totalRecords != null}of {totalRecords.toLocaleString()} doc{totalRecords === 1 ? '' : 's'}{:else}(filtered){/if}
+      </span>
+      <div style="margin-left:auto;display:flex;align-items:center;gap:var(--px-5)">
+        <label style="display:flex;align-items:center;gap:var(--px-5);color:var(--muted)">Page size
+          <select
+            value={pageSize}
+            onchange={(e) => setPageSize(Number(e.currentTarget.value))}
+            style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-5);padding:var(--px-2) var(--px-6);color:var(--text);font-size:var(--px-11_5)"
+          >
+            {#each PAGE_SIZES as n (n)}<option value={n}>{n}</option>{/each}
+          </select>
+        </label>
+        <span class="mv-pg" style="opacity:{page > 0 ? 1 : 0.4}" onclick={() => gotoPage(0)} onkeydown={(e) => e.key === 'Enter' && gotoPage(0)} role="button" tabindex="0" title="First page">«</span>
+        <span class="mv-pg" style="opacity:{page > 0 ? 1 : 0.4}" onclick={() => gotoPage(page - 1)} onkeydown={(e) => e.key === 'Enter' && gotoPage(page - 1)} role="button" tabindex="0" title="Previous page">‹</span>
+        <span style="align-self:center;color:var(--text2)">Page {(page + 1).toLocaleString()}{totalPages != null ? ` of ${totalPages.toLocaleString()}` : ''}</span>
+        <span class="mv-pg" style="opacity:{canNext ? 1 : 0.4}" onclick={() => gotoPage(page + 1)} onkeydown={(e) => e.key === 'Enter' && gotoPage(page + 1)} role="button" tabindex="0" title="Next page">›</span>
+        {#if totalPages != null}
+          <span class="mv-pg" style="opacity:{page + 1 < totalPages ? 1 : 0.4}" onclick={() => gotoPage(totalPages - 1)} onkeydown={(e) => e.key === 'Enter' && gotoPage(totalPages - 1)} role="button" tabindex="0" title="Last page">»</span>
+        {/if}
+      </div>
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -173,6 +215,16 @@
   }
   .mv-btn:hover {
     background: var(--hover);
+  }
+  .mv-pg {
+    cursor: pointer;
+    padding: 0 var(--px-5);
+    font-size: var(--px-13);
+    color: var(--text2);
+    user-select: none;
+  }
+  .mv-pg:hover {
+    color: var(--text);
   }
   .mv-in {
     background: var(--panel);

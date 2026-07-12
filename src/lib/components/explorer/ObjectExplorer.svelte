@@ -142,6 +142,20 @@
   $effect(() => {
     explorer.selectedSchema = erTarget
   })
+  // Bottom toolbar (New table / Query / Import / Generate scripts / Backup /
+  // Sessions / Users) is enabled ONLY when a relational schema/database node is
+  // selected — and then acts on THAT connection + schema (not schemas[0]). Non-
+  // relational systems have no such node → erTarget is null → the whole toolbar
+  // is disabled.
+  const RELATIONAL_TOOLS = ['postgres', 'mysql', 'mariadb', 'mssql', 'sqlite', 'clickhouse']
+  const toolTarget = $derived(erTarget && RELATIONAL_TOOLS.includes(erTarget.system) ? erTarget : null)
+  // "database.schema" of the current toolbar target (for the button tooltips);
+  // schema-as-database engines already have db === schema, so just the schema.
+  const toolTargetLabel = $derived.by(() => {
+    if (!toolTarget) return ''
+    const tdb = connections.databaseOf(toolTarget.connId)
+    return tdb && tdb !== toolTarget.schema ? `${tdb}.${toolTarget.schema}` : toolTarget.schema
+  })
   // The database a NEW Query Editor tab should bind to, from the current tree
   // selection. Unlike `erTarget` this resolves the database NAME even for a
   // not-yet-expanded foreign database — New Query doesn't need the sub-connection
@@ -167,7 +181,9 @@
     return null
   })
   $effect(() => {
-    explorer.selectedDatabase = dbTarget
+    // MongoDB is browsed by MongoExplorer (a child component) which owns the
+    // selected-database signal for the Mongo tree — don't clobber it here.
+    if (selected?.system !== 'mongodb') explorer.selectedDatabase = dbTarget
   })
   // Top filter — DATABASE names only (item 1). Object filtering is per-folder.
   let dbFilter = $state('')
@@ -2504,34 +2520,30 @@
 
   <!-- bottom toolbar — dòng 155-166 -->
   <div style="flex:none;display:flex;align-items:center;gap:var(--px-1);padding:var(--px-5) var(--px-8);border-top:var(--px-1) solid var(--border);background:var(--header);color:var(--text2)">
-    <span class="xbtn" onclick={() => selected && tabs.openTableDesigner(selected.id, cache?.schemas?.[0]?.name ?? '', '')} onkeydown={(e) => e.key === 'Enter' && selected && tabs.openTableDesigner(selected.id, cache?.schemas?.[0]?.name ?? '', '')} role="button" tabindex="0" title="New table">
+    <span class="xbtn" class:off={!toolTarget} onclick={() => toolTarget && tabs.openTableDesigner(toolTarget.connId, toolTarget.schema, '')} onkeydown={(e) => e.key === 'Enter' && toolTarget && tabs.openTableDesigner(toolTarget.connId, toolTarget.schema, '')} role="button" tabindex="0" title={toolTarget ? `New table: ${toolTargetLabel}` : 'Select a schema / database first'}>
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="1.5"></rect><path d="M3 9h18M9 9v11" stroke-linecap="round"></path><path d="M16.5 14v5M14 16.5h5" stroke-linecap="round"></path></svg>
     </span>
-    <span class="xbtn" onclick={() => newQuery(cache?.schemas?.[0]?.name ?? '')} onkeydown={(e) => e.key === 'Enter' && newQuery(cache?.schemas?.[0]?.name ?? '')} role="button" tabindex="0" title="Open query console">
+    <span class="xbtn" class:off={!toolTarget} onclick={() => toolTarget && tabs.openQueryConsole()} onkeydown={(e) => e.key === 'Enter' && toolTarget && tabs.openQueryConsole()} role="button" tabindex="0" title={toolTarget ? `Query console: ${toolTargetLabel}` : 'Select a schema / database first'}>
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M7 9l3 3-3 3M13 15h4"></path></svg>
     </span>
     <span style="width:var(--px-1);height:var(--px-16);background:var(--border);margin:0 var(--px-3)"></span>
-    <span class="xbtn" onclick={() => selected && importWizard.show(selected.id, cache?.schemas?.[0]?.name ?? '')} onkeydown={(e) => e.key === 'Enter' && selected && importWizard.show(selected.id, cache?.schemas?.[0]?.name ?? '')} role="button" tabindex="0" title="Import data from file">
+    <span class="xbtn" class:off={!toolTarget} onclick={() => toolTarget && importWizard.show(toolTarget.connId, toolTarget.schema)} onkeydown={(e) => e.key === 'Enter' && toolTarget && importWizard.show(toolTarget.connId, toolTarget.schema)} role="button" tabindex="0" title={toolTarget ? `Import data: ${toolTargetLabel}` : 'Select a schema / database first'}>
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 10l5 5 5-5"></path><path d="M5 21h14"></path></svg>
     </span>
     <!-- Export/dump → Generate Scripts (T15). Users & privileges (T23) còn ẩn. -->
-    <span class="xbtn" onclick={() => selected && scriptsWizard.show(selected.id, cache?.schemas?.[0]?.name ?? '')} onkeydown={(e) => e.key === 'Enter' && selected && scriptsWizard.show(selected.id, cache?.schemas?.[0]?.name ?? '')} role="button" tabindex="0" title="Generate scripts (dump schema)">
+    <span class="xbtn" class:off={!toolTarget} onclick={() => toolTarget && scriptsWizard.show(toolTarget.connId, toolTarget.schema)} onkeydown={(e) => e.key === 'Enter' && toolTarget && scriptsWizard.show(toolTarget.connId, toolTarget.schema)} role="button" tabindex="0" title={toolTarget ? `Generate scripts: ${toolTargetLabel}` : 'Select a schema / database first'}>
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21V9M7 14l5 5 5-5"></path><path d="M5 3h14"></path></svg>
     </span>
     <!-- Backup & Restore (T22) -->
-    <span class="xbtn" onclick={() => selected && backupWizard.show(selected.id, selected.system)} onkeydown={(e) => e.key === 'Enter' && selected && backupWizard.show(selected.id, selected.system)} role="button" tabindex="0" title="Backup & Restore">
+    <span class="xbtn" class:off={!toolTarget} onclick={() => toolTarget && backupWizard.show(toolTarget.connId, toolTarget.system)} onkeydown={(e) => e.key === 'Enter' && toolTarget && backupWizard.show(toolTarget.connId, toolTarget.system)} role="button" tabindex="0" title={toolTarget ? `Backup & Restore: ${toolTargetLabel}` : 'Select a schema / database first'}>
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="8" ry="3"></ellipse><path d="M4 5v6c0 1.66 3.58 3 8 3s8-1.34 8-3V5M4 11v6c0 1.66 3.58 3 8 3s8-1.34 8-3v-6"></path></svg>
     </span>
     <!-- Session Monitor + Users & privileges (T23) -->
-    <span class="xbtn" onclick={() => selected && tabs.openAdminView(selected.id, 'sessions')} onkeydown={(e) => e.key === 'Enter' && selected && tabs.openAdminView(selected.id, 'sessions')} role="button" tabindex="0" title="Session Monitor">
+    <span class="xbtn" class:off={!toolTarget} onclick={() => toolTarget && tabs.openAdminView(toolTarget.base, 'sessions')} onkeydown={(e) => e.key === 'Enter' && toolTarget && tabs.openAdminView(toolTarget.base, 'sessions')} role="button" tabindex="0" title={toolTarget ? `Session Monitor: ${toolTargetLabel}` : 'Select a schema / database first'}>
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l3 8 4-16 3 8h4"></path></svg>
     </span>
-    <span class="xbtn" onclick={() => selected && tabs.openAdminView(selected.id, 'users')} onkeydown={(e) => e.key === 'Enter' && selected && tabs.openAdminView(selected.id, 'users')} role="button" tabindex="0" title="Users & privileges">
+    <span class="xbtn" class:off={!toolTarget} onclick={() => toolTarget && tabs.openAdminView(toolTarget.base, 'users')} onkeydown={(e) => e.key === 'Enter' && toolTarget && tabs.openAdminView(toolTarget.base, 'users')} role="button" tabindex="0" title={toolTarget ? `Users & privileges: ${toolTargetLabel}` : 'Select a schema / database first'}>
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3"></circle><path d="M3 20c0-3 3-5 6-5s6 2 6 5"></path><path d="M17 7a3 3 0 0 1 0 6M22 20c0-2.5-2-4-4-4.5"></path></svg>
-    </span>
-    <span style="margin-left:auto;display:flex;gap:var(--px-1)">
-      <span class="xbtn2" onclick={() => cache?.schemas?.forEach((s) => expandSchema(s.name))} onkeydown={(e) => e.key === 'Enter' && cache?.schemas?.forEach((s) => expandSchema(s.name))} role="button" tabindex="0" title="Expand all">⊕</span>
-      <span class="xbtn2" onclick={collapseAll} onkeydown={(e) => e.key === 'Enter' && collapseAll()} role="button" tabindex="0" title="Collapse all">⊖</span>
     </span>
   </div>
 </div>
@@ -2595,19 +2607,16 @@
     border-radius: var(--px-5);
     cursor: pointer;
   }
-  .xbtn2 {
-    width: var(--px-24);
-    height: var(--px-24);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: var(--px-5);
-    cursor: pointer;
-    font-size: var(--px-13);
-  }
-  .xbtn:hover,
-  .xbtn2:hover {
+  .xbtn:hover {
     background: var(--hover);
+  }
+  /* disabled toolbar button: no target schema selected (or non-relational). */
+  .xbtn.off {
+    opacity: 0.35;
+    cursor: not-allowed;
+  }
+  .xbtn.off:hover {
+    background: transparent;
   }
   .cfm-btn {
     font-size: var(--px-12);

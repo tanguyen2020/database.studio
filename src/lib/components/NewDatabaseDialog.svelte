@@ -14,23 +14,52 @@
   })
 
   let name = $state('')
+  let coll = $state('') // MongoDB: first collection (a DB persists only with ≥1 collection)
   let busy = $state(false)
 
-  // reset the field each time the dialog opens
+  // reset the fields each time the dialog opens
   $effect(() => {
-    if (newDatabaseWizard.open) name = ''
+    if (newDatabaseWizard.open) {
+      name = ''
+      coll = ''
+    }
   })
 
   const system = $derived(newDatabaseWizard.system)
   const sqlite = $derived(system === 'sqlite')
-  const ddl = $derived(name.trim() ? genCreateDatabase(system, name.trim()) : '')
-  const valid = $derived(!!name.trim() && !sqlite)
+  const isMongo = $derived(system === 'mongodb')
+  // Relational: CREATE DATABASE DDL. MongoDB: a database materializes when its first
+  // collection is created, so the "statement" is db.createCollection(<coll>) run
+  // against the new database (via mongo_exec, not the SQL execStatement path).
+  const ddl = $derived(
+    isMongo
+      ? name.trim() && coll.trim()
+        ? `use ${name.trim()}\ndb.createCollection(${JSON.stringify(coll.trim())})`
+        : ''
+      : name.trim()
+        ? genCreateDatabase(system, name.trim())
+        : '',
+  )
+  const valid = $derived(!!name.trim() && !sqlite && (!isMongo || !!coll.trim()))
 
   async function create() {
     const cid = newDatabaseWizard.connId
     if (!cid || !valid || busy) return
     busy = true
     try {
+      if (isMongo) {
+        // Create the first collection in the target database → the DB now exists.
+        const res = await ipc.mongoExec(cid, `db.createCollection(${JSON.stringify(coll.trim())})`, name.trim())
+        if (res.ok) {
+          toasts.success(`Database "${name.trim()}" created`, system)
+          await explorer.loadDatabases(cid, true).catch(() => {})
+          await explorer.refresh(cid, { kind: 'connection' }).catch(() => {})
+          newDatabaseWizard.close()
+        } else {
+          toasts.error(res.error?.message ?? 'Failed to create database')
+        }
+        return
+      }
       const res = await ipc.execStatement(cid, ddl, 0)
       if (res.ok) {
         toasts.success(`Database "${name.trim()}" created`, system)
@@ -85,6 +114,19 @@
             style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-7);padding:var(--px-7) var(--px-10);color:var(--text);font-size:var(--px-13);outline:none"
           />
         </label>
+        {#if isMongo}
+          <label style="font-size:var(--px-12);color:var(--text2);display:flex;flex-direction:column;gap:var(--px-6)">
+            First collection
+            <input
+              bind:value={coll}
+              placeholder="e.g. items"
+              spellcheck="false"
+              onkeydown={(e) => { if (e.key === 'Enter' && valid) void create() }}
+              style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-7);padding:var(--px-7) var(--px-10);color:var(--text);font-size:var(--px-13);outline:none"
+            />
+            <span style="font-size:var(--px-11);color:var(--muted)">MongoDB creates a database with its first collection.</span>
+          </label>
+        {/if}
         {#if sqlite}
           <div style="font-size:var(--px-11_5);color:var(--warn)">SQLite databases are files — create a new connection with a new .sqlite path instead.</div>
         {:else if ddl}

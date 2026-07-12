@@ -39,6 +39,15 @@
 
   const system = $derived(connections.byId(exportWizard.connId)?.system ?? 'postgres')
   const isTable = $derived(exportWizard.mode === 'table')
+  // Header target: table mode shows db.schema.table (skipping the db prefix on
+  // schema-as-database engines where schema already IS the db); result mode → "result".
+  const db = $derived(connections.databaseOf(exportWizard.connId))
+  const target = $derived.by(() => {
+    if (!isTable) return 'result'
+    const dbPart = db && db !== exportWizard.schema ? `${db}.` : ''
+    const schemaPart = exportWizard.schema ? `${exportWizard.schema}.` : ''
+    return `${dbPart}${schemaPart}${exportWizard.table}`
+  })
   const cache = $derived(exportWizard.connId ? explorer.cache[exportWizard.connId] : undefined)
   const available = $derived.by(() => {
     if (exportWizard.mode === 'result') return exportWizard.resultHeaders
@@ -195,7 +204,7 @@
   <div onkeydown={(e) => e.key === 'Escape' && !running && exportWizard.close()} role="presentation" style="position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:56">
     <div onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.key === 'Escape' && !running && exportWizard.close()} role="dialog" aria-modal="true" tabindex="-1" style="width:var(--px-560);max-width:95vw;max-height:90vh;background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-14);box-shadow:0 var(--px-30) var(--px-70) rgba(0,0,0,.55);overflow:hidden;display:flex;flex-direction:column">
       <div style="flex:none;display:flex;align-items:center;gap:var(--px-10);padding:var(--px-15) var(--px-18);border-bottom:var(--px-1) solid var(--border)">
-        <span style="font-weight:700;font-size:var(--px-15)">Export {isTable ? exportWizard.table : 'result'}</span>
+        <span style="font-weight:700;font-size:var(--px-15)">Export {target}</span>
         <span onclick={() => !running && exportWizard.close()} onkeydown={(e) => e.key === 'Enter' && !running && exportWizard.close()} role="button" tabindex="0" style="margin-left:auto;cursor:pointer;color:var(--muted);font-size:var(--px-20)">×</span>
       </div>
       <div style="flex:1;overflow:auto;min-height:0;padding:var(--px-16) var(--px-18);display:flex;flex-direction:column;gap:var(--px-12)">

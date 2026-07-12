@@ -96,9 +96,10 @@
       else if (p.system === 'kafka') { /* explorer shows topics; consumer opens per topic */ }
       // Cassandra: CQL editor (tái dùng SQL editor + result grid, title Untitled CQL)
       else if (p.system === 'cassandra') tabs.openSqlTab({ connectionId: p.id, title: 'Untitled CQL' })
-      // MongoDB: collections live in the ObjectExplorer sidebar; open a query
-      // editor (mongosh-style: db.coll.find({...})) like the Cassandra CQL editor.
-      else if (p.system === 'mongodb') tabs.openSqlTab({ connectionId: p.id, title: 'Untitled Mongo' })
+      // MongoDB: collections live in the ObjectExplorer sidebar — do NOT open a tab
+      // on connect (double-click a collection to open its documents; a mongosh query
+      // console is still available via the context menu / New Query).
+      else if (p.system === 'mongodb') { /* explorer shows collections; open per collection */ }
     }
   }
 
@@ -246,7 +247,7 @@
     </ContextMenu.Trigger>
     <ContextMenu.Content class="w-56">
       <ContextMenu.Item onclick={() => newQueryConsole(p)}>New Query Console</ContextMenu.Item>
-      {#if isRelational(p.system) && p.system !== 'sqlite'}
+      {#if (isRelational(p.system) && p.system !== 'sqlite') || p.system === 'mongodb'}
         <ContextMenu.Item onclick={() => newDatabase(p)}>New Database…</ContextMenu.Item>
       {/if}
       {#if p.connected}

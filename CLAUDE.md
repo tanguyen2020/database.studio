@@ -420,3 +420,29 @@ User báo hover/selected vẫn không thấy. 2 nguyên nhân: (a) hover dùng `
 - Áp `.cmp-row` cho CẢ column rows (trước chỉ display) → giờ hover+select được; base bg giữ qua `.cmp-panel`.
 - e2e schema-compare mở rộng: sau click row → `.cmp-row.sel` count=1 + backgroundColor ≠ transparent; **đóng modal → vẫn count=1** (selected persist). Behavior cũ (mở DDL/expand/checkbox) giữ nguyên.
 - Gates: check 0/0, tokens 190 (0 mới), e2e schema-compare 3/3.
+
+## MONGODB M6 — 5 mục parity UX (Design Document · pagination · autocomplete · number color · New Database)
+Chỉ MongoDB, additive, frontend-orchestrated qua `mongo_exec` (driver đã có updateMany/count/createCollection — KHÔNG thêm backend command).
+1. **Design Document** (ctx menu collection): pure `mongo/design.ts` (`buildFieldOps` → updateMany $set add-if-missing / $rename / $unset; order add→rename→drop) + `DesignDocumentDialog` + `designDocWizard`. Nạp fields (list_columns), rename/drop (chặn `_id`)/add (default JSON), preview, Apply tuần tự + refresh.
+2. **Open Document pagination**: `MongoCollectionView` từ "Load next page" → page-based (page/pageSize 100-1000 + `countDocuments` total + « ‹ › » footer) đồng bộ Table Viewer quan hệ; find.skip.limit.
+3. **Autocomplete Mongo editor**: pure `mongo/complete.ts` (`parseMongoCollection`/`isCollectionPrefix`) + `SqlWorkspace.mongoCompletionSource` (dùng thay columnSource khi systemType==='mongodb'): `db.`→collections, trong query→fields của collection tham chiếu; lazy từ explorer.cache theo currentDb.
+4. **Number color grid**: `ResultGrid.NUM_COLOR_SYSTEMS` +`'mongodb'`; MongoCollectionView truyền `system="mongodb"`; `classifyType` +`long`→bigint → int/long/double/decimal tô `--syntax-number`.
+5. **New Database (Mongo)**: ctx menu hiện cho mongodb; `NewDatabaseDialog` nhánh mongo +field "First collection" → `mongoExec(db.createCollection(coll), dbName)`.
+- Tests: unit design(9)+complete(5)+types(+long/double/decimal); e2e mongo-explorer 9/9 (Design/NewDB/autocomplete/pager+color); integration `mongo_new_database_design_document_and_pagination` (mongo:7) EXIT=0. Gates: check 0/0, vitest 531, tokens 190 (0 mới). Spec: SPEC-MONGODB-FEATURE.md §M6.
+
+## MONGODB M6.1 — Tree expand chỉ qua double-click
+User: MongoExplorer single-click KHÔNG expand, chỉ double-click mới mở. Đổi binding: database + collection node → onclick chỉ select, ondblclick toggle (expand/collapse); chevron ▸/▾ single-click vẫn toggle (tiện). **Collection double-click giờ = expand fields/indexes** (trước = mở documents); Open Documents chuyển hẳn về context menu (không mất tính năng). Auto-expand default db lúc connect giữ nguyên (gọi toggleDb trực tiếp). Chỉ đụng Mongo. e2e mongo-explorer +1 (single-click không collapse → dblclick collapse/expand → dblclick collection hiện first_name, không mở tab viewer) → 10/10. check 0/0. Spec: SPEC-MONGODB-FEATURE.md §M6.1.
+
+## MONGODB M6.2 — Query Editor mongosh + double-click documents + shared grid
+1. **Query Editor**: user gõ SQL không chạy (editor là mongosh, KHÔNG phải SQL — run path `results.run→mongoExec` đã đúng, F5+Ctrl+Enter đều chạy). Fix UX: bỏ SQL lint cho mongodb (`lintDoc` early-return) → hết squiggle sai. Autocomplete collections/fields đã có (M6). Cách query: `db.<coll>.find({filter},{proj}).skip().limit().sort()`, aggregate, countDocuments, insert/update/deleteOne (update/delete phải có filter).
+2. **Double-click collection = Open Documents** (khôi phục sau M6.1): double-click collection→openMongoCollection; single-click=select; chevron single-click=expand fields/indexes; double-click DB=expand collections. Không mất tính năng.
+3. **Shared component**: MongoCollectionView ĐÃ dùng chung `ResultGrid` + `EditTarget`→apply_grid(by _id) + exportWizard + footer pager kiểu Table Viewer. Shell riêng vì mongosh/JSON filter khác SQL (không hợp nhất TableViewerTab để tránh rủi ro relational).
+- Tests: e2e mongo-explorer 10/10 (Run F5 + dbl-click documents + dbl-click DB expand); integration `mongo_query_editor_find_filter_projection_limit` (filter/projection/limit) EXIT=0. check 0/0. Spec §M6.2.
+
+## MONGODB M6.3 — Ctrl+N mở đúng Mongo console + DB dropdown cho Mongo
+1. **Ctrl/Cmd+N**: MongoExplorer chưa publish `explorer.selectedDatabase` → Ctrl+N mở "Untitled query" không bind db. Fix: MongoExplorer `$effect` set `selectedDatabase={base:connId, database:<db từ selectedKey>}`; ObjectExplorer guard dbTarget effect `if(system!=='mongodb')` (không ghi đè, không đụng relational); `openQueryConsole` title='Untitled Mongo' cho mongodb. → chọn db `analytics` → Ctrl+N → tab "Untitled Mongo" bound analytics.
+2. **DB dropdown Mongo**: SqlWorkspace `supportsMongoDb` + `showDbPicker`; dropdown (list_databases) cho Mongo, pick→tab.state.database→currentDb→autocomplete+runOpts.database vào mongoExec (KHÔNG attach sub-conn, resolveRunConn giữ nguyên).
+- Tests: e2e mongo +2 (Ctrl+N bound analytics + dropdown switch); relational Ctrl+N/dropdown 15/15 regression xanh; check 0/0, vitest 531, tokens 190. Spec §M6.3.
+
+## MONGODB M6.4 — Query Editor suggest hàm MongoDB (methods + operators)
+User: editor Mongo chỉ suggest collection, thiếu hàm. Thêm vào `mongoCompletionSource`: pure `mongo/functions.ts` MONGO_METHODS (sau `db.<coll>.`) + MONGO_OPERATORS (gõ `$`: comparison/logical/element/array/update/aggregation) — vocab tĩnh check TRƯỚC guard connection (suggest ngay). Detect `isMethodContext`/`isOperatorContext` (complete.ts). Thứ tự method→operator→collection→field. `SqlEditor.langExt` bỏ `fnSource` (SQL functions) cho mongodb (relational giữ nguyên). Tests: unit functions.test(4)+complete.test(+6) → mongo unit 19; e2e mongo +1 (db.students.→find/aggregate, $g→$gt); integration `mongo_suggested_methods_and_operators_execute` (find $gt/$in/$or·updateMany $set+$inc·aggregate $match/$group/$sum·distinct·deleteMany) EXIT=0. check 0/0, tokens 190, editor-autocomplete 6/6. Spec §M6.4.

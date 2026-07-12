@@ -35,7 +35,8 @@
       // Kafka: topics shown in explorer — no cluster tab on connect (topic → consumer).
       else if (system === 'kafka') { /* topics shown in explorer */ }
       else if (system === 'cassandra') tabs.openSqlTab({ connectionId: id, title: 'Untitled CQL' })
-      else if (system === 'mongodb') tabs.openSqlTab({ connectionId: id, title: 'Untitled Mongo' })
+      // MongoDB: collections shown in explorer — no tab on connect (collection → documents).
+      else if (system === 'mongodb') { /* collections shown in explorer */ }
       else tabs.openSqlTab({ connectionId: id, title: 'Untitled query' })
     })
   }

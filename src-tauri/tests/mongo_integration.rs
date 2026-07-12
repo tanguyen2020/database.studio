@@ -507,3 +507,223 @@ async fn mongo_auth_defaults_authsource_to_admin() {
     let dbs = drv.databases().await.expect("liệt kê databases sau khi auth admin");
     assert!(dbs.iter().any(|d| d.name == "admin"), "thấy admin db sau khi auth");
 }
+
+// New Database (Feature 5), Design Document field ops (Feature 1) and page-based
+// pagination (Feature 2) — runs the EXACT mongosh statements the frontend builders
+// emit (createCollection / updateMany $set·$rename·$unset / countDocuments +
+// find.skip.limit) against a real MongoDB and verifies via query-back.
+#[tokio::test]
+async fn mongo_new_database_design_document_and_pagination() {
+    let (_c, port) = start_mongo().await;
+    let deadline = Instant::now() + Duration::from_secs(180);
+    let drv = loop {
+        match MongoDriver::connect(&params(port)).await {
+            Ok(d) => break d,
+            Err(e) => {
+                assert!(Instant::now() < deadline, "mongo chưa sẵn sàng: {}", e.message);
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+        }
+    };
+    let rows = |o: StatementOutcome| match o {
+        StatementOutcome::Rows { result } => result,
+        other => panic!("expected Rows, got {other:?}"),
+    };
+
+    // --- Feature 5: New Database — createCollection in a brand-new database ------
+    drv.exec_mongo_in(Some("shopdb"), "db.createCollection(\"products\")", None, None)
+        .await
+        .expect("createCollection in a new database");
+    let dbs = drv.databases().await.expect("databases");
+    assert!(dbs.iter().any(|d| d.name == "shopdb"), "New Database → shopdb xuất hiện");
+    assert!(
+        drv.collections("shopdb").await.unwrap().iter().any(|t| t.name == "products"),
+        "collection đầu tiên (products) tồn tại → database đã materialize"
+    );
+
+    // --- Seed 5 docs (fresh database) for Design + pagination -------------------
+    let client = Client::with_uri_str(format!("mongodb://localhost:{port}/")).await.unwrap();
+    let people = client.database("designdb").collection::<Document>("people");
+    let seed: Vec<Document> = (1..=5)
+        .map(|i| doc! { "_id": i, "name": format!("P{i}"), "age": 20 + i })
+        .collect();
+    people.insert_many(seed).await.unwrap();
+
+    // --- Feature 1: Design Document — add / rename / drop field (exact builder output) --
+    drv.exec_mongo_in(
+        Some("designdb"),
+        "db.people.updateMany({ \"active\": { \"$exists\": false } }, { \"$set\": { \"active\": true } })",
+        None,
+        None,
+    )
+    .await
+    .expect("add field via $set");
+    drv.exec_mongo_in(
+        Some("designdb"),
+        "db.people.updateMany({}, { \"$rename\": { \"name\": \"fullName\" } })",
+        None,
+        None,
+    )
+    .await
+    .expect("rename field via $rename");
+    drv.exec_mongo_in(Some("designdb"), "db.people.updateMany({}, { \"$unset\": { \"age\": \"\" } })", None, None)
+        .await
+        .expect("drop field via $unset");
+
+    let one = rows(
+        drv.exec_mongo_in(Some("designdb"), "db.people.find({\"_id\":1})", None, None)
+            .await
+            .unwrap()
+            .outcome,
+    );
+    assert_eq!(one.rows[0]["active"].as_bool(), Some(true), "add-field (active) áp dụng");
+    assert!(one.rows[0].get("fullName").is_some(), "rename name→fullName áp dụng");
+    assert!(one.rows[0].get("name").is_none(), "field name cũ biến mất sau rename");
+    assert!(one.rows[0].get("age").is_none(), "drop field age áp dụng");
+
+    // --- Feature 2: pagination — countDocuments (total) + find.skip.limit -------
+    let cnt = rows(
+        drv.exec_mongo_in(Some("designdb"), "db.people.countDocuments({})", None, None)
+            .await
+            .unwrap()
+            .outcome,
+    );
+    assert_eq!(cnt.rows[0]["count"].as_i64(), Some(5), "total = 5 docs");
+    let page2 = rows(
+        drv.exec_mongo_in(Some("designdb"), "db.people.find({}).skip(2).limit(2)", None, None)
+            .await
+            .unwrap()
+            .outcome,
+    );
+    assert_eq!(page2.total, 2, "trang 2 (skip 2, limit 2) trả đúng 2 docs");
+}
+
+// Query Editor + Open Documents paths — the exact mongosh shapes the editor/viewer
+// send (find with filter / projection / limit). Proves querying works end-to-end
+// (Issue: "Query Editor chưa query được" was SQL-vs-mongosh syntax, not a backend bug).
+#[tokio::test]
+async fn mongo_query_editor_find_filter_projection_limit() {
+    let (_c, port) = start_mongo().await;
+    let deadline = Instant::now() + Duration::from_secs(180);
+    let drv = loop {
+        match MongoDriver::connect(&params(port)).await {
+            Ok(d) => break d,
+            Err(e) => {
+                assert!(Instant::now() < deadline, "mongo chưa sẵn sàng: {}", e.message);
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+        }
+    };
+    let rows = |o: StatementOutcome| match o {
+        StatementOutcome::Rows { result } => result,
+        other => panic!("expected Rows, got {other:?}"),
+    };
+
+    let client = Client::with_uri_str(format!("mongodb://localhost:{port}/")).await.unwrap();
+    let users = client.database("appdb").collection::<Document>("users");
+    let seed: Vec<Document> = (1..=4)
+        .map(|i| doc! { "_id": i, "name": format!("U{i}"), "age": 18 + i * 5 })
+        .collect();
+    users.insert_many(seed).await.unwrap();
+
+    // filter — db.users.find({"age":{"$gt":25}})
+    let f = rows(
+        drv.exec_mongo("db.users.find({\"age\":{\"$gt\":25}})", None, None).await.unwrap().outcome,
+    );
+    assert!(f.total >= 1, "filter trả ít nhất 1 doc");
+    assert!(f.rows.iter().all(|r| r["age"].as_i64().unwrap_or(0) > 25), "mọi doc age>25");
+
+    // projection — db.users.find({}, {"name":1}) → chỉ name (+ _id), không age
+    let p = rows(drv.exec_mongo("db.users.find({}, {\"name\":1})", None, None).await.unwrap().outcome);
+    assert!(
+        p.rows.iter().all(|r| r.get("name").is_some() && r.get("age").is_none()),
+        "projection chỉ trả name (+_id), loại age"
+    );
+
+    // limit — db.users.find({}).limit(2)
+    let l = rows(drv.exec_mongo("db.users.find({}).limit(2)", None, None).await.unwrap().outcome);
+    assert_eq!(l.total, 2, "limit(2) → đúng 2 docs");
+}
+
+// The methods (find/updateMany/aggregate/distinct/deleteMany) and operators
+// ($gt/$in/$or/$set/$inc/$match/$group/$sum) the Query Editor autocompletes must
+// actually execute — this runs a representative sample against a real MongoDB.
+#[tokio::test]
+async fn mongo_suggested_methods_and_operators_execute() {
+    let (_c, port) = start_mongo().await;
+    let deadline = Instant::now() + Duration::from_secs(180);
+    let drv = loop {
+        match MongoDriver::connect(&params(port)).await {
+            Ok(d) => break d,
+            Err(e) => {
+                assert!(Instant::now() < deadline, "mongo chưa sẵn sàng: {}", e.message);
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+        }
+    };
+    let rows = |o: StatementOutcome| match o {
+        StatementOutcome::Rows { result } => result,
+        other => panic!("expected Rows, got {other:?}"),
+    };
+    let affected = |o: StatementOutcome| match o {
+        StatementOutcome::Affected { affected } => affected,
+        other => panic!("expected Affected, got {other:?}"),
+    };
+
+    let client = Client::with_uri_str(format!("mongodb://localhost:{port}/")).await.unwrap();
+    let users = client.database("appdb").collection::<Document>("u");
+    users
+        .insert_many(vec![
+            doc! { "_id": 1, "name": "Ann", "age": 30 },
+            doc! { "_id": 2, "name": "Bob", "age": 20 },
+            doc! { "_id": 3, "name": "Cat", "age": 40 },
+        ])
+        .await
+        .unwrap();
+
+    // $gt
+    let gt = rows(drv.exec_mongo("db.u.find({\"age\":{\"$gt\":25}})", None, None).await.unwrap().outcome);
+    assert_eq!(gt.total, 2, "$gt 25 → Ann + Cat");
+    // $in
+    let in_ = rows(drv.exec_mongo("db.u.find({\"name\":{\"$in\":[\"Ann\",\"Bob\"]}})", None, None).await.unwrap().outcome);
+    assert_eq!(in_.total, 2, "$in → Ann + Bob");
+    // $or
+    let or = rows(drv.exec_mongo("db.u.find({\"$or\":[{\"age\":40},{\"name\":\"Bob\"}]})", None, None).await.unwrap().outcome);
+    assert_eq!(or.total, 2, "$or → Cat(age 40) + Bob");
+
+    // updateMany $set + $inc
+    let up = affected(
+        drv.exec_mongo("db.u.updateMany({}, {\"$set\":{\"active\":true},\"$inc\":{\"age\":1}})", None, None)
+            .await
+            .unwrap()
+            .outcome,
+    );
+    assert_eq!(up, 3, "updateMany áp cho cả 3 doc");
+    let ann = rows(drv.exec_mongo("db.u.find({\"_id\":1})", None, None).await.unwrap().outcome);
+    assert_eq!(ann.rows[0]["active"].as_bool(), Some(true), "$set active");
+    assert_eq!(ann.rows[0]["age"].as_i64(), Some(31), "$inc age 30→31");
+
+    // aggregate $match / $group / $sum
+    let agg = rows(
+        drv.exec_mongo(
+            "db.u.aggregate([{\"$match\":{\"active\":true}},{\"$group\":{\"_id\":null,\"total\":{\"$sum\":\"$age\"}}}])",
+            None,
+            None,
+        )
+        .await
+        .unwrap()
+        .outcome,
+    );
+    // ages after $inc: 31 + 21 + 41 = 93
+    assert_eq!(agg.rows[0]["total"].as_i64(), Some(93), "$group/$sum tổng age");
+
+    // distinct
+    let dist = rows(drv.exec_mongo("db.u.distinct(\"name\")", None, None).await.unwrap().outcome);
+    assert_eq!(dist.total, 3, "distinct name → 3 giá trị");
+
+    // deleteMany with filter (không wipe toàn bộ)
+    let del = affected(drv.exec_mongo("db.u.deleteMany({\"name\":\"Ann\"})", None, None).await.unwrap().outcome);
+    assert_eq!(del, 1, "deleteMany filter → xoá 1 (Ann)");
+    let left = rows(drv.exec_mongo("db.u.countDocuments({})", None, None).await.unwrap().outcome);
+    assert_eq!(left.rows[0]["count"].as_i64(), Some(2), "còn 2 doc");
+}

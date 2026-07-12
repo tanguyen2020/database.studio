@@ -22,9 +22,15 @@
   // svelte-ignore state_referenced_locally
   const table = tab.state.table as string
   const profile = $derived(connections.byId(tab.connectionId))
-  // Which database this viewer is bound to (base profile db, or the `db` of a
-  // `{base}::{db}` foreign sub-connection) — surfaced in the toolbar.
-  const dbName = $derived(connections.databaseOf(tab.connectionId))
+  // Which database this viewer is bound to, surfaced in the toolbar. For MySQL/
+  // MariaDB/ClickHouse a "schema" IS a database, and a table opened in a non-default
+  // one keeps the BASE connection (whose databaseOf() is the connection's default DB,
+  // not this table's DB) — so use the table's schema, which is the real database.
+  // PG/MSSQL keep databaseOf() (the connection's DB; the schema is shown separately).
+  const schemaIsDatabase = $derived(['mysql', 'mariadb', 'clickhouse'].includes(profile?.system ?? ''))
+  const dbName = $derived(
+    schemaIsDatabase ? schema || connections.databaseOf(tab.connectionId) : connections.databaseOf(tab.connectionId),
+  )
   const accent = $derived(systemMeta(profile?.system).accent)
 
   let data = $state<QueryResultSet | null>(null)
@@ -278,7 +284,7 @@
   {#if data}
     <div style="flex:none;display:flex;align-items:center;gap:var(--px-10);padding:var(--px-7) var(--px-12);border-top:var(--px-1) solid var(--border);background:var(--header)">
       <label style="display:flex;align-items:center;gap:var(--px-5);font-size:var(--px-12_5);color:var(--text2)">
-        Rows / page
+        Page size
         <select
           style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-5);padding:var(--px-3) var(--px-6);font-size:var(--px-12_5);color:var(--text)"
           bind:value={pageSize}

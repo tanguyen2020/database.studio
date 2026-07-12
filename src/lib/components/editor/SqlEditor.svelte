@@ -4,7 +4,7 @@
   // tầng 1 arrives in Phase 2).
   import { onMount } from 'svelte'
   import { EditorView, keymap, lineNumbers } from '@codemirror/view'
-  import { EditorState, Compartment } from '@codemirror/state'
+  import { EditorState, Compartment, type Extension } from '@codemirror/state'
   import {
     defaultKeymap,
     history,
@@ -101,7 +101,10 @@
     // merge function completions vào language data (không thay keyword/schema source).
     // columnSource (nếu có) xử lý `alias.`/`table.` — lazy-load cột của bảng thật
     // referenced trong FROM/JOIN (built-in chỉ resolve alias khi cột đã nạp sẵn).
-    const exts = [base, base.language.data.of({ autocomplete: fnSource(sys) })]
+    const exts: Extension[] = [base]
+    // MongoDB is mongosh, not SQL — don't offer SQL function names (COUNT/SUM…);
+    // its columnSource provides Mongo methods/operators/collections/fields instead.
+    if (sys !== 'mongodb') exts.push(base.language.data.of({ autocomplete: fnSource(sys) }))
     if (columnSource) exts.push(base.language.data.of({ autocomplete: columnSource }))
     return exts
   }

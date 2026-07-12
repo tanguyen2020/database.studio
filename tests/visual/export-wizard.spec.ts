@@ -27,7 +27,8 @@ test('Table Export wizard: format/columns/WHERE/limit/filename → download', as
   await page.waitForTimeout(300)
 
   const dialog = page.getByRole('dialog')
-  await expect(dialog.getByText('Export students')).toBeVisible()
+  // header now shows the qualified target (db.schema.table)
+  await expect(dialog.getByText(/Export .*students/)).toBeVisible()
   await expect(dialog.getByText(/Columns \(/)).toBeVisible()
   await expect(dialog.getByText('WHERE (optional)')).toBeVisible()
   await expect(dialog.getByText('Filename')).toBeVisible()

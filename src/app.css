@@ -76,6 +76,9 @@
   --sacc-purple: #6d3fc4; /* token-exempt: light-mode streaming accent */
   --sacc-mauve: #8a4f85; /* token-exempt: light-mode streaming accent */
   --sacc-red: #c0392b; /* token-exempt: light-mode streaming accent */
+  /* MongoDB brand green (#00ED64) is a neon that washes out on the light sidebar —
+     use MongoDB's darker "forest green" for light; dark keeps the brand accent. */
+  --sacc-mongo: #00684a; /* token-exempt: legible MongoDB green for light mode */
 }
 
 .dark {
@@ -100,6 +103,7 @@
   --sacc-purple: var(--hex-c4b5fd);
   --sacc-mauve: var(--hex-b48ead);
   --sacc-red: var(--hex-e06c75);
+  --sacc-mongo: var(--sys-mongodb-accent);
 }
 
 /* ---------------------------------------------------------------------------

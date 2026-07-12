@@ -24,6 +24,8 @@
   import { lintSql, schemaLints, toCmDiagnostics } from '$lib/sql/lint-client'
   import { splitStatements, statementAtOffset, offsetToLineCol } from '$lib/sql/statements'
   import { parseTableRefs, resolveRef } from '$lib/sql/aliases'
+  import { parseMongoCollection, isCollectionPrefix, isMethodContext, isOperatorContext } from '$lib/mongo/complete'
+  import { MONGO_METHODS, MONGO_OPERATORS } from '$lib/mongo/functions'
   import { dangerousStatements, type DangerStmt } from '$lib/sql/danger'
   import { quoteIfReserved } from '$lib/sql/reserved'
   import { autofocus } from '$lib/actions/autofocus'
@@ -61,6 +63,12 @@
   const supportsDbSwitch = $derived(
     !isOrphan && ['postgres', 'mysql', 'mariadb', 'mssql', 'clickhouse'].includes(tab.systemType),
   )
+  // MongoDB also picks a database — but the chosen DB is passed to mongo_exec via
+  // runOpts.database (NOT a sub-connection attach like relational), so it's kept
+  // separate from supportsDbSwitch. With many Mongo databases, this dropdown makes
+  // the tab reflect (and switch to) the right one.
+  const supportsMongoDb = $derived(!isOrphan && tab.systemType === 'mongodb')
+  const showDbPicker = $derived(supportsDbSwitch || supportsMongoDb)
   const currentDb = $derived(((tab.state.database as string) || profile?.database || '').trim())
 
   // ---- schema dropdown ---------------------------------------------------------
@@ -73,13 +81,14 @@
 
   $effect(() => {
     const p = profile
-    if (!p?.connected || !supportsDbSwitch) return
+    if (!p?.connected || !showDbPicker) return
     untrack(() => void loadDbList(p.id, p.system))
   })
 
   async function loadDbList(connId: string, system: string) {
     try {
-      if (system === 'postgres' || system === 'mssql') {
+      if (system === 'postgres' || system === 'mssql' || system === 'mongodb') {
+        // PG/MSSQL/MongoDB: real databases via list_databases.
         dbList = (await ipc.listDatabases(connId)).map((d) => d.name)
       } else {
         // MySQL/MariaDB/ClickHouse: a schema IS a database.
@@ -405,9 +414,81 @@
     return { from: word.from, options, validFor: /^[\w$]*$/ }
   }
 
+  // MongoDB autocomplete (mongosh `db.<coll>.<method>({field:…})`): suggest
+  // collection names right after `db.`, and the referenced collection's sampled
+  // fields elsewhere. Collections/fields load lazily from the Explorer cache (same
+  // pattern as columnSource — return null after kicking off a load; the popup
+  // refreshes on the next keystroke). Bound to the tab's database (currentDb).
+  const mongoCompletionSource: CompletionSource = (ctx) => {
+    // --- static vocab (no connection needed) --------------------------------
+    // Method access `db.<coll>.` → collection methods (find/aggregate/updateOne…).
+    const method = ctx.matchBefore(/\bdb\.[A-Za-z_$][\w$]*\.[\w$]*$/)
+    if (method && isMethodContext(method.text)) {
+      return {
+        from: method.from + method.text.lastIndexOf('.') + 1,
+        options: MONGO_METHODS.map((m) => ({ label: m.name, type: 'method', detail: m.signature, info: m.detail })),
+        validFor: /^[\w$]*$/,
+      }
+    }
+    // Operator token `$…` → query/update/aggregation operators ($gt/$set/$match…).
+    const op = ctx.matchBefore(/\$[\w]*$/)
+    if (op && isOperatorContext(op.text)) {
+      return {
+        from: op.from,
+        options: MONGO_OPERATORS.map((o) => ({ label: o.name, type: 'keyword', detail: o.signature, info: o.detail })),
+        validFor: /^\$?[\w]*$/,
+      }
+    }
+
+    // --- dynamic vocab (collections/fields from the Explorer cache) ----------
+    const cid = acConnId
+    if (!cid) return null
+    const db = currentDb || profile?.database || ''
+    if (!db) return null
+    const sc = explorer.cache[cid]?.bySchema?.[db]
+
+    // 1) `db.` → collection names of this database
+    const dotted = ctx.matchBefore(/\bdb\.[\w$]*$/)
+    if (dotted && isCollectionPrefix(dotted.text)) {
+      const from = dotted.from + dotted.text.lastIndexOf('.') + 1
+      const colls = sc?.tables
+      if (!colls) {
+        void explorer.loadSchemaChildren(cid, db)
+        return null
+      }
+      return {
+        from,
+        options: colls.map((t) => ({ label: t.name, type: 'class' })),
+        validFor: /^[\w$]*$/,
+      }
+    }
+
+    // 2) field context → sampled fields of the statement's collection
+    const coll = parseMongoCollection(ctx.state.doc.toString())
+    if (!coll) return null
+    const word = ctx.matchBefore(/[\w$]*$/)
+    if (!word || (word.from === word.to && !ctx.explicit)) return null
+    // don't fire right after a dot (method access, e.g. `db.coll.`)
+    if (word.from > 0 && ctx.state.sliceDoc(word.from - 1, word.from) === '.') return null
+    const cols = sc?.tableDetails?.[coll]?.columns
+    if (!cols) {
+      void explorer.loadTableDetail(cid, db, coll)
+      return null
+    }
+    if (cols.length === 0) return null
+    return {
+      from: word.from,
+      options: cols.map((c) => ({ label: c.name, type: 'property', detail: c.data_type })),
+      validFor: /^[\w$]*$/,
+    }
+  }
+
   // ---- lint tầng 1 (phase-2 §2b): backend parse-only + schema-aware client ----
   async function lintDoc(doc: string): Promise<Diagnostic[]> {
     if (!tab.connectionId || isOrphan) return []
+    // MongoDB queries are mongosh (db.<coll>.find({…})), not SQL — the SQL parser/
+    // schema linter mis-flags them (misleading red squiggles), so skip lint here.
+    if (tab.systemType === 'mongodb') return []
     const backend = await lintSql(tab.systemType, doc)
     return [...toCmDiagnostics(doc, backend), ...schemaLints(doc, knownTables)]
   }
@@ -756,8 +837,9 @@
     </div>
 
     <!-- database dropdown (AUDIT-5 items 1 + 10) — searchable combobox to pick a
-         DB within the connection (type to filter when there are many). -->
-    {#if supportsDbSwitch && profile?.connected}
+         DB within the connection (type to filter when there are many). Also shown
+         for MongoDB (many databases → pick the right one for the query). -->
+    {#if showDbPicker && profile?.connected}
       <div style="display:flex;align-items:center;gap:var(--px-6)">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" style="flex:none;color:var(--muted)"><ellipse cx="12" cy="5" rx="8" ry="3"></ellipse><path d="M4 5v14c0 1.66 3.58 3 8 3s8-1.34 8-3V5"></path><path d="M4 12c0 1.66 3.58 3 8 3s8-1.34 8-3"></path></svg>
         <SearchSelect
@@ -852,7 +934,7 @@
       system={tab.systemType}
       schema={completionSchema}
       {defaultSchema}
-      {columnSource}
+      columnSource={tab.systemType === 'mongodb' ? mongoCompletionSource : columnSource}
       lintSource={lintDoc}
       {onChange}
       onRun={run}

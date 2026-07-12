@@ -17,6 +17,12 @@
     const schemas = explorer.cache[profile.id]?.schemas
     return schemas?.find((s) => s.is_default)?.name ?? schemas?.[0]?.name ?? null
   })
+  // For MySQL/MariaDB/ClickHouse a "schema" IS a database, so the object qualifier
+  // must be the database the statement actually ran against — the DB picked in the
+  // editor's dropdown (tab.state.database) or the connection's DB — NOT the cached
+  // default schema (which ignores the picked DB / can mis-decode is_default).
+  const schemaIsDatabase = $derived(['mysql', 'mariadb', 'clickhouse'].includes(profile?.system ?? ''))
+  const runDb = $derived(((tab?.state?.database as string) || profile?.database || '').trim())
 
   // active.dot (dòng 4649): connected → accent, không thì màu orphan
   const dot = $derived(
@@ -33,9 +39,9 @@
   )
   const statusObject = $derived.by(() => {
     if (!exec || exec.subResults.length === 0) return '—'
-    const schema = currentSchema ?? 'public'
-    if (activeSub?.kind === 'rows' && activeSub.table) return `${schema}.${activeSub.table}`
-    return schema
+    const qualifier = schemaIsDatabase ? runDb || currentSchema || 'database' : currentSchema ?? 'public'
+    if (activeSub?.kind === 'rows' && activeSub.table) return `${qualifier}.${activeSub.table}`
+    return qualifier
   })
   const statusRows = $derived(
     activeSub?.kind === 'rows' && activeSub.result

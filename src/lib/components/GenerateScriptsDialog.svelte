@@ -38,6 +38,12 @@
   let prog = $state<{ pct: number; cur: number; total: number; label: string; done: boolean; error?: string; path?: string } | null>(null)
 
   const system = $derived(connections.byId(scriptsWizard.connId)?.system ?? 'postgres')
+  // Header shows the target as db.schema (schema-as-database engines already show
+  // the db as the schema, so skip the redundant prefix there).
+  const db = $derived(connections.databaseOf(scriptsWizard.connId))
+  const target = $derived(
+    db && db !== scriptsWizard.schema ? `${db}.${scriptsWizard.schema}` : scriptsWizard.schema,
+  )
   const grouped = $derived(
     GROUPS.map((g) => ({ ...g, items: objects.filter((o) => o.kind === g.kind) })).filter((g) => g.items.length),
   )
@@ -229,7 +235,7 @@
   <div onkeydown={(e) => e.key === 'Escape' && !running && scriptsWizard.close()} role="presentation" style="position:fixed;inset:0;background:var(--rgba-0-0-0-_5);display:flex;align-items:center;justify-content:center;z-index:56">
     <div onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.key === 'Escape' && !running && scriptsWizard.close()} role="dialog" aria-modal="true" aria-label="Generate Scripts" tabindex="-1" style="width:var(--px-560);max-width:95vw;max-height:90vh;background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-14);box-shadow:0 var(--px-30) var(--px-70) var(--rgba-0-0-0-_55);overflow:hidden;display:flex;flex-direction:column">
       <div style="flex:none;display:flex;align-items:center;gap:var(--px-10);padding:var(--px-15) var(--px-18);border-bottom:var(--px-1) solid var(--border)">
-        <span style="font-weight:700;font-size:var(--px-15)">Generate Scripts · {scriptsWizard.schema}</span>
+        <span style="font-weight:700;font-size:var(--px-15)">Generate Scripts · {target}</span>
         <span onclick={() => !running && scriptsWizard.close()} onkeydown={(e) => e.key === 'Enter' && !running && scriptsWizard.close()} role="button" tabindex="0" style="margin-left:auto;cursor:pointer;color:var(--muted);font-size:var(--px-20)">×</span>
       </div>
       <div style="flex:1;overflow:auto;min-height:0;padding:var(--px-16) var(--px-18);display:flex;flex-direction:column;gap:var(--px-12)">
