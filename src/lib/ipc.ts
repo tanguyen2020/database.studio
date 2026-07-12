@@ -11,6 +11,7 @@ import type {
   ColumnInfo,
   ConstraintInfo,
   ExecResponse,
+  FunctionInfo,
   IndexInfo,
   PartitionInfo,
   ProfileDraft,
@@ -740,6 +741,9 @@ export const listPartitions = (connId: string, schema: string, table: string) =>
 
 export const listRoutines = (connId: string, schema: string) =>
   invoke<RoutineInfo[]>('list_routines', { connId, schema })
+
+export const listFunctions = (connId: string, schema: string) =>
+  invoke<FunctionInfo[]>('list_functions', { connId, schema })
 
 export const listTriggers = (connId: string, schema: string) =>
   invoke<TriggerInfo[]>('list_triggers', { connId, schema })

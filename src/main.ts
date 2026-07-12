@@ -9,8 +9,11 @@ import '@fontsource/jetbrains-mono/700.css'
 import './app.css'
 import App from './App.svelte'
 
-// dark theme is the default; ui store re-applies the persisted choice on boot
-document.documentElement.classList.add('dark')
+// Apply the persisted theme BEFORE first paint (no flash). localStorage is
+// synchronous and survives restart in both the desktop WebView and the browser,
+// so the chosen Light/Dark shows immediately; the ui store later reconciles with
+// the backend app_state. Dark is the default when nothing was saved.
+document.documentElement.classList.toggle('dark', localStorage.getItem('theme') !== 'light')
 
 const app = mount(App, {
   target: document.getElementById('app')!,

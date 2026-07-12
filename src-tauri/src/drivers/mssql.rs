@@ -432,6 +432,33 @@ impl MssqlDriver {
             .collect())
     }
 
+    /// User-defined functions in `schema`. Built-in T-SQL functions (LEN,
+    /// GETDATE, …) are not stored as objects, so the frontend merges those in
+    /// from a static set; this surfaces user scalar/table/aggregate functions.
+    pub async fn functions(&mut self, schema: &str) -> Result<Vec<FunctionInfo>, QueryError> {
+        let rows = self
+            .client
+            .query(
+                "SELECT o.name FROM sys.objects o
+                 WHERE o.type IN ('FN','IF','TF','AF','FS','FT') AND SCHEMA_NAME(o.schema_id) = @P1
+                 ORDER BY o.name",
+                &[&schema],
+            )
+            .await
+            .map_err(|e| map_error(&e))?
+            .into_first_result()
+            .await
+            .map_err(|e| map_error(&e))?;
+        Ok(rows
+            .iter()
+            .map(|r| FunctionInfo {
+                name: r.get::<&str, _>(0).unwrap_or_default().to_string(),
+                signature: None,
+                detail: Some("user".into()),
+            })
+            .collect())
+    }
+
     pub async fn routines(&mut self, schema: &str) -> Result<Vec<RoutineInfo>, QueryError> {
         let rows = self
             .client

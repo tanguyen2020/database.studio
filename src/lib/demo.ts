@@ -468,6 +468,16 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
         { schema: 'public', name: 'refresh_stats', kind: 'procedure', params: [] },
         { schema: 'public', name: 'recompute_ranks', kind: 'procedure', params: [] },
       ])
+    case 'list_functions':
+      // A small slice standing in for the server catalog (pg_proc etc.). The real
+      // engines return hundreds; the frontend merges these with its static set.
+      return ok([
+        { name: 'to_char', signature: 'to_char(timestamp, text)', detail: 'function' },
+        { name: 'date_trunc', signature: 'date_trunc(text, timestamp)', detail: 'function' },
+        { name: 'jsonb_agg', signature: 'jsonb_agg(anyelement)', detail: 'aggregate' },
+        { name: 'regexp_replace', signature: 'regexp_replace(text, text, text)', detail: 'function' },
+        { name: 'split_part', signature: 'split_part(text, text, integer)', detail: 'function' },
+      ])
     case 'list_triggers':
       return ok([
         { schema: 'public', name: 'trg_audit', table: 'students', event: 'BEFORE INSERT' },

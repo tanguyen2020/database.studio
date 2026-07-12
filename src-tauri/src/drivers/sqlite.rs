@@ -274,6 +274,27 @@ impl SqliteDriver {
         .await
     }
 
+    /// Every available function (built-ins + loaded extensions) via
+    /// `pragma_function_list()`. Names only — signatures come from the
+    /// frontend's curated set for common ones.
+    pub async fn functions(&self) -> Result<Vec<FunctionInfo>, QueryError> {
+        self.with_conn(|c| {
+            let mut stmt = c
+                .prepare("SELECT DISTINCT name FROM pragma_function_list() ORDER BY name")
+                .map_err(|e| map_rusqlite_error(&e))?;
+            let rows = stmt
+                .query_map([], |r| r.get::<_, String>(0))
+                .map_err(|e| map_rusqlite_error(&e))?;
+            let mut out = Vec::new();
+            for name in rows {
+                let name = name.map_err(|e| map_rusqlite_error(&e))?;
+                out.push(FunctionInfo { name, signature: None, detail: Some("function".into()) });
+            }
+            Ok(out)
+        })
+        .await
+    }
+
     pub async fn tables(&self, schema: &str) -> Result<Vec<TableInfo>, QueryError> {
         let schema = schema.to_string();
         self.with_conn(move |c| {

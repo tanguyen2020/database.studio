@@ -12,7 +12,8 @@ use std::time::{Duration, Instant};
 use crate::drivers::postgres::ExportFormat;
 
 use crate::drivers::types::{
-    ColumnInfo, PartitionInfo, QueryResultSet, SchemaInfo, StatementOutcome, TableInfo, TestResult,
+    ColumnInfo, FunctionInfo, PartitionInfo, QueryResultSet, SchemaInfo, StatementOutcome,
+    TableInfo, TestResult,
 };
 use crate::drivers::util::{is_dml, returns_rows};
 use crate::error::QueryError;
@@ -201,6 +202,26 @@ impl ChDriver {
             .map(|name| SchemaInfo {
                 name: name.to_string(),
                 is_default: name == self.params.database,
+            })
+            .collect())
+    }
+
+    /// Every function known to the server (regular + aggregate + combinators)
+    /// via `system.functions`. Names only.
+    pub async fn functions(&mut self) -> Result<Vec<FunctionInfo>, QueryError> {
+        let (body, _) = self
+            .raw_query("SELECT name, is_aggregate FROM system.functions ORDER BY name", &[])
+            .await?;
+        let parsed: ChJsonBody = serde_json::from_str(&body)
+            .map_err(|e| QueryError::new(SYSTEM, e.to_string(), body.clone()))?;
+        Ok(parsed
+            .data
+            .iter()
+            .filter_map(|r| r["name"].as_str())
+            .map(|name| FunctionInfo {
+                name: name.to_string(),
+                signature: None,
+                detail: Some("function".into()),
             })
             .collect())
     }

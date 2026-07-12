@@ -3,8 +3,16 @@
   // Ctrl+F5 / Esc keymap, execution-error squiggles (tầng 2 — advisory lint
   // tầng 1 arrives in Phase 2).
   import { onMount } from 'svelte'
-  import { EditorView, keymap, lineNumbers } from '@codemirror/view'
-  import { EditorState, Compartment, type Extension } from '@codemirror/state'
+  import {
+    EditorView,
+    keymap,
+    lineNumbers,
+    ViewPlugin,
+    Decoration,
+    type DecorationSet,
+    type ViewUpdate,
+  } from '@codemirror/view'
+  import { EditorState, Compartment, RangeSetBuilder, type Extension } from '@codemirror/state'
   import {
     defaultKeymap,
     history,
@@ -29,11 +37,21 @@
     closeBracketsKeymap,
     completionKeymap,
     type CompletionSource,
+    type Completion,
   } from '@codemirror/autocomplete'
-  import { functionSignatures } from '$lib/sql/functions'
+  import { functionCatalog, type FnHint } from '$lib/sql/functions'
   import { highlightSelectionMatches, searchKeymap } from '@codemirror/search'
   import { linter, setDiagnostics, type Diagnostic } from '@codemirror/lint'
-  import { sql, PostgreSQL, MySQL, MSSQL, SQLite, StandardSQL, type SQLNamespace } from '@codemirror/lang-sql'
+  import {
+    sql,
+    SQLDialect,
+    PostgreSQL,
+    MySQL,
+    MSSQL,
+    SQLite,
+    StandardSQL,
+    type SQLNamespace,
+  } from '@codemirror/lang-sql'
   import { clickHouseDialect } from '$lib/sql/ch-editor-dialect'
   import { lineColToOffset } from '$lib/sql/statements'
 
@@ -47,6 +65,9 @@
     defaultSchema?: string
     /** async completion cho `alias.`/`table.` — lazy-load cột của bảng trong FROM/JOIN */
     columnSource?: CompletionSource
+    /** functions introspected from the live server (list_functions) — merged with
+     *  the static built-ins + curated signatures for the dialect. */
+    dynamicFunctions?: FnHint[]
     /** lint tầng 1 — advisory, debounce 400ms do linter đảm nhiệm, KHÔNG chặn Run */
     lintSource?: (doc: string) => Promise<Diagnostic[]>
     onChange?: (doc: string) => void
@@ -65,6 +86,7 @@
     schema,
     defaultSchema,
     columnSource,
+    dynamicFunctions,
     lintSource,
     onChange,
     onRun,
@@ -79,9 +101,82 @@
   let view: EditorView | null = null
   const langCompartment = new Compartment()
 
-  // T21 — function-signature completion (bổ sung cạnh keyword/schema của lang-sql).
+  function baseDialect(sys: string): SQLDialect {
+    switch (sys) {
+      case 'postgres':
+        return PostgreSQL
+      case 'mysql':
+      case 'mariadb':
+        return MySQL
+      case 'mssql':
+        return MSSQL
+      case 'sqlite':
+        return SQLite
+      case 'clickhouse':
+        return clickHouseDialect // lang-sql has no CH dialect → our own
+      default:
+        return StandardSQL
+    }
+  }
+
+  // Set of known function names for a dialect — the merged catalog (static +
+  // curated + introspected `dynamicFunctions`, so server/extension functions like
+  // PG `date_trunc` colour too) PLUS the dialect's own `builtin` words (covers
+  // ClickHouse's CH_FUNCTIONS). Driven purely by the function catalog: real
+  // functions (incl. MSSQL GETDATE/DATEADD which are also dialect keywords) colour,
+  // while non-function keywords (IN/VALUES/EXISTS — not in any catalog) do not — so
+  // there's NO keyword subtraction (that dropped keyword-named functions). Used only
+  // to COLOUR calls; never fed to the tokenizer, so completion/quoting are unaffected.
+  function fnColorSet(sys: string): Set<string> {
+    const set = new Set<string>(functionCatalog(sys, dynamicFunctions ?? []).map((f) => f.name.toLowerCase()))
+    for (const w of ((baseDialect(sys).spec?.builtin ?? '') as string).split(/\s+/)) {
+      if (w) set.add(w.toLowerCase())
+    }
+    return set
+  }
+
+  // Colour known function calls (`name(`) via a decoration — NOT by adding names
+  // to the dialect `builtin`. Putting functions in `builtin` makes the tokenizer
+  // read them as complete keywords, which broke table completion when a table
+  // prefix equals a function name (typing `ord` → the `ORD` function shadowed a
+  // table `order`). A decoration leaves tokenization untouched.
+  const fnMark = Decoration.mark({ class: 'cm-sql-fn' })
+  function functionHighlighter(sys: string) {
+    const set = fnColorSet(sys)
+    const build = (view: EditorView): DecorationSet => {
+      const b = new RangeSetBuilder<Decoration>()
+      const re = /\b([A-Za-z_]\w*)\s*(?=\()/g
+      for (const { from, to } of view.visibleRanges) {
+        const text = view.state.sliceDoc(from, to)
+        let m: RegExpExecArray | null
+        while ((m = re.exec(text))) {
+          if (set.has(m[1].toLowerCase())) {
+            const s = from + m.index
+            b.add(s, s + m[1].length, fnMark)
+          }
+        }
+      }
+      return b.finish()
+    }
+    return ViewPlugin.fromClass(
+      class {
+        decorations: DecorationSet
+        constructor(view: EditorView) {
+          this.decorations = build(view)
+        }
+        update(u: ViewUpdate) {
+          if (u.docChanged || u.viewportChanged) this.decorations = build(u.view)
+        }
+      },
+      { decorations: (v) => v.decorations },
+    )
+  }
+
+  // The SINGLE function-completion source (with signatures). Because the keyword
+  // source below EXCLUDES function names, functions are suggested exactly once —
+  // no duplicate bare/keyword entry alongside the signature one.
   function fnSource(sys: string): CompletionSource {
-    const options = functionSignatures(sys).map((f) => ({
+    const options: Completion[] = functionCatalog(sys, dynamicFunctions ?? []).map((f) => ({
       label: f.name,
       type: 'function',
       detail: f.signature,
@@ -92,19 +187,32 @@
       if (!word || (word.from === word.to && !ctx.explicit)) return null
       // after `alias.` / `table.` only columns are meaningful — skip functions
       if (word.from > 0 && ctx.state.sliceDoc(word.from - 1, word.from) === '.') return null
+      // In a table-reference position (after FROM/JOIN/INTO/UPDATE/TABLE) suggest
+      // tables, not functions — otherwise a function like MySQL `ORD` would shadow
+      // a table named `order` when you type `ord`.
+      const pre = ctx.state.sliceDoc(Math.max(0, word.from - 40), word.from)
+      if (/\b(from|join|into|update|table)\s+$/i.test(pre)) return null
       return { from: word.from, options }
     }
   }
 
   function langExt(sys: string) {
-    const base = sql({ dialect: dialectFor(sys), schema, defaultSchema })
-    // merge function completions vào language data (không thay keyword/schema source).
-    // columnSource (nếu có) xử lý `alias.`/`table.` — lazy-load cột của bảng thật
-    // referenced trong FROM/JOIN (built-in chỉ resolve alias khi cột đã nạp sẵn).
-    const exts: Extension[] = [base]
-    // MongoDB is mongosh, not SQL — don't offer SQL function names (COUNT/SUM…);
-    // its columnSource provides Mongo methods/operators/collections/fields instead.
-    if (sys !== 'mongodb') exts.push(base.language.data.of({ autocomplete: fnSource(sys) }))
+    // MongoDB is mongosh, not SQL — keep the plain lang-sql path (no function/
+    // keyword SQL sources); its columnSource provides Mongo methods/operators.
+    if (sys === 'mongodb') {
+      const base = sql({ dialect: StandardSQL, schema, defaultSchema })
+      const exts: Extension[] = [base]
+      if (columnSource) exts.push(base.language.data.of({ autocomplete: columnSource }))
+      return exts
+    }
+    // Relational: use lang-sql's own `sql()` for schema + keyword completion +
+    // language (its schema/alias/reserved-word-quoting behaviour is subtle — hand-
+    // wiring it broke alias-column completion). On top we add a colour decoration
+    // and the function source. Functions from the static/introspected catalog are
+    // NOT dialect keywords, so they're offered once (only by fnSource); the handful
+    // that are also keywords (count/coalesce/…) behave exactly as before.
+    const base = sql({ dialect: baseDialect(sys), schema, defaultSchema })
+    const exts: Extension[] = [base, functionHighlighter(sys), base.language.data.of({ autocomplete: fnSource(sys) })]
     if (columnSource) exts.push(base.language.data.of({ autocomplete: columnSource }))
     return exts
   }
@@ -120,25 +228,6 @@
     if (acceptCompletion(view)) return true
     if (moveCompletionSelection(true)(view)) return acceptCompletion(view)
     return false
-  }
-
-  function dialectFor(sys: string) {
-    switch (sys) {
-      case 'postgres':
-        return PostgreSQL
-      case 'mysql':
-      case 'mariadb':
-        return MySQL
-      case 'mssql':
-        return MSSQL
-      case 'sqlite':
-        return SQLite
-      case 'clickhouse':
-        // lang-sql has no ClickHouse dialect → our own (ENGINE/LowCardinality/…)
-        return clickHouseDialect
-      default:
-        return StandardSQL
-    }
   }
 
   // Theme-aware SQL syntax palette (AUDIT-3 item 2). Colors resolve from CSS
@@ -165,6 +254,8 @@
       fontFamily: 'var(--font-mono, monospace)',
       caretColor: 'var(--text)',
     },
+    // Known function calls, coloured by the functionHighlighter decoration.
+    '.cm-sql-fn': { color: 'var(--syntax-function)' },
     '.cm-gutters': {
       backgroundColor: 'var(--surface)',
       color: 'var(--muted)',
@@ -330,6 +421,7 @@
   // → reconfigure lang: reload autocomplete (spec phase-1 §6 + phase-2 §1)
   $effect(() => {
     void schema
+    void dynamicFunctions // server functions arrived → rebuild the completion source
     view?.dispatch({ effects: langCompartment.reconfigure(langExt(system)) })
   })
 

@@ -2520,19 +2520,12 @@
 
   <!-- bottom toolbar — dòng 155-166 -->
   <div style="flex:none;display:flex;align-items:center;gap:var(--px-1);padding:var(--px-5) var(--px-8);border-top:var(--px-1) solid var(--border);background:var(--header);color:var(--text2)">
-    <span class="xbtn" class:off={!toolTarget} onclick={() => toolTarget && tabs.openTableDesigner(toolTarget.connId, toolTarget.schema, '')} onkeydown={(e) => e.key === 'Enter' && toolTarget && tabs.openTableDesigner(toolTarget.connId, toolTarget.schema, '')} role="button" tabindex="0" title={toolTarget ? `New table: ${toolTargetLabel}` : 'Select a schema / database first'}>
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="1.5"></rect><path d="M3 9h18M9 9v11" stroke-linecap="round"></path><path d="M16.5 14v5M14 16.5h5" stroke-linecap="round"></path></svg>
-    </span>
     <span class="xbtn" class:off={!toolTarget} onclick={() => toolTarget && tabs.openQueryConsole()} onkeydown={(e) => e.key === 'Enter' && toolTarget && tabs.openQueryConsole()} role="button" tabindex="0" title={toolTarget ? `Query console: ${toolTargetLabel}` : 'Select a schema / database first'}>
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M7 9l3 3-3 3M13 15h4"></path></svg>
     </span>
     <span style="width:var(--px-1);height:var(--px-16);background:var(--border);margin:0 var(--px-3)"></span>
     <span class="xbtn" class:off={!toolTarget} onclick={() => toolTarget && importWizard.show(toolTarget.connId, toolTarget.schema)} onkeydown={(e) => e.key === 'Enter' && toolTarget && importWizard.show(toolTarget.connId, toolTarget.schema)} role="button" tabindex="0" title={toolTarget ? `Import data: ${toolTargetLabel}` : 'Select a schema / database first'}>
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 10l5 5 5-5"></path><path d="M5 21h14"></path></svg>
-    </span>
-    <!-- Export/dump → Generate Scripts (T15). Users & privileges (T23) còn ẩn. -->
-    <span class="xbtn" class:off={!toolTarget} onclick={() => toolTarget && scriptsWizard.show(toolTarget.connId, toolTarget.schema)} onkeydown={(e) => e.key === 'Enter' && toolTarget && scriptsWizard.show(toolTarget.connId, toolTarget.schema)} role="button" tabindex="0" title={toolTarget ? `Generate scripts: ${toolTargetLabel}` : 'Select a schema / database first'}>
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21V9M7 14l5 5 5-5"></path><path d="M5 3h14"></path></svg>
     </span>
     <!-- Backup & Restore (T22) -->
     <span class="xbtn" class:off={!toolTarget} onclick={() => toolTarget && backupWizard.show(toolTarget.connId, toolTarget.system)} onkeydown={(e) => e.key === 'Enter' && toolTarget && backupWizard.show(toolTarget.connId, toolTarget.system)} role="button" tabindex="0" title={toolTarget ? `Backup & Restore: ${toolTargetLabel}` : 'Select a schema / database first'}>

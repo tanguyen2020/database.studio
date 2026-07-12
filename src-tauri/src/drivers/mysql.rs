@@ -323,6 +323,27 @@ impl MySqlDriver {
             .collect())
     }
 
+    /// User-defined functions in `schema`. MySQL/MariaDB built-in functions are
+    /// not listed in any catalog view, so the frontend merges those in from a
+    /// static set; this only surfaces user routines of type FUNCTION.
+    pub async fn functions(&mut self, schema: &str) -> Result<Vec<FunctionInfo>, QueryError> {
+        let rows = sqlx::query(
+            "SELECT r.ROUTINE_NAME
+             FROM information_schema.ROUTINES r
+             WHERE CONVERT(r.ROUTINE_SCHEMA USING utf8mb4) = CONVERT(? USING utf8mb4)
+               AND r.ROUTINE_TYPE = 'FUNCTION'
+             ORDER BY r.ROUTINE_NAME",
+        )
+        .bind(schema)
+        .fetch_all(&mut self.conn)
+        .await
+        .map_err(|e| map_error(self.system, &e))?;
+        Ok(rows
+            .iter()
+            .map(|r| FunctionInfo { name: text(r, 0), signature: None, detail: Some("user".into()) })
+            .collect())
+    }
+
     pub async fn routines(&mut self, schema: &str) -> Result<Vec<RoutineInfo>, QueryError> {
         // information_schema.ROUTINES columns can carry a different collation than the
         // connection (e.g. utf8mb4_general_ci vs utf8mb4_0900_ai_ci), so `col = ?` raises

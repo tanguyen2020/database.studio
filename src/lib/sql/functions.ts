@@ -1,10 +1,20 @@
 // Function-signature autocomplete data (Phase 5 · T21). Pure per-dialect list →
 // unit-testable; SqlEditor feeds it into a CodeMirror completion source.
 
+import { staticFunctions } from './functions.catalog'
+
 export interface FnSig {
   name: string
   signature: string
   detail: string
+}
+
+/** A function hint with the signature/detail optional — the shape returned by
+ *  `list_functions` introspection (some engines give names only). */
+export interface FnHint {
+  name: string
+  signature?: string
+  detail?: string
 }
 
 const COMMON: FnSig[] = [
@@ -55,4 +65,35 @@ const BY_SYSTEM: Record<string, FnSig[]> = {
 /** Danh sách function + chữ ký cho dialect (common + đặc thù hệ). */
 export function functionSignatures(system: string): FnSig[] {
   return [...COMMON, ...(BY_SYSTEM[system] ?? [])]
+}
+
+/**
+ * The full function list to feed autocomplete: merge of
+ *  1. static built-ins (MySQL/MariaDB/MSSQL — not introspectable),
+ *  2. `dynamic` functions introspected from the live server (`list_functions`:
+ *     PG/SQLite/ClickHouse full catalog + extensions; MySQL/MSSQL user functions),
+ *  3. curated signatures (best param hints) — these win on the signature.
+ * Deduped case-insensitively by name; a name with a real `name(args)` signature
+ * beats a bare `name(…)` placeholder. Sorted for stable display.
+ */
+export function functionCatalog(system: string, dynamic: FnHint[] = []): FnSig[] {
+  const byName = new Map<string, FnSig>()
+  const hasArgs = (s?: string) => !!s && /\([^…)]*\S/.test(s) // signature with real args, not "name(…)"
+  const add = (f: FnHint, curated: boolean) => {
+    const key = f.name.toLowerCase()
+    const norm: FnSig = { name: f.name, signature: f.signature || `${f.name}()`, detail: f.detail || 'function' }
+    const existing = byName.get(key)
+    if (!existing) {
+      byName.set(key, norm)
+      return
+    }
+    // Curated always wins; otherwise only upgrade to a richer signature.
+    if (curated || (!hasArgs(existing.signature) && hasArgs(f.signature))) {
+      byName.set(key, { name: existing.name, signature: norm.signature, detail: f.detail || existing.detail })
+    }
+  }
+  for (const f of staticFunctions(system)) add(f, false)
+  for (const f of dynamic) add(f, false)
+  for (const f of functionSignatures(system)) add(f, true)
+  return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name))
 }

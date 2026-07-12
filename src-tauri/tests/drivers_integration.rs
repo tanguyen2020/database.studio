@@ -209,6 +209,23 @@ async fn pg_full_introspection_surfaces_every_object_type() {
     assert!(routines.iter().any(|r| r.name == "emp_count"), "function listed: {routines:?}");
     assert!(routines.iter().any(|r| r.name == "touch_emp"), "procedure listed: {routines:?}");
 
+    // functions() (Query Editor autocomplete): built-ins from pg_catalog that the
+    // curated frontend set omits, PLUS the user function. Operator-support noise is
+    // filtered, and a representative signature is attached.
+    let fns = drv.functions("public").await.unwrap();
+    for builtin in ["to_char", "date_trunc", "regexp_replace", "split_part", "jsonb_agg"] {
+        assert!(fns.iter().any(|f| f.name == builtin), "built-in {builtin} suggested: {} fns", fns.len());
+    }
+    assert!(fns.iter().any(|f| f.name == "emp_count"), "user function suggested");
+    // names fold overloads to one completion (no duplicate suggestions)
+    let mut names: Vec<&String> = fns.iter().map(|f| &f.name).collect();
+    let n = names.len();
+    names.sort();
+    names.dedup();
+    assert_eq!(names.len(), n, "function names are unique (overloads folded)");
+    let to_char = fns.iter().find(|f| f.name == "to_char").unwrap();
+    assert!(to_char.signature.as_deref().is_some_and(|s| s.starts_with("to_char(")), "signature: {to_char:?}");
+
     // triggers
     let trigs = drv.triggers("public").await.unwrap();
     assert!(trigs.iter().any(|t| t.name == "trg_emp" && t.table == "emp"), "trigger listed: {trigs:?}");
@@ -1056,6 +1073,11 @@ async fn mysql_explorer_tree_introspection() {
     let func = routines.iter().find(|r| r.name == "f_double").expect("function listed");
     assert_eq!(func.kind, "function");
 
+    // functions() (Query Editor autocomplete): MySQL built-ins aren't in any catalog
+    // (the frontend merges those in statically), so this surfaces the USER function.
+    let fns = drv.functions("testdb").await.unwrap();
+    assert!(fns.iter().any(|f| f.name == "f_double"), "user function suggested: {fns:?}");
+
     // remaining introspection under the mismatched collation must not raise 1267 either.
     assert!(drv.indexes("testdb", "students").await.unwrap().iter().any(|i| i.primary), "PK index read");
     assert!(!drv.constraints("testdb", "students").await.unwrap().is_empty(), "constraints read");
@@ -1317,6 +1339,15 @@ async fn mssql_roundtrip_and_line_error() {
     let it_t = tbls.iter().find(|t| t.name == "it_t").expect("it_t listed");
     assert!(it_t.data_length.is_some_and(|b| b > 0), "mssql data_length reported: {it_t:?}");
 
+    // functions() (Query Editor autocomplete): built-in T-SQL functions aren't
+    // catalog objects (the frontend supplies those statically) — this surfaces the
+    // USER function below.
+    drv.exec("CREATE FUNCTION dbo.fn_double(@x int) RETURNS int AS BEGIN RETURN @x * 2 END")
+        .await
+        .unwrap();
+    let fns = drv.functions("dbo").await.unwrap();
+    assert!(fns.iter().any(|f| f.name == "fn_double"), "mssql user function suggested: {fns:?}");
+
     // MSSQL trả line number cho lỗi → position
     let err = drv.exec("SELECT 1\nFROM bang_khong_co").await.expect_err("phải fail");
     assert_eq!(err.code.as_deref(), Some("208"));
@@ -1521,6 +1552,14 @@ async fn clickhouse_roundtrip_types_and_errors() {
 
     // Phase 5 T7c: engine badge trong TableInfo
     assert_eq!(t.engine.as_deref(), Some("MergeTree"), "engine badge phải là MergeTree");
+
+    // functions() (Query Editor autocomplete): system.functions liệt kê đầy đủ hàm
+    // (regular + aggregate + combinators) — dùng cho tô màu + gợi ý.
+    let fns = drv.functions().await.unwrap();
+    for f in ["arrayJoin", "toDateTime", "uniqExact", "count"] {
+        assert!(fns.iter().any(|x| x.name == f), "clickhouse function {f} listed ({} fns)", fns.len());
+    }
+    assert!(fns.len() > 100, "system.functions returns the full catalog: {}", fns.len());
 
     // Phase 5 T7c: table_meta + parse TTL (DELETE + MOVE) từ CREATE thật
     drv.exec(
@@ -2094,6 +2133,13 @@ async fn sqlite_introspection() {
     assert!(!pid.nullable);
     let id = cols.iter().find(|c| c.name == "id").unwrap();
     assert!(id.is_pk);
+
+    // functions() via pragma_function_list — the full built-in set (autocomplete).
+    let fns = mem.functions().await.unwrap();
+    for builtin in ["json_extract", "substr", "coalesce", "strftime", "length"] {
+        assert!(fns.iter().any(|f| f.name == builtin), "sqlite built-in {builtin} listed ({} fns)", fns.len());
+    }
+    assert!(fns.len() > 20, "pragma_function_list returns the full catalog: {}", fns.len());
 }
 
 // ---------------------------------------------------------------------------

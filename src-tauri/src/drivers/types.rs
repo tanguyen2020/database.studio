@@ -246,6 +246,22 @@ pub struct SequenceInfo {
     pub name: String,
 }
 
+/// A callable function available on the server (Query Editor autocomplete).
+/// Introspected where the engine exposes a catalog (PostgreSQL `pg_proc`,
+/// SQLite `pragma_function_list`, ClickHouse `system.functions`) or user-defined
+/// routines (MySQL/MSSQL). Built-in lists for MySQL/MariaDB/MSSQL — which are not
+/// enumerable from the catalog — are merged in on the frontend from a static set.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FunctionInfo {
+    pub name: String,
+    /// e.g. "to_char(timestamp, text)" when the catalog exposes arguments.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
+    /// Short kind label ("function" | "aggregate" | "window" | "user").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
 /// A single partition of a partitioned table (Explorer "Partitions" node).
 /// `method`/`key` describe the parent table's partitioning; the remaining
 /// per-partition fields describe this one partition.

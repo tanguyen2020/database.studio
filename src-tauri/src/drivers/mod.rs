@@ -518,6 +518,25 @@ impl LiveConnection {
         }
     }
 
+    /// Callable functions for Query Editor autocomplete. PG/SQLite/ClickHouse
+    /// enumerate the full catalog (built-ins + extensions); MySQL/MSSQL return
+    /// only user-defined functions (built-ins are supplied statically on the
+    /// frontend). Non-relational engines return an empty list.
+    pub async fn functions(&mut self, schema: &str) -> Result<Vec<FunctionInfo>, QueryError> {
+        match self {
+            Self::Postgres(d) => d.functions(schema).await,
+            Self::Sqlite(d) => d.functions().await,
+            Self::Clickhouse(d) => d.functions().await,
+            Self::MySql(d) => d.functions(schema).await,
+            Self::Mssql(d) => d.functions(schema).await,
+            Self::Redis(_) => Ok(Vec::new()),
+            Self::Nats(_) => Ok(Vec::new()),
+            Self::Kafka(_) => Ok(Vec::new()),
+            Self::Cassandra(_) => Ok(Vec::new()),
+            Self::Mongo(_) => Ok(Vec::new()),
+        }
+    }
+
     pub async fn triggers(&mut self, schema: &str) -> Result<Vec<TriggerInfo>, QueryError> {
         match self {
             Self::Postgres(d) => d.triggers(schema).await,

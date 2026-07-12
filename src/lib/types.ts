@@ -199,6 +199,13 @@ export interface SequenceInfo {
   name: string
 }
 
+/** A callable function surfaced by `list_functions` for editor autocomplete. */
+export interface FunctionInfo {
+  name: string
+  signature?: string
+  detail?: string
+}
+
 // ---------------------------------------------------------------------------
 // Tabs
 // ---------------------------------------------------------------------------

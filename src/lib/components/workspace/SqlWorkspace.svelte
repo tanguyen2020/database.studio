@@ -28,6 +28,7 @@
   import { MONGO_METHODS, MONGO_OPERATORS } from '$lib/mongo/functions'
   import { dangerousStatements, type DangerStmt } from '$lib/sql/danger'
   import { quoteIfReserved } from '$lib/sql/reserved'
+  import type { FunctionInfo } from '$lib/types'
   import { autofocus } from '$lib/actions/autofocus'
   import type { TabState } from '$lib/types'
   import type { Diagnostic } from '@codemirror/lint'
@@ -310,6 +311,36 @@
   const defaultSchema = $derived(
     tab.systemType === 'postgres' ? selectedSchema || dbDefaultSchema : dbDefaultSchema,
   )
+
+  // ---- server function catalog (list_functions) --------------------------------
+  // The live server's full function list (PG/SQLite/ClickHouse: built-ins +
+  // extensions; MySQL/MSSQL: user functions) — merged in the editor with static
+  // built-ins + curated signatures so autocomplete isn't limited to ~11 names.
+  // Cached per connection+schema; only relational engines (Mongo uses its own).
+  let dynFns = $state<FunctionInfo[]>([])
+  let dynFnsKey = ''
+  $effect(() => {
+    const cid = acConnId
+    const sys = tab.systemType
+    const schema = dbDefaultSchema ?? ''
+    if (!cid || !RELATIONAL.includes(sys)) {
+      dynFns = []
+      dynFnsKey = ''
+      return
+    }
+    const key = `${cid}::${schema}`
+    if (key === dynFnsKey) return
+    dynFnsKey = key
+    untrack(() => {
+      ipc
+        .listFunctions(cid, schema)
+        .then((fns) => {
+          // guard against a stale response after the connection/schema changed
+          if (`${acConnId}::${dbDefaultSchema ?? ''}` === key) dynFns = fns
+        })
+        .catch(() => {})
+    })
+  })
 
   // Schema dropdown options (PG/MSSQL): every schema in the active database.
   const schemaOptions = $derived.by(() => {
@@ -935,6 +966,7 @@
       schema={completionSchema}
       {defaultSchema}
       columnSource={tab.systemType === 'mongodb' ? mongoCompletionSource : columnSource}
+      dynamicFunctions={dynFns}
       lintSource={lintDoc}
       {onChange}
       onRun={run}

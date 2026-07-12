@@ -392,6 +392,54 @@ impl PgDriver {
             .collect())
     }
 
+    /// Every callable function visible to the Query Editor: built-ins from
+    /// `pg_catalog` plus user/extension functions in `schema`. Operator-support
+    /// and type-I/O functions (internal/cstring args) are filtered out, and
+    /// overloads fold to a single completion.
+    pub async fn functions(&mut self, schema: &str) -> Result<Vec<FunctionInfo>, QueryError> {
+        let rows = sqlx::query(
+            "SELECT p.proname,
+                    COALESCE(pg_catalog.pg_get_function_arguments(p.oid), '') AS args,
+                    CASE p.prokind WHEN 'a' THEN 'aggregate' WHEN 'w' THEN 'window' ELSE 'function' END AS kind
+             FROM pg_catalog.pg_proc p
+             JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+             WHERE n.nspname IN ('pg_catalog', $1)
+               AND p.prokind IN ('f','a','w')
+               AND NOT EXISTS (
+                 SELECT 1 FROM pg_catalog.pg_operator o
+                 WHERE o.oprcode = p.oid OR o.oprrest = p.oid OR o.oprjoin = p.oid)
+             ORDER BY p.proname",
+        )
+        .bind(schema)
+        .fetch_all(&mut self.conn)
+        .await
+        .map_err(|e| map_error("postgres", &e))?;
+        let mut out = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for r in &rows {
+            let name: String = r.get(0);
+            let args: String = r.get(1);
+            // Internal type-I/O + support functions users never call.
+            if args.contains("internal") || args.contains("cstring") {
+                continue;
+            }
+            if !seen.insert(name.clone()) {
+                continue; // fold overloads to one completion
+            }
+            let kind: String = r.get(2);
+            out.push(FunctionInfo {
+                signature: Some(if args.is_empty() {
+                    format!("{name}()")
+                } else {
+                    format!("{name}({args})")
+                }),
+                name,
+                detail: Some(kind),
+            });
+        }
+        Ok(out)
+    }
+
     pub async fn triggers(&mut self, schema: &str) -> Result<Vec<TriggerInfo>, QueryError> {
         let rows = sqlx::query(
             "SELECT t.tgname, c.relname,

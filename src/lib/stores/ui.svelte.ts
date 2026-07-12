@@ -80,9 +80,20 @@ class UiStore {
   }
 
   toggleTheme() {
-    this.theme = this.theme === 'dark' ? 'light' : 'dark'
-    document.documentElement.classList.toggle('dark', this.theme === 'dark')
-    void ipc.setAppState('theme', this.theme)
+    this.setTheme(this.theme === 'dark' ? 'light' : 'dark')
+  }
+
+  setTheme(theme: 'dark' | 'light') {
+    this.theme = theme
+    document.documentElement.classList.toggle('dark', theme === 'dark')
+    // localStorage = fast, synchronous, applied at boot (no flash); app_state =
+    // backend copy. Both are written so the choice survives an app restart.
+    try {
+      localStorage.setItem('theme', theme)
+    } catch {
+      /* private mode / storage disabled — app_state still persists */
+    }
+    void ipc.setAppState('theme', theme)
   }
 
   private applyFontScale() {
@@ -104,8 +115,27 @@ class UiStore {
         ipc.getAppState('conn_group_mode'),
         ipc.getAppState('font_scale'),
       ])
-      if (theme === 'light' || theme === 'dark') {
-        this.theme = theme
+      // Prefer localStorage (what boot already applied); fall back to the backend
+      // app_state for installs saved before localStorage was used, and mirror it
+      // back so future boots are flash-free.
+      let stored: string | null = null
+      try {
+        stored = localStorage.getItem('theme')
+      } catch {
+        stored = null
+      }
+      if (stored !== 'light' && stored !== 'dark') {
+        stored = theme // migrate from app_state
+        if ((theme === 'light' || theme === 'dark')) {
+          try {
+            localStorage.setItem('theme', theme)
+          } catch {
+            /* ignore */
+          }
+        }
+      }
+      if (stored === 'light' || stored === 'dark') {
+        this.theme = stored
       }
       if (groupMode === 'type' || groupMode === 'folder') {
         this.connGroupMode = groupMode
