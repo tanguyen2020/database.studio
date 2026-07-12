@@ -8,6 +8,7 @@
   import SystemBadge from '$lib/components/SystemBadge.svelte'
   import { mongoExec } from '$lib/ipc'
   import { connections } from '$lib/stores/connections.svelte'
+  import { systemMeta } from '$lib/systems'
   import { exportWizard } from '$lib/stores/export.svelte'
   import { toasts } from '$lib/stores/toast.svelte'
   import type { QueryError, QueryResultSet, TabState } from '$lib/types'
@@ -116,7 +117,16 @@
     {#if profile}
       <SystemBadge system={profile.system} />
     {/if}
-    <span class="mono">{database}.{collection}</span>
+    <span style="font-weight:600;color:var(--text)" title="Connection">{profile?.name ?? '—'}</span>
+    <span style="color:var(--muted)">/</span>
+    <span
+      class="mono"
+      title={`Database: ${database} · ${database}.${collection}`}
+      style="display:inline-flex;align-items:center;gap:var(--px-5);font-size:var(--px-11_5);font-weight:600;color:{systemMeta(profile?.system).accent};background:color-mix(in srgb, {systemMeta(profile?.system).accent} 14%, transparent);border:var(--px-1) solid color-mix(in srgb, {systemMeta(profile?.system).accent} 45%, transparent);border-radius:var(--px-6);padding:var(--px-2) var(--px-8)"
+    >
+      <span style="font-size:var(--px-11)">▤</span>{database}
+    </span>
+    <span class="mono" style="color:var(--text2)">{database}.{collection}</span>
     <input
       class="mv-in mono"
       style="flex:1;max-width:var(--px-460)"

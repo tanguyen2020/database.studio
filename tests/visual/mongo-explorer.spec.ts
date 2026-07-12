@@ -66,6 +66,9 @@ test('mongo UI: document viewer (Open Documents → grid + filter + Export)', as
   await page.waitForTimeout(500)
 
   await expect(page.getByRole('tab', { name: /app\.students/ }).first()).toBeVisible()
+  // Header must make the connection + database unmistakable
+  await expect(page.getByTitle('Connection').filter({ hasText: 'Events MongoDB' }).first()).toBeVisible()
+  await expect(page.getByTitle(/^Database: app/).first()).toBeVisible()
   await expect(page.getByText('Ann').first()).toBeVisible() // document rendered via mongo_exec
   await expect(page.getByText(/docs ·/).first()).toBeVisible() // footer count
   await expect(page.getByPlaceholder(/filter \(JSON\)/).first()).toBeVisible()

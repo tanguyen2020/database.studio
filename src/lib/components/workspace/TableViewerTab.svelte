@@ -7,6 +7,7 @@
   import SystemBadge from '$lib/components/SystemBadge.svelte'
   import { execFiltered, execStatement, listColumns, type FilterCond, type SortSpec } from '$lib/ipc'
   import { connections } from '$lib/stores/connections.svelte'
+  import { systemMeta } from '$lib/systems'
   import { quoteIdent, qualified } from '$lib/sql/dialect'
   import type { QueryError, QueryResultSet, TabState } from '$lib/types'
 
@@ -24,6 +25,7 @@
   // Which database this viewer is bound to (base profile db, or the `db` of a
   // `{base}::{db}` foreign sub-connection) — surfaced in the toolbar.
   const dbName = $derived(connections.databaseOf(tab.connectionId))
+  const accent = $derived(systemMeta(profile?.system).accent)
 
   let data = $state<QueryResultSet | null>(null)
   let error = $state<QueryError | null>(null)
@@ -168,11 +170,18 @@
     {#if profile}
       <SystemBadge system={profile.system} />
     {/if}
-    {#if dbName}
-      <span class="mono" style="color:var(--primary);font-weight:600" title="Database">{dbName}</span>
-      <span style="color:var(--muted)">/</span>
-    {/if}
-    <span class="mono" title={dbName ? `${dbName} · ${schema}.${table}` : `${schema}.${table}`}>{schema}.{table}</span>
+    <!-- Connection this viewer is bound to -->
+    <span style="font-weight:600;color:var(--text)" title="Connection">{profile?.name ?? '—'}</span>
+    <span style="color:var(--muted)">/</span>
+    <!-- Database (+ schema) — distinct accent chip so it's unmistakable -->
+    <span
+      class="mono"
+      title={`Database: ${dbName || '(none)'} · ${schema}.${table}`}
+      style="display:inline-flex;align-items:center;gap:var(--px-5);font-size:var(--px-11_5);font-weight:600;color:{accent};background:color-mix(in srgb, {accent} 14%, transparent);border:var(--px-1) solid color-mix(in srgb, {accent} 45%, transparent);border-radius:var(--px-6);padding:var(--px-2) var(--px-8)"
+    >
+      <span style="font-size:var(--px-11)">▤</span>{dbName || 'database'}
+    </span>
+    <span class="mono" style="color:var(--text2)" title={`${schema}.${table}`}>{schema}.{table}</span>
     <span class="tv-btn" style="background:{filtersOpen ? 'var(--hover)' : 'var(--panel)'}" onclick={() => (filtersOpen = !filtersOpen)} onkeydown={(e) => e.key === 'Enter' && (filtersOpen = !filtersOpen)} role="button" tabindex="0">Filters {filters.length ? `(${filters.length})` : ''} ▾</span>
     <div style="margin-left:auto;display:flex;align-items:center;gap:var(--px-8)">
       <span class="tv-btn" style="display:inline-flex;align-items:center;gap:var(--px-5)" onclick={() => { page = 0; void load() }} onkeydown={(e) => e.key === 'Enter' && (page = 0, load())} role="button" tabindex="0" title="Refresh">⟳ Refresh</span>
