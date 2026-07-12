@@ -25,6 +25,10 @@ describe('findShortcut', () => {
     expect(findShortcut(ev({ ctrlKey: true, altKey: true, key: 'j' }))?.id).toBe('result-json')
     expect(findShortcut(ev({ ctrlKey: true, altKey: true, key: 'r' }))?.id).toBe('result-single')
   })
+  it('Ctrl+J (no alt) → toggle Result panel (distinct from Ctrl+Alt+J result-json)', () => {
+    expect(findShortcut(ev({ ctrlKey: true, key: 'j' }))?.id).toBe('toggle-result')
+    expect(findShortcut(ev({ ctrlKey: true, altKey: true, key: 'j' }))?.id).toBe('result-json')
+  })
   it('Cmd (metaKey) counts as Ctrl', () => {
     expect(findShortcut(ev({ metaKey: true, shiftKey: true, key: 'f' }))?.id).toBe('format')
   })

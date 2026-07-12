@@ -428,6 +428,7 @@
     const cid = await resolveRunConn()
     if (!cid) return
     runConnId = cid
+    ui.showResultPanel() // running a statement always reveals the (possibly hidden) result panel
     results.clearExplain(tab.id) // Run closes the Query Plan sub-tab, focuses results
     await results.run(tab.id, cid, statements, runOpts())
     showExecErrors()
@@ -461,6 +462,7 @@
     const cid = await resolveRunConn()
     if (!cid) return
     runConnId = cid
+    ui.showResultPanel() // running a statement always reveals the (possibly hidden) result panel
     results.clearExplain(tab.id) // Run closes the Query Plan sub-tab, focuses results
     await results.run(tab.id, cid, [stmt], runOpts())
     showExecErrors()
@@ -538,6 +540,7 @@
     if (!ensureConnected()) return
     const cid = await resolveRunConn()
     if (!cid) return
+    ui.showResultPanel() // Explain reveals the (possibly hidden) result panel
     await results.runExplain(tab.id, cid, sql, actual)
   }
   async function doExplain() {
@@ -681,6 +684,7 @@
     <SqliteFileHeader
       connId={tab.connectionId}
       onRunSql={(sqlText) => {
+        ui.showResultPanel()
         results.clearExplain(tab.id)
         void results.run(tab.id, tab.connectionId!, splitStatements(sqlText))
       }}
@@ -813,15 +817,29 @@
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9" stroke-dasharray="3 3"></circle><circle cx="12" cy="3" r="2" fill="currentColor" stroke="none"></circle><circle cx="20" cy="17" r="2" fill="currentColor" stroke="none"></circle><circle cx="4" cy="17" r="2" fill="currentColor" stroke="none"></circle></svg>Ring
       </div>
     {/if}
-    <div style="margin-left:auto">
+    <div style="margin-left:auto;display:flex;align-items:center;gap:var(--px-10)">
       {#if exec && !exec.running}
         <span class="mono" style="font-size:var(--px-11);color:var(--muted)">{exec.totalMs} ms</span>
       {/if}
+      <!-- toggle the Result panel (Ctrl/Cmd+J). When hidden, running a statement or
+           Explain auto-reveals it. Active (panel shown) = accent background. -->
+      <div
+        class="wk-tbtn"
+        onclick={() => ui.toggleResultPanel()}
+        onkeydown={(e) => e.key === 'Enter' && ui.toggleResultPanel()}
+        role="button"
+        tabindex="0"
+        aria-pressed={!ui.resultPanelHidden}
+        title={ui.resultPanelHidden ? 'Show Result panel (Ctrl+J)' : 'Hide Result panel (Ctrl+J)'}
+        style="background:{ui.resultPanelHidden ? 'transparent' : 'color-mix(in srgb, var(--primary) 16%, transparent)'};color:{ui.resultPanelHidden ? 'var(--text2)' : 'var(--primary)'}"
+      >
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"></rect><line x1="3" y1="14" x2="21" y2="14"></line></svg>Result
+      </div>
     </div>
   </div>
 
-  <!-- editor -->
-  <div style="height:{ui.editorHeight}px;flex:none">
+  <!-- editor — fills the pane when the result panel is hidden, else fixed height -->
+  <div style={ui.resultPanelHidden ? 'flex:1;min-height:0' : `height:${ui.editorHeight}px;flex:none`}>
     <SqlEditor
       bind:this={editor}
       value={initialQuery}
@@ -840,6 +858,7 @@
     />
   </div>
 
+  {#if !ui.resultPanelHidden}
   <!-- split handle editor/result -->
   <div
     style="flex:none;height:var(--px-5);cursor:row-resize;background:var(--border)"
@@ -872,6 +891,7 @@
       </div>
     {/if}
   </div>
+  {/if}
 </div>
 
 {#if dangerPrompt}

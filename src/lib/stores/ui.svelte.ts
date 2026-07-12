@@ -37,6 +37,10 @@ class UiStore {
   // handle / title-bar button. Width 264px when shown.
   rightPanelOpen = $state(false)
   rightPanelWidth = $state(264)
+  // Result panel (query editor) — collapsible. When hidden the editor fills the
+  // pane; running a statement or Explain auto-shows it again (see SqlWorkspace).
+  // Toggled by the toolbar button + Ctrl/Cmd+J. Persisted with the other sizes.
+  resultPanelHidden = $state(false)
   sizesLoaded = $state(false)
 
   // T21 — signal ticks cho shortcut cần context editor/result/explorer.
@@ -57,6 +61,17 @@ class UiStore {
   }
   requestCopyJson() {
     this.copyJsonTick++
+  }
+  toggleResultPanel() {
+    this.resultPanelHidden = !this.resultPanelHidden
+    this.persistSizes()
+  }
+  /** Force the result panel visible — called when a statement/Explain runs. */
+  showResultPanel() {
+    if (this.resultPanelHidden) {
+      this.resultPanelHidden = false
+      this.persistSizes()
+    }
   }
 
   setConnGroupMode(mode: 'type' | 'folder') {
@@ -107,6 +122,7 @@ class UiStore {
         if (parsed.connListHeight > 100) this.connListHeight = parsed.connListHeight
         if (parsed.editorHeight > 100) this.editorHeight = parsed.editorHeight
         if (parsed.rightPanelWidth > 150) this.rightPanelWidth = parsed.rightPanelWidth
+        if (typeof parsed.resultPanelHidden === 'boolean') this.resultPanelHidden = parsed.resultPanelHidden
         // rightPanelOpen intentionally NOT restored — the Properties panel always
         // starts hidden on app open; the user reopens it via the edge handle.
       }
@@ -130,6 +146,7 @@ class UiStore {
           editorHeight: this.editorHeight,
           rightPanelWidth: this.rightPanelWidth,
           rightPanelOpen: this.rightPanelOpen,
+          resultPanelHidden: this.resultPanelHidden,
         }),
       )
     }, 500)

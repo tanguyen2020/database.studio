@@ -17,6 +17,7 @@ export const SHORTCUTS: Shortcut[] = [
   { id: 'result-json', ctrl: true, shift: false, alt: true, key: 'j', label: 'Result: JSON' },
   { id: 'result-single', ctrl: true, shift: false, alt: true, key: 'r', label: 'Result: Single Row' },
   { id: 'find-in-explorer', ctrl: true, shift: false, alt: false, key: 'f', label: 'Find in Explorer' },
+  { id: 'toggle-result', ctrl: true, shift: false, alt: false, key: 'j', label: 'Toggle Result panel' },
 ]
 
 export interface KeyLike {

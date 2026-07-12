@@ -235,7 +235,7 @@
           <span style="width:var(--px-7);height:var(--px-7);border-radius:50%;flex:none;background:{p.connected ? systemMeta(p.system).accent : 'var(--sys-orphan-accent)'}" title={p.connected ? `Connected · ${p.latency_ms ?? '–'} ms` : 'Disconnected'}></span>
         {/if}
         <div style="flex:1;min-width:0">
-          <div class="mono" style="font-weight:600;font-size:var(--px-12_5);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{p.name}</div>
+          <div class="conn-name mono" style="font-weight:600;font-size:var(--px-12_5);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{p.name}</div>
           <div class="mono" style="font-size:var(--px-10);color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{p.system === 'sqlite' ? p.sqlite_path || ':memory:' : `${p.host}:${p.port}`}</div>
         </div>
         {#if p.ephemeral}
@@ -419,12 +419,22 @@
   .hoverable:hover {
     background: var(--hover);
   }
-  /* connection row: hover trực quan + selected có thanh accent để phân biệt */
+  /* connection row: hover + selected use a primary (blue) tint so they read
+     clearly over the softened sidebar in BOTH themes (--hover alone was lighter
+     than the light-mode sidebar → nearly invisible). Selected is a stronger tint
+     + a left accent bar + a bolder name, so it's unmistakable vs. a mere hover. */
   .conn-row:hover {
-    background: var(--hover);
+    background: color-mix(in srgb, var(--primary) 12%, transparent);
   }
   .conn-row.selected {
-    background: var(--hover);
-    box-shadow: inset var(--px-2) 0 0 var(--primary);
+    background: color-mix(in srgb, var(--primary) 22%, transparent);
+    box-shadow: inset var(--px-3) 0 0 var(--primary);
+  }
+  .conn-row.selected:hover {
+    background: color-mix(in srgb, var(--primary) 30%, transparent);
+  }
+  .conn-row.selected .conn-name {
+    color: var(--primary);
+    font-weight: 700;
   }
 </style>

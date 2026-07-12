@@ -108,6 +108,9 @@
         case 'find-in-explorer':
           ui.requestExplorerFind()
           break
+        case 'toggle-result':
+          ui.toggleResultPanel()
+          break
       }
       return
     }

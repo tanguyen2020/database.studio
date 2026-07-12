@@ -31,8 +31,8 @@ test('connection form: buttons work, no Group field, English', async ({ page }) 
   await dialog.getByText('Test connection', { exact: true }).first().click()
   await page.waitForTimeout(150)
 
-  // Cancel closes the form
-  await dialog.getByText('Cancel', { exact: true }).first().click()
+  // Close button in the footer closes the form
+  await dialog.getByText('Close', { exact: true }).first().click()
   await page.waitForTimeout(200)
   await expect(page.getByRole('dialog').getByText('New connection', { exact: true })).toHaveCount(0)
 

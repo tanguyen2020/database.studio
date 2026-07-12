@@ -578,8 +578,9 @@
               onkeydown={(e) => e.key === 'Enter' && close()}
               role="button"
               tabindex="0"
+              title="Close this dialog"
               style="font-size:var(--px-12_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-8);padding:var(--px-8) var(--px-16);cursor:pointer"
-            >Cancel</span>
+            >Close</span>
             {#if isQuick}
               <span
                 onclick={connectQuick}
