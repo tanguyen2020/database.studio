@@ -42,6 +42,33 @@ test('Table Export wizard: format/columns/WHERE/limit/filename → download', as
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
 
+test('Result Export ▾ offers XML and downloads an .xml file', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(String(e)))
+  await boot(page)
+
+  await page.getByRole('button', { name: /Postgres/ }).first().click()
+  await page.waitForTimeout(300)
+  await page.getByTitle('New SQL tab (Ctrl+T)').first().click()
+  await page.waitForTimeout(300)
+  await page.locator('.cm-content').first().click()
+  await page.keyboard.type('SELECT id, gpa FROM students')
+  await page.getByRole('button', { name: 'Run' }).first().click()
+  await expect(page.getByText('Single Row', { exact: true }).first()).toBeVisible({ timeout: 10_000 })
+
+  await page.getByText('Export ▾').first().click()
+  await page.waitForTimeout(150)
+  // XML is listed alongside CSV/JSON/SQL/Excel
+  await expect(page.getByText('XML', { exact: true }).first()).toBeVisible()
+
+  const dl = page.waitForEvent('download', { timeout: 8000 })
+  await page.getByText('XML', { exact: true }).first().click()
+  const download = await dl
+  expect(download.suggestedFilename()).toMatch(/\.xml$/)
+
+  expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
+})
+
 test('Result custom Export: run query → Export ▾ → Custom → download', async ({ page }) => {
   const errors: string[] = []
   page.on('pageerror', (e) => errors.push(String(e)))

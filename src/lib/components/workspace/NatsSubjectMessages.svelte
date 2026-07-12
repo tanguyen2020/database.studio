@@ -197,7 +197,7 @@
   <div style="flex:none;display:flex;align-items:center;gap:var(--px-12);padding:var(--px-9) var(--px-14);border-bottom:var(--px-1) solid var(--border);background:var(--surface)">
     <span style="width:var(--px-3);height:var(--px-20);border-radius:var(--px-2);background:{accent}"></span>
     <div style="display:flex;flex-direction:column;line-height:1.15">
-      <span class="mono" style="font-size:var(--px-13);font-weight:600;color:var(--warn2)">{subject}</span>
+      <span class="mono" style="font-size:var(--px-13);font-weight:600;color:var(--sacc-amber)">{subject}</span>
       <span class="mono" style="font-size:var(--px-10);color:{accent}">stream <span style="font-weight:600">{stream}</span></span>
     </div>
     <div style="margin-left:auto;display:flex;gap:var(--px-8);align-items:center">
@@ -234,13 +234,13 @@
               style="background:{rowBg(m.seq)};cursor:default"
             >
               <td style="border-bottom:var(--px-1) solid var(--border);padding:var(--px-6) var(--px-12);color:{cellColor(m.seq, 'var(--muted)')}">{m.seq}</td>
-              <td style="border-bottom:var(--px-1) solid var(--border);padding:var(--px-6) var(--px-12);font-weight:700;color:{cellColor(m.seq, 'var(--warn2)')}">{fmtTime(m.time)}</td>
-              <td style="border-bottom:var(--px-1) solid var(--border);padding:var(--px-6) var(--px-12);color:{cellColor(m.seq, 'var(--warn2)')};white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title={m.subject}>{m.subject}</td>
+              <td style="border-bottom:var(--px-1) solid var(--border);padding:var(--px-6) var(--px-12);font-weight:700;color:{cellColor(m.seq, 'var(--sacc-amber)')}">{fmtTime(m.time)}</td>
+              <td style="border-bottom:var(--px-1) solid var(--border);padding:var(--px-6) var(--px-12);color:{cellColor(m.seq, 'var(--sacc-amber)')};white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title={m.subject}>{m.subject}</td>
               {#if hasKey}
                 <td style="border-bottom:var(--px-1) solid var(--border);padding:var(--px-6) var(--px-12);color:{cellColor(m.seq, 'var(--text2)')};white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title={m.key}>{m.key || '—'}</td>
               {/if}
               <!-- single-line preview trimmed to the column; hover shows the full text, Copy grabs all of it -->
-              <td style="border-bottom:var(--px-1) solid var(--border);padding:var(--px-6) var(--px-12);color:{cellColor(m.seq, 'var(--hex-98c379)')};white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title={m.payload}>{m.payload}</td>
+              <td style="border-bottom:var(--px-1) solid var(--border);padding:var(--px-6) var(--px-12);color:{cellColor(m.seq, 'var(--syntax-string)')};white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title={m.payload}>{m.payload}</td>
               <!-- action icons: recolour to white when the row is selected so the blue
                    highlight never hides them (View JSON / Copy / Delete). -->
               <td style="border-bottom:var(--px-1) solid var(--border);padding:var(--px-6) var(--px-8);white-space:nowrap">
@@ -333,7 +333,7 @@
       >
         <div style="display:flex;align-items:center;gap:var(--px-8);margin-bottom:var(--px-10)">
           <span style="font-size:var(--px-14);font-weight:600;color:var(--text)">Message #{viewState.seq}</span>
-          <span class="mono" style="font-size:var(--px-11);color:var(--warn2)">{viewState.subject}</span>
+          <span class="mono" style="font-size:var(--px-11);color:var(--sacc-amber)">{viewState.subject}</span>
           {#if !viewState.isJson}<span style="font-size:var(--px-10_5);color:var(--muted)">(not JSON — raw payload)</span>{/if}
           <span style="margin-left:auto;display:flex;gap:var(--px-8)">
             <span onclick={() => viewState && copyMsg(viewState.text)} onkeydown={(e) => e.key === 'Enter' && viewState && copyMsg(viewState.text)} role="button" tabindex="0" class="eg-btn">Copy</span>

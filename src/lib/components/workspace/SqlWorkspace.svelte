@@ -42,6 +42,10 @@
   let editor = $state<SqlEditor | null>(null)
   let connDropOpen = $state(false)
   const exec = $derived(results.get(tab.id))
+  // Result panel visibility: a freshly opened Query tab shows NO result panel —
+  // the editor fills the pane until a statement or Explain runs (which sets exec/
+  // explain + calls ui.showResultPanel). The user's Ctrl+J / X toggle still hides
+  // it afterwards. `exec`/`explain` are per-tab, so switching tabs is independent.
   const profile = $derived(connections.byId(tab.connectionId))
   const isOrphan = $derived(tab.systemType === 'orphan' || (!!tab.connectionId && !profile))
   const disconnected = $derived(!!profile && !profile.connected)
@@ -273,6 +277,19 @@
     const cid = acConnId
     if (!cid) return undefined
     const schemas = explorer.cache[cid]?.schemas ?? []
+    // Schema-as-database engines (MySQL/MariaDB/ClickHouse): the database you PICKED
+    // is the default schema for completion — anchor to it directly rather than the
+    // server's is_default flag. That flag (SCHEMA_NAME = DATABASE()) can fail to
+    // resolve to the selected DB (e.g. it decodes false → falls back to schemas[0],
+    // the first database alphabetically), which left the selected DB's tables
+    // suggestable only as `db.table`, never unqualified — the reported "no suggest".
+    if (
+      ['mysql', 'mariadb', 'clickhouse'].includes(tab.systemType) &&
+      currentDb &&
+      schemas.some((s) => s.name === currentDb)
+    ) {
+      return currentDb
+    }
     return (schemas.find((s) => s.is_default) ?? schemas[0])?.name
   })
 
@@ -562,6 +579,9 @@
     await runExplainSql(stmt.sql, cap?.actual_kind === 'analyze')
   }
   const explain = $derived(results.explainOf(tab.id))
+  // The result panel shows only once this tab has run something (see comment at
+  // the exec declaration) and isn't manually hidden.
+  const resultVisible = $derived(!ui.resultPanelHidden && (!!exec || !!explain))
   // Capability drives the Actual toggle visibility inside the plan view.
   let explainCap = $state<ipc.EngineCapability | null>(null)
   $effect(() => {
@@ -825,7 +845,7 @@
   </div>
 
   <!-- editor — fills the pane when the result panel is hidden, else fixed height -->
-  <div style={ui.resultPanelHidden ? 'flex:1;min-height:0' : `height:${ui.editorHeight}px;flex:none`}>
+  <div style={resultVisible ? `height:${ui.editorHeight}px;flex:none` : 'flex:1;min-height:0'}>
     <SqlEditor
       bind:this={editor}
       value={initialQuery}
@@ -844,7 +864,7 @@
     />
   </div>
 
-  {#if !ui.resultPanelHidden}
+  {#if resultVisible}
   <!-- split handle editor/result -->
   <div
     style="flex:none;height:var(--px-5);cursor:row-resize;background:var(--border)"
@@ -855,41 +875,23 @@
     onpointerup={() => (dragging = false)}
   ></div>
 
-  <!-- results -->
+  <!-- results — only rendered once the tab has run a statement/Explain -->
   <div style="min-height:0;flex:1;display:flex;flex-direction:column">
-    {#if exec || explain}
-      <ResultPanel
-        {exec}
-        connId={runConnId ?? tab.connectionId}
-        active={tabs.active?.id === tab.id}
-        accent={systemMeta(tab.systemType).accent}
-        onJump={jump}
-        onLoadMore={(idx) => results.fetchMoreCql(tab.id, idx)}
-        {explain}
-        capability={explainCap}
-        onExplainActual={explainSetActual}
-        onExplainReExplain={explainReExplain}
-        onExplainClose={explainClose}
-        onHide={() => (ui.resultPanelHidden = true)}
-      />
-    {:else}
-      <!-- empty result panel — still closable via the X (top-right), like the filled panel -->
-      <div style="flex:1;display:flex;flex-direction:column;min-height:0;position:relative">
-        <span
-          class="wk-hide mono"
-          onclick={() => (ui.resultPanelHidden = true)}
-          onkeydown={(e) => e.key === 'Enter' && (ui.resultPanelHidden = true)}
-          role="button"
-          tabindex="0"
-          title="Hide Result panel (Ctrl+J)"
-          aria-label="Hide Result panel"
-          style="position:absolute;top:var(--px-6);right:var(--px-10);display:flex;align-items:center;justify-content:center;width:var(--px-22);height:var(--px-22);border-radius:var(--px-5);cursor:pointer;color:var(--muted);font-size:var(--px-15);line-height:1"
-        >×</span>
-        <div style="flex:1;display:flex;align-items:center;justify-content:center;font-size:var(--px-12);color:var(--muted)">
-          Run a query (F5) to see results · Ctrl+Enter runs the statement at the cursor
-        </div>
-      </div>
-    {/if}
+    <ResultPanel
+      {exec}
+      connId={runConnId ?? tab.connectionId}
+      system={tab.systemType}
+      active={tabs.active?.id === tab.id}
+      accent={systemMeta(tab.systemType).accent}
+      onJump={jump}
+      onLoadMore={(idx) => results.fetchMoreCql(tab.id, idx)}
+      {explain}
+      capability={explainCap}
+      onExplainActual={explainSetActual}
+      onExplainReExplain={explainReExplain}
+      onExplainClose={explainClose}
+      onHide={() => (ui.resultPanelHidden = true)}
+    />
   </div>
   {/if}
 </div>
@@ -948,10 +950,6 @@
   .wk-tbtn:hover,
   .wk-drop-row:hover {
     background: var(--hover);
-  }
-  .wk-hide:hover {
-    background: color-mix(in srgb, var(--error) 18%, transparent);
-    color: var(--error);
   }
   .wk-select {
     background: var(--surface);

@@ -25,15 +25,16 @@
   let error = $state<string | null>(null)
   let expanded = $state<Set<string>>(new Set())
 
+  // Theme-aware streaming accents (legible on both the light + dark sidebar).
   const TYPE_COLOR: Record<string, string> = {
-    string: 'var(--hex-5b9bd5)',
-    hash: 'var(--hex-e8c547)',
-    list: 'var(--hex-56b6c2)',
-    set: 'var(--hex-b48ead)',
-    zset: 'var(--hex-e06c75)',
-    stream: 'var(--hex-e8923a)',
+    string: 'var(--sacc-blue)',
+    hash: 'var(--sacc-yellow)',
+    list: 'var(--sacc-cyan)',
+    set: 'var(--sacc-mauve)',
+    zset: 'var(--sacc-red)',
+    stream: 'var(--sacc-orange)',
   }
-  const typeColor = (t: string) => TYPE_COLOR[t] ?? 'var(--hex-9aa4b8)'
+  const typeColor = (t: string) => TYPE_COLOR[t] ?? 'var(--text2)'
   const typeBadge = (t: string) => (t || '?').slice(0, 1).toUpperCase()
   function ttlLabel(ttl: number): string {
     if (ttl === -1) return '∞'
@@ -247,7 +248,7 @@
       bind:value={pattern}
       placeholder="pattern (e.g. user:*)"
       class="mono"
-      style="width:100%;background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-8);font-size:var(--px-11_5);color:var(--text);outline:none"
+      style="width:100%;background:var(--raised);border:var(--px-1) solid var(--border2);border-radius:var(--px-6);padding:var(--px-5) var(--px-8);font-size:var(--px-11_5);color:var(--text);outline:none"
     />
   </div>
 

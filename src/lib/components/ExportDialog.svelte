@@ -11,16 +11,18 @@
   import { settings } from '$lib/stores/settings.svelte'
   import { toasts } from '$lib/stores/toast.svelte'
   import { toCsv, toJson, toSqlInsert, toExcelHtml, download } from '$lib/export/rows'
+  import { toXml } from '$lib/export/clipboard'
   import { buildExportSelect, supportsOffset } from '$lib/export/query'
   import { save as saveFileDialog } from '@tauri-apps/plugin-dialog'
 
-  type Fmt = 'csv' | 'json' | 'sql' | 'xls'
-  const EXT: Record<Fmt, string> = { csv: 'csv', json: 'json', sql: 'sql', xls: 'xls' }
+  type Fmt = 'csv' | 'json' | 'sql' | 'xls' | 'xml'
+  const EXT: Record<Fmt, string> = { csv: 'csv', json: 'json', sql: 'sql', xls: 'xls', xml: 'xml' }
   const MIME: Record<Fmt, string> = {
     csv: 'text/csv',
     json: 'application/json',
     sql: 'text/plain',
     xls: 'application/vnd.ms-excel',
+    xml: 'application/xml',
   }
   const PAGE = 5000
 
@@ -76,6 +78,7 @@
     if (format === 'csv') return toCsv(headers, rows)
     if (format === 'json') return toJson(rows.map((r) => Object.fromEntries(headers.map((h) => [h, r[h]]))))
     if (format === 'sql') return toSqlInsert(exportWizard.table || 'export', headers, rows)
+    if (format === 'xml') return toXml(headers, rows)
     return toExcelHtml(headers, rows)
   }
 
@@ -121,7 +124,7 @@
   // streaming_io setting is on. PostgreSQL + ClickHouse + csv/json/sql; else the
   // in-memory path.
   const canStream = $derived(
-    isTable && IS_TAURI && (system === 'postgres' || system === 'clickhouse') && format !== 'xls' && settings.value.streamingIo,
+    isTable && IS_TAURI && (system === 'postgres' || system === 'clickhouse') && ['csv', 'json', 'sql'].includes(format) && settings.value.streamingIo,
   )
 
   async function runStreaming(headers: string[]) {
@@ -199,7 +202,7 @@
         <!-- format -->
         <div style="display:flex;gap:var(--px-14);font-size:var(--px-12);color:var(--text2);align-items:center">
           Format
-          {#each ['csv', 'json', 'sql', 'xls'] as const as f (f)}
+          {#each ['csv', 'json', 'sql', 'xls', 'xml'] as const as f (f)}
             <label style="display:flex;align-items:center;gap:var(--px-5);cursor:pointer"><input type="radio" name="expfmt" checked={format === f} onchange={() => setFormat(f)} /> {f.toUpperCase()}</label>
           {/each}
         </div>

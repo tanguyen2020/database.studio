@@ -141,6 +141,45 @@ test('explorer: NATS stream subject filter + Add subject dialog', async ({ page 
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
 
+// A filter funnel on the right of each NATS stream row opens the subject filter
+// directly (no need for the context menu), and toggles it closed again.
+test('explorer: NATS stream funnel icon opens/closes the subject filter', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(String(e)))
+  await blockRemoteFonts(page)
+  await page.goto(APP_URL)
+  await page.waitForSelector('#app > *', { timeout: 15_000 })
+  await page.waitForTimeout(300)
+
+  await page.getByRole('button', { name: /Messaging NATS/ }).first().click()
+  await page.waitForTimeout(500)
+  await expect(page.getByText('ORDERS', { exact: true }).first()).toBeVisible({ timeout: 8000 })
+
+  // the ORDERS stream row (before expanding, only stream rows contain "orders")
+  const ordersRow = page.locator('[role="treeitem"]').filter({ hasText: 'ORDERS' }).first()
+  // click the funnel on its right → the subject filter box appears + both subjects
+  await ordersRow.getByTitle('Filter', { exact: true }).click()
+  await page.waitForTimeout(200)
+  const filterInput = page.getByPlaceholder('Filter subjects…')
+  await expect(filterInput).toBeVisible()
+  // the funnel focuses the input immediately so you can type right away
+  await expect(filterInput).toBeFocused()
+  await expect(page.getByText('orders.us', { exact: true }).first()).toBeVisible()
+
+  // type "eu" → orders.us filtered out
+  await filterInput.fill('eu')
+  await page.waitForTimeout(200)
+  await expect(page.getByText('orders.eu', { exact: true }).first()).toBeVisible()
+  await expect(page.getByText('orders.us', { exact: true })).toHaveCount(0)
+
+  // funnel now highlighted (Clear filter) → clicking it again closes the box
+  await ordersRow.getByTitle('Clear filter', { exact: true }).click()
+  await page.waitForTimeout(200)
+  await expect(filterInput).toHaveCount(0)
+
+  expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
+})
+
 // The subject-messages grid has an ＋ Add button that opens the publish dialog with
 // the current subject prefilled (Add message).
 test('explorer: NATS subject grid ＋ Add opens publish dialog', async ({ page }) => {

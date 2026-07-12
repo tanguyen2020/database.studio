@@ -25,15 +25,16 @@
   let stringDraft = $state('')
   let mem = $state<number | null>(null)
 
+  // Theme-aware streaming accents (legible on both the light + dark result grid).
   const TYPE_COLOR: Record<string, string> = {
-    string: 'var(--hex-5b9bd5)',
-    hash: 'var(--hex-e8c547)',
-    list: 'var(--hex-56b6c2)',
-    set: 'var(--hex-b48ead)',
-    zset: 'var(--hex-e06c75)',
-    stream: 'var(--hex-e8923a)',
+    string: 'var(--sacc-blue)',
+    hash: 'var(--sacc-yellow)',
+    list: 'var(--sacc-cyan)',
+    set: 'var(--sacc-mauve)',
+    zset: 'var(--sacc-red)',
+    stream: 'var(--sacc-orange)',
   }
-  const typeColor = (t: string) => TYPE_COLOR[t] ?? 'var(--hex-9aa4b8)'
+  const typeColor = (t: string) => TYPE_COLOR[t] ?? 'var(--text2)'
   function ttlLabel(ttl: number): string {
     if (ttl === -1) return '∞'
     if (ttl === -2) return 'expired'
@@ -164,7 +165,7 @@
     <tbody>
       {#each rows as row, i (i)}
         <tr>
-          <td style="padding:var(--px-7) var(--px-14);border-bottom:var(--px-1) solid var(--border);color:var(--hex-e8c547);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title={row[0]}>{row[0]}</td>
+          <td style="padding:var(--px-7) var(--px-14);border-bottom:var(--px-1) solid var(--border);color:var(--sacc-yellow);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title={row[0]}>{row[0]}</td>
           <td style="padding:var(--px-7) var(--px-14);border-bottom:var(--px-1) solid var(--border);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title={row[1]}>{row[1]}</td>
           {@render actions(row[0], row[1], row[0], del)}
         </tr>
@@ -247,7 +248,7 @@
           {#each v.value.entries as e (e.id)}
             {@const fieldsText = e.fields.map((f) => `${f[0]}=${f[1]}`).join('  ')}
             <tr>
-              <td style="padding:var(--px-6) var(--px-14);border-bottom:var(--px-1) solid var(--border);color:var(--hex-e8923a);white-space:nowrap">{e.id}</td>
+              <td style="padding:var(--px-6) var(--px-14);border-bottom:var(--px-1) solid var(--border);color:var(--sacc-orange);white-space:nowrap">{e.id}</td>
               <td style="padding:var(--px-6) var(--px-14);border-bottom:var(--px-1) solid var(--border);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title={fieldsText}>{fieldsText}</td>
               {@render actions(e.id, JSON.stringify(Object.fromEntries(e.fields)), e.id, (id) => delItem('stream', id))}
             </tr>
@@ -274,7 +275,7 @@
       >
         <div style="display:flex;align-items:center;gap:var(--px-8);margin-bottom:var(--px-10)">
           <span style="font-size:var(--px-14);font-weight:600;color:var(--text)">Value</span>
-          <span class="mono" style="font-size:var(--px-11);color:var(--hex-e8c547);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{viewState.label}</span>
+          <span class="mono" style="font-size:var(--px-11);color:var(--sacc-yellow);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{viewState.label}</span>
           {#if !viewState.isJson}<span style="font-size:var(--px-10_5);color:var(--muted)">(not JSON — raw value)</span>{/if}
           <span style="margin-left:auto;display:flex;gap:var(--px-8)">
             <span onclick={() => viewState && copy(viewState.text)} onkeydown={(e) => e.key === 'Enter' && viewState && copy(viewState.text)} role="button" tabindex="0" class="eg-btn">Copy</span>

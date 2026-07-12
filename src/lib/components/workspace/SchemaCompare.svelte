@@ -358,6 +358,9 @@
 
   // T19 — side-by-side DDL diff panel (routine/trigger) + prev/next điều hướng.
   let selDiff = $state<ObjectDiff | null>(null)
+  // Persistent row selection highlight (independent of the DDL modal, which closes
+  // and would otherwise clear any selection). Any clicked diff row stays highlighted.
+  let selRow = $state<string | null>(null)
   const ddlDiffs = $derived(diffs.filter((d) => (d.srcDdl != null || d.tgtDdl != null) && vis(d)))
   const ddlLines = $derived(selDiff ? lineDiff(selDiff.tgtDdl ?? '', selDiff.srcDdl ?? '') : [])
   function stepDiff(delta: number) {
@@ -458,9 +461,11 @@
         {@const hasDdl = d.srcDdl != null || d.tgtDdl != null}
         {@const nk = objectKey(d)}
         <div
-          style="display:flex;align-items:stretch;border-bottom:var(--px-1) solid var(--border);background:var(--panel);cursor:{hasDdl ? 'pointer' : 'default'}"
-          onclick={() => { if (hasDdl) selDiff = d }}
-          onkeydown={(e) => e.key === 'Enter' && hasDdl && (selDiff = d)}
+          class="cmp-row cmp-panel"
+          class:sel={selRow === nk}
+          style="display:flex;align-items:stretch;border-bottom:var(--px-1) solid var(--border);cursor:pointer"
+          onclick={() => { selRow = nk; if (hasDdl) selDiff = d }}
+          onkeydown={(e) => e.key === 'Enter' && (selRow = nk, hasDdl && (selDiff = d))}
           role="button"
           tabindex="0"
           title={hasDdl ? 'View DDL diff' : ''}
@@ -503,9 +508,11 @@
             {@const expandable = hasDdl || hasChildren}
             {@const isOpen = isRowOpen(dkey)}
             <div
-              style="display:flex;align-items:stretch;border-bottom:var(--px-1) solid var(--border);cursor:{expandable ? 'pointer' : 'default'}"
-              onclick={() => { if (hasDdl) selDiff = d; else if (hasChildren) toggleRow(dkey) }}
-              onkeydown={(e) => e.key === 'Enter' && (hasDdl ? (selDiff = d) : hasChildren && toggleRow(dkey))}
+              class="cmp-row"
+              class:sel={selRow === dkey}
+              style="display:flex;align-items:stretch;border-bottom:var(--px-1) solid var(--border);cursor:pointer"
+              onclick={() => { selRow = dkey; if (hasDdl) selDiff = d; else if (hasChildren) toggleRow(dkey) }}
+              onkeydown={(e) => e.key === 'Enter' && (selRow = dkey, hasDdl ? (selDiff = d) : hasChildren && toggleRow(dkey))}
               role="button"
               tabindex="0"
               title={hasDdl ? 'View DDL diff' : hasChildren ? 'Show columns / indexes / triggers' : ''}
@@ -535,7 +542,15 @@
                     {@const csm = statusMeta[c.status]}
                     {@const ck = columnKey(d.name, c.name)}
                     {@const changed = c.status !== 'identical'}
-                    <div style="display:flex;align-items:stretch;border-bottom:var(--px-1) solid var(--border);background:var(--panel);font-size:var(--px-11_5)">
+                    <div
+                      class="cmp-row cmp-panel"
+                      class:sel={selRow === ck}
+                      style="display:flex;align-items:stretch;border-bottom:var(--px-1) solid var(--border);font-size:var(--px-11_5);cursor:pointer"
+                      onclick={() => (selRow = ck)}
+                      onkeydown={(e) => e.key === 'Enter' && (selRow = ck)}
+                      role="button"
+                      tabindex="0"
+                    >
                       <div class="mono" style="flex:1;display:flex;align-items:center;gap:var(--px-8);padding:var(--px-4) var(--px-14) var(--px-4) var(--px-80);box-shadow:inset var(--px-3) 0 0 {csm.color}">
                         <!-- each column is checkable (only changed columns drive the migration) -->
                         <input type="checkbox" checked={selected.has(ck)} disabled={!changed} onchange={() => toggleSel(ck)} onclick={(e) => e.stopPropagation()} />
@@ -612,3 +627,24 @@
     </div>
   {/if}
 </div>
+
+<style>
+  /* Diff rows: hover + selected feedback using the SAME primary tints as the
+     Explorer tree (var(--hover) reads too faint on the light surface). Additive —
+     base backgrounds unchanged (nested rows keep --panel via .cmp-panel; table
+     rows stay transparent) so the existing look is preserved. */
+  .cmp-panel {
+    background: var(--panel);
+  }
+  .cmp-row:not(.sel):hover {
+    background: color-mix(in srgb, var(--primary) 9%, transparent);
+  }
+  .cmp-row.sel {
+    /* 16% blue fill — the diff rows already carry a left status bar, so no extra
+       accent bar (it would sit under that bar and read as a conflict). */
+    background: var(--rgba-91-124-255-_16);
+  }
+  .cmp-row.sel:hover {
+    background: color-mix(in srgb, var(--primary) 22%, transparent);
+  }
+</style>

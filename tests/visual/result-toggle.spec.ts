@@ -1,10 +1,11 @@
 import { expect, test } from '@playwright/test'
 import { APP_URL, blockRemoteFonts } from './helpers'
 
-// User request — the Result panel closes via an X in its header (no toolbar
-// button) and re-opens via Ctrl/Cmd+J; running a statement (or Explain) also
-// auto-reveals it when hidden.
-test('result panel: X hides it + Ctrl+J + auto-show on Run', async ({ page }) => {
+// User request — a freshly opened Query tab shows NO result panel; the editor
+// fills the pane until a statement (or Explain) runs, which auto-reveals it.
+// After results are shown, the X in the header hides the panel and Ctrl/Cmd+J
+// toggles it back.
+test('result panel: hidden on new tab, auto-shows on Run, X + Ctrl+J toggle', async ({ page }) => {
   const errors: string[] = []
   page.on('pageerror', (e) => errors.push(String(e)))
   await blockRemoteFonts(page)
@@ -17,26 +18,25 @@ test('result panel: X hides it + Ctrl+J + auto-show on Run', async ({ page }) =>
   await page.getByTitle('New SQL tab (Ctrl+T)').first().click()
   await page.waitForTimeout(200)
 
-  // Panel shown by default → empty-state hint visible.
-  const hint = page.getByText(/Run a query .* to see results/)
-  await expect(hint.first()).toBeVisible()
+  // New tab → no result panel yet (nothing has run).
+  const grid = page.getByText(/Rows 1–3 of 3/)
+  await expect(grid).toHaveCount(0)
+  await expect(page.getByTitle('Hide Result panel (Ctrl+J)')).toHaveCount(0)
 
-  // Click the X in the (empty) result panel → panel hidden (hint gone).
-  await page.getByTitle('Hide Result panel (Ctrl+J)').first().click()
-  await expect(hint).toHaveCount(0)
-
-  // Ctrl+J toggles it back on.
-  await page.keyboard.press('Control+j')
-  await expect(hint.first()).toBeVisible()
-
-  // Hide again, then Run → the panel auto-reveals with results (hint replaced by grid).
-  await page.getByTitle('Hide Result panel (Ctrl+J)').first().click()
-  await expect(hint).toHaveCount(0)
+  // Run → the panel auto-reveals with results.
   await page.locator('.cm-content').first().click()
   await page.keyboard.type('SELECT * FROM students')
   await page.getByRole('button', { name: 'Run' }).first().click()
   await page.waitForTimeout(500)
-  await expect(page.getByText(/Rows 1–3 of 3/).first()).toBeVisible()
+  await expect(grid.first()).toBeVisible()
+
+  // X in the result header hides it (results gone from view).
+  await page.getByTitle('Hide Result panel (Ctrl+J)').first().click()
+  await expect(grid).toHaveCount(0)
+
+  // Ctrl+J toggles it back on (results still there).
+  await page.keyboard.press('Control+j')
+  await expect(grid.first()).toBeVisible()
 
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })

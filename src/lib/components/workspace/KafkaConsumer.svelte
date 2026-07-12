@@ -250,7 +250,7 @@
   <!-- status / error line from librdkafka (so empty grid isn't a mystery) -->
   {#if statusMsg}
     <div
-      style="flex:none;padding:var(--px-6) var(--px-14);font-size:var(--px-11_5);border-bottom:var(--px-1) solid var(--border);color:{statusLevel === 'error' ? 'var(--danger)' : 'var(--warn2)'};background:var(--surface)"
+      style="flex:none;padding:var(--px-6) var(--px-14);font-size:var(--px-11_5);border-bottom:var(--px-1) solid var(--border);color:{statusLevel === 'error' ? 'var(--error)' : 'var(--sacc-amber)'};background:var(--surface)"
     >
       {statusLevel === 'error' ? '✕' : '⚠'} {statusMsg}
     </div>
@@ -286,10 +286,10 @@
               style="background:{rowBg(k)};cursor:default"
             >
               <td style="padding:var(--px-5) var(--px-12);border-bottom:var(--px-1) solid var(--border);white-space:nowrap;width:1%;color:{cellColor(k, 'var(--muted)')}">{m.partition}</td>
-              <td style="padding:var(--px-5) var(--px-12);border-bottom:var(--px-1) solid var(--border);white-space:nowrap;width:1%;color:{cellColor(k, 'var(--hex-d19a66)')}">{m.offset}</td>
-              <td style="padding:var(--px-5) var(--px-12);border-bottom:var(--px-1) solid var(--border);white-space:nowrap;width:1%;font-weight:700;color:{cellColor(k, 'var(--warn2)')}">{fmtTs(m.timestamp)}</td>
-              <td style="padding:var(--px-5) var(--px-12);border-bottom:var(--px-1) solid var(--border);color:{cellColor(k, 'var(--hex-61afef)')};max-width:var(--px-140);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title={m.key}>{m.key}</td>
-              <td style="padding:var(--px-5) var(--px-12);border-bottom:var(--px-1) solid var(--border);color:{cellColor(k, 'var(--hex-5cc4e8)')};max-width:var(--px-420);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title={decodeVal(m.value)}>{decodeVal(m.value)}</td>
+              <td style="padding:var(--px-5) var(--px-12);border-bottom:var(--px-1) solid var(--border);white-space:nowrap;width:1%;color:{cellColor(k, 'var(--syntax-number)')}">{m.offset}</td>
+              <td style="padding:var(--px-5) var(--px-12);border-bottom:var(--px-1) solid var(--border);white-space:nowrap;width:1%;font-weight:700;color:{cellColor(k, 'var(--sacc-amber)')}">{fmtTs(m.timestamp)}</td>
+              <td style="padding:var(--px-5) var(--px-12);border-bottom:var(--px-1) solid var(--border);color:{cellColor(k, 'var(--syntax-function)')};max-width:var(--px-140);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title={m.key}>{m.key}</td>
+              <td style="padding:var(--px-5) var(--px-12);border-bottom:var(--px-1) solid var(--border);color:{cellColor(k, 'var(--syntax-operator)')};max-width:var(--px-420);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title={decodeVal(m.value)}>{decodeVal(m.value)}</td>
               <!-- action icons recolour to white when selected so the blue highlight never hides them -->
               <td style="padding:var(--px-5) var(--px-8);border-bottom:var(--px-1) solid var(--border);white-space:nowrap">
                 <span onclick={(e) => { e.stopPropagation(); viewJson(m) }} onkeydown={(e) => e.key === 'Enter' && viewJson(m)} role="button" tabindex="0" title="View value as JSON" style="cursor:pointer;color:{cellColor(k, 'var(--muted)')};margin-right:var(--px-6)">⛶</span>
@@ -342,7 +342,7 @@
       >
         <div style="display:flex;align-items:center;gap:var(--px-8);margin-bottom:var(--px-10)">
           <span style="font-size:var(--px-14);font-weight:600;color:var(--text)">Message</span>
-          <span class="mono" style="font-size:var(--px-11);color:var(--hex-c4b5fd)">{viewState.label}</span>
+          <span class="mono" style="font-size:var(--px-11);color:var(--sacc-purple)">{viewState.label}</span>
           {#if !viewState.isJson}<span style="font-size:var(--px-10_5);color:var(--muted)">(not JSON — raw value)</span>{/if}
           <span style="margin-left:auto;display:flex;gap:var(--px-8)">
             <span onclick={() => viewState && copyText(viewState.text)} onkeydown={(e) => e.key === 'Enter' && viewState && copyText(viewState.text)} role="button" tabindex="0" class="cm-mini" style="cursor:pointer">Copy</span>

@@ -182,7 +182,11 @@ impl MySqlDriver {
             // CONVERT both operands to utf8mb4 so the `=` shares one collation and
             // doesn't hit "Illegal mix of collations" (information_schema columns may be
             // utf8mb3 or utf8mb4 depending on the server; the connection is utf8mb4).
-            "SELECT SCHEMA_NAME, CONVERT(SCHEMA_NAME USING utf8mb4) = CONVERT(DATABASE() USING utf8mb4)
+            // CAST the comparison to SIGNED + COALESCE(NULL DATABASE() → 0) so the flag
+            // decodes reliably as i64 (a bare `=` result can come back as a type
+            // try_get::<i64> rejects → is_default silently false → wrong default schema).
+            "SELECT SCHEMA_NAME,
+                    CAST(COALESCE(CONVERT(SCHEMA_NAME USING utf8mb4) = CONVERT(DATABASE() USING utf8mb4), 0) AS SIGNED)
              FROM information_schema.SCHEMATA
              WHERE SCHEMA_NAME NOT IN ('mysql','information_schema','performance_schema','sys')
              ORDER BY SCHEMA_NAME",

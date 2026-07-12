@@ -264,8 +264,6 @@
     const k = treeSel
     const s = selected
     if (!k || !s || k.indexOf(':') < 0) return null
-    const prefix = k.slice(0, k.indexOf(':'))
-    const rest = k.slice(k.indexOf(':') + 1)
     const kindMap: Record<string, { kind: string; label: string }> = {
       t: { kind: 'table', label: 'Table' },
       v: { kind: 'view', label: 'View' },
@@ -275,9 +273,28 @@
       fn: { kind: 'function', label: 'Function' },
       tg: { kind: 'trigger', label: 'Trigger' },
       seq: { kind: 'sequence', label: 'Sequence' },
+      sq: { kind: 'sequence', label: 'Sequence' }, // tree uses `sq:` for sequence rows
       s: { kind: 'schema', label: 'Schema' },
       dic: { kind: 'dictionary', label: 'Dictionary' },
     }
+    // Foreign-database subtree (PG/MSSQL other DBs): keys are
+    // `fdb:<db>:s:<schema>:<fk>:<name>[:col:<col>]`, browsed via a sub-connection.
+    // Publish those too so Properties works for tables outside the current DB.
+    const mf = k.match(/^fdb:([^:]+):s:([^:]+):([a-z]+):(.+)$/)
+    if (mf) {
+      const [, db, schema, fk, tail] = mf
+      const sub = dbSubId[db]
+      if (!sub) return null
+      const colM = tail.match(/^(.+):col:(.+)$/)
+      if (colM) {
+        return { connId: sub, system: s.system, kind: 'column', typeLabel: 'Column', schema, table: colM[1], name: colM[2] }
+      }
+      const mk = kindMap[fk]
+      if (!mk) return null
+      return { connId: sub, system: s.system, kind: mk.kind, typeLabel: mk.label, schema, name: tail }
+    }
+    const prefix = k.slice(0, k.indexOf(':'))
+    const rest = k.slice(k.indexOf(':') + 1)
     const m = kindMap[prefix]
     if (!m) return null
     const parts = rest.split('.')
@@ -969,9 +986,12 @@
     kafka: 'var(--hex-8b5cf6)',
   } as const
 
-  // Kafka topic icon — the gradient Kafka logo (connected nodes) served as an SVG
-  // asset so the blue→purple gradient renders exactly (like the NATS logo).
-  const KAFKA_LOGO = '<img src="/assets/db-kafka.svg" width="14" height="15" style="display:block" alt="kafka" />'
+  // Kafka topic icon — the app's canonical Kafka mark (the node-"K" connector,
+  // identical to SystemIcon's Kafka logo used on connections). Inline SVG using
+  // currentColor so it renders in the Kafka accent (C.kafka) like the rest of the
+  // Kafka identity — not the previous orange asset that clashed with the logo.
+  const KAFKA_LOGO =
+    '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="display:block" aria-hidden="true"><circle cx="6" cy="12" r="2.2"/><circle cx="18" cy="5.5" r="2.2"/><circle cx="18" cy="18.5" r="2.2"/><path d="M8 11 L16 6.5"/><path d="M8 13 L16 17.5"/></svg>'
 
   // Folder icon for database nodes (DataGrip-style) — inline SVG, uses currentColor.
   const DB_FOLDER_SVG =
@@ -1002,6 +1022,10 @@
     /** folder headers: show a funnel icon on the right that toggles the filter box
      *  (uses `key` as the folder-filter key) */
     filterable?: boolean
+    /** custom filter funnel on the right (e.g. NATS stream → subject filter) —
+     *  distinct from `filterable`, which drives the generic folder filter. */
+    onFilter?: () => void
+    filterActive?: boolean
     onClick?: () => void
     onDblClick?: () => void
   }
@@ -1064,6 +1088,20 @@
           style="flex:none;display:flex;align-items:center;justify-content:center;width:var(--px-15);color:{active ? 'var(--primary)' : 'var(--muted)'};cursor:pointer;opacity:{active ? 1 : 0.55}"
         >{@html FILTER_ICON}</span>
       {/if}
+      {#if p.onFilter}
+        <!-- custom filter funnel (NATS stream → subject filter). stopPropagation so
+             it doesn't toggle the row; highlights when the filter is open. -->
+        <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
+        <span
+          role="button"
+          tabindex="0"
+          onclick={(e) => { e.stopPropagation(); treeSel = p.key; p.onFilter?.() }}
+          onkeydown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); p.onFilter?.() } }}
+          title={p.filterActive ? 'Clear filter' : 'Filter'}
+          aria-label="Filter"
+          style="flex:none;display:flex;align-items:center;justify-content:center;width:var(--px-15);color:{p.filterActive ? 'var(--primary)' : 'var(--muted)'};cursor:pointer;opacity:{p.filterActive ? 1 : 0.55}"
+        >{@html FILTER_ICON}</span>
+      {/if}
     </div>
   {/snippet}
   {#if menu}
@@ -1090,7 +1128,7 @@
         onkeydown={(e) => e.key === 'Escape' && clearFolderFilter(key)}
         placeholder="Filter…"
         aria-label="Filter items"
-        style="flex:1;background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-5);padding:var(--px-2) var(--px-7);color:var(--text);font-size:var(--px-11);outline:none"
+        style="flex:1;background:var(--raised);border:var(--px-1) solid var(--border2);border-radius:var(--px-5);padding:var(--px-2) var(--px-7);color:var(--text);font-size:var(--px-11);outline:none"
       />
       <!-- × clears the query text (list restored) but keeps the box open -->
       <span onclick={() => clearFolderFilterText(key)} onkeydown={(e) => e.key === 'Enter' && clearFolderFilterText(key)} role="button" tabindex="0" title="Clear filter text" aria-label="Clear filter text" style="cursor:pointer;color:var(--muted);font-size:var(--px-13);line-height:1">×</span>
@@ -1143,7 +1181,7 @@
         placeholder="Filter databases…"
         aria-label="Filter databases"
         spellcheck="false"
-        style="width:100%;background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-22);color:var(--text);font-size:var(--px-11_5);outline:none"
+        style="width:100%;background:var(--raised);border:var(--px-1) solid var(--border2);border-radius:var(--px-6);padding:var(--px-4) var(--px-22);color:var(--text);font-size:var(--px-11_5);outline:none"
       />
       {#if dbFiltering}
         <span onclick={() => (dbFilter = '')} onkeydown={(e) => e.key === 'Enter' && (dbFilter = '')} role="button" tabindex="0" title="Clear" style="position:absolute;right:var(--px-14);top:50%;transform:translateY(-60%);color:var(--muted);font-size:var(--px-13);cursor:pointer">×</span>
@@ -1161,7 +1199,7 @@
         placeholder="Filter topics…"
         aria-label="Filter topics"
         spellcheck="false"
-        style="width:100%;background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-22);color:var(--text);font-size:var(--px-11_5);outline:none"
+        style="width:100%;background:var(--raised);border:var(--px-1) solid var(--border2);border-radius:var(--px-6);padding:var(--px-4) var(--px-22);color:var(--text);font-size:var(--px-11_5);outline:none"
       />
       {#if topicFiltering}
         <span onclick={() => (topicFilter = '')} onkeydown={(e) => e.key === 'Enter' && (topicFilter = '')} role="button" tabindex="0" title="Clear" style="position:absolute;right:var(--px-14);top:50%;transform:translateY(-50%);color:var(--muted);font-size:var(--px-13);cursor:pointer">×</span>
@@ -1193,7 +1231,7 @@
         placeholder="Filter streams…"
         aria-label="Filter streams"
         spellcheck="false"
-        style="width:100%;background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-22);color:var(--text);font-size:var(--px-11_5);outline:none"
+        style="width:100%;background:var(--raised);border:var(--px-1) solid var(--border2);border-radius:var(--px-6);padding:var(--px-4) var(--px-22);color:var(--text);font-size:var(--px-11_5);outline:none"
       />
       {#if streamFiltering}
         <span onclick={() => (streamFilter = '')} onkeydown={(e) => e.key === 'Enter' && (streamFilter = '')} role="button" tabindex="0" title="Clear" style="position:absolute;right:var(--px-14);top:calc(50% + var(--px-3));transform:translateY(-60%);color:var(--muted);font-size:var(--px-13);cursor:pointer">×</span>
@@ -1408,7 +1446,7 @@
             </ContextMenu.Content>
           {/snippet}
           {@render row(
-            { key: `kafka:t:${t.name}`, depth: 0, glyph: '', svg: KAFKA_LOGO, color: C.kafka, nameColor: 'var(--hex-56b6c2)', head: true, name: t.name, meta: t.meta, openOnSingleClick: true, onClick: () => selected && tabs.openKafkaTool(selected.id, 'kafka-consumer', t.name) },
+            { key: `kafka:t:${t.name}`, depth: 0, glyph: '', svg: KAFKA_LOGO, color: C.kafka, nameColor: 'var(--sacc-cyan)', head: true, name: t.name, meta: t.meta, openOnSingleClick: true, onClick: () => selected && tabs.openKafkaTool(selected.id, 'kafka-consumer', t.name) },
             topicMenu,
           )}
         {/each}
@@ -1439,21 +1477,22 @@
               <ContextMenu.Item onclick={() => selected && explorer.refreshStreaming(selected.id)}>Refresh</ContextMenu.Item>
             </ContextMenu.Content>
           {/snippet}
-          {@render row({ key: sKey, depth: 0, glyph: '', svg: NATS_LOGO, color: C.folder, nameColor: 'var(--success)', name: s.name, meta: s.meta, head: true, expandable: true, onClick: () => toggle(sKey) }, streamMenu)}
+          {@render row({ key: sKey, depth: 0, glyph: '', svg: NATS_LOGO, color: C.folder, nameColor: 'var(--sacc-green)', name: s.name, meta: s.meta, head: true, expandable: true, onClick: () => toggle(sKey), onFilter: () => (subjFilterOpen.has(s.name) ? clearSubjFilter(s.name) : openSubjFilter(s.name)), filterActive: subjFilterOpen.has(s.name) }, streamMenu)}
           {#if expanded.has(sKey)}
             {#if subjFilterOpen.has(s.name)}
               <!-- per-stream subject filter (SSMS-style), depth-1 indented -->
               <div style="display:flex;align-items:center;gap:var(--px-6);padding:var(--px-3) var(--px-8) var(--px-5);padding-left:calc(var(--px-8) + 1 * var(--px-14));position:relative">
                 <span style="position:absolute;left:calc(var(--px-16) + 1 * var(--px-14));color:var(--muted);font-size:var(--px-11);pointer-events:none">⌕</span>
-                <!-- svelte-ignore a11y_autofocus -->
+                <!-- use:focusFilter focuses on mount (reliable when toggled from
+                     the funnel — autofocus doesn't fire on a dynamic re-insert). -->
                 <input
                   class="mono"
+                  use:focusFilter
                   bind:value={subjFilters[s.name]}
                   placeholder="Filter subjects…"
                   aria-label="Filter subjects"
-                  autofocus
                   spellcheck="false"
-                  style="flex:1;background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-3) var(--px-22);color:var(--text);font-size:var(--px-11_5);outline:none"
+                  style="flex:1;background:var(--raised);border:var(--px-1) solid var(--border2);border-radius:var(--px-6);padding:var(--px-3) var(--px-22);color:var(--text);font-size:var(--px-11_5);outline:none"
                 />
                 <span onclick={() => clearSubjFilter(s.name)} onkeydown={(e) => e.key === 'Enter' && clearSubjFilter(s.name)} role="button" tabindex="0" title="Clear filter" style="position:absolute;right:var(--px-14);color:var(--muted);font-size:var(--px-13);cursor:pointer">×</span>
               </div>
@@ -1475,7 +1514,7 @@
                 </ContextMenu.Content>
               {/snippet}
               {@render row(
-                { key: `nats:sub:${s.name}:${sub.subject}`, depth: 1, glyph: '✉', color: C.seq, nameColor: 'var(--warn2)', name: sub.subject, openOnSingleClick: true, onClick: () => selected && tabs.openNatsSubject(selected.id, s.name, sub.subject) },
+                { key: `nats:sub:${s.name}:${sub.subject}`, depth: 1, glyph: '✉', color: C.seq, nameColor: 'var(--sacc-amber)', name: sub.subject, openOnSingleClick: true, onClick: () => selected && tabs.openNatsSubject(selected.id, s.name, sub.subject) },
                 subjectMenu,
               )}
             {/each}

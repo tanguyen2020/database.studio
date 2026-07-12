@@ -62,3 +62,39 @@ test('result grid copy menu: raw + 6 extract formats', async ({ page }) => {
 
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
+
+// The copy menu is tall (11 items). Because the result grid sits in the bottom
+// panel, right-clicking a row opens the menu low on screen — it must clamp so the
+// whole menu stays on screen (the last items, "XML", used to be clipped off).
+test('result grid copy menu: stays fully inside the viewport', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(String(e)))
+  await blockRemoteFonts(page)
+  await page.goto(APP_URL)
+  await page.waitForSelector('#app > *', { timeout: 15_000 })
+  await page.waitForTimeout(300)
+
+  await page.getByRole('button', { name: /Postgres/ }).first().click()
+  await page.waitForTimeout(200)
+  await page.getByTitle('New SQL tab (Ctrl+T)').first().click()
+  await page.waitForTimeout(200)
+  await page.locator('.cm-content').first().click()
+  await page.keyboard.type('SELECT * FROM students')
+  await page.getByRole('button', { name: 'Run' }).first().click()
+  await page.waitForTimeout(500)
+
+  await page.locator('.grid-row td:not(:first-child)').last().click({ button: 'right' })
+  await page.waitForTimeout(150)
+
+  // the menu container (parent of the "Copy cell" item) fits entirely on screen
+  const menu = page.getByText('Copy cell', { exact: true }).first().locator('..')
+  const box = await menu.boundingBox()
+  const vh = await page.evaluate(() => window.innerHeight)
+  expect(box).not.toBeNull()
+  expect(box!.y).toBeGreaterThanOrEqual(0)
+  expect(box!.y + box!.height).toBeLessThanOrEqual(vh)
+  // the last item is visible (was clipped before)
+  await expect(page.getByText('XML', { exact: true }).first()).toBeVisible()
+
+  expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
+})

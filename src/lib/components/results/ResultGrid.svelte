@@ -24,6 +24,7 @@
   import { applyGridChanges, previewGridChanges, chGenerateMutations, cancelQuery, type GridChange } from '$lib/ipc'
   import { tabs } from '$lib/stores/tabs.svelte'
   import { formatClipboard, type ClipFormat } from '$lib/export/clipboard'
+  import { classifyType } from '$lib/copy/types'
   import type { QueryResultSet } from '$lib/types'
 
   /** Bật editable grid khi mở từ Table Data Viewer (biết schema/table/pk). */
@@ -40,9 +41,12 @@
   interface Props {
     data: QueryResultSet
     editTarget?: EditTarget
+    /** system of the result's connection — enables numeric-column coloring for
+     *  relational engines only (falls back to editTarget.system when omitted). */
+    system?: string
   }
 
-  let { data, editTarget }: Props = $props()
+  let { data, editTarget, system }: Props = $props()
 
   // ---- editable state (chỉ dùng khi editTarget) ----------------------------
   // cell đã sửa: "rowIdx:col" → giá trị mới (đã coerce về kiểu gốc)
@@ -382,6 +386,20 @@
   const columns = $derived(data.cols.map(([name]) => name))
   const colTypes = $derived(Object.fromEntries(data.cols.map(([name, type]) => [name, type])))
 
+  // Numeric-column coloring — relational engines only (per request). Detect number
+  // families (int/bigint/float/decimal — covers int/smallint/integer/bigint,
+  // numeric/decimal/money, real/double/float) via the shared classifyType, and tint
+  // those columns' values with the theme-aware --syntax-number token. Selected
+  // cells/rows keep their white text (see the cell color guard below).
+  const NUM_COLOR_SYSTEMS = ['postgres', 'mysql', 'mariadb', 'mssql', 'sqlite']
+  const NUM_FAMILIES = new Set(['int', 'bigint', 'float', 'decimal'])
+  const colorNumbers = $derived(NUM_COLOR_SYSTEMS.includes(system ?? editTarget?.system ?? ''))
+  const numericCols = $derived(
+    colorNumbers
+      ? new Set(data.cols.filter(([, type]) => NUM_FAMILIES.has(classifyType(type))).map(([name]) => name))
+      : new Set<string>(),
+  )
+
   // Duplicate column names (e.g. `SELECT a.id, b.id`) used to crash the tab: the
   // keyed {#each} threw on the repeated key. Now the grid renders (keyed by index),
   // but because a row is a name-keyed object, same-named columns share one value —
@@ -674,6 +692,25 @@
   // ---- right-click copy menu -----------------------------------------------
   let ctxMenu = $state<{ x: number; y: number; row: number; col: string } | null>(null)
 
+  // Position the context menu fully inside the viewport. The menu's height varies
+  // with the item list (Copy formats etc.), so measure the real element after mount
+  // and flip/clamp — a fixed offset (the old `- 330`) under-counted and clipped the
+  // last items. Falls back to scrolling only when the menu is taller than the screen.
+  function placeMenu(node: HTMLElement, pos: { x: number; y: number }) {
+    const place = (p: { x: number; y: number }) => {
+      const margin = 8
+      const r = node.getBoundingClientRect()
+      let x = p.x
+      let y = p.y
+      if (x + r.width > window.innerWidth - margin) x = window.innerWidth - r.width - margin
+      if (y + r.height > window.innerHeight - margin) y = window.innerHeight - r.height - margin
+      node.style.left = `${Math.max(margin, x)}px`
+      node.style.top = `${Math.max(margin, y)}px`
+    }
+    place(pos)
+    return { update: place }
+  }
+
   function openCtx(e: MouseEvent, rowIdx: number, col: string) {
     e.preventDefault()
     e.stopPropagation()
@@ -853,7 +890,7 @@
         <!-- No. gutter (AUDIT-5 item 2): row number + click to select (shift/ctrl multi) -->
         <th style="width:1%;background:var(--header);border-bottom:var(--px-1) solid var(--border2);border-right:var(--px-1) solid var(--border);padding:var(--px-6) var(--px-8);text-align:right;font-weight:600;color:var(--muted);white-space:nowrap;position:sticky;left:0;z-index:11">#</th>
         {#each data.cols as [name, type], ci (ci)}
-          <th style="background:var(--header);border-bottom:var(--px-1) solid var(--border2);border-right:var(--px-1) solid var(--border);padding:var(--px-6) var(--px-12);text-align:left;font-weight:600;color:var(--text2);white-space:nowrap">
+          <th style="background:var(--header);border-bottom:var(--px-1) solid var(--border2);border-right:var(--px-1) solid var(--border);padding:var(--px-6) var(--px-12);text-align:{numericCols.has(name) ? 'right' : 'left'};font-weight:600;color:var(--text2);white-space:nowrap">
             {name}
             <span style="color:var(--muted);font-weight:400;font-size:var(--px-10)">{type}</span>
           </th>
@@ -907,7 +944,7 @@
                   class="mono"
                   value={editingCell?.seed ?? (cell.isNull ? '' : cell.text)}
                   use:focusEditor
-                  style="width:100%;border:none;outline:none;background:var(--raised);color:var(--text);font-size:var(--px-12);padding:var(--px-5) var(--px-12);font-family:inherit"
+                  style="width:100%;border:none;outline:none;background:var(--raised);color:var(--text);font-size:var(--px-12);padding:var(--px-5) var(--px-12);font-family:inherit;{numericCols.has(col) ? 'text-align:right' : ''}"
                   onpaste={(e) => onCellPaste(e, col, ri)}
                   onblur={(e) => commitEdit(ri, col, e.currentTarget.value, row?.[col] ?? null)}
                   onkeydown={(e) => {
@@ -923,13 +960,13 @@
                   }}
                 />
               {:else}
-                <div style="padding:var(--px-5) var(--px-12);display:flex;align-items:center;gap:var(--px-6)">
+                <div style="padding:var(--px-5) var(--px-12);display:flex;align-items:center;gap:var(--px-6);{numericCols.has(col) ? 'justify-content:flex-end' : ''}">
                   {#if cell.isNull}
                     <span style="font-size:var(--px-10);color:var(--muted);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-3);padding:0 var(--px-5)">NULL</span>
                   {:else if cell.text === ''}
                     <span style="font-size:var(--px-10);color:var(--muted);opacity:.6">''</span>
                   {:else}
-                    <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{cell.text}</span>
+                    <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;{numericCols.has(col) && !isCellSelected && !isRowSelected ? 'color:var(--syntax-number)' : ''}">{cell.text}</span>
                   {/if}
                   {#if isJsonValue(rawVal)}
                     <!-- JSON/JSONB cell badge — port dòng 445, click mở modal -->
@@ -1069,7 +1106,7 @@
   {@const m = ctxMenu}
   {@const selN = selectedRows.size || (selectedCell ? 1 : data.rows.length)}
   <div role="presentation" style="position:fixed;inset:0;z-index:60" onclick={() => (ctxMenu = null)} oncontextmenu={(e) => { e.preventDefault(); ctxMenu = null }}></div>
-  <div class="mono" style="position:fixed;left:{Math.min(m.x, window.innerWidth - 220)}px;top:{Math.min(m.y, window.innerHeight - 330)}px;z-index:61;min-width:var(--px-200);background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-8);box-shadow:0 var(--px-12) var(--px-30) var(--rgba-0-0-0-_5);padding:var(--px-4) 0;font-size:var(--px-12)">
+  <div use:placeMenu={{ x: m.x, y: m.y }} class="mono" style="position:fixed;left:{m.x}px;top:{m.y}px;max-height:calc(100vh - var(--px-16));overflow-y:auto;z-index:61;min-width:var(--px-200);background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-8);box-shadow:0 var(--px-12) var(--px-30) var(--rgba-0-0-0-_5);padding:var(--px-4) 0;font-size:var(--px-12)">
     {#snippet item(label: string, act: () => void)}
       <div
         role="button"

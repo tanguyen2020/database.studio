@@ -58,10 +58,18 @@ test('schema compare: pick source/target + diff view + sync script', async ({ pa
   await expect(page.getByText('Functions', { exact: true }).first()).toBeVisible()
   await page.getByText(/add_one/).first().click()
   await page.waitForTimeout(200)
+  // clicking a diff row marks it selected (existing-color highlight) — exactly one row
+  const selRow = page.locator('.cmp-row.sel')
+  await expect(selRow).toHaveCount(1)
+  // the highlight is a real, visible fill (not transparent)
+  const bg = await selRow.first().evaluate((el) => getComputedStyle(el).backgroundColor)
+  expect(bg).not.toBe('rgba(0, 0, 0, 0)')
   await expect(page.getByRole('dialog').getByText(/Source ·/).first()).toBeVisible()
   await expect(page.getByText(/Next ▶/).first()).toBeVisible()
   await page.getByRole('dialog').getByText('×').first().click()
   await page.waitForTimeout(150)
+  // selection PERSISTS after the DDL modal closes (it's independent of the modal)
+  await expect(page.locator('.cmp-row.sel')).toHaveCount(1)
 
   // Sync Script mode shows migration pre + an Execute button (task 5)
   await page.getByText('Sync Script', { exact: true }).first().click()

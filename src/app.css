@@ -59,6 +59,23 @@
   --syntax-function: #4078f2;
   --syntax-type: #c18401;
   --syntax-operator: #0184bc;
+
+  /* Streaming/keyspace label palette (NATS · Kafka · Redis nodes in the Object
+   * Explorer + their Result grids). The bright One-Dark-ish accents wash out on
+   * the light sidebar/grid, so these LIGHT values are darkened for legibility;
+   * the .dark block below restores the exact original hex so dark mode (the
+   * pixel-diff baseline) is untouched. Light literals are non-prototype (the
+   * prototype ships no light streaming palette) — same justified pattern as
+   * --grid-select / --sidebar above. */
+  --sacc-blue: #1f5c9e; /* token-exempt: light-mode streaming accent */
+  --sacc-cyan: #0e7490; /* token-exempt: light-mode streaming accent */
+  --sacc-green: #157f3c; /* token-exempt: light-mode streaming accent */
+  --sacc-amber: #92640a; /* token-exempt: light-mode streaming accent */
+  --sacc-yellow: #8a6d00; /* token-exempt: light-mode streaming accent */
+  --sacc-orange: #b1500f; /* token-exempt: light-mode streaming accent */
+  --sacc-purple: #6d3fc4; /* token-exempt: light-mode streaming accent */
+  --sacc-mauve: #8a4f85; /* token-exempt: light-mode streaming accent */
+  --sacc-red: #c0392b; /* token-exempt: light-mode streaming accent */
 }
 
 .dark {
@@ -72,6 +89,17 @@
   --syntax-function: var(--hex-61afef);
   --syntax-type: var(--hex-e5c07b);
   --syntax-operator: var(--hex-56b6c2);
+
+  /* Streaming palette — dark mode keeps the exact original bright accents. */
+  --sacc-blue: var(--hex-5b9bd5);
+  --sacc-cyan: var(--hex-56b6c2);
+  --sacc-green: var(--success);
+  --sacc-amber: var(--warn2);
+  --sacc-yellow: var(--hex-e8c547);
+  --sacc-orange: var(--hex-e8923a);
+  --sacc-purple: var(--hex-c4b5fd);
+  --sacc-mauve: var(--hex-b48ead);
+  --sacc-red: var(--hex-e06c75);
 }
 
 /* ---------------------------------------------------------------------------
