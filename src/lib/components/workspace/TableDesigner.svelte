@@ -10,6 +10,7 @@
   import { tabs } from '$lib/stores/tabs.svelte'
   import { toasts } from '$lib/stores/toast.svelte'
   import { systemMeta } from '$lib/systems'
+  import SystemBadge from '$lib/components/SystemBadge.svelte'
   import { designerTypes } from '$lib/sql/ddl'
   import { defaultColumnType } from '$lib/sql/datatypes'
   import TypeSelect from '$lib/components/TypeSelect.svelte'
@@ -497,11 +498,20 @@
   <!-- header -->
   <div style="flex:none;display:flex;align-items:center;gap:var(--px-12);padding:var(--px-9) var(--px-14);border-bottom:var(--px-1) solid var(--border);background:var(--surface)">
     <span style="width:var(--px-3);height:var(--px-20);border-radius:var(--px-2);background:{accent}"></span>
-    <div style="display:flex;flex-direction:column;line-height:1.15">
-      <span style="font-size:var(--px-12_5);font-weight:600;color:var(--text)">{profile?.name ?? '—'}</span>
-      <span class="mono" style="font-size:var(--px-10);color:var(--muted)">{dbName ? `${dbName}${schema ? ` · ${schema}` : ''}` : schema || 'database'}{isNew ? '' : ' · alter'}</span>
-    </div>
-    <span style="font-size:var(--px-12);color:var(--muted)">Table</span>
+    <!-- Connection identity: engine badge + connection name -->
+    <SystemBadge system={system} />
+    <span style="font-size:var(--px-13);font-weight:600;color:var(--text)" title="Connection">{profile?.name ?? '—'}</span>
+    <span style="color:var(--muted);font-size:var(--px-12)">/</span>
+    <!-- Database (+ schema) this designer targets — a distinct accent chip -->
+    <span
+      class="mono"
+      title={`Database: ${dbName || '(none)'}${schema && schema !== dbName ? ` · schema: ${schema}` : ''}`}
+      style="display:inline-flex;align-items:center;gap:var(--px-5);font-size:var(--px-11_5);font-weight:600;color:{accent};background:color-mix(in srgb, {accent} 14%, transparent);border:var(--px-1) solid color-mix(in srgb, {accent} 45%, transparent);border-radius:var(--px-6);padding:var(--px-2) var(--px-8)"
+    >
+      <span style="font-size:var(--px-11)">▤</span>{dbName || 'database'}{schema && schema !== dbName ? ` · ${schema}` : ''}
+    </span>
+    {#if !isNew}<span class="mono" style="font-size:var(--px-9);font-weight:700;color:var(--hex-e8923a);border:var(--px-1) solid var(--hex-e8923a);border-radius:var(--px-3);padding:0 var(--px-5)">ALTER</span>{/if}
+    <span style="font-size:var(--px-12);color:var(--muted);margin-left:var(--px-4)">Table</span>
     <input bind:value={name} disabled={!isNew} class="mono" style="font-size:var(--px-13_5);font-weight:600;background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-7);padding:var(--px-5) var(--px-11);color:var(--text);outline:none;width:var(--px-220);opacity:{isNew ? 1 : 0.7}" />
     <div style="display:flex;background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-7);overflow:hidden;margin-left:var(--px-6)">
       <span onclick={() => (mode = 'table')} onkeydown={(e) => e.key === 'Enter' && (mode = 'table')} role="button" tabindex="0" style="padding:var(--px-5) var(--px-14);font-size:var(--px-12);font-weight:600;cursor:pointer;background:{mode === 'table' ? 'var(--primary)' : 'transparent'};color:{mode === 'table' ? 'var(--hex-fff)' : 'var(--text2)'}">Table</span>
