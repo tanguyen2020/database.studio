@@ -473,7 +473,7 @@
         <div class="mono" style="flex:1;overflow:auto;min-height:0;font-size:var(--px-11_5);margin-bottom:var(--px-6)">
           {#each cliLog as l, i (i)}
             <div style="color:var(--muted)"><span style="color:#D82C20;font-weight:700">{cliPrompt}</span> {l.cmd}</div>
-            <pre style="margin:0 0 var(--px-4);white-space:pre-wrap;word-break:break-word;color:{l.err ? 'var(--error)' : 'var(--text2)'}">{l.out}</pre>
+            <pre class="selectable" style="margin:0 0 var(--px-4);white-space:pre-wrap;word-break:break-word;color:{l.err ? 'var(--error)' : 'var(--text2)'}">{l.out}</pre>
           {/each}
         </div>
       {/if}

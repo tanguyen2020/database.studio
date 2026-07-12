@@ -338,7 +338,7 @@
             </div>
           {/each}
           {#if kvValue}
-            <pre class="mono" style="margin-top:var(--px-10);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-8);font-size:var(--px-12);white-space:pre-wrap;word-break:break-word">{kvValue.key} = {kvValue.value}</pre>
+            <pre class="selectable mono" style="margin-top:var(--px-10);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-8);font-size:var(--px-12);white-space:pre-wrap;word-break:break-word">{kvValue.key} = {kvValue.value}</pre>
           {/if}
         {:else}
           <div style="color:var(--muted);font-size:var(--px-12)">Select a bucket to view keys.</div>

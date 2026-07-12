@@ -73,7 +73,7 @@
       {:else if notApplicable}
         <div style="color:var(--muted);font-size:var(--px-12_5)">EXPLAIN does not apply to <b>{plan?.system}</b>.</div>
       {:else if showRaw}
-        <pre class="mono" style="margin:0;font-size:var(--px-12);line-height:1.55;white-space:pre-wrap;color:var(--text)">{plan?.raw}</pre>
+        <pre class="selectable mono" style="margin:0;font-size:var(--px-12);line-height:1.55;white-space:pre-wrap;color:var(--text)">{plan?.raw}</pre>
       {:else if isTracing && plan?.root}
         <div style="font-size:var(--px-11_5);color:#e0803a;background:rgba(224,128,58,.1);border:var(--px-1) solid #e0803a;border-radius:var(--px-6);padding:var(--px-6) var(--px-10);margin-bottom:var(--px-10)">This is an execution <b>trace</b> (diagnostics), not a cost-based plan — Cassandra has no query planner.</div>
         <PlanNodeBox node={plan.root} />

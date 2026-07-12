@@ -108,7 +108,7 @@
           </label>
         {/if}
         <div style="font-size:var(--px-11);color:var(--muted)">DDL preview</div>
-        <pre class="mono" style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-10);font-size:var(--px-11);margin:0;max-height:var(--px-150);overflow:auto;color:var(--text2)">{ddl || '-- fill in the required fields'}</pre>
+        <pre class="selectable mono" style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-10);font-size:var(--px-11);margin:0;max-height:var(--px-150);overflow:auto;color:var(--text2)">{ddl || '-- fill in the required fields'}</pre>
         {#if err}<div style="font-size:var(--px-12);color:var(--error)">✗ {err}</div>{/if}
       </div>
       <div style="flex:none;display:flex;gap:var(--px-9);padding:var(--px-13) var(--px-18);border-top:var(--px-1) solid var(--border);background:var(--panel)">

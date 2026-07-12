@@ -151,7 +151,7 @@
     </div>
     <span class="eg-btn" role="button" tabindex="0" aria-disabled={!ixDdl || busy} onclick={createIndex} onkeydown={(e) => e.key === 'Enter' && createIndex()} style="opacity:{ixDdl && !busy ? 1 : 0.5}">Create index</span>
   </div>
-  {#if ixDdl}<pre class="mono" style="font-size:var(--px-10_5);color:var(--muted);background:var(--panel);border-radius:var(--px-6);padding:var(--px-8);margin:0;overflow:auto">{ixDdl}</pre>{/if}
+  {#if ixDdl}<pre class="selectable mono" style="font-size:var(--px-10_5);color:var(--muted);background:var(--panel);border-radius:var(--px-6);padding:var(--px-8);margin:0;overflow:auto">{ixDdl}</pre>{/if}
 
   <!-- Foreign keys -->
   <div style="font-size:var(--px-13);font-weight:600;color:var(--text);margin-top:var(--px-6)">Foreign keys ({fks.length})</div>
@@ -170,5 +170,5 @@
     <input bind:value={fkToCol} placeholder="ref column" class="mono" style="width:var(--px-110);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-8);color:var(--text);font-size:var(--px-11)" />
     <span class="eg-btn" role="button" tabindex="0" aria-disabled={!fkDdl || busy} onclick={addFk} onkeydown={(e) => e.key === 'Enter' && addFk()} style="opacity:{fkDdl && !busy ? 1 : 0.5}">Add FK</span>
   </div>
-  {#if fkDdl}<pre class="mono" style="font-size:var(--px-10_5);color:var(--muted);background:var(--panel);border-radius:var(--px-6);padding:var(--px-8);margin:0;overflow:auto">{fkDdl}</pre>{/if}
+  {#if fkDdl}<pre class="selectable mono" style="font-size:var(--px-10_5);color:var(--muted);background:var(--panel);border-radius:var(--px-6);padding:var(--px-8);margin:0;overflow:auto">{fkDdl}</pre>{/if}
 </div>

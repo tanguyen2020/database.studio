@@ -580,7 +580,7 @@
     </div>
     <div style="flex:1;overflow:auto;background:var(--bg)">
       <!-- syntax-coloured migration (keywords / strings / comments) for readability -->
-      <pre class="mono" style="margin:0;padding:var(--px-16) var(--px-18);font-size:var(--px-12_5);line-height:1.6;white-space:pre;color:var(--text)">{#each highlightSql(migration) as t}<span style="color:{sqlTokenColor(t.kind)}">{t.text}</span>{/each}</pre>
+      <pre class="selectable mono" style="margin:0;padding:var(--px-16) var(--px-18);font-size:var(--px-12_5);line-height:1.6;white-space:pre;color:var(--text)">{#each highlightSql(migration) as t}<span style="color:{sqlTokenColor(t.kind)}">{t.text}</span>{/each}</pre>
     </div>
   {/if}
 

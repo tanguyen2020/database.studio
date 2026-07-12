@@ -340,7 +340,7 @@
             <span onclick={() => (viewState = null)} onkeydown={(e) => e.key === 'Enter' && (viewState = null)} role="button" tabindex="0" class="eg-btn">Close</span>
           </span>
         </div>
-        <pre class="mono" style="flex:1;overflow:auto;margin:0;background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-8);padding:var(--px-12);font-size:var(--px-12);line-height:1.5;color:var(--text);white-space:pre-wrap;word-break:break-word">{#if viewState.isJson}{#each highlightJson(viewState.text) as tok}<span style="color:{jsonTokenColor(tok.kind)}">{tok.text}</span>{/each}{:else}{viewState.text}{/if}</pre>
+        <pre class="selectable mono" style="flex:1;overflow:auto;margin:0;background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-8);padding:var(--px-12);font-size:var(--px-12);line-height:1.5;color:var(--text);white-space:pre-wrap;word-break:break-word">{#if viewState.isJson}{#each highlightJson(viewState.text) as tok}<span style="color:{jsonTokenColor(tok.kind)}">{tok.text}</span>{/each}{:else}{viewState.text}{/if}</pre>
       </div>
     </div>
   {/if}

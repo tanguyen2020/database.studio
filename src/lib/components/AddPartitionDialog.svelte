@@ -180,7 +180,7 @@
             <!-- live script (UI + script together) -->
             <div style="display:flex;flex-direction:column;gap:var(--px-4)">
               <span class="mono" style="font-size:var(--px-11);text-transform:uppercase;letter-spacing:.06em;color:var(--muted)">Script</span>
-              <pre class="mono" style="margin:0;padding:var(--px-10) var(--px-12);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-8);font-size:var(--px-12);line-height:1.55;white-space:pre-wrap;overflow-x:auto;color:var(--text);min-height:var(--px-40)">{#if sql}{#each highlightSql(sql) as tk}<span style="color:{sqlTokenColor(tk.kind)}">{tk.text}</span>{/each}{:else if warning}<span style="color:var(--warn)">-- {warning}</span>{:else}<span style="color:var(--syntax-comment)">-- fill in the name and bound</span>{/if}</pre>
+              <pre class="selectable mono" style="margin:0;padding:var(--px-10) var(--px-12);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-8);font-size:var(--px-12);line-height:1.55;white-space:pre-wrap;overflow-x:auto;color:var(--text);min-height:var(--px-40)">{#if sql}{#each highlightSql(sql) as tk}<span style="color:{sqlTokenColor(tk.kind)}">{tk.text}</span>{/each}{:else if warning}<span style="color:var(--warn)">-- {warning}</span>{:else}<span style="color:var(--syntax-comment)">-- fill in the name and bound</span>{/if}</pre>
             </div>
             {#if warning}<div class="mono" style="font-size:var(--px-11_5);color:var(--warn)">⚠ {warning}</div>{/if}
           {/if}

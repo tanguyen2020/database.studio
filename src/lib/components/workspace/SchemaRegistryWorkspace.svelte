@@ -100,7 +100,7 @@
           </div>
         </div>
         <div style="flex:1;overflow:auto;min-height:0;padding:var(--px-14) var(--px-16)">
-          <pre class="mono" style="margin:0;font-size:var(--px-12);line-height:1.55;color:var(--text);white-space:pre-wrap">{schema.schema}</pre>
+          <pre class="selectable mono" style="margin:0;font-size:var(--px-12);line-height:1.55;color:var(--text);white-space:pre-wrap">{schema.schema}</pre>
         </div>
         <div style="flex:none;border-top:var(--px-1) solid var(--border);background:var(--surface);padding:var(--px-8) var(--px-14);font-size:var(--px-11);color:var(--muted)">Compatibility: <span style="color:var(--text2)">{schema.compat}</span> · Schema ID <span class="mono" style="color:var(--text2)">{schema.id}</span></div>
       {:else}

@@ -193,7 +193,7 @@
               {:else if defError}
                 <div class="pp-err">{defError}</div>
               {:else if defText}
-                <pre class="mono pp-def">{defText}</pre>
+                <pre class="selectable mono pp-def">{defText}</pre>
               {:else}
                 <div class="pp-note">No definition available</div>
               {/if}

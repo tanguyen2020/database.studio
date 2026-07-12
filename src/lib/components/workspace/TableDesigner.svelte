@@ -790,7 +790,7 @@
             {#if partScript}
               <div style="display:flex;flex-direction:column;gap:var(--px-4)">
                 <span class="mono" style="font-size:var(--px-11);text-transform:uppercase;letter-spacing:.06em;color:var(--muted)">{partLocked ? 'Add-partition script' : partConvert ? 'Convert-to-partitioned script' : 'Partition script'}</span>
-                <pre class="mono" style="margin:0;padding:var(--px-10) var(--px-12);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-8);font-size:var(--px-12);line-height:1.55;white-space:pre-wrap;overflow-x:auto;color:var(--text)">{#each highlightSql(partScript) as tk}<span style="color:{sqlTokenColor(tk.kind)}">{tk.text}</span>{/each}</pre>
+                <pre class="selectable mono" style="margin:0;padding:var(--px-10) var(--px-12);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-8);font-size:var(--px-12);line-height:1.55;white-space:pre-wrap;overflow-x:auto;color:var(--text)">{#each highlightSql(partScript) as tk}<span style="color:{sqlTokenColor(tk.kind)}">{tk.text}</span>{/each}</pre>
               </div>
             {/if}
             {#each partBuild.warnings as w (w)}
@@ -808,7 +808,7 @@
         </div>
       {/if}
       <!-- syntax-coloured DDL preview (keywords / strings / comments) for readability -->
-      <pre class="mono" style="margin:0;padding:var(--px-16) var(--px-18);font-size:var(--px-12_5);line-height:1.6;white-space:pre-wrap;color:var(--text)">{#if ddlText}{#each highlightSql(ddlText) as tk}<span style="color:{sqlTokenColor(tk.kind)}">{tk.text}</span>{/each}{:else}<span style="color:var(--syntax-comment)">-- add a column or object, then Save (Ctrl/Cmd+S)</span>{/if}</pre>
+      <pre class="selectable mono" style="margin:0;padding:var(--px-16) var(--px-18);font-size:var(--px-12_5);line-height:1.6;white-space:pre-wrap;color:var(--text)">{#if ddlText}{#each highlightSql(ddlText) as tk}<span style="color:{sqlTokenColor(tk.kind)}">{tk.text}</span>{/each}{:else}<span style="color:var(--syntax-comment)">-- add a column or object, then Save (Ctrl/Cmd+S)</span>{/if}</pre>
     </div>
   {/if}
 </div>
