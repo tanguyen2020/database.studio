@@ -381,6 +381,96 @@ async fn mongo_introspection_databases_collections_indexes_fields() {
     drv.kill_op(999_999).await.expect("killOp không được lỗi với opid không tồn tại");
 }
 
+// TLS: a self-signed cert (openssl) is copied into a mongod started with
+// --tlsMode requireTLS; the client connects with ssl=true + ssl_ca pointing at the
+// cert (its own CA). Proves the TLS connection path succeeds. Skips if openssl is
+// unavailable.
+#[tokio::test]
+async fn mongo_connects_over_tls() {
+    let dir = std::env::temp_dir().join(format!("ds-mongo-tls-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let ca_key = dir.join("ca.key");
+    let ca_crt = dir.join("ca.crt"); // client trust anchor (CA:TRUE)
+    let s_key = dir.join("server.key");
+    let s_csr = dir.join("server.csr");
+    let s_crt = dir.join("server.crt"); // server cert signed by CA, SAN=localhost
+    let ext = dir.join("san.ext");
+    std::fs::write(&ext, "subjectAltName=DNS:localhost,IP:127.0.0.1\nbasicConstraints=CA:FALSE\n").unwrap();
+    let p = |x: &std::path::Path| x.to_str().unwrap().to_string();
+    let openssl = |args: Vec<String>| -> bool {
+        std::process::Command::new("openssl")
+            .args(&args)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    };
+    // 1) self-signed CA, 2) server key+CSR, 3) server cert signed by CA with SAN.
+    let ok = openssl(vec![
+        "req".into(), "-x509".into(), "-newkey".into(), "rsa:2048".into(), "-nodes".into(),
+        "-keyout".into(), p(&ca_key), "-out".into(), p(&ca_crt), "-days".into(), "2".into(),
+        "-subj".into(), "/CN=Test CA".into(), "-addext".into(), "basicConstraints=critical,CA:TRUE".into(),
+    ]) && openssl(vec![
+        "req".into(), "-newkey".into(), "rsa:2048".into(), "-nodes".into(),
+        "-keyout".into(), p(&s_key), "-out".into(), p(&s_csr), "-subj".into(), "/CN=localhost".into(),
+    ]) && openssl(vec![
+        "x509".into(), "-req".into(), "-in".into(), p(&s_csr), "-CA".into(), p(&ca_crt),
+        "-CAkey".into(), p(&ca_key), "-CAcreateserial".into(), "-out".into(), p(&s_crt),
+        "-days".into(), "2".into(), "-extfile".into(), p(&ext),
+    ]);
+    if !ok {
+        eprintln!("SKIP mongo_connects_over_tls: openssl unavailable/failed");
+        let _ = std::fs::remove_dir_all(&dir);
+        return;
+    }
+    let cert = ca_crt.clone(); // client ssl_ca = the CA
+    // mongod tlsCertificateKeyFile = server cert + key concatenated.
+    let mut pem = std::fs::read(&s_crt).unwrap();
+    pem.extend(std::fs::read(&s_key).unwrap());
+
+    // mongod 7 requires a chain of trust (--tlsCAFile) when TLS is on (SERVER-72839).
+    let ca_bytes = std::fs::read(&ca_crt).unwrap();
+    let c = GenericImage::new("mongo", "7")
+        .with_exposed_port(27017.tcp())
+        .with_copy_to("/etc/mongo.pem", pem)
+        .with_copy_to("/etc/ca.crt", ca_bytes)
+        .with_cmd([
+            "--tlsMode", "requireTLS",
+            "--tlsCertificateKeyFile", "/etc/mongo.pem",
+            "--tlsCAFile", "/etc/ca.crt",
+            "--tlsAllowConnectionsWithoutCertificates",
+        ])
+        .start()
+        .await
+        .expect("start tls mongo container");
+    let port = c.get_host_port_ipv4(27017).await.unwrap();
+
+    let p = MongoConnParams {
+        host: "localhost".into(),
+        port,
+        database: String::new(),
+        user: String::new(),
+        password: String::new(),
+        ssl: true,
+        ssl_ca: cert.to_str().unwrap().to_string(),
+    };
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let drv = loop {
+        match MongoDriver::connect(&p).await {
+            Ok(d) => break d,
+            Err(e) => {
+                if Instant::now() >= deadline {
+                    let logs = String::from_utf8_lossy(&c.stdout_to_vec().await.unwrap_or_default()).to_string();
+                    panic!("TLS connect failed: {}\n--- mongod logs (tail) ---\n{}", e.message, &logs[logs.len().saturating_sub(2000)..]);
+                }
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+        }
+    };
+    // A command over the TLS connection succeeds → connection verified.
+    assert!(drv.databases().await.is_ok(), "chạy lệnh qua kết nối TLS thành công");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 // Auth-enabled server: a root user lives in `admin`, so build_uri's default
 // authSource=admin must let it log in even while the profile points at `appdb`.
 #[tokio::test]
