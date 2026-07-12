@@ -1,9 +1,10 @@
 import { expect, test } from '@playwright/test'
 import { APP_URL, blockRemoteFonts } from './helpers'
 
-// User request — the Result panel can be toggled (button + Ctrl/Cmd+J). When it
-// is hidden, running a statement (or Explain) auto-reveals it.
-test('result panel: toggle button + Ctrl+J + auto-show on Run', async ({ page }) => {
+// User request — the Result panel closes via an X in its header (no toolbar
+// button) and re-opens via Ctrl/Cmd+J; running a statement (or Explain) also
+// auto-reveals it when hidden.
+test('result panel: X hides it + Ctrl+J + auto-show on Run', async ({ page }) => {
   const errors: string[] = []
   page.on('pageerror', (e) => errors.push(String(e)))
   await blockRemoteFonts(page)
@@ -20,7 +21,7 @@ test('result panel: toggle button + Ctrl+J + auto-show on Run', async ({ page })
   const hint = page.getByText(/Run a query .* to see results/)
   await expect(hint.first()).toBeVisible()
 
-  // Click the toolbar toggle → panel hidden (hint gone).
+  // Click the X in the (empty) result panel → panel hidden (hint gone).
   await page.getByTitle('Hide Result panel (Ctrl+J)').first().click()
   await expect(hint).toHaveCount(0)
 

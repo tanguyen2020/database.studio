@@ -3,7 +3,7 @@
 // unit-testable; the component only handles the actual navigator.clipboard write.
 import { toCsv, toJson, toSqlInsert, sqlLiteral } from './rows'
 
-export type ClipFormat = 'tsv' | 'csv' | 'json' | 'sql-insert' | 'sql-update' | 'markdown'
+export type ClipFormat = 'tsv' | 'csv' | 'json' | 'sql-insert' | 'sql-update' | 'markdown' | 'xml'
 
 export interface CopyInput {
   headers: string[]
@@ -58,6 +58,27 @@ export function toSqlUpdate(
     .join('\n')
 }
 
+/** XML table dump. Each row → `<row>` with one `<col name="…">value</col>` per
+ *  column; the column name is an attribute so arbitrary names (spaces, digits,
+ *  reserved words) stay valid. NULL → an empty element marked `null="true"` so a
+ *  genuine NULL is distinguishable from an empty string. Text and attribute
+ *  values are XML-escaped. */
+export function toXml(headers: string[], rows: Record<string, unknown>[]): string {
+  const escText = (v: unknown) =>
+    rawCell(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  const escAttr = (s: string) =>
+    s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+  const col = (h: string, v: unknown) =>
+    v == null
+      ? `    <col name="${escAttr(h)}" null="true"/>`
+      : `    <col name="${escAttr(h)}">${escText(v)}</col>`
+  const body = rows
+    .map((r) => `  <row>\n${headers.map((h) => col(h, r[h])).join('\n')}\n  </row>`)
+    .join('\n')
+  const doc = body ? `<rows>\n${body}\n</rows>` : '<rows/>'
+  return `<?xml version="1.0" encoding="UTF-8"?>\n${doc}`
+}
+
 /** Only the chosen headers, in order, as plain objects (drop extra columns). */
 function pick(rows: Record<string, unknown>[], headers: string[]): Record<string, unknown>[] {
   return rows.map((r) => Object.fromEntries(headers.map((h) => [h, r[h]])))
@@ -79,5 +100,7 @@ export function formatClipboard(fmt: ClipFormat, input: CopyInput): string {
       return toSqlUpdate(table, input.headers, input.rows, input.keyColumns)
     case 'markdown':
       return toMarkdownTable(input.headers, input.rows)
+    case 'xml':
+      return toXml(input.headers, input.rows)
   }
 }

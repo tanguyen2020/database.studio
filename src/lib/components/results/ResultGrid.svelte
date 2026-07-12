@@ -736,6 +736,7 @@
     'sql-insert': 'SQL INSERT',
     'sql-update': 'SQL UPDATE',
     markdown: 'Markdown',
+    xml: 'XML',
   }
 
   function copyAs(fmt: ClipFormat) {
@@ -1094,6 +1095,7 @@
     {@render item('SQL INSERT', () => copyAs('sql-insert'))}
     {@render item('SQL UPDATE', () => copyAs('sql-update'))}
     {@render item('Markdown table', () => copyAs('markdown'))}
+    {@render item('XML', () => copyAs('xml'))}
   </div>
 {/if}
 

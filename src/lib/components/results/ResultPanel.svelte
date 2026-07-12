@@ -41,6 +41,9 @@
     onExplainActual?: (actual: boolean) => void
     onExplainReExplain?: () => void
     onExplainClose?: () => void
+    /** Hide/close the whole result panel (X in the header). Re-shown via Ctrl+J
+     *  or by running a statement/Explain. Optional — omit to hide the X. */
+    onHide?: () => void
   }
 
   let {
@@ -56,6 +59,7 @@
     onExplainActual,
     onExplainReExplain,
     onExplainClose,
+    onHide,
   }: Props = $props()
 
   // Show the plan sub-view. Auto-activates when a fresh Explain arrives (the
@@ -276,6 +280,20 @@
     {/if}
     {#if exec?.running}
       <span style="display:flex;align-items:center;padding:0 var(--px-13);font-size:var(--px-11);color:var(--text2)">Running…</span>
+    {/if}
+    {#if onHide}
+      <!-- X closes the whole result panel; re-open via Ctrl+J or by running a
+           statement / Explain (which auto-reveal it). -->
+      <span
+        class="rp-hide mono"
+        onclick={() => onHide?.()}
+        onkeydown={(e) => e.key === 'Enter' && onHide?.()}
+        role="button"
+        tabindex="0"
+        title="Hide Result panel (Ctrl+J)"
+        aria-label="Hide Result panel"
+        style="margin-left:auto;flex:none;display:flex;align-items:center;justify-content:center;width:var(--px-22);height:var(--px-22);margin-right:var(--px-8);border-radius:var(--px-5);cursor:pointer;color:var(--muted);font-size:var(--px-15);line-height:1"
+      >×</span>
     {/if}
   </div>
 
@@ -539,6 +557,10 @@
   }
   .msg-row:hover {
     background: var(--hover);
+  }
+  .rp-hide:hover {
+    background: color-mix(in srgb, var(--error) 18%, transparent);
+    color: var(--error);
   }
   /* Export menu — blue highlight on hover (DataGrip-style). */
   .exp-item:hover {

@@ -817,24 +817,10 @@
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9" stroke-dasharray="3 3"></circle><circle cx="12" cy="3" r="2" fill="currentColor" stroke="none"></circle><circle cx="20" cy="17" r="2" fill="currentColor" stroke="none"></circle><circle cx="4" cy="17" r="2" fill="currentColor" stroke="none"></circle></svg>Ring
       </div>
     {/if}
-    <div style="margin-left:auto;display:flex;align-items:center;gap:var(--px-10)">
+    <div style="margin-left:auto">
       {#if exec && !exec.running}
         <span class="mono" style="font-size:var(--px-11);color:var(--muted)">{exec.totalMs} ms</span>
       {/if}
-      <!-- toggle the Result panel (Ctrl/Cmd+J). When hidden, running a statement or
-           Explain auto-reveals it. Active (panel shown) = accent background. -->
-      <div
-        class="wk-tbtn"
-        onclick={() => ui.toggleResultPanel()}
-        onkeydown={(e) => e.key === 'Enter' && ui.toggleResultPanel()}
-        role="button"
-        tabindex="0"
-        aria-pressed={!ui.resultPanelHidden}
-        title={ui.resultPanelHidden ? 'Show Result panel (Ctrl+J)' : 'Hide Result panel (Ctrl+J)'}
-        style="background:{ui.resultPanelHidden ? 'transparent' : 'color-mix(in srgb, var(--primary) 16%, transparent)'};color:{ui.resultPanelHidden ? 'var(--text2)' : 'var(--primary)'}"
-      >
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"></rect><line x1="3" y1="14" x2="21" y2="14"></line></svg>Result
-      </div>
     </div>
   </div>
 
@@ -884,10 +870,24 @@
         onExplainActual={explainSetActual}
         onExplainReExplain={explainReExplain}
         onExplainClose={explainClose}
+        onHide={() => (ui.resultPanelHidden = true)}
       />
     {:else}
-      <div style="flex:1;display:flex;align-items:center;justify-content:center;font-size:var(--px-12);color:var(--muted)">
-        Run a query (F5) to see results · Ctrl+Enter runs the statement at the cursor
+      <!-- empty result panel — still closable via the X (top-right), like the filled panel -->
+      <div style="flex:1;display:flex;flex-direction:column;min-height:0;position:relative">
+        <span
+          class="wk-hide mono"
+          onclick={() => (ui.resultPanelHidden = true)}
+          onkeydown={(e) => e.key === 'Enter' && (ui.resultPanelHidden = true)}
+          role="button"
+          tabindex="0"
+          title="Hide Result panel (Ctrl+J)"
+          aria-label="Hide Result panel"
+          style="position:absolute;top:var(--px-6);right:var(--px-10);display:flex;align-items:center;justify-content:center;width:var(--px-22);height:var(--px-22);border-radius:var(--px-5);cursor:pointer;color:var(--muted);font-size:var(--px-15);line-height:1"
+        >×</span>
+        <div style="flex:1;display:flex;align-items:center;justify-content:center;font-size:var(--px-12);color:var(--muted)">
+          Run a query (F5) to see results · Ctrl+Enter runs the statement at the cursor
+        </div>
       </div>
     {/if}
   </div>
@@ -948,6 +948,10 @@
   .wk-tbtn:hover,
   .wk-drop-row:hover {
     background: var(--hover);
+  }
+  .wk-hide:hover {
+    background: color-mix(in srgb, var(--error) 18%, transparent);
+    color: var(--error);
   }
   .wk-select {
     background: var(--surface);

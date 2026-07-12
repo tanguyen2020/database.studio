@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatClipboard, rawCell, toMarkdownTable, toSqlUpdate, toTsv, type CopyInput } from './clipboard'
+import { formatClipboard, rawCell, toMarkdownTable, toSqlUpdate, toTsv, toXml, type CopyInput } from './clipboard'
 
 const HEADERS = ['id', 'name', 'active']
 const ROWS: Record<string, unknown>[] = [
@@ -49,6 +49,29 @@ describe('toSqlUpdate', () => {
   })
 })
 
+describe('toXml', () => {
+  it('emits a well-formed <rows>/<row>/<col> document, escaping text', () => {
+    const out = toXml(['a', 'b'], [{ a: 'x<y>&z', b: 1 }])
+    expect(out.split('\n')[0]).toBe('<?xml version="1.0" encoding="UTF-8"?>')
+    expect(out).toContain('<col name="a">x&lt;y&gt;&amp;z</col>')
+    expect(out).toContain('<col name="b">1</col>')
+    expect(out).toContain('<rows>')
+    expect(out.trimEnd().endsWith('</rows>')).toBe(true)
+  })
+  it('escapes quotes/specials in the column-name attribute', () => {
+    const out = toXml(['we"ird & <col>'], [{ 'we"ird & <col>': 'v' }])
+    expect(out).toContain('<col name="we&quot;ird &amp; &lt;col&gt;">v</col>')
+  })
+  it('marks a genuine NULL distinct from an empty string', () => {
+    const out = toXml(['a', 'b'], [{ a: null, b: '' }])
+    expect(out).toContain('<col name="a" null="true"/>')
+    expect(out).toContain('<col name="b"></col>')
+  })
+  it('no rows → self-closed <rows/>', () => {
+    expect(toXml(['a'], [])).toBe('<?xml version="1.0" encoding="UTF-8"?>\n<rows/>')
+  })
+})
+
 describe('formatClipboard', () => {
   const input: CopyInput = { headers: HEADERS, rows: ROWS, table: 'users', keyColumns: ['id'] }
 
@@ -78,6 +101,19 @@ describe('formatClipboard', () => {
 
   it('markdown produces a GFM table', () => {
     expect(formatClipboard('markdown', input).split('\n')[1]).toBe('| --- | --- | --- |')
+  })
+
+  it('xml round-trips through a DOM parser with the expected shape', () => {
+    const out = formatClipboard('xml', input)
+    const doc = new DOMParser().parseFromString(out, 'application/xml')
+    expect(doc.querySelector('parsererror')).toBeNull() // well-formed
+    const rows = doc.querySelectorAll('rows > row')
+    expect(rows).toHaveLength(2)
+    const cols = rows[0].querySelectorAll('col')
+    expect([...cols].map((c) => c.getAttribute('name'))).toEqual(HEADERS)
+    expect(rows[0].querySelector('col[name="name"]')?.textContent).toBe("O'Brien")
+    // extra (non-header) column is dropped
+    expect(doc.querySelector('col[name="extra"]')).toBeNull()
   })
 
   it('falls back to a placeholder table name when none is given', () => {

@@ -5,6 +5,7 @@ import { APP_URL, blockRemoteFonts } from './helpers'
 test('result grid copy menu: raw + 6 extract formats', async ({ page }) => {
   const errors: string[] = []
   page.on('pageerror', (e) => errors.push(String(e)))
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write'])
   await blockRemoteFonts(page)
   await page.goto(APP_URL)
   await page.waitForSelector('#app > *', { timeout: 15_000 })
@@ -23,7 +24,7 @@ test('result grid copy menu: raw + 6 extract formats', async ({ page }) => {
   await page.locator('.grid-row td:not(:first-child)').first().click({ button: 'right' })
   await page.waitForTimeout(150)
 
-  for (const label of ['Copy cell', 'Copy row', 'Copy column', 'Tab-separated', 'CSV', 'JSON', 'SQL INSERT', 'SQL UPDATE', 'Markdown table']) {
+  for (const label of ['Copy cell', 'Copy row', 'Copy column', 'Tab-separated', 'CSV', 'JSON', 'SQL INSERT', 'SQL UPDATE', 'Markdown table', 'XML']) {
     await expect(page.getByText(label, { exact: true }).first()).toBeVisible()
   }
 
@@ -33,6 +34,24 @@ test('result grid copy menu: raw + 6 extract formats', async ({ page }) => {
     return el ? getComputedStyle(el).fontFamily : ''
   })
   expect(fontFamily).toContain('JetBrains Mono')
+
+  // Copy XML actually writes well-formed XML to the clipboard (menu → formatClipboard
+  // → navigator.clipboard). Read it back and parse it to prove the copy path works.
+  await page.getByText('XML', { exact: true }).first().click()
+  await page.waitForTimeout(200)
+  const xml = await page.evaluate(() => navigator.clipboard.readText())
+  expect(xml.startsWith('<?xml')).toBe(true)
+  const shape = await page.evaluate((text) => {
+    const doc = new DOMParser().parseFromString(text, 'application/xml')
+    return {
+      err: !!doc.querySelector('parsererror'),
+      rows: doc.querySelectorAll('rows > row').length,
+      cols: doc.querySelectorAll('rows > row:first-child > col[name]').length,
+    }
+  }, xml)
+  expect(shape.err).toBe(false)
+  expect(shape.rows).toBeGreaterThan(0)
+  expect(shape.cols).toBeGreaterThan(0)
 
   // right-clicking the No. (#) gutter opens the same copy menu (scoped to the row)
   await page.keyboard.press('Escape')

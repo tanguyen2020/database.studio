@@ -1012,6 +1012,8 @@
   {#snippet inner()}
     <!-- node row — port dòng 145-151 -->
     <div
+      class="tree-row"
+      class:selected={sel}
       onclick={() => {
         // single-click SELECTS only; expansion needs a double-click (or the chevron).
         // Leaf action rows (Kafka topic / NATS subject) open on a single click.
@@ -1035,7 +1037,7 @@
         e.dataTransfer.setData('text/plain', p.dragData) // fallback mime for strict engines
       }}
       title={p.name}
-      style="display:flex;align-items:center;gap:var(--px-5);padding:var(--px-3) var(--px-6);border-radius:var(--px-5);cursor:pointer;white-space:nowrap;padding-left:calc(var(--px-6) + {p.depth} * var(--px-15));background:{sel ? 'var(--rgba-91-124-255-_16)' : 'transparent'};box-shadow:inset var(--px-2) 0 0 {sel ? 'var(--primary)' : 'transparent'}"
+      style="display:flex;align-items:center;gap:var(--px-5);padding:var(--px-3) var(--px-6);border-radius:var(--px-5);cursor:pointer;white-space:nowrap;padding-left:calc(var(--px-6) + {p.depth} * var(--px-15))"
     >
       <!-- chevron: single-click toggles expansion (row single-click only selects) -->
       <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
@@ -2519,6 +2521,20 @@
 {/if}
 
 <style>
+  /* tree row hover + selected — primary (blue) tint so they read clearly over the
+     softened sidebar in both themes. Background/accent-bar live here (not inline)
+     so :hover isn't blocked by an inline background. Selected = stronger tint +
+     left accent bar; matches the Connections list. */
+  .tree-row:hover {
+    background: color-mix(in srgb, var(--primary) 9%, transparent);
+  }
+  .tree-row.selected {
+    background: var(--rgba-91-124-255-_16);
+    box-shadow: inset var(--px-2) 0 0 var(--primary);
+  }
+  .tree-row.selected:hover {
+    background: color-mix(in srgb, var(--primary) 22%, transparent);
+  }
   .tree-refresh-glyph {
     display: inline-block;
     line-height: 1;
