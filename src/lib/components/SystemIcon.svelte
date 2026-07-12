@@ -22,6 +22,9 @@
   <img src="/assets/db-mysql.png" width={size} height={size} style="object-fit:contain;display:block" alt="mysql" />
 {:else if key === 'mssql'}
   <img src="/assets/db-mssql.png" width={size} height={size} style="object-fit:contain;display:block" alt="mssql" />
+{:else if key === 'mariadb'}
+  <!-- MariaDB sea lion (brand mark), hand-built SVG -->
+  <img src="/assets/db-mariadb.svg" width={size} height={size} style="object-fit:contain;display:block" alt="mariadb" />
 {:else if key === 'clickhouse'}
   <!-- columnar bars (svF) -->
   <svg width={size} height={size} viewBox="0 0 24 24" fill={color} stroke="none" aria-hidden="true">
@@ -59,10 +62,6 @@
       <circle cx="12" cy="12" r="2" fill={color} stroke="none" />
       <circle cx="12" cy="12" r="6" opacity="0.55" />
       <circle cx="12" cy="12" r="10" opacity="0.28" />
-    {:else if key === 'mariadb'}
-      <ellipse cx="12" cy="5" rx="7" ry="2.6" />
-      <path d="M5 5v14c0 1.4 3.1 2.6 7 2.6s7-1.2 7-2.6V5" />
-      <path d="M5 12c0 1.4 3.1 2.6 7 2.6s7-1.2 7-2.6" />
     {:else if key === 'cassandra'}
       <circle cx="12" cy="12" r="3" />
       <circle cx="12" cy="4" r="2" />

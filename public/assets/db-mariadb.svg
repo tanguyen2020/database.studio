@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+  <!-- MariaDB "sea lion" mark, brand brown (#C0765A). Side profile, sitting
+       upright and facing right: rounded head up top, pointed snout, thick body
+       tapering to a sitting base + a front flipper. -->
+  <path fill="#C0765A" d="M8.5 20.2
+    C6.6 19.9 5.6 18 5.8 15.8
+    C6.0 13.4 6.8 11.2 8.0 9.4
+    C8.8 8.2 9.2 7.0 9.4 5.6
+    C9.7 3.9 11.1 2.8 12.8 3.0
+    C14.6 3.2 15.7 4.7 15.5 6.5
+    C15.4 7.3 15.8 7.8 16.6 7.9
+    C17.7 8.0 18.2 8.9 17.5 9.7
+    C16.9 10.4 15.6 10.4 14.6 10.9
+    C13.3 11.5 12.9 12.9 13.0 14.3
+    C13.2 16.3 14.1 18.0 15.9 19.0
+    C17.1 19.7 16.7 21.0 15.2 21.1
+    C12.8 21.3 10.4 21.1 8.5 20.2 Z"/>
+  <!-- eye -->
+  <circle cx="13.2" cy="6.0" r="0.7" fill="#2e1a12"/>
+</svg>

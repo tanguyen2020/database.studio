@@ -20,6 +20,13 @@
   /* Result Grid row selection — periwinkle blue (the requested selection color).
      Not a prototype token; used only for grid selection. */
   --grid-select: #5b7cff;
+  /* Sidebar (Connections + Object Explorer) background. In light mode the prototype
+     surface is pure white, which reads as glary/high-strain for a tool developers
+     stare at all day — soften it to a low-luminance cool grey so the panel recedes
+     (the --border still separates it from the content area). Dark mode keeps the
+     prototype surface untouched (override in .dark below). Non-prototype literal,
+     same justified pattern as --grid-select above. */
+  --sidebar: #e7ebf3;
 
   /* shadcn-svelte mapping */
   --background: var(--bg);
@@ -55,6 +62,8 @@
 }
 
 .dark {
+  /* dark sidebar keeps the prototype surface (pixel-diff baseline is dark) */
+  --sidebar: var(--surface);
   /* SQL editor syntax palette — One Dark, via existing prototype hex tokens. */
   --syntax-keyword: var(--hex-c678dd);
   --syntax-string: var(--hex-98c379);

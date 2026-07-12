@@ -172,7 +172,7 @@
   <div style="flex:1;display:flex;min-height:0">
     <!-- LEFT SIDEBAR — dòng 71 -->
     <aside
-      style="width:{ui.sidebarWidth}px;flex:none;display:flex;flex-direction:column;background:var(--surface);border-right:var(--px-1) solid var(--border);min-height:0"
+      style="width:{ui.sidebarWidth}px;flex:none;display:flex;flex-direction:column;background:var(--sidebar);border-right:var(--px-1) solid var(--border);min-height:0"
     >
       <ConnectionList />
       <!-- resizer chiều cao connection list (persist) -->

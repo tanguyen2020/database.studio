@@ -2449,7 +2449,7 @@
 
   <!-- Object Properties panel (T18) — thông tin object đang chọn -->
   {#if selProps}
-    <div style="flex:none;border-top:var(--px-1) solid var(--border);background:var(--surface);padding:var(--px-7) var(--px-12)">
+    <div style="flex:none;border-top:var(--px-1) solid var(--border);background:var(--sidebar);padding:var(--px-7) var(--px-12)">
       <div style="font-size:var(--px-9_5);font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-bottom:var(--px-3)">Properties</div>
       <div style="display:flex;align-items:center;gap:var(--px-8);flex-wrap:wrap">
         <span style="font-size:var(--px-9_5);font-weight:700;color:var(--hex-fff);background:var(--primary);border-radius:var(--px-3);padding:var(--px-1) var(--px-6)">{selProps.type}</span>
