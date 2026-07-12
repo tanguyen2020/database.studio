@@ -57,7 +57,7 @@
     {@const cell = display(row?.[name])}
     <div style="display:flex;gap:var(--px-14);padding:var(--px-8) 0;border-bottom:var(--px-1) solid var(--border)">
       <div style="width:var(--px-160);flex:none">
-        <div style="font-weight:600;font-size:var(--px-12_5)">{name}</div>
+        <div class="mono" style="font-weight:600;font-size:var(--px-12_5)">{name}</div>
         <div class="mono" style="font-size:var(--px-10);color:var(--muted)">{type}</div>
       </div>
       <div class="mono selectable" style="font-size:var(--px-12_5);color:{cell.color};white-space:pre-wrap;word-break:break-word;min-width:0">{cell.text}</div>

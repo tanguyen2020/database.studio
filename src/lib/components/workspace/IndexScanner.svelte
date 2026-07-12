@@ -78,7 +78,7 @@
 <div style="flex:1;display:flex;flex-direction:column;min-height:0">
   <div style="flex:none;display:flex;align-items:center;gap:var(--px-10);padding:var(--px-10) var(--px-14);border-bottom:var(--px-1) solid var(--border);background:var(--surface);flex-wrap:wrap">
     <span style="font-weight:700;font-size:var(--px-13)">Index Scanner</span>
-    <span style="font-size:var(--px-11);color:var(--muted)">{schema}</span>
+    <span class="mono" style="font-size:var(--px-11);color:var(--muted)">{schema}</span>
     {#if result}
       <span style="font-size:var(--px-11);color:var(--muted)">{result.summary.total} indexes · {fmtSize(result.summary.total_size_bytes)}</span>
     {/if}
@@ -141,8 +141,8 @@
         <div class="mono" style="font-size:var(--px-13);font-weight:700">{sel.name}</div>
         <div style="font-size:var(--px-11_5);color:var(--text2)">Table: <span class="mono">{sel.table}</span></div>
         <div style="font-size:var(--px-11_5);color:var(--text2)">Columns: <span class="mono">{sel.columns.join(', ')}</span></div>
-        <div style="font-size:var(--px-11_5);color:var(--text2)">Type: {sel.index_type} · {sel.unique ? 'unique' : 'non-unique'}{sel.primary ? ' · primary' : ''}</div>
-        {#if sel.usage != null}<div style="font-size:var(--px-11_5);color:var(--text2)">Usage: {sel.usage} scans</div>{/if}
+        <div style="font-size:var(--px-11_5);color:var(--text2)">Type: <span class="mono">{sel.index_type}</span> · {sel.unique ? 'unique' : 'non-unique'}{sel.primary ? ' · primary' : ''}</div>
+        {#if sel.usage != null}<div style="font-size:var(--px-11_5);color:var(--text2)">Usage: <span class="mono">{sel.usage}</span> scans</div>{/if}
         {#if sel.flags.length}
           <div style="font-size:var(--px-11_5);color:#f0a020;font-weight:600;margin-top:var(--px-4)">Suggestion</div>
           {#if sel.flags.includes('unused')}<div style="font-size:var(--px-11);color:var(--text2)">Unused — consider DROP (self-confirm).</div>{/if}

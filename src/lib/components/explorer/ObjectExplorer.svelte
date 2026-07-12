@@ -1080,6 +1080,7 @@
   {#if folderFilterOpen[key]}
     <div style="display:flex;align-items:center;gap:var(--px-4);padding:var(--px-2) var(--px-6) var(--px-3);padding-left:calc(var(--px-6) + {depth} * var(--px-15))">
       <input
+        class="mono"
         use:focusFilter
         value={folderFilterRaw[key] ?? ''}
         oninput={(e) => setFolderFilter(key, e.currentTarget.value)}
@@ -1135,6 +1136,7 @@
     <div style="flex:none;padding:0 var(--px-8) var(--px-6);position:relative">
       <span style="position:absolute;left:var(--px-16);top:50%;transform:translateY(-60%);color:var(--muted);font-size:var(--px-11);pointer-events:none">⌕</span>
       <input
+        class="mono"
         bind:value={dbFilter}
         placeholder="Filter databases…"
         aria-label="Filter databases"
@@ -1152,6 +1154,7 @@
     <div style="flex:none;padding:var(--px-6) var(--px-8);position:relative">
       <span style="position:absolute;left:var(--px-16);top:50%;transform:translateY(-50%);color:var(--muted);font-size:var(--px-11);pointer-events:none">⌕</span>
       <input
+        class="mono"
         bind:value={topicFilter}
         placeholder="Filter topics…"
         aria-label="Filter topics"
@@ -1183,6 +1186,7 @@
     <div style="flex:none;padding:var(--px-6) var(--px-8) 0;position:relative">
       <span style="position:absolute;left:var(--px-16);top:calc(50% + var(--px-3));transform:translateY(-60%);color:var(--muted);font-size:var(--px-11);pointer-events:none">⌕</span>
       <input
+        class="mono"
         bind:value={streamFilter}
         placeholder="Filter streams…"
         aria-label="Filter streams"
@@ -1441,6 +1445,7 @@
                 <span style="position:absolute;left:calc(var(--px-16) + 1 * var(--px-14));color:var(--muted);font-size:var(--px-11);pointer-events:none">⌕</span>
                 <!-- svelte-ignore a11y_autofocus -->
                 <input
+                  class="mono"
                   bind:value={subjFilters[s.name]}
                   placeholder="Filter subjects…"
                   aria-label="Filter subjects"

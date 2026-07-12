@@ -144,7 +144,7 @@
                   <div class="pp-kv"><span>Default</span><b class="mono">{column.default}</b></div>
                 {/if}
                 <div class="pp-kv"><span>Key</span><b>{column.is_pk ? 'PRIMARY' : column.is_fk ? 'FOREIGN' : '—'}</b></div>
-                <div class="pp-kv"><span>Position</span><b>{column.ordinal}</b></div>
+                <div class="pp-kv"><span>Position</span><b class="mono">{column.ordinal}</b></div>
               </div>
             {:else}
               <div class="pp-note">Loading column…</div>

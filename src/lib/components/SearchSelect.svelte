@@ -100,6 +100,7 @@
 <span style="position:relative;display:inline-flex;align-items:center">
   <input
     bind:this={inputEl}
+    class="mono"
     {title}
     {disabled}
     value={open ? query : selectedLabel}
@@ -122,6 +123,7 @@
     >
       {#each filtered as o, i (o.value ?? o.label)}
         <div
+          class="mono"
           role="option"
           aria-selected={o.value === value}
           tabindex="-1"

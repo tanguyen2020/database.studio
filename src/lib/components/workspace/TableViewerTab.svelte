@@ -208,10 +208,10 @@
           {:else}
             <span style="width:var(--px-44)"></span>
           {/if}
-          <select class="tv-sel" bind:value={f.col}>
+          <select class="tv-sel mono" bind:value={f.col}>
             {#each columnNames as c (c)}<option value={c}>{c}</option>{/each}
           </select>
-          <select class="tv-sel" bind:value={f.op}>
+          <select class="tv-sel mono" bind:value={f.op}>
             {#each OPS as op (op)}<option value={op}>{op}</option>{/each}
           </select>
           {#if !noValue(f.op)}
@@ -244,7 +244,7 @@
       <span style="font-size:var(--px-11_5);color:var(--muted);flex:none;align-self:center">Sort:</span>
       {#each columnNames as c (c)}
         <span
-          class="tv-sort"
+          class="tv-sort mono"
           style="{sortIndicator(c) ? 'color:var(--primary);border-color:var(--primary)' : ''}"
           onclick={(e) => toggleSort(c, e.shiftKey)}
           onkeydown={(e) => e.key === 'Enter' && toggleSort(c, false)}

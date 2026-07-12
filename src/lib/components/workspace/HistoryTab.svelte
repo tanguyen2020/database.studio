@@ -43,9 +43,10 @@
     <div style="display:flex;align-items:center;gap:var(--px-6);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-7);padding:var(--px-5) var(--px-9);width:var(--px-300)">
       <span style="color:var(--muted);font-size:var(--px-12)">⌕</span>
       <input
+        class="mono"
         bind:value={search}
         placeholder="Search queries…"
-        style="border:none;background:transparent;color:var(--text);font-size:var(--px-12);outline:none;width:100%;font-family:inherit"
+        style="border:none;background:transparent;color:var(--text);font-size:var(--px-12);outline:none;width:100%"
       />
     </div>
     <span style="font-size:var(--px-11_5);color:var(--muted);margin-left:auto">{entries.length} queries</span>

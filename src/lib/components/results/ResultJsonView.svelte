@@ -52,7 +52,7 @@
     <span class="jv-btn" style="background:{wrap ? 'var(--hover)' : 'var(--panel)'}" onclick={() => (wrap = !wrap)} onkeydown={(e) => e.key === 'Enter' && (wrap = !wrap)} role="button" tabindex="0">Wrap</span>
     <div style="display:flex;align-items:center;gap:var(--px-6);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-3) var(--px-8)">
       <span style="color:var(--muted)">⌕</span>
-      <input bind:value={search} placeholder="Search…" style="border:none;background:transparent;color:var(--text);font-size:var(--px-11_5);outline:none;width:var(--px-130);font-family:inherit" />
+      <input class="mono" bind:value={search} placeholder="Search…" style="border:none;background:transparent;color:var(--text);font-size:var(--px-11_5);outline:none;width:var(--px-130)" />
     </div>
     <span class="jv-btn" style="margin-left:auto" onclick={copyAll} onkeydown={(e) => e.key === 'Enter' && copyAll()} role="button" tabindex="0">Copy</span>
   </div>
