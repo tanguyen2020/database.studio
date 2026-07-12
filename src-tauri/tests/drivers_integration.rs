@@ -1396,7 +1396,7 @@ async fn mssql_showplan_xml_estimated_plan() {
     let xml = cell.as_str().expect("XML string").to_string();
     assert!(xml.contains("ShowPlanXML"), "phải là SHOWPLAN_XML");
 
-    let p = plan::parse_mssql_xml(&xml).expect("parse SHOWPLAN_XML");
+    let p = plan::parse_mssql_xml(&xml, false).expect("parse SHOWPLAN_XML");
     let root = p.root.expect("có root");
     fn refs_table(n: &PlanNode) -> bool {
         n.extra.get("Relation Name").and_then(|v| v.as_str()).map(|s| s.contains("it_plan")).unwrap_or(false)

@@ -6,7 +6,10 @@ use serde::Serialize;
 use tauri::State;
 
 use crate::storage::crypto;
-use crate::drivers::backup::{backup_tool, external_backup_cmd, mongo_restore_cmd, BackupTarget};
+use crate::drivers::backup::{
+    backup_tool, external_backup_cmd, external_restore_cmd, mongo_restore_cmd, restore_tool,
+    BackupTarget,
+};
 use crate::drivers::LiveConnection;
 use crate::error::{AppError, QueryError};
 use crate::state::AppState;
@@ -205,6 +208,49 @@ pub async fn restore_database(
             )));
         }
         return Ok(format!("✓ MongoDB restored ({prog}) ← {src}"));
+    }
+    // pg/mysql/mariadb/clickhouse: restore via the external client tool (symmetric
+    // with backup). psql reads -f <file>; mysql reads the dump from STDIN.
+    if let Some(tool) = restore_tool(&system) {
+        if !tool_available(tool) {
+            return Err(AppError::Driver(format!(
+                "`{tool}` not found on PATH — install the client tool and try again."
+            )));
+        }
+        let profile = state
+            .storage
+            .get_connection(&conn_id)
+            .map_err(|e| AppError::Driver(format!("connection: {e}")))?;
+        let (prog, args, stdin_file) = external_restore_cmd(
+            &system,
+            &BackupTarget {
+                host: profile.host.clone(),
+                port: profile.port,
+                database: profile.database.clone(),
+                user: profile.user.clone(),
+            },
+            &src,
+        )
+        .ok_or_else(|| AppError::Driver(format!("Restore is not supported for {system}")))?;
+        let password = crypto::decrypt(&profile.password_enc).unwrap_or_default();
+        let mut cmd = tokio::process::Command::new(&prog);
+        cmd.args(&args).env("PGPASSWORD", &password).env("MYSQL_PWD", &password);
+        if let Some(f) = stdin_file {
+            let file = std::fs::File::open(&f)
+                .map_err(|e| AppError::Driver(format!("cannot open {f}: {e}")))?;
+            cmd.stdin(std::process::Stdio::from(file));
+        }
+        let out = cmd
+            .output()
+            .await
+            .map_err(|e| AppError::Driver(format!("Failed to run {prog}: {e}")))?;
+        if !out.status.success() {
+            return Err(AppError::Driver(format!(
+                "{prog} error: {}",
+                String::from_utf8_lossy(&out.stderr)
+            )));
+        }
+        return Ok(format!("✓ {system} restored ({prog}) ← {src}"));
     }
     Err(AppError::Driver(format!(
         "Automatic restore is not supported for {system} — open the .sql file in the SQL editor to run it."

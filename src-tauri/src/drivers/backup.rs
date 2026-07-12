@@ -75,6 +75,67 @@ pub fn external_backup_cmd(system: &str, t: &BackupTarget, dest: &str) -> Option
     }
 }
 
+/// Công cụ restore ngoài theo hệ (đối xứng với backup_tool). None = in-process /
+/// chưa hỗ trợ.
+pub fn restore_tool(system: &str) -> Option<&'static str> {
+    match system {
+        "postgres" => Some("psql"),
+        "mysql" | "mariadb" => Some("mysql"),
+        "clickhouse" => Some("clickhouse-client"),
+        "mongodb" => Some("mongorestore"),
+        _ => None, // sqlite = in-process; redis/kafka/nats/cassandra/mssql = N/A
+    }
+}
+
+/// Dựng (program, args, stdin_file) để restore một file backup do backup_database
+/// tạo. `stdin_file`=Some(path) nghĩa là nội dung file được nạp qua STDIN (mysql
+/// đọc dump từ stdin); None nghĩa là file đã nằm trong args (psql `-f`). Mật khẩu
+/// KHÔNG nằm trong args (env PGPASSWORD/MYSQL_PWD như backup).
+pub fn external_restore_cmd(
+    system: &str,
+    t: &BackupTarget,
+    src: &str,
+) -> Option<(String, Vec<String>, Option<String>)> {
+    match system {
+        // pg_dump plain SQL → psql chạy lại vào cùng database (-f đọc file).
+        "postgres" => Some((
+            "psql".into(),
+            vec![
+                "-h".into(), t.host.clone(),
+                "-p".into(), t.port.to_string(),
+                "-U".into(), t.user.clone(),
+                "-d".into(), t.database.clone(),
+                "-v".into(), "ON_ERROR_STOP=1".into(),
+                "-f".into(), src.into(),
+            ],
+            None,
+        )),
+        // mysqldump SQL → mysql client đọc dump qua STDIN.
+        "mysql" | "mariadb" => Some((
+            "mysql".into(),
+            vec![
+                format!("-h{}", t.host),
+                format!("-P{}", t.port),
+                format!("-u{}", t.user),
+                t.database.clone(),
+            ],
+            Some(src.to_string()),
+        )),
+        // ClickHouse: RESTORE DATABASE … FROM Disk('backups', file) (đối xứng BACKUP).
+        "clickhouse" => Some((
+            "clickhouse-client".into(),
+            vec![
+                "--host".into(), t.host.clone(),
+                "--port".into(), t.port.to_string(),
+                "--query".into(),
+                format!("RESTORE DATABASE {} FROM Disk('backups', '{src}')", t.database),
+            ],
+            None,
+        )),
+        _ => None,
+    }
+}
+
 /// mongorestore command để khôi phục từ file archive do mongodump tạo.
 pub fn mongo_restore_cmd(t: &BackupTarget, src: &str) -> (String, Vec<String>) {
     let mut a = vec![
@@ -106,6 +167,38 @@ mod tests {
         assert_eq!(backup_tool("mongodb"), Some("mongodump"));
         assert_eq!(backup_tool("sqlite"), None);
         assert_eq!(backup_tool("redis"), None);
+        // restore tool symmetric with backup
+        assert_eq!(restore_tool("postgres"), Some("psql"));
+        assert_eq!(restore_tool("mysql"), Some("mysql"));
+        assert_eq!(restore_tool("clickhouse"), Some("clickhouse-client"));
+        assert_eq!(restore_tool("mongodb"), Some("mongorestore"));
+        assert_eq!(restore_tool("sqlite"), None);
+        assert_eq!(restore_tool("redis"), None);
+    }
+
+    #[test]
+    fn restore_cmd_shape_per_engine() {
+        let t = tgt();
+        // pg: psql -f file, no password in args, ON_ERROR_STOP
+        let (prog, args, stdin) = external_restore_cmd("postgres", &t, "/tmp/b.sql").unwrap();
+        assert_eq!(prog, "psql");
+        assert!(args.windows(2).any(|w| w == ["-d", "app"]));
+        assert!(args.windows(2).any(|w| w == ["-f", "/tmp/b.sql"]));
+        assert!(args.iter().any(|a| a == "ON_ERROR_STOP=1"));
+        assert!(stdin.is_none(), "pg đọc file qua -f, không stdin");
+        assert!(!args.iter().any(|a| a.contains("password")));
+        // mysql: dump nạp qua STDIN
+        let (prog, args, stdin) = external_restore_cmd("mysql", &t, "/tmp/b.sql").unwrap();
+        assert_eq!(prog, "mysql");
+        assert!(args.iter().any(|a| a == "app"));
+        assert_eq!(stdin.as_deref(), Some("/tmp/b.sql"));
+        // clickhouse: RESTORE DATABASE … FROM Disk
+        let (prog, args, _) = external_restore_cmd("clickhouse", &t, "bkp").unwrap();
+        assert_eq!(prog, "clickhouse-client");
+        assert!(args.iter().any(|a| a.contains("RESTORE DATABASE app FROM Disk('backups', 'bkp')")));
+        // sqlite / unsupported → None
+        assert!(external_restore_cmd("sqlite", &t, "x").is_none());
+        assert!(external_restore_cmd("redis", &t, "x").is_none());
     }
 
     #[test]
