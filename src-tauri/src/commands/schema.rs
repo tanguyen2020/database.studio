@@ -316,6 +316,22 @@ pub async fn object_definition(
         .system_of(&conn_id)
         .or_else(|| state.storage.get_connection(&conn_id).ok().map(|p| p.system.as_str().to_string()))
         .unwrap_or_default();
+    // MongoDB is not SQL: reconstruct the create statement from collection metadata
+    // (createView for views, createCollection otherwise) via the driver.
+    if system == "mongodb" {
+        let (db, coll) = (schema.clone(), name.clone());
+        return state
+            .registry
+            .with_driver(&conn_id, move |d| async move {
+                let g = d.lock().await;
+                match &*g {
+                    crate::drivers::LiveConnection::Mongo(m) => m.collection_ddl(&db, &coll).await,
+                    _ => Err(crate::error::QueryError::new("mongodb", "not mongodb", "not mongodb")),
+                }
+            })
+            .await?
+            .map_err(|e| AppError::Driver(e.message));
+    }
     let q = definition_query(&system, &kind, &schema, &name)
         .ok_or_else(|| AppError::Driver(format!("Show Definition is not supported for {system}")))?;
     let outcome = state

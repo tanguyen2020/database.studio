@@ -129,7 +129,7 @@ class ResultsStore {
     tabId: string,
     connId: string,
     statements: SplitStatement[],
-    opts?: { consistency?: string },
+    opts?: { consistency?: string; database?: string },
   ): Promise<void> {
     if (statements.length === 0) return
     // `connId` may be a per-tab connection (`{base}#tab-{id}`, item 6) and/or a
@@ -205,9 +205,11 @@ class ResultsStore {
           // MongoDB runs through the dedicated `mongo_exec` command (mongosh-style
           // parser + Extended JSON). Warnings and a cursor token share the same
           // fields as Cassandra so the Result panel wiring is unchanged.
-          const m = await ipc.mongoExec(connId, stmt.sql)
+          const m = await ipc.mongoExec(connId, stmt.sql, opts?.database)
           cqlWarnings = m.warnings ?? []
-          cqlNextPage = m.next_cursor ?? null
+          // Mongo editor has no cursor paging (backend always returns None); keep
+          // cqlNextPage null so the shared "Load next page" (cql_exec) never fires.
+          cqlNextPage = null
           response = {
             ok: m.ok,
             result: m.result,

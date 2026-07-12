@@ -96,6 +96,9 @@ export const DEMO_PROFILES: ProfilePublic[] = [
     connected: true,
     latency_ms: 9,
   }),
+  // NOTE: no MongoDB profile here on purpose — DEMO_PROFILES mirrors the prototype's
+  // 11 CONNS for the sidebar pixel-diff (phase2-regions). The Mongo e2e creates its
+  // connection at runtime via the New Connection dialog instead.
 ]
 
 /** TABS t1/t2/t_ma1 của prototype (các tab SQL thuộc hệ Phase 1-2). */
@@ -1011,6 +1014,27 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
           { expr: 'event_date + toIntervalDay(90)', action: 'DELETE', human: 'Delete data when: event_date + toIntervalDay(90)' },
           { expr: 'event_date + toIntervalDay(30)', action: 'MOVE', human: "Move part to disk/volume when: event_date + toIntervalDay(30) (TO VOLUME 'cold')" },
         ],
+      })
+    }
+    // MongoDB query editor / collection viewer (browser & Playwright demo path).
+    case 'mongo_exec': {
+      const q = String(args?.query ?? '')
+      if (/\.(insertOne|insertMany|updateOne|updateMany|deleteOne|deleteMany|createIndex|createCollection|renameCollection|drop)\s*\(/i.test(q))
+        return ok({ ok: true, affected: 1, duration_ms: 3, warnings: [] })
+      if (/countDocuments/i.test(q))
+        return ok({ ok: true, result: { cols: [['count', 'long']], rows: [{ count: 2 }], total: 1 }, duration_ms: 2, warnings: [] })
+      return ok({
+        ok: true,
+        result: {
+          cols: [['_id', 'objectId'], ['name', 'string'], ['age', 'int']],
+          rows: [
+            { _id: { $oid: '507f1f77bcf86cd799439011' }, name: 'Ann', age: 30 },
+            { _id: { $oid: '507f1f77bcf86cd799439012' }, name: 'Bob', age: 25 },
+          ],
+          total: 2,
+        },
+        duration_ms: 4,
+        warnings: [],
       })
     }
     default:

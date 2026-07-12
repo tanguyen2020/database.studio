@@ -306,6 +306,32 @@ async fn mongo_introspection_databases_collections_indexes_fields() {
     assert_eq!(plan_a.mode, "actual");
     assert!(plan_a.root.is_some());
 
+    // --- scan_indexes (review): $indexStats → mọi index của mọi collection --------
+    let scan = drv.scan_indexes("appdb").await.unwrap();
+    assert!(
+        scan.iter().any(|r| r.table == "users" && r.name == "_id_" && r.primary),
+        "scan_indexes phải liệt kê _id_ (primary) của users"
+    );
+    assert!(
+        scan.iter().any(|r| r.name == "email_idx" && r.unique),
+        "scan_indexes phải thấy email_idx unique"
+    );
+
+    // --- createCollection + renameCollection (review) qua editor db-level ---------
+    drv.exec_mongo("db.createCollection(\"scratch\")", None, None).await.unwrap();
+    assert!(
+        drv.collections("appdb").await.unwrap().iter().any(|t| t.name == "scratch"),
+        "createCollection tạo collection mới"
+    );
+    drv.exec_mongo("db.scratch.renameCollection(\"scratch2\")", None, None).await.unwrap();
+    let cols2 = drv.collections("appdb").await.unwrap();
+    assert!(cols2.iter().any(|t| t.name == "scratch2"), "renameCollection đổi tên");
+    assert!(!cols2.iter().any(|t| t.name == "scratch"), "tên cũ biến mất sau rename");
+
+    // --- collection_ddl (Show Definition) ----------------------------------------
+    let ddl = drv.collection_ddl("appdb", "users").await.unwrap();
+    assert!(ddl.contains("createCollection") && ddl.contains("users"), "ddl: {ddl}");
+
     // --- admin views (M5) ---------------------------------------------------
     // serverStatus → metric/value rows incl. version.
     let server = drv.admin_view("server").await.unwrap();

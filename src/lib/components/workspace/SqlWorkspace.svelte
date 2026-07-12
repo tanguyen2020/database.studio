@@ -150,7 +150,11 @@
     if (tab.systemType === 'cassandra') tab.state.consistency = cqlConsistency
   })
   const runOpts = () =>
-    tab.systemType === 'cassandra' ? { consistency: cqlConsistency } : undefined
+    tab.systemType === 'cassandra'
+      ? { consistency: cqlConsistency }
+      : tab.systemType === 'mongodb'
+        ? { database: (tab.state.database as string) || undefined }
+        : undefined
 
   // ---- destructive-statement guard --------------------------------------------
   // A DELETE with no WHERE clause, or a TRUNCATE, wipes a whole table. Before

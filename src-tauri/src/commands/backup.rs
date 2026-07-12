@@ -15,6 +15,19 @@ fn not_sqlite() -> QueryError {
     QueryError::new("sqlite", "Connection is not SQLite", "not sqlite")
 }
 
+/// Write the MongoDB password to a temp `--config` YAML so it stays OFF the
+/// process argv (mongodump/mongorestore have no password env var). The caller
+/// removes the file right after the tool exits.
+fn mongo_pw_config(password: &str) -> Result<std::path::PathBuf, AppError> {
+    use std::io::Write;
+    let mut path = std::env::temp_dir();
+    path.push(format!("ds-mongo-{}.yaml", std::process::id()));
+    let mut f = std::fs::File::create(&path)
+        .map_err(|e| AppError::Driver(format!("temp config: {e}")))?;
+    writeln!(f, "password: {password}").map_err(|e| AppError::Driver(format!("temp config: {e}")))?;
+    Ok(path)
+}
+
 /// Kiểm tra binary backup có trên PATH không (chạy `<tool> --version`).
 fn tool_available(tool: &str) -> bool {
     std::process::Command::new(tool)
@@ -98,18 +111,25 @@ pub async fn backup_database(
     )
     .ok_or_else(|| AppError::Driver(format!("Backup is not supported for {system}")))?;
     let password = crypto::decrypt(&profile.password_enc).unwrap_or_default();
-    // mongodump has no password env var — pass it as an arg (only when set) so an
-    // authenticated dump doesn't hang waiting for a prompt on the spawned process.
-    if system == "mongodb" && !password.is_empty() {
-        args.push(format!("--password={password}"));
-    }
+    // mongodump has no password env var → write it to a temp --config file so it
+    // stays off the process argv; removed right after the tool exits.
+    let mongo_cfg = if system == "mongodb" && !password.is_empty() {
+        let p = mongo_pw_config(&password)?;
+        args.push(format!("--config={}", p.display()));
+        Some(p)
+    } else {
+        None
+    };
     let out = tokio::process::Command::new(&prog)
         .args(&args)
         .env("PGPASSWORD", &password)
         .env("MYSQL_PWD", &password)
         .output()
-        .await
-        .map_err(|e| AppError::Driver(format!("Failed to run {prog}: {e}")))?;
+        .await;
+    if let Some(p) = mongo_cfg {
+        let _ = std::fs::remove_file(p);
+    }
+    let out = out.map_err(|e| AppError::Driver(format!("Failed to run {prog}: {e}")))?;
     if !out.status.success() {
         return Err(AppError::Driver(format!(
             "{prog} error: {}",
@@ -166,14 +186,18 @@ pub async fn restore_database(
             &src,
         );
         let password = crypto::decrypt(&profile.password_enc).unwrap_or_default();
-        if !password.is_empty() {
-            args.push(format!("--password={password}"));
+        let mongo_cfg = if !password.is_empty() {
+            let p = mongo_pw_config(&password)?;
+            args.push(format!("--config={}", p.display()));
+            Some(p)
+        } else {
+            None
+        };
+        let out = tokio::process::Command::new(&prog).args(&args).output().await;
+        if let Some(p) = mongo_cfg {
+            let _ = std::fs::remove_file(p);
         }
-        let out = tokio::process::Command::new(&prog)
-            .args(&args)
-            .output()
-            .await
-            .map_err(|e| AppError::Driver(format!("Failed to run {prog}: {e}")))?;
+        let out = out.map_err(|e| AppError::Driver(format!("Failed to run {prog}: {e}")))?;
         if !out.status.success() {
             return Err(AppError::Driver(format!(
                 "{prog} error: {}",

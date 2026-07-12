@@ -96,6 +96,20 @@ fn userinfo_encode(s: &str) -> String {
 fn build_uri(p: &MongoConnParams) -> String {
     let h = p.host.trim();
     if h.starts_with("mongodb://") || h.starts_with("mongodb+srv://") {
+        // Full connection string: use verbatim, but inject the profile's
+        // credentials when the URI carries none (so the user/password fields
+        // aren't silently ignored). The URI itself controls tls/authSource.
+        if !p.user.is_empty() && !h.contains('@') {
+            if let Some(i) = h.find("://") {
+                let (scheme, rest) = h.split_at(i + 3);
+                let cred = if p.password.is_empty() {
+                    format!("{}@", userinfo_encode(&p.user))
+                } else {
+                    format!("{}:{}@", userinfo_encode(&p.user), userinfo_encode(&p.password))
+                };
+                return format!("{scheme}{cred}{rest}");
+            }
+        }
         return h.to_string();
     }
     let mut uri = String::from("mongodb://");
@@ -122,8 +136,12 @@ fn build_uri(p: &MongoConnParams) -> String {
             params.push(format!("tlsCAFile={}", p.ssl_ca));
         }
     }
-    if !p.user.is_empty() && !p.database.is_empty() {
-        params.push(format!("authSource={}", p.database));
+    if !p.user.is_empty() {
+        // Desktop admin client: users are usually defined in `admin`. Default the
+        // auth database there (not the app database) so admin/root logins work out
+        // of the box. To authenticate against a specific DB, put a full mongodb://
+        // URI with ?authSource=<db> in the host field.
+        params.push("authSource=admin".into());
     }
     if !params.is_empty() {
         uri.push('?');
@@ -270,13 +288,14 @@ fn parse_mongo_query(q: &str) -> Result<MongoCall, QueryError> {
         .ok_or_else(|| perr("query must start with db.<collection>.<method>(...)"))?;
     let paren = rest.find('(').ok_or_else(|| perr("expected '(' after the method name"))?;
     let head = &rest[..paren];
-    let dot = head
-        .rfind('.')
-        .ok_or_else(|| perr("expected db.<collection>.<method>(...)"))?;
-    let collection = head[..dot].trim().to_string();
-    let method = head[dot + 1..].trim().to_lowercase();
-    if collection.is_empty() || method.is_empty() {
-        return Err(perr("empty collection or method name"));
+    // `db.<collection>.<method>(…)` or a db-level command `db.<method>(…)`
+    // (e.g. createCollection) with no collection segment.
+    let (collection, method) = match head.rfind('.') {
+        Some(dot) => (head[..dot].trim().to_string(), head[dot + 1..].trim().to_lowercase()),
+        None => (String::new(), head.trim().to_lowercase()),
+    };
+    if method.is_empty() {
+        return Err(perr("expected db.<collection>.<method>(...) or db.<command>(...)"));
     }
     let (inner, mut after) = read_group(&rest[paren..])?;
     let args = split_args(inner)?;
@@ -561,9 +580,10 @@ impl MongoDriver {
         batch_size: Option<i32>,
         _cursor_token: Option<&str>,
     ) -> Result<MongoOutcome, QueryError> {
-        const DEFAULT_LIMIT: i64 = 500;
+        const DEFAULT_LIMIT: i64 = 1000;
         let call = parse_mongo_query(query)?;
-        let db = self.client.database(database.unwrap_or(&self.database));
+        let dbname = database.unwrap_or(&self.database).to_string();
+        let db = self.client.database(&dbname);
         let coll = call.collection.clone();
         let rows_outcome = |batch: &[Bson]| MongoOutcome {
             outcome: StatementOutcome::Rows { result: docs_to_result(batch) },
@@ -578,11 +598,14 @@ impl MongoDriver {
 
         match call.method.as_str() {
             "find" => {
-                let lim = call
-                    .limit
-                    .or(batch_size.map(|b| b as i64))
-                    .filter(|n| *n > 0)
+                // `.limit(0)` in mongosh means "no limit"; the editor must still cap,
+                // so a 0/absent limit falls back to DEFAULT_LIMIT.
+                let user_limit = call.limit.filter(|n| *n > 0);
+                let lim = user_limit
+                    .or(batch_size.map(|b| b as i64).filter(|n| *n > 0))
                     .unwrap_or(DEFAULT_LIMIT);
+                // batchSize = limit → one batch returns the whole capped result, so no
+                // getMore is needed and any leftover server cursor is closed below.
                 let mut cmd = doc! { "find": &coll, "limit": lim, "batchSize": lim };
                 if let Some(f) = call.args.first().and_then(value_to_doc) {
                     cmd.insert("filter", f);
@@ -597,11 +620,27 @@ impl MongoDriver {
                     cmd.insert("skip", sk);
                 }
                 let res = db.run_command(cmd).await.map_err(exec_err)?;
-                let batch = res
-                    .get_document("cursor")
-                    .and_then(|c| c.get_array("firstBatch"))
-                    .map_err(exec_err)?;
-                Ok(rows_outcome(batch))
+                let cursor = res.get_document("cursor").map_err(exec_err)?;
+                let cursor_id = cursor.get_i64("id").unwrap_or(0);
+                let batch = cursor.get_array("firstBatch").map_err(exec_err)?;
+                let result = docs_to_result(batch);
+                let mut warnings = Vec::new();
+                // Result exceeded one batch (16MB) → free the lingering server cursor
+                // (no getMore paging in the editor) and warn the result was capped.
+                if cursor_id != 0 {
+                    let _ = db
+                        .run_command(doc! { "killCursors": &coll, "cursors": [cursor_id] })
+                        .await;
+                    warnings.push(format!(
+                        "Result capped at {} documents (one batch). Refine the query with a filter/limit, or use \"Export to file\" for the whole collection.",
+                        result.total
+                    ));
+                }
+                Ok(MongoOutcome {
+                    outcome: StatementOutcome::Rows { result },
+                    next_cursor: None,
+                    warnings,
+                })
             }
             "aggregate" => {
                 let pipeline = call.args.first().cloned().unwrap_or(Value::Array(vec![]));
@@ -733,6 +772,42 @@ impl MongoDriver {
             }
             "drop" => {
                 db.run_command(doc! { "drop": &coll }).await.map_err(exec_err)?;
+                Ok(MongoOutcome { outcome: StatementOutcome::Ok, next_cursor: None, warnings: Vec::new() })
+            }
+            "createcollection" => {
+                let name = call
+                    .args
+                    .first()
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| perr("createCollection(\"name\") requires a collection name"))?;
+                let mut cmd = doc! { "create": name };
+                if let Some(opts) = call.args.get(1).and_then(value_to_doc) {
+                    for (k, v) in opts {
+                        cmd.insert(k, v);
+                    }
+                }
+                db.run_command(cmd).await.map_err(exec_err)?;
+                Ok(MongoOutcome { outcome: StatementOutcome::Ok, next_cursor: None, warnings: Vec::new() })
+            }
+            "renamecollection" => {
+                let target = call
+                    .args
+                    .first()
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| perr("renameCollection(\"newName\") requires a target name"))?;
+                if call.collection.is_empty() {
+                    return Err(perr("renameCollection must be called on a collection: db.<coll>.renameCollection(\"new\")"));
+                }
+                // renameCollection is an admin command over full namespaces.
+                self.client
+                    .database("admin")
+                    .run_command(doc! {
+                        "renameCollection": format!("{dbname}.{}", call.collection),
+                        "to": format!("{dbname}.{target}"),
+                        "dropTarget": false,
+                    })
+                    .await
+                    .map_err(exec_err)?;
                 Ok(MongoOutcome { outcome: StatementOutcome::Ok, next_cursor: None, warnings: Vec::new() })
             }
             "createindex" => {
@@ -1055,12 +1130,101 @@ impl MongoDriver {
         Ok(applied)
     }
 
-    /// M4: Index Scanner via `$indexStats`.
+    /// Index Scanner: every index of every collection in `database`, with usage
+    /// from `$indexStats` (ops = times used) so `compute_flags` can flag unused
+    /// indexes. `_id_` is the primary; `unique` comes from listIndexes.
     pub async fn scan_indexes(
         &self,
-        _database: &str,
+        database: &str,
     ) -> Result<Vec<index_scan::IndexScanRow>, QueryError> {
-        Ok(Vec::new())
+        let db = self.client.database(database);
+        let mut out = Vec::new();
+        for c in self.collections(database).await? {
+            if c.kind == "view" {
+                continue;
+            }
+            // usage per index via $indexStats (best-effort; may be unavailable).
+            let mut usage: HashMap<String, i64> = HashMap::new();
+            if let Ok(res) = db
+                .run_command(doc! { "aggregate": &c.name, "pipeline": [doc! { "$indexStats": {} }], "cursor": doc! {} })
+                .await
+            {
+                if let Ok(batch) = res.get_document("cursor").and_then(|cu| cu.get_array("firstBatch")) {
+                    for b in batch {
+                        if let Bson::Document(d) = b {
+                            let name = d.get_str("name").unwrap_or_default().to_string();
+                            let ops = d
+                                .get_document("accesses")
+                                .ok()
+                                .and_then(|a| {
+                                    a.get_i64("ops").ok().or_else(|| a.get_i32("ops").ok().map(|v| v as i64))
+                                })
+                                .unwrap_or(0);
+                            usage.insert(name, ops);
+                        }
+                    }
+                }
+            }
+            for ix in self.indexes(database, &c.name).await.unwrap_or_default() {
+                let usage = usage.get(&ix.name).copied();
+                out.push(index_scan::IndexScanRow {
+                    name: ix.name,
+                    table: c.name.clone(),
+                    columns: ix.columns,
+                    index_type: ix.method,
+                    unique: ix.unique,
+                    primary: ix.primary,
+                    size_bytes: None,
+                    usage, // compute_flags marks unused when usage == Some(0)
+                    fragmentation_pct: None,
+                    valid: true,
+                    flags: Vec::new(),
+                });
+            }
+        }
+        Ok(out)
+    }
+
+    /// Rebuild the create statement for a collection/view (Show Definition):
+    /// `db.createView(name, viewOn, pipeline)` for views, `db.createCollection(name[, options])`
+    /// otherwise. Reconstructed from `listCollections` metadata.
+    pub async fn collection_ddl(&self, database: &str, collection: &str) -> Result<String, QueryError> {
+        let res = self
+            .client
+            .database(database)
+            .run_command(doc! { "listCollections": 1, "filter": doc! { "name": collection } })
+            .await
+            .map_err(exec_err)?;
+        let info = res
+            .get_document("cursor")
+            .ok()
+            .and_then(|c| c.get_array("firstBatch").ok())
+            .and_then(|b| b.first())
+            .and_then(|b| b.as_document())
+            .cloned();
+        let Some(info) = info else {
+            return Ok(format!("// collection \"{collection}\" not found in {database}"));
+        };
+        let opts = info.get_document("options").ok().cloned();
+        if info.get_str("type").unwrap_or("collection") == "view" {
+            let view_on = opts.as_ref().and_then(|o| o.get_str("viewOn").ok()).unwrap_or("");
+            let pipeline = opts
+                .as_ref()
+                .and_then(|o| o.get_array("pipeline").ok())
+                .map(|p| Bson::Array(p.clone()))
+                .unwrap_or(Bson::Array(Vec::new()));
+            let pipe = serde_json::to_string_pretty(&bson_to_json(&pipeline)).unwrap_or_else(|_| "[]".into());
+            Ok(format!("db.createView(\n  \"{collection}\",\n  \"{view_on}\",\n  {pipe}\n)"))
+        } else {
+            match opts.filter(|o| !o.is_empty()) {
+                Some(o) => {
+                    let j = serde_json::to_string_pretty(&bson_to_json(&Bson::Document(o)))
+                        .unwrap_or_else(|_| "{}".into());
+                    Ok(format!("db.createCollection(\"{collection}\", {j})"))
+                }
+                None => Ok(format!("db.createCollection(\"{collection}\")")),
+            }
+        }
     }
 
     /// Admin views (Session Monitor). `sessions` = currentOp, `server` =
@@ -1224,6 +1388,22 @@ impl MongoDriver {
             let key = if first { "firstBatch" } else { "nextBatch" };
             first = false;
             let batch = cursor.get_array(key).cloned().unwrap_or_default();
+            // CSV: header once from the UNION of keys across the first batch (not
+            // just the first doc), so fields absent from doc[0] aren't dropped.
+            if matches!(format, ExportFormat::Csv) && csv_header.is_none() {
+                let mut header: Vec<String> = Vec::new();
+                for b in &batch {
+                    if let Bson::Document(d) = b {
+                        for k in d.keys() {
+                            if !header.contains(k) {
+                                header.push(k.clone());
+                            }
+                        }
+                    }
+                }
+                writeln!(out, "{}", header.iter().map(|c| csv_cell(c)).collect::<Vec<_>>().join(",")).map_err(werr)?;
+                csv_header = Some(header);
+            }
             for b in &batch {
                 if cancel.load(Ordering::Relaxed) {
                     if matches!(format, ExportFormat::Json) {
@@ -1245,18 +1425,14 @@ impl MongoDriver {
                         json_started = true;
                     }
                     ExportFormat::Csv => {
-                        let header = csv_header.get_or_insert_with(|| {
-                            jv.as_object().map(|o| o.keys().cloned().collect()).unwrap_or_default()
-                        });
-                        if n == 0 {
-                            writeln!(out, "{}", header.iter().map(|c| csv_cell(c)).collect::<Vec<_>>().join(",")).map_err(werr)?;
+                        if let Some(header) = csv_header.as_ref() {
+                            let line = header
+                                .iter()
+                                .map(|k| csv_cell(&cell_text(jv.get(k).unwrap_or(&Value::Null))))
+                                .collect::<Vec<_>>()
+                                .join(",");
+                            writeln!(out, "{line}").map_err(werr)?;
                         }
-                        let line = header
-                            .iter()
-                            .map(|k| csv_cell(&cell_text(jv.get(k).unwrap_or(&Value::Null))))
-                            .collect::<Vec<_>>()
-                            .join(",");
-                        writeln!(out, "{line}").map_err(werr)?;
                     }
                     ExportFormat::Sql => {
                         writeln!(out, "db.{}.insertOne({});", call.collection, serde_json::to_string(&jv).unwrap_or_default()).map_err(werr)?;
@@ -1320,7 +1496,18 @@ mod tests {
         let u = build_uri(&params("db.example.com", "admin", "p@ss/word", "appdb", false));
         // userinfo is percent-encoded so '@' and '/' don't break the URI.
         assert!(u.starts_with("mongodb://admin:p%40ss%2Fword@db.example.com:27017/"));
-        assert!(u.contains("authSource=appdb"));
+        // auth database defaults to `admin` (desktop admin client), not the app db.
+        assert!(u.contains("authSource=admin"), "uri: {u}");
+    }
+
+    #[test]
+    fn build_uri_passthrough_injects_profile_credentials() {
+        // Full URI with no credentials + profile user/pass → creds injected.
+        let u = build_uri(&params("mongodb://cluster:27017/?tls=true", "u", "p w", "", false));
+        assert_eq!(u, "mongodb://u:p%20w@cluster:27017/?tls=true");
+        // Full URI that already carries creds is left untouched.
+        let u2 = build_uri(&params("mongodb://a:b@cluster:27017/", "u", "p", "", false));
+        assert_eq!(u2, "mongodb://a:b@cluster:27017/");
     }
 
     #[test]
