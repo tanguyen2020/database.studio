@@ -18,7 +18,7 @@ use serde_json::json;
 use mongodb::Client;
 use testcontainers::core::IntoContainerPort;
 use testcontainers::runners::AsyncRunner;
-use testcontainers::{ContainerAsync, GenericImage};
+use testcontainers::{ContainerAsync, GenericImage, ImageExt};
 
 async fn start_mongo() -> (ContainerAsync<GenericImage>, u16) {
     let c = GenericImage::new("mongo", "7")
@@ -357,4 +357,63 @@ async fn mongo_introspection_databases_collections_indexes_fields() {
     let parsed: serde_json::Value = serde_json::from_str(&text).expect("output là JSON array hợp lệ");
     assert_eq!(parsed.as_array().map(|a| a.len() as u64), Some(n), "số phần tử = số docs");
     assert!(text.contains("$oid"), "ObjectId _id serialize Extended JSON trong export");
+
+    // CSV export: header = union key của batch đầu (Bob thiếu `age` nhưng cột `age`
+    // vẫn có trong header vì Ann có) + có Ann.
+    let mut csv: Vec<u8> = Vec::new();
+    drv.stream_export(Some("appdb"), "db.users.find({})", ExportFormat::Csv, &mut csv, |_| {}, &cancel)
+        .await
+        .unwrap();
+    let csv = String::from_utf8(csv).unwrap();
+    let header = csv.lines().next().unwrap_or("");
+    assert!(header.contains("_id") && header.contains("name"), "CSV header: {header}");
+    assert!(csv.contains("Ann"), "CSV có dữ liệu");
+
+    // SQL export: mongosh insertOne lines.
+    let mut sql: Vec<u8> = Vec::new();
+    drv.stream_export(Some("appdb"), "db.users.find({})", ExportFormat::Sql, &mut sql, |_| {}, &cancel)
+        .await
+        .unwrap();
+    let sql = String::from_utf8(sql).unwrap();
+    assert!(sql.contains("db.users.insertOne("), "SQL export = insertOne lines: {sql}");
+
+    // killOp: an idempotent no-op for an unknown opid must succeed (not error).
+    drv.kill_op(999_999).await.expect("killOp không được lỗi với opid không tồn tại");
+}
+
+// Auth-enabled server: a root user lives in `admin`, so build_uri's default
+// authSource=admin must let it log in even while the profile points at `appdb`.
+#[tokio::test]
+async fn mongo_auth_defaults_authsource_to_admin() {
+    let c = GenericImage::new("mongo", "7")
+        .with_exposed_port(27017.tcp())
+        .with_env_var("MONGO_INITDB_ROOT_USERNAME", "root")
+        .with_env_var("MONGO_INITDB_ROOT_PASSWORD", "secret")
+        .start()
+        .await
+        .expect("start auth mongo container");
+    let port = c.get_host_port_ipv4(27017).await.unwrap();
+
+    let p = MongoConnParams {
+        host: "localhost".into(),
+        port,
+        database: "appdb".into(), // NOT admin — but the root user is defined in admin
+        user: "root".into(),
+        password: "secret".into(),
+        ssl: false,
+        ssl_ca: String::new(),
+    };
+    let deadline = Instant::now() + Duration::from_secs(180);
+    let drv = loop {
+        match MongoDriver::connect(&p).await {
+            Ok(d) => break d,
+            Err(e) => {
+                assert!(Instant::now() < deadline, "auth mongo chưa sẵn sàng: {}", e.message);
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+        }
+    };
+    // Authenticated: an admin command works (proves authSource=admin default).
+    let dbs = drv.databases().await.expect("liệt kê databases sau khi auth admin");
+    assert!(dbs.iter().any(|d| d.name == "admin"), "thấy admin db sau khi auth");
 }
