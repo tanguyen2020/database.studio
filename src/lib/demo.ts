@@ -96,9 +96,11 @@ export const DEMO_PROFILES: ProfilePublic[] = [
     connected: true,
     latency_ms: 9,
   }),
-  // NOTE: no MongoDB profile here on purpose — DEMO_PROFILES mirrors the prototype's
-  // 11 CONNS for the sidebar pixel-diff (phase2-regions). The Mongo e2e creates its
-  // connection at runtime via the New Connection dialog instead.
+  conn('c12', 'Events MongoDB', 'mongodb', '10.0.6.2', 27017, 'app', 'mongo', 'Document', 'production', {
+    connected: true,
+    latency_ms: 5,
+    has_password: false,
+  }),
 ]
 
 /** TABS t1/t2/t_ma1 của prototype (các tab SQL thuộc hệ Phase 1-2). */
