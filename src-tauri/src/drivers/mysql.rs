@@ -85,23 +85,14 @@ impl MySqlDriver {
             let rows = fetch_all(&mut self.conn, sql)
                 .await
                 .map_err(|e| map_exec_error(self.system, &e))?;
-            let mut cols: Vec<ColumnDef> = Vec::new();
-            if let Some(first) = rows.first() {
-                for c in first.columns() {
-                    cols.push((c.name().to_string(), c.type_info().name().to_lowercase()));
+            let (mut cols, out_rows) = decode_rows(&rows);
+            // Empty result set has no rows to read column types from → describe().
+            if cols.is_empty() {
+                if let Ok(desc) = describe(&mut self.conn, sql).await {
+                    for c in desc.columns() {
+                        cols.push((c.name().to_string(), c.type_info().name().to_lowercase()));
+                    }
                 }
-            } else if let Ok(desc) = describe(&mut self.conn, sql).await {
-                for c in desc.columns() {
-                    cols.push((c.name().to_string(), c.type_info().name().to_lowercase()));
-                }
-            }
-            let mut out_rows: Vec<Value> = Vec::new();
-            for row in &rows {
-                let mut obj = Map::new();
-                for (i, c) in row.columns().iter().enumerate() {
-                    obj.insert(c.name().to_string(), decode_value(row, i));
-                }
-                out_rows.push(Value::Object(obj));
             }
             let total = out_rows.len() as u64;
             Ok(StatementOutcome::Rows { result: QueryResultSet { cols, rows: out_rows, total } })
@@ -130,20 +121,7 @@ impl MySqlDriver {
         let rows = mysql_fetch_params(&mut self.conn, sql, params)
             .await
             .map_err(|e| map_exec_error(self.system, &e))?;
-        let mut cols: Vec<ColumnDef> = Vec::new();
-        if let Some(first) = rows.first() {
-            for c in first.columns() {
-                cols.push((c.name().to_string(), c.type_info().name().to_lowercase()));
-            }
-        }
-        let mut out_rows: Vec<Value> = Vec::new();
-        for row in &rows {
-            let mut obj = Map::new();
-            for (i, c) in row.columns().iter().enumerate() {
-                obj.insert(c.name().to_string(), decode_value(row, i));
-            }
-            out_rows.push(Value::Object(obj));
-        }
+        let (cols, out_rows) = decode_rows(&rows);
         let total = out_rows.len() as u64;
         Ok(StatementOutcome::Rows { result: QueryResultSet { cols, rows: out_rows, total } })
     }
@@ -556,6 +534,106 @@ fn text(row: &sqlx::mysql::MySqlRow, idx: usize) -> String {
         .unwrap_or_default()
 }
 
+/// Lowercase `0x…` hex rendering of raw bytes (genuine binary values).
+fn to_hex(bytes: &[u8]) -> String {
+    let mut s = String::with_capacity(2 + bytes.len() * 2);
+    s.push_str("0x");
+    for b in bytes {
+        s.push_str(&format!("{b:02x}"));
+    }
+    s
+}
+
+/// Text interpretation of bytes from a string-carrying binary column: `Some` when
+/// valid UTF-8 with no NUL byte (a `_bin`-collation VARCHAR/TEXT arrives here typed
+/// as VARBINARY/BLOB); `None` for genuine binary. The NUL guard keeps binary blobs
+/// that happen to be valid UTF-8 from being read as garbled text.
+fn text_from_binary(bytes: &[u8]) -> Option<String> {
+    match std::str::from_utf8(bytes) {
+        Ok(s) if !s.contains('\0') => Some(s.to_string()),
+        _ => None,
+    }
+}
+
+/// Render bytes from a string-carrying binary column: the decoded text if it looks
+/// like text, otherwise a `0x…` hex string (genuine binary).
+fn bytes_to_value(bytes: Vec<u8>) -> Value {
+    match text_from_binary(&bytes) {
+        Some(s) => Value::String(s),
+        None => Value::String(to_hex(&bytes)),
+    }
+}
+
+/// sqlx names a `_bin`-collation VARCHAR/CHAR/TEXT column with these binary types
+/// because MySQL sets the BINARY_FLAG on it (see `decode_value`).
+fn is_binary_family(type_name: &str) -> bool {
+    matches!(
+        type_name,
+        "varbinary" | "binary" | "blob" | "tinyblob" | "mediumblob" | "longblob"
+    )
+}
+
+/// The text type that a binary type maps back to, for a column that actually
+/// carried text (mirrors sqlx's own binary↔text naming). Used to correct the
+/// reported column type in the result header so it reads `varchar`, not `varbinary`.
+fn text_type_for(binary_type: &str) -> String {
+    match binary_type {
+        "varbinary" => "varchar",
+        "binary" => "char",
+        "tinyblob" => "tinytext",
+        "mediumblob" => "mediumtext",
+        "longblob" => "longtext",
+        _ => "text", // blob
+    }
+    .to_string()
+}
+
+/// Decode a MySQL result set into (column defs, JSON rows). Besides decoding each
+/// cell, this corrects the reported type of any string-carrying binary column
+/// whose values were ALL text (a `_bin`-collation VARCHAR reads back as VARBINARY):
+/// its header type is relabelled to the text equivalent so the grid shows
+/// `varchar` instead of `varbinary`. A column stays binary if any value was
+/// genuine binary (or it had no non-null value to judge from).
+fn decode_rows(rows: &[sqlx::mysql::MySqlRow]) -> (Vec<ColumnDef>, Vec<Value>) {
+    let mut cols: Vec<ColumnDef> = Vec::new();
+    if let Some(first) = rows.first() {
+        for c in first.columns() {
+            cols.push((c.name().to_string(), c.type_info().name().to_lowercase()));
+        }
+    }
+    let n = cols.len();
+    let bin_family: Vec<bool> = cols.iter().map(|(_, t)| is_binary_family(t)).collect();
+    let mut all_text = vec![true; n]; // no genuine-binary value seen yet
+    let mut has_value = vec![false; n]; // at least one non-null value seen
+
+    let mut out_rows: Vec<Value> = Vec::with_capacity(rows.len());
+    for row in rows {
+        let mut obj = Map::new();
+        for (i, c) in row.columns().iter().enumerate() {
+            let v = decode_value(row, i);
+            if bin_family.get(i).copied().unwrap_or(false) {
+                // Judge text-vs-binary on the RAW bytes (unambiguous, unlike
+                // guessing from the rendered string which could itself be "0x…").
+                if let Ok(Some(bytes)) = row.try_get::<Option<Vec<u8>>, _>(i) {
+                    has_value[i] = true;
+                    if text_from_binary(&bytes).is_none() {
+                        all_text[i] = false;
+                    }
+                }
+            }
+            obj.insert(c.name().to_string(), v);
+        }
+        out_rows.push(Value::Object(obj));
+    }
+
+    for i in 0..n {
+        if bin_family[i] && has_value[i] && all_text[i] {
+            cols[i].1 = text_type_for(&cols[i].1);
+        }
+    }
+    (cols, out_rows)
+}
+
 /// Like [`text`] but preserves SQL NULL as `None` (nullable columns, e.g. defaults).
 fn text_opt(row: &sqlx::mysql::MySqlRow, idx: usize) -> Option<String> {
     row.try_get::<Option<String>, _>(idx)
@@ -663,9 +741,20 @@ fn decode_value(row: &sqlx::mysql::MySqlRow, idx: usize) -> Value {
             .try_get::<chrono::NaiveTime, _>(idx)
             .map(|v| Value::String(v.to_string()))
             .unwrap_or(Value::Null),
-        "BLOB" | "TINYBLOB" | "MEDIUMBLOB" | "LONGBLOB" | "VARBINARY" | "BINARY" | "BIT" => row
+        // String-carrying binary family. A VARCHAR/CHAR/TEXT column with a `_bin`
+        // collation (e.g. utf8_bin) makes MySQL set the protocol BINARY_FLAG, so
+        // sqlx types it VARBINARY/BINARY/BLOB even though the bytes are real UTF-8
+        // text. Decode as UTF-8 first (like the `text()` introspection helper) so
+        // such text isn't dumped as `0x…`; genuine binary (not valid UTF-8, or
+        // containing a NUL) still falls back to a hex string.
+        "BLOB" | "TINYBLOB" | "MEDIUMBLOB" | "LONGBLOB" | "VARBINARY" | "BINARY" => row
             .try_get::<Vec<u8>, _>(idx)
-            .map(|v| Value::String(format!("0x{}", v.iter().map(|b| format!("{b:02x}")).collect::<String>())))
+            .map(bytes_to_value)
+            .unwrap_or(Value::Null),
+        // BIT is a bit-field, not mis-typed text — keep it as a hex string.
+        "BIT" => row
+            .try_get::<Vec<u8>, _>(idx)
+            .map(|v| Value::String(to_hex(&v)))
             .unwrap_or(Value::Null),
         _ => row
             .try_get::<String, _>(idx)
@@ -719,4 +808,57 @@ fn hint_for_code(code: &str) -> Option<String> {
         _ => return None,
     };
     Some(hint.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{bytes_to_value, is_binary_family, text_from_binary, text_type_for, to_hex};
+    use serde_json::json;
+
+    #[test]
+    fn to_hex_prefixes_and_lowercases() {
+        assert_eq!(to_hex(&[]), "0x");
+        assert_eq!(to_hex(&[0x00, 0xff, 0x01, 0xfe]), "0x00ff01fe");
+        assert_eq!(to_hex(b"PT"), "0x5054");
+    }
+
+    #[test]
+    fn bin_collation_text_decodes_as_utf8() {
+        // A `_bin`-collation VARCHAR arrives typed as VARBINARY; its bytes are
+        // real UTF-8 text and must be returned as text, not a `0x…` dump.
+        assert_eq!(bytes_to_value(b"PT-d49534d4".to_vec()), json!("PT-d49534d4"));
+        // multibyte UTF-8 (Vietnamese) round-trips as text
+        assert_eq!(bytes_to_value("Nguyễn".as_bytes().to_vec()), json!("Nguyễn"));
+        assert_eq!(bytes_to_value(vec![]), json!(""));
+    }
+
+    #[test]
+    fn genuine_binary_stays_hex() {
+        // invalid UTF-8 (0xff lead byte) → hex
+        assert_eq!(bytes_to_value(vec![0x00, 0xff, 0x01, 0xfe]), json!("0x00ff01fe"));
+        // valid UTF-8 but contains a NUL → treated as binary (hex), not text
+        assert_eq!(bytes_to_value(vec![0x41, 0x00, 0x42]), json!("0x410042"));
+    }
+
+    #[test]
+    fn text_from_binary_distinguishes_text_and_binary() {
+        assert_eq!(text_from_binary(b"PT-d49534d4").as_deref(), Some("PT-d49534d4"));
+        assert!(text_from_binary(&[0x00, 0xff]).is_none()); // invalid UTF-8
+        assert!(text_from_binary(&[0x41, 0x00]).is_none()); // NUL present
+    }
+
+    #[test]
+    fn binary_family_and_text_remap() {
+        assert!(is_binary_family("varbinary"));
+        assert!(is_binary_family("longblob"));
+        assert!(!is_binary_family("bit")); // bit stays hex, never remapped
+        assert!(!is_binary_family("varchar"));
+        // header remap mirrors sqlx's binary↔text naming
+        assert_eq!(text_type_for("varbinary"), "varchar");
+        assert_eq!(text_type_for("binary"), "char");
+        assert_eq!(text_type_for("blob"), "text");
+        assert_eq!(text_type_for("tinyblob"), "tinytext");
+        assert_eq!(text_type_for("mediumblob"), "mediumtext");
+        assert_eq!(text_type_for("longblob"), "longtext");
+    }
 }

@@ -986,6 +986,63 @@ async fn mysql_routine_definition_is_text_not_hex() {
     assert!(!def.starts_with("0x"), "definition must NOT be a hex BLOB: {def}");
 }
 
+/// Bug: a VARCHAR/TEXT column with a `_bin` collation (e.g. utf8mb4_bin) makes
+/// MySQL set the protocol BINARY_FLAG on the result column, so sqlx types it
+/// VARBINARY and `decode_value` used to hex-dump the (UTF-8 text) bytes as `0x…`.
+/// The column's real catalog type stays `varchar` (collation-independent), which
+/// is why Table Designer showed varchar while the grid showed varbinary+hex.
+/// decode_value now decodes such bytes as UTF-8 → real text; genuine non-UTF-8
+/// binary still renders as a hex string.
+#[tokio::test]
+async fn mysql_bin_collation_text_column_is_not_hex() {
+    let c = GenericImage::new("mysql", "8")
+        .with_exposed_port(3306.tcp())
+        .with_env_var("MYSQL_ROOT_PASSWORD", PASS)
+        .with_env_var("MYSQL_DATABASE", "testdb")
+        .start()
+        .await
+        .expect("start mysql container");
+    let port = c.get_host_port_ipv4(3306).await.unwrap();
+    let params = MySqlConnParams {
+        host: "localhost".into(),
+        port,
+        database: "testdb".into(),
+        user: "root".into(),
+        password: PASS.into(),
+        ssl: false,
+        ssl_ca: String::new(),
+        ssl_cert: String::new(),
+        ssl_key: String::new(),
+    };
+    let mut drv = retry("mysql", || MySqlDriver::connect(&params, "mysql")).await;
+    // receipt_no mirrors the reported column (varchar + _bin collation).
+    // blob_col is genuine binary that is NOT valid UTF-8 → must stay hex.
+    drv.exec(
+        "CREATE TABLE it_bin (id int PRIMARY KEY, \
+         receipt_no varchar(100) COLLATE utf8mb4_bin, \
+         blob_col varbinary(16))",
+    )
+    .await
+    .unwrap();
+    drv.exec("INSERT INTO it_bin VALUES (1, 'PT-d49534d4', UNHEX('00ff01fe'))")
+        .await
+        .unwrap();
+
+    let out = drv.exec("SELECT receipt_no, blob_col FROM it_bin WHERE id = 1").await.unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    let row = &result.rows[0];
+    // _bin-collation text → real text, NOT a 0x… hex dump
+    assert_eq!(row["receipt_no"], serde_json::json!("PT-d49534d4"));
+    // genuine non-UTF-8 binary (has 0xff + NUL) → hex string
+    assert_eq!(row["blob_col"], serde_json::json!("0x00ff01fe"));
+
+    // Header type is corrected: the all-text _bin column reads as varchar, while
+    // the genuinely-binary column stays varbinary.
+    let ty = |name: &str| result.cols.iter().find(|(n, _)| n == name).map(|(_, t)| t.as_str());
+    assert_eq!(ty("receipt_no"), Some("varchar"), "cols: {:?}", result.cols);
+    assert_eq!(ty("blob_col"), Some("varbinary"), "cols: {:?}", result.cols);
+}
+
 /// AUDIT-5 item 4 — the Object Explorer renders MySQL correctly. Drives the exact
 /// introspection chain the tree uses (loadSchemas → loadSchemaChildren →
 /// loadTableDetail): schemas() must surface the connected DB (marked default),
