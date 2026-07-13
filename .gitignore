@@ -29,3 +29,6 @@ out.log
 
 # Local Linux build artifacts
 dist-linux/
+
+# Collected beta installers (NSIS/.deb/AppImage) — large binaries, not tracked
+release-beta/

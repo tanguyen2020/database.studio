@@ -1,7 +1,7 @@
 {
   "name": "database-studio",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.0-beta.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json",
     "tauri": "tauri",
+    "beta:bump": "node scripts/bump-beta.mjs",
     "tokens": "node scripts/extract-tokens.mjs",
     "tokens:check": "node scripts/check-hardcoded-styles.mjs",
     "test": "vitest run",
