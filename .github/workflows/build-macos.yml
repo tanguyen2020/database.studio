@@ -50,8 +50,12 @@ jobs:
       - name: Build macOS app (universal, unsigned)
         uses: tauri-apps/tauri-action@v0
         env:
-          # explicit empty signing identity → skip codesign (unsigned beta)
-          APPLE_SIGNING_IDENTITY: ""
+          # Ad-hoc sign (no Apple Developer cert). "-" is required — an EMPTY
+          # value makes codesign try identity "" and fail, and skipping signing
+          # entirely leaves the arm64 slice unrunnable (Apple Silicon refuses
+          # unsigned binaries). Ad-hoc lets the app launch; Gatekeeper on other
+          # Macs still needs `xattr -cr` on first open.
+          APPLE_SIGNING_IDENTITY: "-"
         with:
           args: --target universal-apple-darwin --bundles app,dmg
 
