@@ -28,6 +28,7 @@
   import { MONGO_METHODS, MONGO_OPERATORS } from '$lib/mongo/functions'
   import { dangerousStatements, type DangerStmt } from '$lib/sql/danger'
   import { quoteIfReserved } from '$lib/sql/reserved'
+  import { escapeSchemaKey } from '$lib/sql/completion-schema'
   import type { FunctionInfo } from '$lib/types'
   import { autofocus } from '$lib/actions/autofocus'
   import type { TabState } from '$lib/types'
@@ -277,7 +278,10 @@
           children: cols.map((c) => identOption(c.name, 'property', c.data_type)),
         }
       }
-      ns[schemaName] = tables
+      // Escape dots in the KEY only — a database named `crm.ismart.edu.vn`
+      // would otherwise be split into a fake nested path by lang-sql and never
+      // suggest its tables (defaultSchema stays raw; see completion-schema.ts).
+      ns[escapeSchemaKey(schemaName)] = tables
     }
     return Object.keys(ns).length > 0 ? ns : undefined
   })
