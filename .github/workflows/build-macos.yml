@@ -1,0 +1,65 @@
+name: Build macOS (beta)
+
+# macOS bundles can only be produced on a macOS host, so this runs on GitHub's
+# macOS runners. Trigger it by hand from the Actions tab (Run workflow) or by
+# pushing a tag like `v0.1.0-beta.1`. The build is UNSIGNED (no Apple Developer
+# certificate) — see the note at the bottom of the job summary for how testers
+# open it past Gatekeeper.
+
+on:
+  workflow_dispatch: {}
+  push:
+    tags:
+      - "v*"
+
+# A newer run supersedes an in-flight one for the same ref.
+concurrency:
+  group: macos-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos:
+    runs-on: macos-latest # Apple Silicon; we cross-build a universal binary
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Rust (with both macOS targets for a universal build)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Cache Rust build
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      # tauri-action runs the config's beforeBuildCommand (npm run build) then
+      # `tauri build`. `--bundles app,dmg` overrides the config's targets (which
+      # are Windows/Linux only) with the macOS ones; `--target universal-apple-darwin`
+      # produces a single binary that runs on both Intel and Apple Silicon.
+      - name: Build macOS app (universal, unsigned)
+        uses: tauri-apps/tauri-action@v0
+        env:
+          # explicit empty signing identity → skip codesign (unsigned beta)
+          APPLE_SIGNING_IDENTITY: ""
+        with:
+          args: --target universal-apple-darwin --bundles app,dmg
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: database-studio-macos-universal
+          if-no-files-found: error
+          path: |
+            src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+            src-tauri/target/universal-apple-darwin/release/bundle/macos/*.app.tar.gz
