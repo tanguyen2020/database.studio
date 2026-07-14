@@ -32,3 +32,8 @@ dist-linux/
 
 # Collected beta installers (NSIS/.deb/AppImage) — large binaries, not tracked
 release-beta/
+
+# Bundled Oracle Instant Client — large + Oracle-licensed binaries, fetched per
+# build (see src-tauri/resources/instantclient/README.md). Track only the README.
+src-tauri/resources/instantclient/*
+!src-tauri/resources/instantclient/README.md

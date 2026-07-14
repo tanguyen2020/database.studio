@@ -434,15 +434,21 @@ oracle-rs = "0.1"                                      # [CẦN XÁC MINH tên c
 
 → **Chốt (A)**. Điều này KHÔNG rò rỉ ra ngoài `OracleDriver` — `impl LiveConnection` chỉ thấy các method `async fn` bình thường (bảng §1.1). Cancel (`registry.rs:240-249` abort task) vẫn hoạt động ở tầng task tokio; để hủy **server-side** cần thêm OCI `break()` gọi từ ngoài thread (tuỳ chọn nâng cao, v1 chấp nhận abort task + heal-reconnect như hiện tại).
 
-### 3.3 Đóng gói Instant Client (Windows/macOS/Linux) — **CHỈ áp dụng nếu chọn A**
+### 3.3 Đóng gói Instant Client — **ĐÃ TRIỂN KHAI: bundle vào Tauri** (chọn A)
 
-> Nếu chọn B (`oracle-rs`): BỎ QUA §3.3 — không có Instant Client, đóng gói tĩnh như các engine khác. Đây là lợi thế đóng gói lớn nhất của B.
+> User chốt **bundle** (không bắt user cài). Cơ chế additive, không đụng engine khác.
 
-- **Windows (máy dev + user)**: cần `oci.dll` + phụ thuộc từ Instant Client Basic trên `PATH` (hoặc cạnh exe). Beta: yêu cầu user cài + thêm PATH.
-- **macOS (universal dmg CI hiện có, commit `fe9b175`)**: Instant Client cho macOS (Intel + Apple Silicon **[CẦN XÁC MINH]** tình trạng arm64) → universal build phức tạp. Khả năng cao **không bundle** cho macOS beta.
-- **Linux (INSTALL-UBUNTU.md có sẵn)**: Instant Client `.so` + `LD_LIBRARY_PATH`.
-- **Phát hiện runtime**: thêm kiểm tra "OCI khả dụng?" (giống `backup_tool_status` phát hiện binary, `commands/backup.rs`) → nếu thiếu, `connect`/`test` trả `QueryError` hướng dẫn cài Instant Client (KHÔNG panic). Cân nhắc ẩn Oracle khỏi picker nếu OCI thiếu, hoặc hiện nhưng báo lỗi rõ khi connect.
-- **License**: Instant Client theo OTN license — cho phép redistribute có điều kiện; **rà trước khi bundle**. Beta khuyến nghị KHÔNG bundle (hướng dẫn cài).
+**Cơ chế (đã code):**
+- **Tauri resource**: `bundle.resources = ["resources/instantclient/**/*"]` (`tauri.conf.json`) → nội dung `src-tauri/resources/instantclient/` được ship cạnh app. Binary Instant Client **git-ignore** (lớn + Oracle-licensed); chỉ commit `README.md`. Mỗi máy/CI build bản Oracle chạy `scripts/fetch-instantclient.ps1` (tải Basic Light Windows x64 no-login từ OTN CDN, flatten vào folder) trước `tauri build`.
+- **Startup bind (robust, KHÔNG hack PATH)**: `lib.rs setup` → `resource_dir()/instantclient` → `drivers::oracle::instant_client_lib()` kiểm tra có `oci.dll`/`libclntsh.*` (dir hoặc 1 subdir `instantclient*`) → nếu có, `init_client_dir()` gọi `oracle::InitParams::new().oracle_client_lib_dir(dir).init()` (ODPI-C `dpiContext_createWithParams` → nạp OCI CHÍNH XÁC từ dir bundle). Chạy **trước** mọi Oracle connect; `Once`-guard; lỗi log-không-panic.
+- **Fallback**: nếu folder KHÔNG có client (platform chưa ship IC, vd macOS/Linux beta) → **không gọi init** → ODPI-C dùng default search → **system-installed Instant Client vẫn chạy**. Chỉ Oracle bị ảnh hưởng; engine khác không đụng. (Vì `init()` với dir thiếu OCI sẽ fail hẳn kể cả khi có client hệ thống, nên BẮT BUỘC kiểm tra file trước khi bind — đã làm.)
+
+**Per-platform (đã script hoá):**
+- **Windows x64**: `scripts/fetch-instantclient.ps1` (Basic Light zip). `oci.dll` + siblings flatten vào resources → nsis bundle.
+- **Linux x64 / ARM64**: `scripts/fetch-instantclient.sh` tự phát hiện arch → tải Basic Light zip đúng arch → `libclntsh.so*` flatten → deb/appimage bundle.
+- **macOS (Apple Silicon)**: `scripts/fetch-instantclient.sh` trên arm64 → tải **Basic `.dmg`** (v23 chỉ có ARM64; Intel dừng ở 19c) → `hdiutil attach` → copy nội dung (giữ symlink `libclntsh.dylib`→bản versioned) → `hdiutil detach`. Lưu ý: app **signed** macOS strip biến `DYLD_*` — nhưng `oracle_client_lib_dir` truyền thẳng path vào ODPI-C (không qua env var) nên KHÔNG dính giới hạn đó.
+- **Fallback URL drift**: default URL theo naming OTN (Windows 23.8.0.25.04 verified; Linux cùng version/verdir; macOS dùng permalink `instantclient-basic-macos-arm64.dmg`). Nếu 404 (bump version) → truyền `--url`/`-Url`; script báo lỗi rõ + trỏ trang download Oracle.
+- **License**: Instant Client theo OTN/OFUTC — redistribute có điều kiện; **rà trước khi publish installer có kèm binary**. Đây là lý do binary không commit vào repo.
 
 ### 3.4 Định tuyến exec (mẫu MSSQL 3 nhánh `mssql.rs:104-154`, chặt hơn)
 

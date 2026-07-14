@@ -17,6 +17,18 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
+            // Point ODPI-C at the bundled Oracle Instant Client (shipped as a Tauri
+            // resource under `instantclient/`) so Oracle works without a system-wide
+            // install. Must run before any Oracle connection. If no bundled client is
+            // present (e.g. a platform we didn't ship IC for), we leave ODPI-C on its
+            // default search so a system-installed client still works.
+            if let Ok(res_dir) = app.path().resource_dir() {
+                let ic = res_dir.join("instantclient");
+                if let Some(lib_dir) = crate::drivers::oracle::instant_client_lib(&ic) {
+                    crate::drivers::oracle::init_client_dir(&lib_dir);
+                }
+            }
+
             let data_dir = app
                 .path()
                 .app_data_dir()

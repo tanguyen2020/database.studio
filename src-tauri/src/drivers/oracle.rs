@@ -21,6 +21,75 @@ use crate::drivers::index_scan::IndexScanRow;
 use crate::drivers::types::*;
 use crate::error::QueryError;
 
+/// Point ODPI-C at a specific Oracle Client (Instant Client) directory so the
+/// bundled client is used instead of requiring a system-wide install. This calls
+/// `dpiContext_createWithParams`, which loads `oci.dll` / `libclntsh.*` from `dir`
+/// immediately, so the caller MUST verify `dir` actually contains the OCI library
+/// first (`instant_client_lib` below) — otherwise init fails outright even when a
+/// system client is present. Must run before the first connection; a no-op if the
+/// client was already initialized. Failures are logged, not fatal (the driver then
+/// falls back to ODPI-C's default library search on first connect).
+pub fn init_client_dir(dir: &std::path::Path) {
+    use std::sync::Once;
+    static INIT: Once = Once::new();
+    INIT.call_once(|| {
+        if oracle::InitParams::is_initialized() {
+            return;
+        }
+        let mut params = oracle::InitParams::new();
+        match params.oracle_client_lib_dir(dir) {
+            Ok(_) => match params.init() {
+                Ok(_) => {}
+                Err(e) => eprintln!(
+                    "[oracle] init with bundled Instant Client '{}' failed: {e}",
+                    dir.display()
+                ),
+            },
+            Err(e) => eprintln!("[oracle] invalid Instant Client dir '{}': {e}", dir.display()),
+        }
+    });
+}
+
+/// If `dir` (or a single `instantclient*` sub-directory of it) contains the
+/// platform OCI library, return the directory that holds it. Used to decide
+/// whether to bind ODPI-C to the bundled client. `None` = no bundled client
+/// present (leave ODPI-C on its default system search).
+pub fn instant_client_lib(dir: &std::path::Path) -> Option<std::path::PathBuf> {
+    fn has_oci(d: &std::path::Path) -> bool {
+        let Ok(entries) = std::fs::read_dir(d) else {
+            return false;
+        };
+        for e in entries.flatten() {
+            let name = e.file_name();
+            let n = name.to_string_lossy().to_ascii_lowercase();
+            // Windows: oci.dll · Linux: libclntsh.so[.x] · macOS: libclntsh.dylib
+            if n == "oci.dll" || n.starts_with("libclntsh.so") || n == "libclntsh.dylib" {
+                return true;
+            }
+        }
+        false
+    }
+    if has_oci(dir) {
+        return Some(dir.to_path_buf());
+    }
+    // Tolerate an un-flattened extract: resources/instantclient/instantclient_23_8/…
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for e in entries.flatten() {
+            let p = e.path();
+            if p.is_dir()
+                && p.file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|n| n.to_ascii_lowercase().starts_with("instantclient"))
+                    .unwrap_or(false)
+                && has_oci(&p)
+            {
+                return Some(p);
+            }
+        }
+    }
+    None
+}
+
 /// Connect params mapped from a `ConnectionProfile` (built in drivers/mod.rs).
 #[derive(Clone)]
 pub struct OracleConnParams {
