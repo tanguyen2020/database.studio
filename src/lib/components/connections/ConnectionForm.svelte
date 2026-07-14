@@ -52,6 +52,7 @@
   const isNats = $derived(draft?.system === 'nats')
   const isKafka = $derived(draft?.system === 'kafka')
   const isCassandra = $derived(draft?.system === 'cassandra')
+  const isOracle = $derived(draft?.system === 'oracle')
   const hostLabel = $derived(isKafka ? 'Host / Bootstrap' : isCassandra ? 'Contact points' : 'Host')
   const hostPlaceholder = $derived(
     isSqlite
@@ -62,7 +63,7 @@
           ? '10.0.5.1,10.0.5.2'
           : 'localhost',
   )
-  const dbPlaceholder = $derived(draft?.system === 'postgres' ? 'postgres' : '')
+  const dbPlaceholder = $derived(draft?.system === 'postgres' ? 'postgres' : isOracle ? 'FREEPDB1' : '')
   // port từ dòng 5791-5796: auth flags MSSQL
   const authWindows = $derived(isMssql && draft?.mssql_auth === 'windows')
   const authShowUser = $derived(!authWindows)
@@ -325,11 +326,27 @@
                     <option value={n}>{n}</option>
                   {/each}
                 </select>
+              {:else if isOracle}
+                <!-- Oracle connects by service name (default) or SID; the value goes
+                     in `database` and the kind is stored in `mssql_auth` (reused). -->
+                <div class="cm-label">{draft.mssql_auth === 'sid' ? 'SID' : 'Service name'}</div>
+                <input class="cm-input mono" bind:value={draft.database} placeholder={dbPlaceholder} />
               {:else}
                 <div class="cm-label">Database</div>
                 <input class="cm-input mono" bind:value={draft.database} placeholder={dbPlaceholder} />
               {/if}
             </div>
+
+            {#if isOracle}
+              <!-- Oracle connect kind (reuses mssql_auth): Service Name vs SID. -->
+              <div>
+                <div class="cm-label">Connect by</div>
+                <select class="cm-input" bind:value={draft.mssql_auth}>
+                  <option value="">Service Name</option>
+                  <option value="sid">SID</option>
+                </select>
+              </div>
+            {/if}
 
             {#if isKafka}
               <!-- Kafka SASL mechanism (tái dùng field mssql_auth làm auth mode) -->
