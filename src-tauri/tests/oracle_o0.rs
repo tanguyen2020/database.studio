@@ -108,9 +108,9 @@ async fn o1_introspection() {
     let cols = d.columns("APPO1", "EMP").await.expect("columns");
     assert!(cols.iter().find(|c| c.name == "ID").expect("ID col").is_pk, "ID is PK");
     assert!(cols.iter().find(|c| c.name == "DEPT_ID").expect("DEPT_ID").is_fk, "DEPT_ID is FK");
-    assert_eq!(cols.iter().find(|c| c.name == "SAL").expect("SAL").data_type, "NUMBER(10,2)", "SAL type built");
-    // Note: column DEFAULT (ALL_TAB_COLUMNS.DATA_DEFAULT) is a LONG — oracle-rs 0.1.7
-    // can't decode LONG, so `default` is None (documented limitation, not asserted).
+    let sal = cols.iter().find(|c| c.name == "SAL").expect("SAL");
+    assert_eq!(sal.data_type, "NUMBER(10,2)", "SAL type built");
+    assert!(sal.default.as_deref().map(|d| d.contains('0')).unwrap_or(false), "SAL default (LONG via crate A): {:?}", sal.default);
 
     let idx = d.indexes("APPO1", "EMP").await.expect("indexes");
     assert!(idx.iter().any(|i| i.name == "EMP_SAL_IX" && i.columns == vec!["SAL"]), "EMP_SAL_IX: {idx:?}");
@@ -151,7 +151,7 @@ async fn o1_introspection() {
     assert_eq!(parts.len(), 2, "two partitions: {parts:?}");
     assert!(parts.iter().all(|p| p.method == "RANGE"), "RANGE method");
     assert_eq!(parts[0].key.as_deref(), Some("SOLD"), "partition key SOLD");
-    // Partition bound (HIGH_VALUE) is a LONG → None on oracle-rs 0.1.7 (documented).
+    assert!(parts.iter().any(|p| p.expression.is_some()), "partition bound (HIGH_VALUE/LONG via crate A): {parts:?}");
 
     let scan = d.scan_indexes("APPO1").await.expect("scan");
     assert!(scan.iter().any(|i| i.name == "EMP_SAL_IX" && i.valid), "EMP_SAL_IX scanned valid: {scan:?}");

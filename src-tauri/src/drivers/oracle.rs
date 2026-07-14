@@ -176,7 +176,8 @@ impl OracleDriver {
         let res = self
             .query(&format!(
                 "SELECT column_name AS name, data_type AS dtype, data_length AS dlen, data_precision AS dprec, \
-                        data_scale AS dscale, nullable AS nullable, column_id AS cid, NVL(identity_column,'NO') AS is_identity \
+                        data_scale AS dscale, nullable AS nullable, column_id AS cid, NVL(identity_column,'NO') AS is_identity, \
+                        data_default AS ddefault \
                  FROM all_tab_columns WHERE owner = {o} AND table_name = {t} ORDER BY column_id"
             ))
             .await?;
@@ -188,7 +189,7 @@ impl OracleDriver {
                 ColumnInfo {
                     data_type: build_col_type(&jstr(r, "DTYPE"), ji64(r, "DLEN"), ji64(r, "DPREC"), ji64(r, "DSCALE")),
                     nullable: jstr(r, "NULLABLE") == "Y",
-                    default: None, // DATA_DEFAULT is LONG — fetched separately if needed
+                    default: { let d = jstr(r, "DDEFAULT").trim().to_string(); if d.is_empty() { None } else { Some(d) } },
                     is_pk: pk.contains(&name),
                     is_fk: fk.contains(&name),
                     ordinal: ji64(r, "CID").unwrap_or(0) as i32,
@@ -384,13 +385,20 @@ impl OracleDriver {
         };
         let res = self
             .query(&format!(
-                "SELECT partition_name AS name, partition_position AS pos, num_rows AS nrows FROM all_tab_partitions WHERE table_owner = {o} AND table_name = {t} ORDER BY partition_position"
+                "SELECT partition_name AS name, partition_position AS pos, num_rows AS nrows, high_value AS hval FROM all_tab_partitions WHERE table_owner = {o} AND table_name = {t} ORDER BY partition_position"
             ))
             .await?;
         Ok(res
             .rows
             .iter()
-            .map(|r| PartitionInfo { name: jstr(r, "NAME"), method: method.clone(), key: key.clone(), expression: None, rows: ji64(r, "NROWS"), position: ji64(r, "POS") })
+            .map(|r| PartitionInfo {
+                name: jstr(r, "NAME"),
+                method: method.clone(),
+                key: key.clone(),
+                expression: { let h = jstr(r, "HVAL").trim().to_string(); if h.is_empty() { None } else { Some(h) } },
+                rows: ji64(r, "NROWS"),
+                position: ji64(r, "POS"),
+            })
             .collect())
     }
 
