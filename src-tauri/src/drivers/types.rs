@@ -19,6 +19,7 @@ pub enum SystemType {
     Kafka,
     Nats,
     Mongodb,
+    Oracle,
 }
 
 impl SystemType {
@@ -35,6 +36,7 @@ impl SystemType {
             SystemType::Kafka => "kafka",
             SystemType::Nats => "nats",
             SystemType::Mongodb => "mongodb",
+            SystemType::Oracle => "oracle",
         }
     }
 
@@ -47,6 +49,7 @@ impl SystemType {
                 | SystemType::Mariadb
                 | SystemType::Mssql
                 | SystemType::Sqlite
+                | SystemType::Oracle
         )
     }
 }

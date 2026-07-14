@@ -110,6 +110,7 @@ impl ConnectionProfile {
             SystemType::Kafka => 9092,
             SystemType::Nats => 4222,
             SystemType::Mongodb => 27017,
+            SystemType::Oracle => 1521,
         }
     }
 }

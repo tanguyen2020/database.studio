@@ -93,6 +93,10 @@ async-trait = "0.1"
 # (no OpenSSL/nasm), đồng bộ TLS toàn repo. bson đi kèm (re-export mongodb::bson).
 mongodb = "3"
 
+# Oracle — PURE-RUST async driver (TNS protocol), rustls TLS, NO Oracle Instant
+# Client / OCI required (unlike the `oracle` ODPI-C crate). O0 spike (crate B).
+oracle-rs = "0.1"
+
 # Misc
 uuid = { version = "1", features = ["v4"] }
 thiserror = "2"

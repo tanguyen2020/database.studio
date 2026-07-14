@@ -10,6 +10,7 @@ pub mod mongo;
 pub mod mssql;
 pub mod mysql;
 pub mod nats;
+pub mod oracle;
 pub mod plan;
 pub mod postgres;
 pub mod redis;
@@ -29,6 +30,7 @@ use mongo::{MongoConnParams, MongoDriver};
 use mssql::{MssqlConnParams, MssqlDriver};
 use mysql::{MySqlConnParams, MySqlDriver};
 use nats::{NatsConnParams, NatsDriver};
+use oracle::{OracleConnParams, OracleDriver};
 use postgres::{PgConnParams, PgDriver};
 use redis::{RedisConnParams, RedisDriver};
 use sqlite::{SqliteConnParams, SqliteDriver};
@@ -52,6 +54,7 @@ pub enum LiveConnection {
     Kafka(KafkaDriver),
     Cassandra(CassandraDriver),
     Mongo(MongoDriver),
+    Oracle(OracleDriver),
 }
 
 fn pg_params(p: &ConnectionProfile, ep: &Endpoint, password: &str) -> PgConnParams {
@@ -212,6 +215,21 @@ fn cassandra_params(p: &ConnectionProfile, ep: &Endpoint, password: &str) -> Cas
     }
 }
 
+fn oracle_params(p: &ConnectionProfile, ep: &Endpoint, password: &str) -> OracleConnParams {
+    // O0: reuse existing profile fields — `database` = service name (or SID), and
+    // `mssql_auth == "sid"` selects SID mode (dedicated oracle_* fields land later).
+    OracleConnParams {
+        host: ep.host.clone(),
+        port: ep.port,
+        service: p.database.clone(),
+        use_sid: p.mssql_auth.eq_ignore_ascii_case("sid"),
+        user: p.user.clone(),
+        password: password.to_string(),
+        ssl: p.ssl,
+        ssl_ca: p.ssl_ca.clone(),
+    }
+}
+
 fn mongo_params(p: &ConnectionProfile, ep: &Endpoint, password: &str) -> MongoConnParams {
     MongoConnParams {
         host: ep.host.clone(),
@@ -264,6 +282,9 @@ impl LiveConnection {
             SystemType::Mongodb => Ok(Self::Mongo(
                 MongoDriver::connect(&mongo_params(profile, endpoint, password)).await?,
             )),
+            SystemType::Oracle => Ok(Self::Oracle(
+                OracleDriver::connect(&oracle_params(profile, endpoint, password)).await?,
+            )),
             #[allow(unreachable_patterns)]
             other => Err(QueryError::new(
                 other.as_str(),
@@ -298,6 +319,9 @@ impl LiveConnection {
             SystemType::Mongodb => {
                 MongoDriver::test(&mongo_params(profile, endpoint, password)).await
             }
+            SystemType::Oracle => {
+                OracleDriver::test(&oracle_params(profile, endpoint, password)).await
+            }
             #[allow(unreachable_patterns)]
             other => TestResult {
                 ok: false,
@@ -330,6 +354,7 @@ impl LiveConnection {
             // Mongo editor: first page only via generic exec (paging + warnings
             // đi qua command mongo_exec chuyên biệt).
             Self::Mongo(d) => Box::pin(async move { d.exec_mongo(sql, None, None).await.map(|o| o.outcome) }),
+            Self::Oracle(d) => Box::pin(d.exec(sql)),
         }
     }
 
@@ -345,6 +370,7 @@ impl LiveConnection {
             Self::Kafka(d) => d.ping().await,
             Self::Cassandra(d) => d.ping().await,
             Self::Mongo(d) => d.ping().await,
+            Self::Oracle(d) => d.ping().await,
         }
     }
 
@@ -380,6 +406,7 @@ impl LiveConnection {
                 "Filter builder does not support MongoDB — use the query editor with a find() filter",
                 "mongodb param select not supported",
             )),
+            Self::Oracle(d) => d.exec_params(sql, params).await,
         }
     }
 
@@ -407,6 +434,7 @@ impl LiveConnection {
             Self::Cassandra(d) => d.apply_grid(changes).await,
             // Mongo: insert/update/delete document by `_id` (no OLTP transaction).
             Self::Mongo(d) => d.apply_grid(changes).await,
+            Self::Oracle(d) => d.apply_changes(changes).await,
         }
     }
 
@@ -426,6 +454,7 @@ impl LiveConnection {
             Self::Cassandra(_) => Ok(Vec::new()),
             // Mongo: cây database→collection lấy qua command mongo_* chuyên biệt.
             Self::Mongo(_) => Ok(Vec::new()),
+            Self::Oracle(d) => d.schemas().await,
         }
     }
 
@@ -437,6 +466,7 @@ impl LiveConnection {
             Self::Postgres(d) => d.databases().await,
             Self::Mssql(d) => d.databases().await,
             Self::Mongo(d) => d.databases().await,
+            Self::Oracle(d) => d.databases().await,
             _ => Ok(Vec::new()),
         }
     }
@@ -454,6 +484,7 @@ impl LiveConnection {
             Self::Cassandra(_) => Ok(Vec::new()),
             // Mongo: "schema" = database, "table" = collection.
             Self::Mongo(d) => d.collections(schema).await,
+            Self::Oracle(d) => d.tables(schema).await,
         }
     }
 
@@ -469,6 +500,7 @@ impl LiveConnection {
             Self::Kafka(_) => Ok(Vec::new()),
             Self::Cassandra(_) => Ok(Vec::new()),
             Self::Mongo(d) => d.collection_fields(schema, table).await,
+            Self::Oracle(d) => d.columns(schema, table).await,
         }
     }
 
@@ -484,6 +516,7 @@ impl LiveConnection {
             Self::Kafka(_) => Ok(Vec::new()),
             Self::Cassandra(_) => Ok(Vec::new()),
             Self::Mongo(d) => d.indexes(schema, table).await,
+            Self::Oracle(d) => d.indexes(schema, table).await,
         }
     }
 
@@ -500,6 +533,7 @@ impl LiveConnection {
             Self::Kafka(_) => Ok(Vec::new()),
             Self::Cassandra(_) => Ok(Vec::new()),
             Self::Mongo(_) => Ok(Vec::new()),
+            Self::Oracle(d) => d.constraints(schema, table).await,
         }
     }
 
@@ -515,6 +549,7 @@ impl LiveConnection {
             Self::Kafka(_) => Ok(Vec::new()),
             Self::Cassandra(_) => Ok(Vec::new()),
             Self::Mongo(_) => Ok(Vec::new()),
+            Self::Oracle(d) => d.routines(schema).await,
         }
     }
 
@@ -534,6 +569,7 @@ impl LiveConnection {
             Self::Kafka(_) => Ok(Vec::new()),
             Self::Cassandra(_) => Ok(Vec::new()),
             Self::Mongo(_) => Ok(Vec::new()),
+            Self::Oracle(d) => d.functions(schema).await,
         }
     }
 
@@ -549,12 +585,14 @@ impl LiveConnection {
             Self::Kafka(_) => Ok(Vec::new()),
             Self::Cassandra(_) => Ok(Vec::new()),
             Self::Mongo(_) => Ok(Vec::new()),
+            Self::Oracle(d) => d.triggers(schema).await,
         }
     }
 
     pub async fn sequences(&mut self, schema: &str) -> Result<Vec<SequenceInfo>, QueryError> {
         match self {
             Self::Postgres(d) => d.sequences(schema).await,
+            Self::Oracle(d) => d.sequences(schema).await,
             // MySQL/MariaDB/MSSQL(Phase1)/SQLite: no sequences node
             _ => Ok(Vec::new()),
         }
@@ -567,6 +605,7 @@ impl LiveConnection {
             Self::MySql(d) => d.foreign_keys(schema).await,
             Self::Mssql(d) => d.foreign_keys(schema).await,
             Self::Sqlite(d) => d.foreign_keys(schema).await,
+            Self::Oracle(d) => d.foreign_keys(schema).await,
             _ => Ok(Vec::new()),
         }
     }
@@ -590,6 +629,7 @@ impl LiveConnection {
             Self::Kafka(_) => Ok(Vec::new()),
             // Mongo sharding ≠ declarative partitioning (ngoài parity core).
             Self::Mongo(_) => Ok(Vec::new()),
+            Self::Oracle(d) => d.partitions(schema, table).await,
         }
     }
 
@@ -614,6 +654,7 @@ impl LiveConnection {
             Self::Clickhouse(d) => ("clickhouse", d.scan_indexes(schema).await?, Vec::new()),
             Self::Cassandra(d) => ("cassandra", d.scan_indexes(schema).await?, Vec::new()),
             Self::Mongo(d) => ("mongodb", d.scan_indexes(schema).await?, Vec::new()),
+            Self::Oracle(d) => ("oracle", d.scan_indexes(schema).await?, Vec::new()),
             #[allow(unreachable_patterns)]
             _ => {
                 return Ok(index_scan::IndexScanResult {

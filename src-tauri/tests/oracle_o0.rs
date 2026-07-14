@@ -1,0 +1,141 @@
+//! O0 live spike — verify the pure-Rust `oracle-rs` driver actually connects to a
+//! real Oracle and decodes a dynamic result set into the locked contract.
+//! Run against a `gvenzl/oracle-free` container:
+//!   docker run -d --name ora-o0 -p 1521:1521 -e ORACLE_PASSWORD=Oracle123 gvenzl/oracle-free:23-slim-faststart
+//!   cargo test --test oracle_o0 -- --nocapture --test-threads=1
+
+use database_studio_lib::drivers::oracle::{OracleConnParams, OracleDriver};
+use database_studio_lib::drivers::types::StatementOutcome;
+
+fn params() -> OracleConnParams {
+    OracleConnParams {
+        host: "127.0.0.1".into(),
+        port: 1521,
+        service: "FREEPDB1".into(),
+        use_sid: false,
+        user: "system".into(),
+        password: "Oracle123".into(),
+        ssl: false,
+        ssl_ca: String::new(),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs a live Oracle container (gvenzl/oracle-free) — run with --ignored"]
+async fn o0_connect_exec_decode() {
+    let mut d = OracleDriver::connect(&params()).await.expect("connect to Oracle");
+
+    // Idempotent drop (ignore "table does not exist").
+    let _ = d
+        .exec("BEGIN EXECUTE IMMEDIATE 'DROP TABLE o0_t'; EXCEPTION WHEN OTHERS THEN NULL; END;")
+        .await;
+
+    d.exec("CREATE TABLE o0_t (id NUMBER, name VARCHAR2(50), amount NUMBER(10,2), created DATE)")
+        .await
+        .expect("create table");
+
+    let ins = d
+        .exec("INSERT INTO o0_t (id, name, amount, created) VALUES (1, 'Ann', 12.50, DATE '2026-01-02')")
+        .await
+        .expect("insert");
+    assert!(matches!(ins, StatementOutcome::Affected { affected: 1 }), "insert affected 1, got {ins:?}");
+
+    let out = d
+        .exec("SELECT id, name, amount, created FROM o0_t ORDER BY id")
+        .await
+        .expect("select");
+
+    match out {
+        StatementOutcome::Rows { result } => {
+            println!("cols = {:?}", result.cols);
+            println!("row0 = {}", serde_json::to_string(&result.rows[0]).unwrap());
+            assert_eq!(result.total, 1, "one row");
+            assert_eq!(result.cols.len(), 4, "four columns");
+            let row = &result.rows[0];
+            assert_eq!(row["NAME"], serde_json::json!("Ann"));
+            // NUMBER(10,2) keeps full precision (string), integer NUMBER may be int/number.
+            let amount = row["AMOUNT"].to_string();
+            assert!(amount.contains("12.5"), "amount decoded: {amount}");
+            // DATE decodes to a non-empty string.
+            assert!(row["CREATED"].as_str().map(|s| !s.is_empty()).unwrap_or(false), "created decoded: {}", row["CREATED"]);
+        }
+        other => panic!("expected Rows, got {other:?}"),
+    }
+
+    // FETCH FIRST paging (the dialect form the frontend generates for Oracle).
+    let paged = d.exec("SELECT id FROM o0_t FETCH FIRST 1 ROWS ONLY").await.expect("fetch first");
+    assert!(matches!(paged, StatementOutcome::Rows { .. }), "FETCH FIRST returns rows");
+
+    let _ = d.exec("DROP TABLE o0_t").await;
+    println!("O0 LIVE OK — connect + DDL + DML + dynamic decode + FETCH FIRST verified");
+}
+
+/// O1: real introspection (ALL_* catalog views) against a seeded schema.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs a live Oracle container (gvenzl/oracle-free) — run with --ignored"]
+async fn o1_introspection() {
+    let mut d = OracleDriver::connect(&params()).await.expect("connect");
+    let drop_user = "BEGIN EXECUTE IMMEDIATE 'DROP USER appo1 CASCADE'; EXCEPTION WHEN OTHERS THEN NULL; END;";
+    let _ = d.exec(drop_user).await;
+
+    for sql in [
+        "CREATE USER appo1 IDENTIFIED BY Appo1Pw123",
+        "ALTER USER appo1 QUOTA UNLIMITED ON USERS",
+        "CREATE TABLE appo1.dept (id NUMBER PRIMARY KEY, name VARCHAR2(50) NOT NULL)",
+        "CREATE TABLE appo1.emp (id NUMBER PRIMARY KEY, dept_id NUMBER, sal NUMBER(10,2), CONSTRAINT emp_dept_fk FOREIGN KEY (dept_id) REFERENCES appo1.dept(id))",
+        "CREATE INDEX appo1.emp_sal_ix ON appo1.emp (sal)",
+        "CREATE VIEW appo1.v_emp AS SELECT id, sal FROM appo1.emp",
+        "CREATE SEQUENCE appo1.emp_seq START WITH 1 INCREMENT BY 1",
+        "CREATE OR REPLACE TRIGGER appo1.emp_bi BEFORE INSERT ON appo1.emp FOR EACH ROW BEGIN NULL; END;",
+        "CREATE OR REPLACE FUNCTION appo1.f_double(n NUMBER) RETURN NUMBER AS BEGIN RETURN n*2; END;",
+        "CREATE OR REPLACE PROCEDURE appo1.p_noop AS BEGIN NULL; END;",
+        "CREATE TABLE appo1.sales (id NUMBER, sold DATE) PARTITION BY RANGE (sold) (PARTITION p2025 VALUES LESS THAN (DATE '2026-01-01'), PARTITION pmax VALUES LESS THAN (MAXVALUE))",
+    ] {
+        d.exec(sql).await.unwrap_or_else(|e| panic!("setup failed [{sql}]: {}", e.message));
+    }
+
+    let schemas = d.schemas().await.expect("schemas");
+    assert!(schemas.iter().any(|s| s.name == "APPO1"), "APPO1 in schemas: {schemas:?}");
+
+    let tables = d.tables("APPO1").await.expect("tables");
+    assert!(tables.iter().any(|t| t.name == "EMP" && t.kind == "table"), "EMP table: {tables:?}");
+    assert!(tables.iter().any(|t| t.name == "V_EMP" && t.kind == "view"), "V_EMP view");
+
+    let cols = d.columns("APPO1", "EMP").await.expect("columns");
+    assert!(cols.iter().find(|c| c.name == "ID").expect("ID col").is_pk, "ID is PK");
+    assert!(cols.iter().find(|c| c.name == "DEPT_ID").expect("DEPT_ID").is_fk, "DEPT_ID is FK");
+    assert_eq!(cols.iter().find(|c| c.name == "SAL").expect("SAL").data_type, "NUMBER(10,2)", "SAL type built");
+
+    let idx = d.indexes("APPO1", "EMP").await.expect("indexes");
+    assert!(idx.iter().any(|i| i.name == "EMP_SAL_IX" && i.columns == vec!["SAL"]), "EMP_SAL_IX: {idx:?}");
+    assert!(idx.iter().any(|i| i.primary), "a primary index present");
+
+    let cons = d.constraints("APPO1", "EMP").await.expect("constraints");
+    assert!(cons.iter().any(|c| c.kind == "PK"), "PK constraint");
+    assert!(cons.iter().any(|c| c.kind == "FK"), "FK constraint");
+
+    let fks = d.foreign_keys("APPO1").await.expect("fks");
+    assert!(
+        fks.iter().any(|f| f.from_table == "EMP" && f.from_column == "DEPT_ID" && f.to_table == "DEPT" && f.to_column == "ID"),
+        "EMP.DEPT_ID → DEPT.ID: {fks:?}"
+    );
+
+    assert!(d.sequences("APPO1").await.expect("seq").iter().any(|s| s.name == "EMP_SEQ"), "EMP_SEQ");
+    assert!(d.triggers("APPO1").await.expect("trg").iter().any(|t| t.name == "EMP_BI" && t.table == "EMP"), "EMP_BI");
+
+    let rt = d.routines("APPO1").await.expect("routines");
+    assert!(rt.iter().any(|r| r.name == "F_DOUBLE" && r.kind == "function"), "F_DOUBLE fn");
+    assert!(rt.iter().any(|r| r.name == "P_NOOP" && r.kind == "procedure"), "P_NOOP proc");
+    assert!(d.functions("APPO1").await.expect("fns").iter().any(|f| f.name == "F_DOUBLE"), "F_DOUBLE in functions");
+
+    let parts = d.partitions("APPO1", "SALES").await.expect("partitions");
+    assert_eq!(parts.len(), 2, "two partitions: {parts:?}");
+    assert!(parts.iter().all(|p| p.method == "RANGE"), "RANGE method");
+    assert_eq!(parts[0].key.as_deref(), Some("SOLD"), "partition key SOLD");
+
+    let scan = d.scan_indexes("APPO1").await.expect("scan");
+    assert!(scan.iter().any(|i| i.name == "EMP_SAL_IX" && i.valid), "EMP_SAL_IX scanned valid: {scan:?}");
+
+    let _ = d.exec(drop_user).await;
+    println!("O1 INTROSPECTION OK — schemas/tables/columns/indexes/constraints/FKs/sequences/triggers/routines/functions/partitions/scan verified");
+}
