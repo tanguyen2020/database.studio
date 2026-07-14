@@ -86,7 +86,7 @@ async fn o1_introspection() {
         "CREATE USER appo1 IDENTIFIED BY Appo1Pw123",
         "ALTER USER appo1 QUOTA UNLIMITED ON USERS",
         "CREATE TABLE appo1.dept (id NUMBER PRIMARY KEY, name VARCHAR2(50) NOT NULL)",
-        "CREATE TABLE appo1.emp (id NUMBER PRIMARY KEY, dept_id NUMBER, sal NUMBER(10,2), CONSTRAINT emp_dept_fk FOREIGN KEY (dept_id) REFERENCES appo1.dept(id))",
+        "CREATE TABLE appo1.emp (id NUMBER PRIMARY KEY, dept_id NUMBER, sal NUMBER(10,2) DEFAULT 0, CONSTRAINT emp_dept_fk FOREIGN KEY (dept_id) REFERENCES appo1.dept(id))",
         "CREATE INDEX appo1.emp_sal_ix ON appo1.emp (sal)",
         "CREATE VIEW appo1.v_emp AS SELECT id, sal FROM appo1.emp",
         "CREATE SEQUENCE appo1.emp_seq START WITH 1 INCREMENT BY 1",
@@ -109,6 +109,8 @@ async fn o1_introspection() {
     assert!(cols.iter().find(|c| c.name == "ID").expect("ID col").is_pk, "ID is PK");
     assert!(cols.iter().find(|c| c.name == "DEPT_ID").expect("DEPT_ID").is_fk, "DEPT_ID is FK");
     assert_eq!(cols.iter().find(|c| c.name == "SAL").expect("SAL").data_type, "NUMBER(10,2)", "SAL type built");
+    // Note: column DEFAULT (ALL_TAB_COLUMNS.DATA_DEFAULT) is a LONG — oracle-rs 0.1.7
+    // can't decode LONG, so `default` is None (documented limitation, not asserted).
 
     let idx = d.indexes("APPO1", "EMP").await.expect("indexes");
     assert!(idx.iter().any(|i| i.name == "EMP_SAL_IX" && i.columns == vec!["SAL"]), "EMP_SAL_IX: {idx:?}");
@@ -139,6 +141,7 @@ async fn o1_introspection() {
     assert_eq!(parts.len(), 2, "two partitions: {parts:?}");
     assert!(parts.iter().all(|p| p.method == "RANGE"), "RANGE method");
     assert_eq!(parts[0].key.as_deref(), Some("SOLD"), "partition key SOLD");
+    // Partition bound (HIGH_VALUE) is a LONG → None on oracle-rs 0.1.7 (documented).
 
     let scan = d.scan_indexes("APPO1").await.expect("scan");
     assert!(scan.iter().any(|i| i.name == "EMP_SAL_IX" && i.valid), "EMP_SAL_IX scanned valid: {scan:?}");

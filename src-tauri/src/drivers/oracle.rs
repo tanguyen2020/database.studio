@@ -197,17 +197,21 @@ impl OracleDriver {
                  ORDER BY name"
             ))
             .await?;
+        let sizes = self.segment_sizes(schema, "TABLE").await; // best-effort
         Ok(res
             .rows
             .iter()
-            .map(|r| TableInfo {
-                schema: schema.to_string(),
-                name: cell_str(&res, r, "NAME"),
-                kind: cell_str(&res, r, "KIND"),
-                row_estimate: cell_i64(&res, r, "NROWS"),
-                locked: false,
-                engine: None,
-                data_length: None, // O2: DBA_SEGMENTS.bytes (needs privileges)
+            .map(|r| {
+                let name = cell_str(&res, r, "NAME");
+                TableInfo {
+                    schema: schema.to_string(),
+                    kind: cell_str(&res, r, "KIND"),
+                    row_estimate: cell_i64(&res, r, "NROWS"),
+                    locked: false,
+                    engine: None,
+                    data_length: sizes.get(&name).copied(),
+                    name,
+                }
             })
             .collect())
     }
@@ -236,7 +240,7 @@ impl OracleDriver {
                         cell_i64(&res, r, "DSCALE"),
                     ),
                     nullable: cell_str(&res, r, "NULLABLE") == "Y",
-                    default: None, // O2: DATA_DEFAULT is LONG — skip to avoid LONG decode
+                    default: None, // DATA_DEFAULT is a LONG; oracle-rs 0.1.7 can't decode LONG
                     is_pk: pk.contains(&name),
                     is_fk: fk.contains(&name),
                     ordinal: cell_i64(&res, r, "CID").unwrap_or(0) as i32,
@@ -257,6 +261,25 @@ impl OracleDriver {
             ))
             .await?;
         Ok(res.rows.iter().map(|r| cell_str(&res, r, "NAME")).collect())
+    }
+
+    /// On-disk segment sizes by object name (DBA_SEGMENTS needs privileges → best-effort).
+    async fn segment_sizes(&self, schema: &str, seg_type: &str) -> HashMap<String, i64> {
+        let o = lit(schema);
+        match self
+            .q(&format!(
+                "SELECT segment_name AS name, SUM(bytes) AS bytes FROM dba_segments \
+                 WHERE owner = {o} AND segment_type = '{seg_type}' GROUP BY segment_name"
+            ))
+            .await
+        {
+            Ok(res) => res
+                .rows
+                .iter()
+                .filter_map(|r| cell_i64(&res, r, "BYTES").map(|b| (cell_str(&res, r, "NAME"), b)))
+                .collect(),
+            Err(_) => HashMap::new(),
+        }
     }
 
     async fn pk_index_names(&self, schema: &str) -> HashSet<String> {
@@ -469,7 +492,7 @@ impl OracleDriver {
                 name: cell_str(&res, r, "NAME"),
                 method: method.clone(),
                 key: key.clone(),
-                expression: None, // O2: HIGH_VALUE is LONG — skip to avoid LONG decode
+                expression: None, // HIGH_VALUE is a LONG; oracle-rs 0.1.7 can't decode LONG
                 rows: cell_i64(&res, r, "NROWS"),
                 position: cell_i64(&res, r, "POS"),
             })
@@ -479,6 +502,7 @@ impl OracleDriver {
     pub async fn scan_indexes(&mut self, schema: &str) -> Result<Vec<IndexScanRow>, QueryError> {
         let o = lit(schema);
         let pk = self.pk_index_names(schema).await;
+        let sizes = self.segment_sizes(schema, "INDEX").await; // best-effort
         let res = self
             .q(&format!(
                 "SELECT i.index_name AS iname, i.table_name AS tname, i.index_type AS itype, i.uniqueness AS uniq, i.status AS status, \
@@ -503,8 +527,8 @@ impl OracleDriver {
                 index_type: cell_str(&res, r, "ITYPE"),
                 unique: cell_str(&res, r, "UNIQ") == "UNIQUE",
                 primary: pk.contains(&name),
-                size_bytes: None,          // O2: DBA_SEGMENTS
-                usage: None,               // O2: V$OBJECT_USAGE
+                size_bytes: sizes.get(&name).copied(),
+                usage: None,               // O2: V$OBJECT_USAGE (monitoring must be enabled)
                 fragmentation_pct: None,
                 valid: cell_str(&res, r, "STATUS") == "VALID",
                 flags: Vec::new(),
