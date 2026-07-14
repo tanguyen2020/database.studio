@@ -75,6 +75,18 @@ export function partitionOps(
         { label: 'Drop partition', sql: `ALTER TABLE ${t} DROP PARTITION ${val};`, danger: true },
       ]
     }
+    case 'oracle': {
+      // Oracle partitions are named (like MySQL); maintenance is ALTER TABLE … PARTITION.
+      const pq = quoteIdent(system, part.name)
+      const ops: PartitionOp[] = [
+        { label: 'Truncate partition', sql: `ALTER TABLE ${t} TRUNCATE PARTITION ${pq};`, danger: true },
+        { label: 'Rebuild unusable indexes', sql: `ALTER TABLE ${t} MODIFY PARTITION ${pq} REBUILD UNUSABLE LOCAL INDEXES;` },
+      ]
+      if (/^(RANGE|LIST)/i.test(part.method)) {
+        ops.push({ label: 'Drop partition', sql: `ALTER TABLE ${t} DROP PARTITION ${pq};`, danger: true })
+      }
+      return ops
+    }
     default:
       return []
   }
@@ -180,6 +192,22 @@ export function buildPartitionCreate(
       }
       return out
     }
+    case 'oracle': {
+      // Oracle inline partition clause inside CREATE TABLE (after the column list).
+      if (spec.strategy === 'HASH') {
+        out.clause = `PARTITION BY HASH (${cols})\nPARTITIONS ${spec.hashCount ?? 4}`
+        return out
+      }
+      const defs = (spec.partitions ?? []).map((p) => {
+        const pn = quoteIdent(system, p.name)
+        // Oracle LIST uses VALUES (…) (no IN); RANGE uses VALUES LESS THAN (…).
+        return spec.strategy === 'LIST'
+          ? `  PARTITION ${pn} VALUES (${p.bound})`
+          : `  PARTITION ${pn} VALUES LESS THAN (${p.bound})`
+      })
+      out.clause = `PARTITION BY ${spec.strategy} (${cols})` + (defs.length ? ` (\n${defs.join(',\n')}\n)` : '')
+      return out
+    }
     case 'mssql': {
       const fn = `pf_${table}`
       const scheme = `ps_${table}`
@@ -261,6 +289,14 @@ export function buildConvertToPartitioned(
       )
       return out
     }
+    case 'oracle': {
+      // Oracle 12cR2+ can repartition in place with MODIFY … ONLINE (rebuilds indexes).
+      const pc = buildPartitionCreate(system, schema, table, spec, keyType)
+      out.post.push(`ALTER TABLE ${t}\n  MODIFY\n${pc.clause}\n  ONLINE;`)
+      out.warnings.push(...pc.warnings)
+      out.warnings.push('Oracle repartitions in place with MODIFY … ONLINE (requires 12cR2+). Local indexes are rebuilt; review before running.')
+      return out
+    }
     case 'clickhouse': {
       // ClickHouse can't ALTER … PARTITION BY in place → recreate. `CREATE TABLE new
       // AS old` copies the column structure; ENGINE + ORDER BY must be restated (we
@@ -289,12 +325,12 @@ export function buildConvertToPartitioned(
 
 /** Whether an existing table can be converted to partitioned in the designer. */
 export function canConvertToPartitioned(system: string): boolean {
-  return ['postgres', 'mysql', 'mariadb', 'mssql', 'clickhouse'].includes(system)
+  return ['postgres', 'mysql', 'mariadb', 'mssql', 'clickhouse', 'oracle'].includes(system)
 }
 
 /** Systems that support declarative table partitioning in the designer. */
 export function supportsPartitioning(system: string): boolean {
-  return ['postgres', 'mysql', 'mariadb', 'mssql', 'clickhouse'].includes(system)
+  return ['postgres', 'mysql', 'mariadb', 'mssql', 'clickhouse', 'oracle'].includes(system)
 }
 
 /**
@@ -321,6 +357,11 @@ export function buildAddPartition(
       const pn = quoteIdent(system, def.name)
       const vals = strategy === 'LIST' ? `VALUES IN (${def.bound})` : `VALUES LESS THAN (${def.bound})`
       return { sql: `ALTER TABLE ${t} ADD PARTITION (PARTITION ${pn} ${vals});` }
+    }
+    case 'oracle': {
+      const pn = quoteIdent(system, def.name)
+      const vals = strategy === 'LIST' ? `VALUES (${def.bound})` : `VALUES LESS THAN (${def.bound})`
+      return { sql: `ALTER TABLE ${t} ADD PARTITION ${pn} ${vals};` }
     }
     case 'mssql':
       return {
@@ -378,6 +419,11 @@ export function addPartitionTemplate(system: string, schema: string, table: stri
         `-- ClickHouse creates partitions automatically on INSERT (by the PARTITION BY key).\n` +
         `-- To re-attach a previously detached partition, edit the value:\n` +
         `ALTER TABLE ${t} ATTACH PARTITION ...;`
+      )
+    case 'oracle':
+      return (
+        `-- Add a partition to ${t} (RANGE/LIST tables) — edit the name and bound.\n` +
+        `ALTER TABLE ${t} ADD PARTITION pNEW VALUES LESS THAN (...);`
       )
     default:
       return `-- Partitioning is not supported for ${system}.`

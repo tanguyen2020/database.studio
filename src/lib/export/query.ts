@@ -54,6 +54,14 @@ export function buildExportSelect(o: ExportSelect): string {
     return sql
   }
 
+  // Oracle has no LIMIT → FETCH FIRST n ROWS ONLY (12c+); never appends LIMIT/OFFSET.
+  if (o.system === 'oracle') {
+    let sql = `SELECT ${colList} FROM ${tgt}`
+    if (where) sql += ` WHERE ${where}`
+    if (hasLimit) sql += ` FETCH FIRST ${o.limit} ROWS ONLY`
+    return sql
+  }
+
   let sql = `SELECT ${colList} FROM ${tgt}`
   if (where) sql += ` WHERE ${where}`
   if (hasLimit) sql += ` LIMIT ${o.limit}`

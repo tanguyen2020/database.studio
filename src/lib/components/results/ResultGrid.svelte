@@ -391,7 +391,7 @@
   // numeric/decimal/money, real/double/float) via the shared classifyType, and tint
   // those columns' values with the theme-aware --syntax-number token. Selected
   // cells/rows keep their white text (see the cell color guard below).
-  const NUM_COLOR_SYSTEMS = ['postgres', 'mysql', 'mariadb', 'mssql', 'sqlite', 'mongodb']
+  const NUM_COLOR_SYSTEMS = ['postgres', 'mysql', 'mariadb', 'mssql', 'sqlite', 'mongodb', 'oracle']
   const NUM_FAMILIES = new Set(['int', 'bigint', 'float', 'decimal'])
   const colorNumbers = $derived(NUM_COLOR_SYSTEMS.includes(system ?? editTarget?.system ?? ''))
   const numericCols = $derived(

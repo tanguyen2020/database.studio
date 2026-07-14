@@ -61,7 +61,7 @@
   const selConn = $derived(connections.byId(connections.selectedId ?? ''))
   // selRel: dòng 4643 chỉ liệt kê pg/mysql/mssql/clickhouse — mâu thuẫn với tab
   // dispatch dòng 2731 (có mariadb/sqlite) và README; theo dispatch + README.
-  const REL_SYSTEMS = ['postgres', 'mysql', 'mariadb', 'mssql', 'clickhouse', 'sqlite']
+  const REL_SYSTEMS = ['postgres', 'mysql', 'mariadb', 'mssql', 'clickhouse', 'sqlite', 'oracle']
   const isRelational = (system: string) => REL_SYSTEMS.includes(system)
   const selRel = $derived(!!selConn && isRelational(selConn.system))
   // View ER / Generate Scripts enable only when a schema/database node (public / dbo /

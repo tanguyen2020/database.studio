@@ -58,6 +58,13 @@ export function toAlterStatement(system: string, kind: AlterKind, schema: string
       }
       return `${def};` // SQLite has no stored procedures/functions
     }
+    case 'oracle': {
+      // Oracle supports CREATE OR REPLACE for VIEW/PROCEDURE/FUNCTION/TRIGGER/PACKAGE.
+      // DBMS_METADATA.GET_DDL often already emits "CREATE OR REPLACE" → don't double it.
+      // No CREATE OR REPLACE TABLE (<23c). Keep any PL/SQL `/` handling to the editor.
+      if (/^\s*CREATE\s+OR\s+REPLACE/i.test(def)) return `${def};`
+      return `${swapLeadingCreate(def, 'CREATE OR REPLACE')};`
+    }
     case 'clickhouse': {
       if (kind === 'view') {
         // SHOW CREATE (TABLE) of a view → `CREATE [MATERIALIZED] VIEW …`; ClickHouse

@@ -107,6 +107,7 @@ function defaultSchema(system: string): string {
   if (system === 'sqlite') return 'main'
   if (system === 'mysql' || system === 'mariadb' || system === 'clickhouse') return ''
   if (system === 'mssql') return 'dbo'
+  if (system === 'oracle') return '' // schema = connected user; empty → current-user
   return 'public'
 }
 
@@ -138,7 +139,8 @@ function fkClause(system: string, schema: string, fk: DesignForeignKey, name: st
   const refCols = fk.refColumns.map(q).join(', ')
   let s = `CONSTRAINT ${q(name)} FOREIGN KEY (${cols}) REFERENCES ${target(system, schema, fk.refTable)} (${refCols})`
   if (fk.onDelete && fk.onDelete.trim()) s += ` ON DELETE ${fk.onDelete.trim()}`
-  if (fk.onUpdate && fk.onUpdate.trim()) s += ` ON UPDATE ${fk.onUpdate.trim()}`
+  // Oracle foreign keys do NOT support ON UPDATE (only ON DELETE CASCADE|SET NULL).
+  if (fk.onUpdate && fk.onUpdate.trim() && system !== 'oracle') s += ` ON UPDATE ${fk.onUpdate.trim()}`
   return s
 }
 
@@ -208,6 +210,16 @@ export function alterColumn(system: string, schema: string, table: string, c: De
       out.push(`ALTER TABLE ${t} ALTER COLUMN ${col} ${typ} ${c.nullable ? 'NULL' : 'NOT NULL'};`)
       if (c.dflt.trim()) warns.push(`SQL Server: set the DEFAULT for ${c.name} via a separate DROP/ADD CONSTRAINT.`)
       break
+    case 'oracle': {
+      // Oracle uses MODIFY (col …). Emit NOT NULL when tightening; NULL only when
+      // relaxing an existing NOT NULL (avoids ORA-01451 on a no-op nullability change).
+      let def = `${col} ${typ}`
+      if (c.dflt.trim()) def += ` DEFAULT ${c.dflt.trim()}`
+      if (!c.nullable) def += ' NOT NULL'
+      else if (c.orig && !c.orig.nullable) def += ' NULL'
+      out.push(`ALTER TABLE ${t} MODIFY (${def});`)
+      break
+    }
     case 'sqlite':
       warns.push(`SQLite cannot ALTER a column (${c.name}) — recreate the table to change its type/nullability.`)
       break
@@ -245,6 +257,12 @@ export function buildTrigger(system: string, schema: string, table: string, tr: 
     case 'sqlite': {
       if (!body) return { warning: `Trigger ${tr.name || '(unnamed)'}: SQLite needs a trigger body.` }
       return { sql: `CREATE TRIGGER ${name} ${timing} ${event} ON ${t}\nBEGIN\n  ${body}${body.endsWith(';') ? '' : ';'}\nEND;` }
+    }
+    case 'oracle': {
+      // Oracle PL/SQL trigger body (uses :NEW/:OLD). INSTEAD OF is valid (on views).
+      if (!body) return { warning: `Trigger ${tr.name || '(unnamed)'}: Oracle needs a PL/SQL body (BEGIN … END;), using :NEW/:OLD.` }
+      const b = /^\s*(declare|begin)/i.test(body) ? body : `BEGIN\n  ${body}${body.endsWith(';') ? '' : ';'}\nEND;`
+      return { sql: `CREATE OR REPLACE TRIGGER ${name} ${timing} ${event} ON ${t}\nFOR EACH ROW\n${b}` }
     }
     default:
       return { warning: `Triggers are not supported for ${system}.` }
@@ -317,7 +335,7 @@ export function buildTableDdl(system: string, model: TableModel, isNew: boolean)
       if (!(tr.existing && tr.dropped) || !tr.name.trim()) return
       if (isCh) return
       if (system === 'postgres') statements.push(`DROP TRIGGER IF EXISTS ${q(tr.name)} ON ${tr.table ? target(system, sch, tr.table) : t};`)
-      else if (system === 'mssql') statements.push(`DROP TRIGGER ${q(tr.name)};`)
+      else if (system === 'mssql' || system === 'oracle') statements.push(`DROP TRIGGER ${q(tr.name)};`) // no IF EXISTS on Oracle
       else statements.push(`DROP TRIGGER IF EXISTS ${q(tr.name)};`)
     })
     model.foreignKeys.forEach((f) => {
@@ -359,8 +377,13 @@ export function buildTableDdl(system: string, model: TableModel, isNew: boolean)
     // ---- ADD new columns (not dropped) ----
     const newCols = model.columns.filter((c) => !c.existing && !c.dropped && c.name.trim())
     for (const c of newCols) {
-      const addKw = system === 'mssql' ? 'ADD' : 'ADD COLUMN'
-      statements.push(`ALTER TABLE ${t} ${addKw} ${columnDef(system, c)};`)
+      // Oracle: ADD (col …) — parenthesized, no COLUMN keyword.
+      if (system === 'oracle') {
+        statements.push(`ALTER TABLE ${t} ADD (${columnDef(system, c)});`)
+      } else {
+        const addKw = system === 'mssql' ? 'ADD' : 'ADD COLUMN'
+        statements.push(`ALTER TABLE ${t} ${addKw} ${columnDef(system, c)};`)
+      }
     }
     if (isCh) {
       if (model.uniques.some((u) => !u.existing) || model.checks.some((c) => !c.existing) || model.foreignKeys.some((f) => !f.existing) || model.triggers.some((t) => !t.existing)) {

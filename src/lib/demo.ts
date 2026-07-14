@@ -101,6 +101,10 @@ export const DEMO_PROFILES: ProfilePublic[] = [
     latency_ms: 5,
     has_password: false,
   }),
+  conn('c13', 'Oracle', 'oracle', '10.0.7.1', 1521, 'ORCLPDB1', 'system', 'Production', 'production', {
+    connected: true,
+    latency_ms: 20,
+  }),
 ]
 
 /** TABS t1/t2/t_ma1 của prototype (các tab SQL thuộc hệ Phase 1-2). */
@@ -999,7 +1003,8 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
           case 'mariadb':
           case 'mysql':
           case 'mssql':
-            // P3.3 — MySQL (EXPLAIN ANALYZE) + MSSQL (STATISTICS XML) now support actual
+          case 'oracle':
+            // Oracle: EXPLAIN PLAN + DBMS_XPLAN (actual via GATHER_PLAN_STATISTICS)
             return { has_planner: true, supports_actual: true, actual_kind: 'analyze', cost_basis: 'cost' }
           case 'sqlite':
           case 'clickhouse':

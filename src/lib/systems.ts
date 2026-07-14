@@ -42,6 +42,7 @@ const EXTRA: Record<
   mysql: { category: 'RELATIONAL', defaultPort: 3306, quote: 'backtick', available: true },
   mariadb: { category: 'RELATIONAL', defaultPort: 3306, quote: 'backtick', available: true },
   mssql: { category: 'RELATIONAL', defaultPort: 1433, quote: 'bracket', available: true },
+  oracle: { category: 'RELATIONAL', defaultPort: 1521, quote: 'double', available: true }, // Oracle Database
   sqlite: { category: 'EMBEDDED', defaultPort: null, quote: 'double', available: true },
   clickhouse: { category: 'ANALYTICAL', defaultPort: 8123, quote: 'backtick', available: true },
   cassandra: { category: 'WIDE COLUMN', defaultPort: 9042, quote: 'double', available: true }, // Phase 4b
@@ -79,6 +80,7 @@ export const SYSTEM_ORDER: SystemKey[] = [
   'mysql',
   'mariadb',
   'mssql',
+  'oracle',
   'clickhouse',
   'cassandra',
   'mongodb',

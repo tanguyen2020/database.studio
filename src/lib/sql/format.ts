@@ -12,6 +12,8 @@ function langOf(system: string): FormatOptionsWithLanguage['language'] {
       return 'transactsql'
     case 'sqlite':
       return 'sqlite'
+    case 'oracle':
+      return 'plsql'
     case 'clickhouse':
       // sql-formatter chưa có ClickHouse riêng → dùng chuẩn SQL
       return 'sql'

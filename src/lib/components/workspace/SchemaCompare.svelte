@@ -33,7 +33,7 @@
   // Every relational connection is selectable (item 2) — not only already-open ones;
   // a picked-but-closed connection is opened on demand in compare(). Non-relational
   // systems (Redis/Kafka/NATS) have no schema to compare, so they're excluded.
-  const RELATIONAL = ['postgres', 'mysql', 'mariadb', 'mssql', 'sqlite', 'clickhouse']
+  const RELATIONAL = ['postgres', 'mysql', 'mariadb', 'mssql', 'sqlite', 'clickhouse', 'oracle']
   const options = $derived(connections.profiles.filter((p) => RELATIONAL.includes(p.system)))
   type CmpState = { srcConn?: string | null; tgtConn?: string | null; srcDb?: string | null; tgtDb?: string | null; presetTick?: number }
   const st0 = untrack(() => tab.state) as CmpState
@@ -90,8 +90,8 @@
   async function loadDbs(connId: string, system: string): Promise<string[]> {
     try {
       if (system === 'postgres' || system === 'mssql') return (await ipc.listDatabases(connId)).map((d) => d.name)
-      if (system === 'mysql' || system === 'mariadb' || system === 'clickhouse')
-        return (await ipc.listSchemas(connId)).map((s) => s.name)
+      if (system === 'mysql' || system === 'mariadb' || system === 'clickhouse' || system === 'oracle')
+        return (await ipc.listSchemas(connId)).map((s) => s.name) // Oracle: schemas = users
       return []
     } catch {
       return []
@@ -333,7 +333,7 @@
     executing = true
     try {
       const tid = await resolveId(tgtConn, tgtDb)
-      const stmts = splitStatements(migration).map((s) => s.sql).filter(hasSql)
+      const stmts = splitStatements(migration, tgtProfile?.system).map((s) => s.sql).filter(hasSql)
       if (stmts.length === 0) {
         toasts.error('Nothing to execute')
         return

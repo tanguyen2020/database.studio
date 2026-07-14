@@ -62,6 +62,7 @@
   const isSqlite = $derived(selected?.system === 'sqlite')
   const isMssql = $derived(selected?.system === 'mssql')
   const isPg = $derived(selected?.system === 'postgres')
+  const isOracle = $derived(selected?.system === 'oracle')
   // ClickHouse (clickhouseTree): Databases → Tables/Views — không có
   // Procs/Triggers/Sequences; Dictionaries/Functions/engine badge → Phase 5
   const isClickhouse = $derived(selected?.system === 'clickhouse')
@@ -80,7 +81,7 @@
   // AUDIT-4 item 2 — PG/MSSQL bind one DB per connection; the tree nests schemas
   // under a current-database header, and lists other databases separately.
   const pgMssqlMultiDb = $derived(
-    (selected?.system === 'postgres' || selected?.system === 'mssql') && (cache?.databases?.length ?? 0) > 0,
+    (selected?.system === 'postgres' || selected?.system === 'mssql' || selected?.system === 'oracle') && (cache?.databases?.length ?? 0) > 0,
   )
   // schema tree depth offset: SQLite nests under a file node; PG/MSSQL nest under
   // the current-database header node (see relational branch).
@@ -147,7 +148,7 @@
   // selected — and then acts on THAT connection + schema (not schemas[0]). Non-
   // relational systems have no such node → erTarget is null → the whole toolbar
   // is disabled.
-  const RELATIONAL_TOOLS = ['postgres', 'mysql', 'mariadb', 'mssql', 'sqlite', 'clickhouse']
+  const RELATIONAL_TOOLS = ['postgres', 'mysql', 'mariadb', 'mssql', 'sqlite', 'clickhouse', 'oracle']
   const toolTarget = $derived(erTarget && RELATIONAL_TOOLS.includes(erTarget.system) ? erTarget : null)
   // "database.schema" of the current toolbar target (for the button tooltips);
   // schema-as-database engines already have db === schema, so just the schema.
@@ -339,7 +340,7 @@
         void explorer.loadSchemas(s.id)
         // Postgres/MSSQL: one DB per connection → list every database so the user
         // can open another. (MySQL/MariaDB already expose all DBs as schemas.)
-        if (s.system === 'postgres' || s.system === 'mssql') void explorer.loadDatabases(s.id)
+        if (s.system === 'postgres' || s.system === 'mssql' || s.system === 'oracle') void explorer.loadDatabases(s.id)
       })
     }
   })
@@ -474,7 +475,7 @@
       } else {
         // relational + ClickHouse: rebuild the schema cache; PG/MSSQL also re-list DBs
         await explorer.refresh(s.id, { kind: 'connection' })
-        if (s.system === 'postgres' || s.system === 'mssql') await explorer.loadDatabases(s.id)
+        if (s.system === 'postgres' || s.system === 'mssql' || s.system === 'oracle') await explorer.loadDatabases(s.id)
       }
     } finally {
       refreshingTree = false
@@ -1188,7 +1189,7 @@
   </div>
 
   <!-- filter — finds databases and objects by name (schema-tree systems) -->
-  {#if selected?.connected && ['postgres', 'mysql', 'mariadb', 'mssql', 'sqlite', 'clickhouse'].includes(selected.system)}
+  {#if selected?.connected && ['postgres', 'mysql', 'mariadb', 'mssql', 'sqlite', 'clickhouse', 'oracle'].includes(selected.system)}
     <div style="flex:none;padding:0 var(--px-8) var(--px-6);position:relative">
       <span style="position:absolute;left:var(--px-16);top:50%;transform:translateY(-60%);color:var(--muted);font-size:var(--px-11);pointer-events:none">⌕</span>
       <input
@@ -2204,8 +2205,8 @@
             {/each}
           {/if}
 
-          {#if isPg}
-            <!-- Sequences (PG only) -->
+          {#if isPg || isOracle}
+            <!-- Sequences (PG / Oracle) -->
             {#snippet seqsFolderMenu()}
               <ContextMenu.Content class="w-48">
                 <ContextMenu.Item onclick={() => createObject('sequence', schema.name)}>Create Sequence…</ContextMenu.Item>
@@ -2299,7 +2300,7 @@
                 {@const fViews = fsc.tables?.filter((t) => t.kind === 'view') ?? []}
                 {@const fProcs = fsc.routines?.filter((r) => r.kind === 'procedure') ?? []}
                 {@const fFns = fsc.routines?.filter((r) => r.kind !== 'procedure') ?? []}
-                {#each [['t', 'Tables', '▤', fTables], ['v', 'Views', '◫', fViews], ['p', 'Procedures', '⚙', fProcs], ['fn', 'Functions', 'ƒ', fFns], ['tg', 'Triggers', '⚡', fsc.triggers ?? []], ...(isPg ? [['sq', 'Sequences', '#', fsc.sequences ?? []]] : [])] as [fk, label, glyph, items] (fk)}
+                {#each [['t', 'Tables', '▤', fTables], ['v', 'Views', '◫', fViews], ['p', 'Procedures', '⚙', fProcs], ['fn', 'Functions', 'ƒ', fFns], ['tg', 'Triggers', '⚡', fsc.triggers ?? []], ...(isPg || isOracle ? [['sq', 'Sequences', '#', fsc.sequences ?? []]] : [])] as [fk, label, glyph, items] (fk)}
                   {@const folderKey = `${skey}:${fk}`}
                   {#snippet fFolderMenu()}
                     <ContextMenu.Content class="w-48">

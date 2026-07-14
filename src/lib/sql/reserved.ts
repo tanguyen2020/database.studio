@@ -81,6 +81,20 @@ const BY_SYSTEM: Record<string, string[]> = {
     'format', 'global', 'materialized', 'offset', 'optimize', 'partition',
     'prewhere', 'sample', 'settings', 'ttl', 'view',
   ],
+  // Oracle SQL reserved words that commonly clash with real column/table names.
+  // No @codemirror/lang-sql Oracle dialect exists (see LANG_BY_SYSTEM) → this list
+  // must be reasonably complete on its own.
+  oracle: [
+    'access', 'audit', 'char', 'cluster', 'comment', 'compress', 'connect',
+    'current', 'date', 'decimal', 'exclusive', 'file', 'float', 'identified',
+    'immediate', 'increment', 'initial', 'integer', 'intersect', 'level', 'lock',
+    'long', 'maxextents', 'minus', 'mlslabel', 'mode', 'modify', 'noaudit',
+    'nocompress', 'nowait', 'number', 'offline', 'online', 'option', 'pctfree',
+    'prior', 'privileges', 'public', 'raw', 'rename', 'resource', 'row', 'rowid',
+    'rownum', 'rows', 'session', 'share', 'size', 'smallint', 'start', 'successful',
+    'synonym', 'sysdate', 'trigger', 'uid', 'validate', 'varchar', 'varchar2',
+    'view', 'whenever',
+  ],
   sqlite: [
     'abort', 'action', 'after', 'analyze', 'attach', 'autoincrement', 'before',
     'cascade', 'conflict', 'deferrable', 'deferred', 'detach', 'each', 'escape',
@@ -124,12 +138,24 @@ const SAFE = new Set([
   'total', 'message', 'category', 'tag', 'note', 'notes', 'address', 'phone',
 ])
 
+// Per-system re-additions: words that are globally SAFE (never quoted) but ARE
+// genuinely reserved in this specific engine and MUST be quoted there. Applied
+// AFTER the SAFE subtraction, and ONLY for the named system — so editing this does
+// NOT change quoting for any other engine (the global SAFE set is left intact).
+const SAFE_OVERRIDE_BY_SYSTEM: Record<string, string[]> = {
+  // Oracle: these are true reserved words (fail unquoted as identifiers) yet sit in
+  // the shared SAFE allowlist because they're harmless in PG/MySQL/MSSQL/…
+  oracle: ['date', 'comment', 'level', 'mode', 'number', 'size'],
+}
+
 const CACHE: Record<string, Set<string>> = {}
 
 function reservedSet(system: string): Set<string> {
   if (!CACHE[system]) {
     const set = new Set([...CORE, ...(BY_SYSTEM[system] ?? []), ...(LANG_BY_SYSTEM[system] ?? [])])
     for (const w of SAFE) set.delete(w)
+    // Re-add engine-specific reserved words that SAFE would otherwise suppress.
+    for (const w of SAFE_OVERRIDE_BY_SYSTEM[system] ?? []) set.add(w)
     CACHE[system] = set
   }
   return CACHE[system]

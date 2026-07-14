@@ -15,11 +15,22 @@ export interface SplitStatement {
   startCol: number
 }
 
-export function splitStatements(doc: string): SplitStatement[] {
+/** True when the char at `i` is a `/` that is alone on its line (Oracle PL/SQL
+ *  block terminator: `/` on its own line runs the preceding block). */
+function isLoneSlash(doc: string, i: number): boolean {
+  for (let a = i - 1; a >= 0 && doc[a] !== '\n'; a--) if (!/\s/.test(doc[a])) return false
+  for (let b = i + 1; b < doc.length && doc[b] !== '\n'; b++) if (!/\s/.test(doc[b])) return false
+  return true
+}
+
+export function splitStatements(doc: string, system?: string): SplitStatement[] {
   const out: SplitStatement[] = []
   const len = doc.length
   let i = 0
   let stmtStart = 0
+  // Oracle-only additions (a `/` line terminator + anonymous DECLARE/BEGIN blocks +
+  // PACKAGE/TYPE bodies). Gated so every other engine keeps the exact prior behavior.
+  const oracle = system === 'oracle'
 
   type Mode = 'code' | 'line-comment' | 'block-comment' | 'single' | 'double' | 'backtick' | 'bracket' | 'dollar'
   let mode: Mode = 'code'
@@ -57,7 +68,13 @@ export function splitStatements(doc: string): SplitStatement[] {
           const word = doc.slice(i, j).toUpperCase()
           if (word === 'BEGIN') {
             // Only a routine body starts a suppressing block (not a `BEGIN;` txn).
-            if (beginDepth > 0 || /\bCREATE\b[\s\S]*\b(FUNCTION|PROCEDURE|TRIGGER|EVENT)\b/i.test(doc.slice(stmtStart, i))) {
+            const pre = doc.slice(stmtStart, i)
+            const isRoutine = /\bCREATE\b[\s\S]*\b(FUNCTION|PROCEDURE|TRIGGER|EVENT)\b/i.test(pre)
+            // Oracle: CREATE PACKAGE/TYPE bodies, and anonymous blocks that start with
+            // DECLARE or BEGIN (nothing meaningful before the BEGIN) also suppress `;`.
+            const isOracleBlock =
+              oracle && (/\bCREATE\b[\s\S]*\b(PACKAGE|TYPE)\b/i.test(pre) || /^\s*(DECLARE\b[\s\S]*)?$/i.test(pre))
+            if (beginDepth > 0 || isRoutine || isOracleBlock) {
               beginDepth++
             }
           } else if (word === 'END' && beginDepth > 0) {
@@ -81,6 +98,18 @@ export function splitStatements(doc: string): SplitStatement[] {
             continue
           }
         }
+        // Oracle: a `/` alone on its line terminates the current (PL/SQL) statement.
+        // Not a block-comment opener (next !== '*'); requires the slash be isolated.
+        if (oracle && ch === '/' && next !== '*' && isLoneSlash(doc, i)) {
+          push(i)
+          let k = i + 1
+          while (k < len && doc[k] !== '\n') k++
+          if (k < len) k++ // consume the newline
+          stmtStart = k
+          beginDepth = 0
+          i = k
+          continue
+        }
         if (ch === '-' && next === '-') mode = 'line-comment'
         else if (ch === '/' && next === '*') mode = 'block-comment'
         else if (ch === "'") mode = 'single'
@@ -88,8 +117,17 @@ export function splitStatements(doc: string): SplitStatement[] {
         else if (ch === '`') mode = 'backtick'
         else if (ch === '[') mode = 'bracket'
         else if (ch === ';' && beginDepth === 0) {
-          push(i)
-          stmtStart = i + 1
+          // Oracle: a `;` does NOT terminate a PL/SQL block (DECLARE/BEGIN or a
+          // CREATE routine/package/type) — only a `/` line does. So the trailing
+          // `END;` and every inner `;` stay part of the one statement.
+          const skip =
+            oracle &&
+            (/^\s*(DECLARE|BEGIN)\b/i.test(doc.slice(stmtStart, i)) ||
+              /\bCREATE\b[\s\S]*\b(PROCEDURE|FUNCTION|PACKAGE|TRIGGER|TYPE)\b/i.test(doc.slice(stmtStart, i)))
+          if (!skip) {
+            push(i)
+            stmtStart = i + 1
+          }
         }
         break
       case 'line-comment':

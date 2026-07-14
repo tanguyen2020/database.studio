@@ -9,9 +9,12 @@ export type TypeFamily = 'int' | 'bigint' | 'float' | 'decimal' | 'bool' | 'text
 
 export function classifyType(srcType: string): TypeFamily {
   const t = srcType.toLowerCase().trim()
+  // Oracle: BINARY_FLOAT/BINARY_DOUBLE (underscore blocks \b) matched explicitly.
+  if (/binary_float|binary_double/.test(t)) return 'float'
   if (/\b(bigint|int8|bigserial|long)\b/.test(t)) return 'bigint'
   if (/\b(smallint|int2|integer|int4|int|serial|mediumint|tinyint)\b/.test(t)) return 'int'
-  if (/\b(numeric|decimal|money)\b/.test(t)) return 'decimal'
+  // Oracle NUMBER folds into the decimal family.
+  if (/\b(numeric|decimal|money|number)\b/.test(t)) return 'decimal'
   if (/\b(real|double|float|float4|float8)\b/.test(t)) return 'float'
   if (/\b(bool|boolean|bit)\b/.test(t)) return 'bool'
   if (/\b(uuid|uniqueidentifier)\b/.test(t)) return 'uuid'
@@ -19,7 +22,8 @@ export function classifyType(srcType: string): TypeFamily {
   if (/\b(timestamp|datetime|timestamptz)\b/.test(t)) return 'timestamp'
   if (/\bdate\b/.test(t)) return 'date'
   if (/\btime\b/.test(t)) return 'time'
-  if (/\b(bytea|blob|binary|varbinary|image)\b/.test(t)) return 'bytes'
+  // Oracle RAW / LONG RAW join the binary family.
+  if (/\b(bytea|blob|binary|varbinary|image|raw)\b/.test(t)) return 'bytes'
   return 'text'
 }
 
@@ -31,6 +35,7 @@ const DIALECT_TYPES: Record<string, Record<TypeFamily, string>> = {
   mssql: { int: 'int', bigint: 'bigint', float: 'float', decimal: 'decimal(38,10)', bool: 'bit', text: 'nvarchar(max)', date: 'date', time: 'time', timestamp: 'datetime2', json: 'nvarchar(max)', uuid: 'uniqueidentifier', bytes: 'varbinary(max)' },
   sqlite: { int: 'INTEGER', bigint: 'INTEGER', float: 'REAL', decimal: 'NUMERIC', bool: 'INTEGER', text: 'TEXT', date: 'TEXT', time: 'TEXT', timestamp: 'TEXT', json: 'TEXT', uuid: 'TEXT', bytes: 'BLOB' },
   clickhouse: { int: 'Int32', bigint: 'Int64', float: 'Float64', decimal: 'Decimal(38,10)', bool: 'UInt8', text: 'String', date: 'Date', time: 'String', timestamp: 'DateTime', json: 'String', uuid: 'UUID', bytes: 'String' },
+  oracle: { int: 'NUMBER(10)', bigint: 'NUMBER(19)', float: 'BINARY_DOUBLE', decimal: 'NUMBER(38,10)', bool: 'NUMBER(1)', text: 'VARCHAR2(4000)', date: 'DATE', time: 'VARCHAR2(30)', timestamp: 'TIMESTAMP', json: 'CLOB', uuid: 'VARCHAR2(36)', bytes: 'BLOB' },
 }
 
 /** Map a source column type to the destination dialect's concrete type. */

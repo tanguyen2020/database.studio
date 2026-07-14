@@ -30,12 +30,13 @@ const EXPECTED: Record<string, [badge: string, accent: string]> = {
   kafka: ['KF', '#8B5CF6'],
   nats: ['NT', '#27AE60'], // NT — không phải NA
   mongodb: ['MG', '#00ED64'],
+  oracle: ['OR', '#C74634'],
 }
 
 describe('SYSTEMS metadata (từ systems.gen.ts)', () => {
-  it('đủ 11 hệ + orphan', () => {
-    expect(SYSTEM_ORDER).toHaveLength(11)
-    expect(Object.keys(SYSTEMS)).toHaveLength(12)
+  it('đủ 12 hệ + orphan', () => {
+    expect(SYSTEM_ORDER).toHaveLength(12)
+    expect(Object.keys(SYSTEMS)).toHaveLength(13)
   })
 
   for (const [key, [badge, accent]] of Object.entries(EXPECTED)) {
@@ -103,6 +104,7 @@ describe('SystemIcon (port dbIcon() HTML dòng 3883)', () => {
     ['mysql', 'png'],
     ['mssql', 'png'],
     ['mariadb', 'svg'],
+    ['oracle', 'svg'],
   ])('%s dùng logo assets/ (%s)', (key, ext) => {
     const { container } = render(SystemIcon, { system: key, size: 16 })
     const img = container.querySelector('img')!

@@ -24,7 +24,8 @@ export function createTemplate(system: string, kind: CreateKind, schema: string)
       return `CREATE VIEW ${v} AS\nSELECT * FROM ${qname(system, schema, 'source_table')};`
     }
     case 'sequence': {
-      if (system !== 'postgres') return `-- ${label(system)} does not support standalone sequences`
+      // PostgreSQL and Oracle both have first-class standalone sequences.
+      if (system !== 'postgres' && system !== 'oracle') return `-- ${label(system)} does not support standalone sequences`
       return `CREATE SEQUENCE ${qname(system, schema, 'new_sequence')}\n  START WITH 1\n  INCREMENT BY 1;`
     }
     case 'procedure':
@@ -46,6 +47,9 @@ function procedureTemplate(system: string, schema: string): string {
       return `CREATE PROCEDURE ${p}()\nBEGIN\n  -- statements here\nEND;`
     case 'mssql':
       return `CREATE PROCEDURE ${p}\nAS\nBEGIN\n  SET NOCOUNT ON;\n  -- statements here\nEND;`
+    case 'oracle':
+      // PL/SQL block terminated by `/` on its own line.
+      return `CREATE OR REPLACE PROCEDURE ${p} AS\nBEGIN\n  NULL; -- statements here\nEND;\n/`
     default:
       return `-- ${label(system)} does not support stored procedures`
   }
@@ -61,6 +65,9 @@ function functionTemplate(system: string, schema: string): string {
       return `CREATE FUNCTION ${f}()\nRETURNS INT\nDETERMINISTIC\nBEGIN\n  RETURN 0;\nEND;`
     case 'mssql':
       return `CREATE FUNCTION ${f}()\nRETURNS INT\nAS\nBEGIN\n  RETURN 0;\nEND;`
+    case 'oracle':
+      // Oracle uses RETURN (not RETURNS); PL/SQL block + `/` terminator.
+      return `CREATE OR REPLACE FUNCTION ${f}\nRETURN NUMBER AS\nBEGIN\n  RETURN 0;\nEND;\n/`
     default:
       return `-- ${label(system)} does not support SQL functions`
   }
@@ -92,6 +99,13 @@ function triggerTemplate(system: string, schema: string): string {
         `CREATE TRIGGER ${quoteIdent(system, 'new_trigger')}\n` +
         `AFTER INSERT ON ${quoteIdent(system, 'target_table')}\n` +
         `BEGIN\n  -- statements here\nEND;`
+      )
+    case 'oracle':
+      // Oracle uses :NEW/:OLD (colon-prefixed); PL/SQL block + `/` terminator.
+      return (
+        `CREATE OR REPLACE TRIGGER ${name}\n` +
+        `BEFORE INSERT ON ${table}\n` +
+        `FOR EACH ROW\nBEGIN\n  -- :NEW.col := ...;\n  NULL;\nEND;\n/`
       )
     default:
       return `-- ${label(system)} does not support triggers`

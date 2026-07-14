@@ -14,6 +14,7 @@ export type SystemType =
   | 'kafka'
   | 'nats'
   | 'mongodb'
+  | 'oracle'
 
 export type Environment = 'production' | 'staging' | 'development' | 'local'
 export type SqliteMode = 'read-write' | 'read-only' | 'in-memory'

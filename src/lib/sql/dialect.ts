@@ -29,5 +29,9 @@ export function selectStarSql(system: string, schema: string, table: string, lim
   if (system === 'mssql') {
     return `SELECT TOP ${limit} * FROM ${target};`
   }
+  // Oracle has no LIMIT/TOP → FETCH FIRST n ROWS ONLY (12c+).
+  if (system === 'oracle') {
+    return `SELECT * FROM ${target} FETCH FIRST ${limit} ROWS ONLY;`
+  }
   return `SELECT * FROM ${target} LIMIT ${limit};`
 }

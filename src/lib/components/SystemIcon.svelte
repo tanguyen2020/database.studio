@@ -25,6 +25,9 @@
 {:else if key === 'mariadb'}
   <!-- MariaDB sea lion (brand mark), hand-built SVG -->
   <img src="/assets/db-mariadb.svg" width={size} height={size} style="object-fit:contain;display:block" alt="mariadb" />
+{:else if key === 'oracle'}
+  <!-- Oracle brand mark (simple-icons "O" glyph), Oracle Red -->
+  <img src="/assets/db-oracle.svg" width={size} height={size} style="object-fit:contain;display:block" alt="oracle" />
 {:else if key === 'clickhouse'}
   <!-- columnar bars (svF) -->
   <svg width={size} height={size} viewBox="0 0 24 24" fill={color} stroke="none" aria-hidden="true">

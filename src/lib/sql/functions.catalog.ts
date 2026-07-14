@@ -137,10 +137,56 @@ function merge(base: Catalog, extra: Catalog): Catalog {
   return out
 }
 
+// ---------------------------------------------------------------------------
+// Oracle Database built-in (SQL) functions. Oracle's built-ins live in the SYS
+// STANDARD package and are NOT enumerable like PG/SQLite/ClickHouse, so — as with
+// MySQL/MSSQL — a curated static catalog is the pragmatic source.
+// ---------------------------------------------------------------------------
+const ORACLE: Catalog = {
+  string: [
+    'ascii', 'chr', 'concat', 'initcap', 'instr', 'instrb', 'length', 'lengthb',
+    'lower', 'lpad', 'ltrim', 'nls_initcap', 'nls_lower', 'nls_upper', 'nlssort',
+    'regexp_count', 'regexp_instr', 'regexp_replace', 'regexp_substr', 'replace',
+    'rpad', 'rtrim', 'soundex', 'substr', 'substrb', 'translate', 'trim', 'upper',
+  ],
+  numeric: [
+    'abs', 'acos', 'asin', 'atan', 'atan2', 'bitand', 'ceil', 'cos', 'cosh', 'exp',
+    'floor', 'ln', 'log', 'mod', 'power', 'remainder', 'round', 'sign', 'sin', 'sinh',
+    'sqrt', 'tan', 'tanh', 'trunc', 'width_bucket',
+  ],
+  datetime: [
+    'add_months', 'current_date', 'current_timestamp', 'dbtimezone', 'extract',
+    'from_tz', 'last_day', 'localtimestamp', 'months_between', 'new_time', 'next_day',
+    'numtodsinterval', 'numtoyminterval', 'sessiontimezone', 'sysdate', 'systimestamp',
+    'to_dsinterval', 'to_timestamp', 'to_timestamp_tz', 'to_yminterval', 'tz_offset',
+  ],
+  conversion: [
+    'asciistr', 'bin_to_num', 'cast', 'chartorowid', 'convert', 'hextoraw', 'rawtohex',
+    'rowidtochar', 'to_char', 'to_clob', 'to_date', 'to_lob', 'to_nclob', 'to_number',
+    'to_single_byte', 'to_multi_byte', 'unistr', 'validate_conversion',
+  ],
+  'null handling': ['coalesce', 'decode', 'lnnvl', 'nanvl', 'nullif', 'nvl', 'nvl2'],
+  aggregate: [
+    'avg', 'collect', 'corr', 'count', 'covar_pop', 'covar_samp', 'cume_dist',
+    'dense_rank', 'grouping', 'grouping_id', 'listagg', 'max', 'median', 'min',
+    'percentile_cont', 'percentile_disc', 'percent_rank', 'rank', 'stddev',
+    'stddev_pop', 'stddev_samp', 'sum', 'var_pop', 'var_samp', 'variance',
+  ],
+  analytic: [
+    'first_value', 'lag', 'last_value', 'lead', 'nth_value', 'ntile',
+    'ratio_to_report', 'row_number',
+  ],
+  system: [
+    'dump', 'greatest', 'least', 'ora_hash', 'sys_context', 'sys_guid', 'uid',
+    'user', 'userenv', 'vsize',
+  ],
+}
+
 const CATALOGS: Record<string, FnSig[]> = {
   mysql: flatten(MYSQL),
   mariadb: flatten(merge(MYSQL, MARIADB_EXTRA)),
   mssql: flatten(MSSQL),
+  oracle: flatten(ORACLE),
 }
 
 /**

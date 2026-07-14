@@ -21,6 +21,8 @@ export function defaultColumnType(system: string): string {
       return 'INTEGER'
     case 'clickhouse':
       return 'Int64'
+    case 'oracle':
+      return 'NUMBER'
     default:
       return 'integer' // postgres
   }
@@ -40,6 +42,8 @@ export function dataTypes(system: string): string[] {
       return SQLITE_TYPES
     case 'clickhouse':
       return CLICKHOUSE_TYPES
+    case 'oracle':
+      return ORACLE_TYPES
     case 'postgres':
       return POSTGRES_TYPES
     default:
@@ -133,6 +137,26 @@ const SQLITE_TYPES = [
   'TEXT', 'CHARACTER', 'VARCHAR', 'VARYING CHARACTER', 'NCHAR', 'NATIVE CHARACTER', 'NVARCHAR', 'CLOB',
   // BLOB affinity
   'BLOB',
+]
+
+// Oracle Database. Types that take length/precision listed bare (VARCHAR2, NUMBER);
+// the designer's Length column supplies (n)/(p,s). No AUTO_INCREMENT (use IDENTITY
+// 12c+ or a sequence); no native BOOLEAN before 23c.
+const ORACLE_TYPES = [
+  // numeric
+  'NUMBER', 'INTEGER', 'INT', 'SMALLINT', 'FLOAT', 'BINARY_FLOAT', 'BINARY_DOUBLE',
+  'DECIMAL', 'DEC', 'NUMERIC', 'REAL', 'DOUBLE PRECISION',
+  // character
+  'VARCHAR2', 'NVARCHAR2', 'CHAR', 'NCHAR', 'VARCHAR', 'LONG',
+  // large objects
+  'CLOB', 'NCLOB', 'BLOB', 'BFILE',
+  // date / time / interval
+  'DATE', 'TIMESTAMP', 'TIMESTAMP WITH TIME ZONE', 'TIMESTAMP WITH LOCAL TIME ZONE',
+  'INTERVAL YEAR TO MONTH', 'INTERVAL DAY TO SECOND',
+  // binary / rowid
+  'RAW', 'LONG RAW', 'ROWID', 'UROWID',
+  // modern (version-gated) / misc
+  'JSON', 'BOOLEAN', 'XMLTYPE', 'SDO_GEOMETRY',
 ]
 
 const CLICKHOUSE_TYPES = [

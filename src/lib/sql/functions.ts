@@ -60,6 +60,20 @@ const BY_SYSTEM: Record<string, FnSig[]> = {
     { name: 'toDateTime', signature: 'toDateTime(expr)', detail: 'conversion' },
     { name: 'arrayJoin', signature: 'arrayJoin(arr)', detail: 'array' },
   ],
+  oracle: [
+    { name: 'nvl', signature: 'nvl(expr, replacement)', detail: 'null handling' },
+    { name: 'nvl2', signature: 'nvl2(expr, if_not_null, if_null)', detail: 'null handling' },
+    { name: 'decode', signature: 'decode(expr, search, result, …, default)', detail: 'conditional' },
+    { name: 'to_char', signature: 'to_char(expr [, fmt])', detail: 'conversion' },
+    { name: 'to_date', signature: 'to_date(text, fmt)', detail: 'conversion' },
+    { name: 'to_number', signature: 'to_number(text [, fmt])', detail: 'conversion' },
+    { name: 'listagg', signature: 'listagg(expr, delim) WITHIN GROUP (ORDER BY …)', detail: 'aggregate' },
+    { name: 'substr', signature: 'substr(str, start [, length])', detail: 'string' },
+    { name: 'instr', signature: 'instr(str, substr)', detail: 'string' },
+    { name: 'trunc', signature: 'trunc(date_or_number [, fmt])', detail: 'datetime/numeric' },
+    { name: 'sysdate', signature: 'sysdate', detail: 'current date' },
+    { name: 'systimestamp', signature: 'systimestamp', detail: 'current timestamp' },
+  ],
 }
 
 /** Danh sách function + chữ ký cho dialect (common + đặc thù hệ). */

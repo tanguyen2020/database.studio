@@ -1,6 +1,6 @@
 //
 // GENERATED — do not edit by hand.
-// Sinh bởi scripts/extract-tokens.mjs từ "Database Studio.dc.html" (sha256 af89d4d232c2).
+// Sinh bởi scripts/extract-tokens.mjs từ "Database Studio.dc.html" (sha256 e5dce50ef4ad).
 // Chạy lại: npm run tokens
 // 
 
@@ -101,6 +101,14 @@ export const SYS_GEN = {
     "fg": "#57e39a",
     "badge": "MG",
     "label": "MongoDB"
+  },
+  "oracle": {
+    "accent": "#C74634",
+    "bg": "#301410",
+    "border": "#5e281f",
+    "fg": "#e8917a",
+    "badge": "OR",
+    "label": "Oracle"
   },
   "orphan": {
     "accent": "#5b6473",

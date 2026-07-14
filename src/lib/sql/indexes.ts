@@ -38,6 +38,9 @@ export function genDropIndex(system: string, schema: string, table: string, name
       return `DROP INDEX ${q(name)} ON ${target(system, schema, table)};`
     case 'sqlite':
       return `DROP INDEX IF EXISTS ${q(name)};`
+    case 'oracle':
+      // Index dropped by name (schema-qualified); Oracle has no IF EXISTS (<23c).
+      return `DROP INDEX ${schema ? `${q(schema)}.${q(name)}` : q(name)};`
     default: // postgres — index lives in the schema, not tied to the table in DROP
       return `DROP INDEX IF EXISTS ${schema ? `${q(schema)}.${q(name)}` : q(name)};`
   }

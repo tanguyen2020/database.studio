@@ -61,6 +61,11 @@ export function buildInsert(p: InsertPlan): string {
   const target =
     p.schema && p.system !== 'sqlite' ? `${q(p.schema)}.${q(p.table)}` : q(p.table)
   const cols = p.columns.map(q).join(', ')
+  // Oracle has no multi-row `VALUES (…),(…)` syntax → use the INSERT ALL idiom.
+  if (p.system === 'oracle') {
+    const rows = p.rows.map((r) => `  INTO ${target} (${cols}) VALUES (${r.map(sqlLiteral).join(', ')})`).join('\n')
+    return `INSERT ALL\n${rows}\nSELECT 1 FROM DUAL;`
+  }
   const eff: ConflictMode = conflictSupported(p.system) ? p.mode : 'error'
   const prefix = insertPrefix(p.system, eff)
   const suffix = conflictSuffix(p.system, eff)

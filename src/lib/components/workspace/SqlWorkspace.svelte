@@ -78,7 +78,7 @@
   // autocomplete (and, for Postgres, the run-time search_path) to that schema.
   // Systems where a "database" already IS a schema (MySQL/MariaDB/ClickHouse) or
   // that have no schemas (SQLite) don't show this dropdown.
-  const supportsSchemaSwitch = $derived(!isOrphan && ['postgres', 'mssql'].includes(tab.systemType))
+  const supportsSchemaSwitch = $derived(!isOrphan && ['postgres', 'mssql', 'oracle'].includes(tab.systemType))
   const selectedSchema = $derived(((tab.state.schema as string) || '').trim())
 
   $effect(() => {
@@ -174,7 +174,7 @@
   // ---- destructive-statement guard --------------------------------------------
   // A DELETE with no WHERE clause, or a TRUNCATE, wipes a whole table. Before
   // running one we pop an in-app confirm. Applies to relational SQL dialects.
-  const RELATIONAL = ['postgres', 'mysql', 'mariadb', 'mssql', 'sqlite', 'clickhouse']
+  const RELATIONAL = ['postgres', 'mysql', 'mariadb', 'mssql', 'sqlite', 'clickhouse', 'oracle']
   let dangerPrompt = $state<{ items: DangerStmt[]; resolve: (ok: boolean) => void } | null>(null)
 
   /** Resolve true if it's safe to run, false if the user cancels. Only prompts
@@ -546,8 +546,8 @@
     // rebased to the document so error positions stay accurate); else run all.
     const statements =
       range.from === range.to
-        ? splitStatements(doc)
-        : splitStatements(doc.slice(range.from, range.to)).map((s) => {
+        ? splitStatements(doc, tab.systemType)
+        : splitStatements(doc.slice(range.from, range.to), tab.systemType).map((s) => {
             const from = s.from + range.from
             const { line, col } = offsetToLineCol(doc, from)
             return { ...s, from, to: s.to + range.from, startLine: line, startCol: col }
@@ -822,7 +822,7 @@
       onRunSql={(sqlText) => {
         ui.showResultPanel()
         results.clearExplain(tab.id)
-        void results.run(tab.id, tab.connectionId!, splitStatements(sqlText))
+        void results.run(tab.id, tab.connectionId!, splitStatements(sqlText, tab.systemType))
       }}
     />
   {/if}

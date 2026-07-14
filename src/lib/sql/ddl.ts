@@ -24,6 +24,8 @@ export function genSelect(system: string, schema: string, table: string, cols: C
   const list = cols.map((c) => quoteIdent(system, c.name)).join(', ') || '*'
   const t = target(system, schema, table)
   if (system === 'mssql') return `SELECT TOP 100 ${list}\nFROM ${t};`
+  // Oracle has no LIMIT/TOP → FETCH FIRST n ROWS ONLY (12c+).
+  if (system === 'oracle') return `SELECT ${list}\nFROM ${t}\nFETCH FIRST 100 ROWS ONLY;`
   return `SELECT ${list}\nFROM ${t}\nLIMIT 100;`
 }
 
@@ -89,6 +91,10 @@ export function genRename(system: string, schema: string, table: string): string
  *  MSSQL uses `ADD` (no COLUMN keyword); others use `ADD COLUMN`. */
 export function genAlterTable(system: string, schema: string, table: string): string {
   const t = target(system, schema, table)
+  // Oracle: ADD (col type) — parenthesized, no COLUMN keyword; type NUMBER.
+  if (system === 'oracle') {
+    return `ALTER TABLE ${t}\n  ADD (${quoteIdent(system, 'new_column')} NUMBER);`
+  }
   const colType = system === 'postgres' ? 'integer' : 'INT'
   const addKw = system === 'mssql' ? 'ADD' : 'ADD COLUMN'
   return `ALTER TABLE ${t}\n  ${addKw} ${quoteIdent(system, 'new_column')} ${colType};`
@@ -110,6 +116,9 @@ export function genRenameDatabase(system: string, database: string): string {
       return `ALTER DATABASE ${from} MODIFY NAME = ${to};`
     case 'clickhouse':
       return `RENAME DATABASE ${from} TO ${to};`
+    case 'oracle':
+      // In Oracle a "database" ≈ a user/schema; there is no rename-user. Recreate.
+      return `-- Oracle has no rename-user/schema. Create the new user, copy objects\n-- (e.g. Data Pump remap_schema), then DROP USER ${from} CASCADE.`
     case 'mysql':
     case 'mariadb':
       return `-- MySQL/MariaDB cannot rename a database directly.\n-- Create ${to}, move each table (RENAME TABLE ${from}.t TO ${to}.t), then DROP DATABASE ${from}.`
@@ -131,6 +140,9 @@ export function genCreateDatabase(system: string, database: string): string {
     case 'mariadb':
     case 'clickhouse':
       return `CREATE DATABASE ${d};`
+    case 'oracle':
+      // A "database" in Oracle is an instance; the user-facing analogue is a schema = user.
+      return `CREATE USER ${d} IDENTIFIED BY "change_me";\nGRANT CONNECT, RESOURCE TO ${d};\nALTER USER ${d} QUOTA UNLIMITED ON USERS;`
     case 'sqlite':
       return `-- SQLite databases are files — create a new connection with a new .sqlite path.`
     default:
@@ -154,6 +166,9 @@ export function genDropDatabase(system: string, database: string): string {
     case 'mariadb':
     case 'clickhouse':
       return `DROP DATABASE IF EXISTS ${d};`
+    case 'oracle':
+      // Schema = user; no IF EXISTS. CASCADE drops the user's objects too.
+      return `DROP USER ${d} CASCADE;`
     case 'sqlite':
       return `-- SQLite databases are files — delete the .sqlite file on disk instead.`
     default:
@@ -166,6 +181,8 @@ export function genTruncate(system: string, schema: string, table: string): stri
 }
 
 export function genDrop(system: string, schema: string, table: string): string {
+  // Oracle has no DROP TABLE IF EXISTS (<23c); CASCADE CONSTRAINTS drops inbound FKs.
+  if (system === 'oracle') return `DROP TABLE ${target(system, schema, table)} CASCADE CONSTRAINTS;`
   return `DROP TABLE IF EXISTS ${target(system, schema, table)};`
 }
 
@@ -214,5 +231,7 @@ function defaultSchema(system: string): string {
   if (system === 'sqlite') return 'main'
   if (system === 'mysql' || system === 'mariadb' || system === 'clickhouse') return ''
   if (system === 'mssql') return 'dbo'
+  // Oracle: schema = connected user (resolved by caller); empty → current-user schema.
+  if (system === 'oracle') return ''
   return 'public'
 }

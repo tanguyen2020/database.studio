@@ -13,7 +13,7 @@
   import { buildInsert } from '$lib/import/plan'
   import type { ColumnInfo } from '$lib/types'
 
-  const REL = ['postgres', 'mysql', 'mariadb', 'mssql', 'clickhouse', 'sqlite']
+  const REL = ['postgres', 'mysql', 'mariadb', 'mssql', 'clickhouse', 'sqlite', 'oracle']
   const PAGE = 2000
 
   let srcCols = $state<ColumnInfo[]>([])

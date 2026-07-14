@@ -27,6 +27,9 @@ export function genRenameRoutine(
     case 'mysql':
     case 'mariadb':
       return `-- ${system} cannot rename a routine in place — drop and recreate ${oldName} as ${newName}.`
+    case 'oracle':
+      // Oracle RENAME only covers tables/views/sequences/synonyms, not routines.
+      return `-- Oracle cannot rename a stored routine in place — recreate ${oldName} as ${newName} (CREATE OR REPLACE) and DROP the old.`
     default:
       return `-- ${system} has no stored routines to rename.`
   }
@@ -89,6 +92,12 @@ export function buildRoutineExec(
   // Functions (scalar / table): only IN params, no output binding needed.
   if (kind !== 'procedure') {
     const args = params.filter((p) => isInput(p.mode)).map(val)
+    if (system === 'oracle') {
+      // Oracle: scalar SELECT needs FROM DUAL; table function uses the TABLE() operator.
+      return kind === 'table_function'
+        ? `SELECT * FROM TABLE(${qual}(${args.join(', ')}));`
+        : `SELECT ${qual}(${args.join(', ')}) FROM DUAL;`
+    }
     return kind === 'table_function'
       ? `SELECT * FROM ${qual}(${args.join(', ')});`
       : `SELECT ${qual}(${args.join(', ')});`
@@ -97,6 +106,7 @@ export function buildRoutineExec(
   const hasOut = params.some((p) => isOut(p.mode))
   if (!hasOut) {
     const args = params.map(val)
+    if (system === 'oracle') return `BEGIN\n  ${qual}(${args.join(', ')});\nEND;\n/`
     return system === 'mssql'
       ? `EXEC ${qual}${args.length ? ` ${args.join(', ')}` : ''};`
       : `CALL ${qual}(${args.join(', ')});`
@@ -104,6 +114,33 @@ export function buildRoutineExec(
 
   // Procedure WITH OUT/INOUT params.
   const q = (n: string) => quoteIdent(system, n)
+  if (system === 'oracle') {
+    // PL/SQL block: declare a local for each OUT/INOUT, call, print via DBMS_OUTPUT.
+    // (Requires SET SERVEROUTPUT ON — emitted so the block is runnable in any client.)
+    const decls: string[] = []
+    const callArgs: string[] = []
+    const prints: string[] = []
+    for (const p of params) {
+      if (!isOut(p.mode)) {
+        callArgs.push(val(p))
+        continue
+      }
+      const v = `v_${p.name}`
+      decls.push(`  ${v} ${p.data_type}${/inout/i.test(p.mode) ? ` := ${val(p)}` : ''};`)
+      callArgs.push(v)
+      prints.push(`  DBMS_OUTPUT.PUT_LINE('${p.name} = ' || ${v});`)
+    }
+    return [
+      'SET SERVEROUTPUT ON;',
+      'DECLARE',
+      ...decls,
+      'BEGIN',
+      `  ${qual}(${callArgs.join(', ')});`,
+      ...prints,
+      'END;',
+      '/',
+    ].join('\n')
+  }
   if (system === 'mssql') {
     const decls: string[] = []
     const execArgs: string[] = []
@@ -154,13 +191,14 @@ export function buildCall(
   const qual = qualified(system, schema, name)
   const argList = args.join(', ')
   if (kind === 'procedure') {
+    if (system === 'oracle') return `BEGIN\n  ${qual}(${argList});\nEND;\n/`
     return system === 'mssql'
       ? `EXEC ${qual}${args.length ? ` ${argList}` : ''};`
       : `CALL ${qual}(${argList});`
   }
   if (kind === 'table_function') {
-    return `SELECT * FROM ${qual}(${argList});`
+    return system === 'oracle' ? `SELECT * FROM TABLE(${qual}(${argList}));` : `SELECT * FROM ${qual}(${argList});`
   }
   // scalar / function
-  return `SELECT ${qual}(${argList});`
+  return system === 'oracle' ? `SELECT ${qual}(${argList}) FROM DUAL;` : `SELECT ${qual}(${argList});`
 }

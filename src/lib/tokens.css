@@ -1,6 +1,6 @@
 /*
  * GENERATED — do not edit by hand.
- * Sinh bởi scripts/extract-tokens.mjs từ "Database Studio.dc.html" (sha256 af89d4d232c2).
+ * Sinh bởi scripts/extract-tokens.mjs từ "Database Studio.dc.html" (sha256 e5dce50ef4ad).
  * Chạy lại: npm run tokens
  */
 
@@ -85,6 +85,10 @@
   --sys-mongodb-bg: #04231a;
   --sys-mongodb-border: #0a5c3c;
   --sys-mongodb-fg: #57e39a;
+  --sys-oracle-accent: #C74634;
+  --sys-oracle-bg: #301410;
+  --sys-oracle-border: #5e281f;
+  --sys-oracle-fg: #e8917a;
   --sys-orphan-accent: #5b6473;
   --sys-orphan-bg: #2a2f3a;
   --sys-orphan-border: #3a4150;
@@ -184,7 +188,7 @@
   --px-740: 740px;
   --px-840: 840px;
 
-/* Mọi màu hex literal trong prototype (103 màu) */
+/* Mọi màu hex literal trong prototype (107 màu) */
   --hex-00ed64: #00ed64;
   --hex-04231a: #04231a;
   --hex-0a1e35: #0a1e35;
@@ -216,6 +220,7 @@
   --hex-2a6fdb: #2a6fdb;
   --hex-2e1a12: #2e1a12;
   --hex-2e2600: #2e2600;
+  --hex-301410: #301410;
   --hex-33290a: #33290a;
   --hex-333b4d: #333b4d;
   --hex-336791: #336791;
@@ -238,6 +243,7 @@
   --hex-5c4a1a: #5c4a1a;
   --hex-5c6878: #5c6878;
   --hex-5cc4e8: #5cc4e8;
+  --hex-5e281f: #5e281f;
   --hex-5fd58a: #5fd58a;
   --hex-60b8f5: #60b8f5;
   --hex-61afef: #61afef;
@@ -259,6 +265,7 @@
   --hex-c0765a: #c0765a;
   --hex-c4b5fd: #c4b5fd;
   --hex-c678dd: #c678dd;
+  --hex-c74634: #c74634;
   --hex-cc2927: #cc2927;
   --hex-d0a45e: #d0a45e;
   --hex-d19a66: #d19a66;
@@ -271,6 +278,7 @@
   --hex-e5c07b: #e5c07b;
   --hex-e6e9f0: #e6e9f0;
   --hex-e8868f: #e8868f;
+  --hex-e8917a: #e8917a;
   --hex-e8923a: #e8923a;
   --hex-e8a882: #e8a882;
   --hex-e8c547: #e8c547;
