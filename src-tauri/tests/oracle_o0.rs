@@ -128,7 +128,10 @@ async fn o1_introspection() {
     assert!(d.triggers("APPO1").await.expect("trg").iter().any(|t| t.name == "EMP_BI" && t.table == "EMP"), "EMP_BI");
 
     let rt = d.routines("APPO1").await.expect("routines");
-    assert!(rt.iter().any(|r| r.name == "F_DOUBLE" && r.kind == "function"), "F_DOUBLE fn");
+    let f = rt.iter().find(|r| r.name == "F_DOUBLE" && r.kind == "function").expect("F_DOUBLE fn");
+    assert_eq!(f.params.len(), 1, "F_DOUBLE has 1 param: {:?}", f.params);
+    assert_eq!(f.params[0].name, "N", "param name");
+    assert!(f.return_type.is_some(), "F_DOUBLE return type: {:?}", f.return_type);
     assert!(rt.iter().any(|r| r.name == "P_NOOP" && r.kind == "procedure"), "P_NOOP proc");
     assert!(d.functions("APPO1").await.expect("fns").iter().any(|f| f.name == "F_DOUBLE"), "F_DOUBLE in functions");
 

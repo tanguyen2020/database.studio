@@ -6,7 +6,7 @@
 //! exec. Introspection + grid apply are stubbed (TODO O1) so the enum wiring
 //! compiles and the connect/query path can be verified end-to-end on a real DB.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
 use oracle_rs::{Config, Connection, QueryResult, Row, Value as OraValue};
@@ -322,15 +322,46 @@ impl OracleDriver {
                  WHERE owner = {o} AND object_type IN ('PROCEDURE','FUNCTION') ORDER BY object_name"
             ))
             .await?;
+        // Params + return type from ALL_ARGUMENTS (standalone routines: package NULL).
+        // position 0 = function return value; 1..n = params. IN_OUT = IN | OUT | IN/OUT.
+        let mut pmap: HashMap<String, (Vec<ParamInfo>, Option<String>)> = HashMap::new();
+        if let Ok(a) = self
+            .q(&format!(
+                "SELECT object_name AS oname, argument_name AS aname, position AS pos, data_type AS dtype, in_out AS io \
+                 FROM all_arguments WHERE owner = {o} AND package_name IS NULL AND data_type IS NOT NULL \
+                 ORDER BY object_name, position"
+            ))
+            .await
+        {
+            for r in &a.rows {
+                let entry = pmap.entry(cell_str(&a, r, "ONAME")).or_default();
+                let dtype = cell_str(&a, r, "DTYPE");
+                if cell_i64(&a, r, "POS") == Some(0) {
+                    entry.1 = Some(dtype); // function return value
+                } else {
+                    let io = cell_str(&a, r, "IO");
+                    entry.0.push(ParamInfo {
+                        name: cell_str(&a, r, "ANAME"),
+                        data_type: dtype,
+                        mode: if io == "IN/OUT" { "INOUT".into() } else { io.to_uppercase() },
+                        default: None,
+                    });
+                }
+            }
+        }
         Ok(res
             .rows
             .iter()
-            .map(|r| RoutineInfo {
-                schema: schema.to_string(),
-                name: cell_str(&res, r, "NAME"),
-                kind: if cell_str(&res, r, "OTYPE") == "FUNCTION" { "function" } else { "procedure" }.to_string(),
-                params: Vec::new(), // O2: ALL_ARGUMENTS
-                return_type: None,
+            .map(|r| {
+                let name = cell_str(&res, r, "NAME");
+                let (params, return_type) = pmap.remove(&name).unwrap_or_default();
+                RoutineInfo {
+                    schema: schema.to_string(),
+                    kind: if cell_str(&res, r, "OTYPE") == "FUNCTION" { "function" } else { "procedure" }.to_string(),
+                    params,
+                    return_type,
+                    name,
+                }
             })
             .collect())
     }
