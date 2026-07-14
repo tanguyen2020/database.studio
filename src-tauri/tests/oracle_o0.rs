@@ -4,7 +4,7 @@
 //!   docker run -d --name ora-o0 -p 1521:1521 -e ORACLE_PASSWORD=Oracle123 gvenzl/oracle-free:23-slim-faststart
 //!   cargo test --test oracle_o0 -- --nocapture --test-threads=1
 
-use database_studio_lib::commands::admin;
+use database_studio_lib::commands::{admin, schema};
 use database_studio_lib::drivers::grid::{self, Col, GridChange, SortSpec};
 use database_studio_lib::drivers::oracle::{OracleConnParams, OracleDriver};
 use database_studio_lib::drivers::plan;
@@ -136,6 +136,16 @@ async fn o1_introspection() {
     assert!(f.return_type.is_some(), "F_DOUBLE return type: {:?}", f.return_type);
     assert!(rt.iter().any(|r| r.name == "P_NOOP" && r.kind == "procedure"), "P_NOOP proc");
     assert!(d.functions("APPO1").await.expect("fns").iter().any(|f| f.name == "F_DOUBLE"), "F_DOUBLE in functions");
+
+    // Show Definition — DBMS_METADATA.GET_DDL returns a CLOB (verify inline decode).
+    let ddl_sql = schema::definition_query("oracle", "view", "APPO1", "V_EMP").expect("def sql");
+    match d.exec(&ddl_sql).await.expect("get_ddl") {
+        StatementOutcome::Rows { result } => {
+            let cell = result.rows.first().and_then(|r| r.as_object()).and_then(|o| o.values().next()).and_then(|v| v.as_str()).unwrap_or("");
+            assert!(cell.to_uppercase().contains("V_EMP"), "view DDL from GET_DDL (CLOB): {cell:?}");
+        }
+        o => panic!("expected DDL rows: {o:?}"),
+    }
 
     let parts = d.partitions("APPO1", "SALES").await.expect("partitions");
     assert_eq!(parts.len(), 2, "two partitions: {parts:?}");

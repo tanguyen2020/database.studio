@@ -193,6 +193,20 @@ pub fn definition_query(system: &str, kind: &str, schema: &str, name: &str) -> O
         }
         ("mssql", _) => format!("SELECT OBJECT_DEFINITION(OBJECT_ID('{s}.{n}')) AS d"),
         ("sqlite", _) => format!("SELECT sql FROM sqlite_master WHERE name = '{n}'"),
+        // Oracle: DBMS_METADATA.GET_DDL returns a CLOB, which oracle-rs 0.1.7 hands
+        // back as a LOB locator (not prefetched) — so wrap it in DBMS_LOB.SUBSTR to
+        // get a VARCHAR2 that decodes as text. Capped at 4000 chars (very large
+        // packages truncate — a full-LOB read is a future driver enhancement).
+        ("oracle", kind) => {
+            let t = match kind {
+                "view" => "VIEW",
+                "trigger" => "TRIGGER",
+                "procedure" => "PROCEDURE",
+                "sequence" => "SEQUENCE",
+                _ => "FUNCTION", // function / scalar_function / table_function
+            };
+            format!("SELECT DBMS_LOB.SUBSTR(DBMS_METADATA.GET_DDL('{t}', '{n}', '{s}'), 4000, 1) AS d FROM DUAL")
+        }
         // ClickHouse: SHOW CREATE returns the full runnable DDL in a `statement`
         // column (object_definition falls back to the first column). Views/MVs are
         // tables in system.tables → SHOW CREATE TABLE; dictionaries have their own.
@@ -269,6 +283,8 @@ pub fn index_definition_query(system: &str, schema: &str, table: &str, name: &st
                  WHERE database='{s}' AND table='{t}' AND name='{n}' LIMIT 1"
             )
         }
+        // Oracle: GET_DDL('INDEX', …) → CLOB via DBMS_LOB.SUBSTR as VARCHAR2 (≤4000).
+        "oracle" => format!("SELECT DBMS_LOB.SUBSTR(DBMS_METADATA.GET_DDL('INDEX', '{n}', '{s}'), 4000, 1) AS d FROM DUAL"),
         _ => return None,
     };
     Some(q)

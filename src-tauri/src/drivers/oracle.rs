@@ -660,7 +660,17 @@ fn value_to_json(v: Option<&OraValue>) -> Json {
         Some(OraValue::String(s)) => Json::String(s.clone()),
         Some(OraValue::Json(j)) => j.clone(),
         Some(OraValue::Bytes(b)) => Json::String(to_hex(b)),
-        // NUMBER (full precision) / Date / Timestamp / RowId / Lob / Vector / … →
+        // LOB (CLOB/BLOB): use the inline bytes — text if valid UTF-8 (CLOB, e.g.
+        // DBMS_METADATA DDL), else hex (BLOB). Locator (large LOB not prefetched) → "".
+        Some(OraValue::Lob(lob)) => match lob.as_bytes() {
+            Ok(Some(b)) if !b.is_empty() => match std::str::from_utf8(&b) {
+                Ok(s) if !s.contains('\u{0}') => Json::String(s.to_string()),
+                _ => Json::String(to_hex(&b)),
+            },
+            Ok(_) => Json::Null,
+            Err(_) => Json::String(String::new()), // Locator — requires explicit read
+        },
+        // NUMBER (full precision) / Date / Timestamp / RowId / Vector / … →
         // their Display string (keeps NUMBER precision; ISO-ish dates).
         Some(other) => Json::String(value_to_string_ref(other)),
     }
