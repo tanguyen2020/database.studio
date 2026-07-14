@@ -278,7 +278,6 @@ pub async fn kafka_consume(
     offset: i64,
     partition: Option<i32>,
 ) -> Result<(), AppError> {
-    use rdkafka::consumer::Consumer;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
     use std::time::Duration;

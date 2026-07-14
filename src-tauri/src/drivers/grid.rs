@@ -121,7 +121,7 @@ pub fn build(system: &str, change: &GridChange) -> BoundStatement {
     let q = quote_style(system);
     let mut params: Vec<Value> = Vec::new();
     let mut n = 0usize;
-    let mut next = |v: &Value, params: &mut Vec<Value>, n: &mut usize| -> String {
+    let next = |v: &Value, params: &mut Vec<Value>, n: &mut usize| -> String {
         *n += 1;
         params.push(v.clone());
         ph.render(*n)
