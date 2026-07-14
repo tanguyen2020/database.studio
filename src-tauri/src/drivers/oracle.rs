@@ -107,7 +107,11 @@ impl OracleDriver {
 
     pub async fn exec(&mut self, sql: &str) -> Result<StatementOutcome, QueryError> {
         let stmt = prepare_statement(sql);
-        if util::returns_rows(&stmt) {
+        // `EXPLAIN PLAN [SET STATEMENT_ID …] FOR …` looks row-returning (leading verb
+        // EXPLAIN) but produces NO result set — it only populates PLAN_TABLE. Route it
+        // (and anything non-row-returning) through execute().
+        let wants_rows = util::returns_rows(&stmt) && !stmt.trim_start().to_uppercase().starts_with("EXPLAIN PLAN");
+        if wants_rows {
             let res = self.conn.query(&stmt, &[]).await.map_err(|e| map_error(&e))?;
             Ok(StatementOutcome::Rows { result: decode(&res) })
         } else {
@@ -142,9 +146,23 @@ impl OracleDriver {
         self.conn.query(sql, &[]).await.map_err(|e| map_error(&e))
     }
 
-    /// O2: editable-grid apply (needs the grid `:1` bind builder / Placeholder::Colon).
-    pub async fn apply_changes(&mut self, _changes: &[GridChange]) -> Result<u64, QueryError> {
-        Err(QueryError::new("oracle", "Oracle grid edit lands in O2", "oracle grid o2"))
+    /// Editable-grid apply — parametrized INSERT/UPDATE/DELETE (`:1` binds) run in
+    /// one transaction (Oracle has no BEGIN; COMMIT/ROLLBACK explicit).
+    pub async fn apply_changes(&mut self, changes: &[GridChange]) -> Result<u64, QueryError> {
+        let mut affected = 0u64;
+        for ch in changes {
+            let bs = crate::drivers::grid::build("oracle", ch);
+            let binds: Vec<OraValue> = bs.params.iter().map(json_to_value).collect();
+            match self.conn.execute(&bs.sql, &binds).await {
+                Ok(res) => affected += res.rows_affected,
+                Err(e) => {
+                    let _ = self.conn.rollback().await;
+                    return Err(map_error(&e));
+                }
+            }
+        }
+        self.conn.commit().await.map_err(|e| map_error(&e))?;
+        Ok(affected)
     }
 
     pub async fn schemas(&mut self) -> Result<Vec<SchemaInfo>, QueryError> {

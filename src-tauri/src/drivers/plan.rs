@@ -147,6 +147,9 @@ pub fn capability(system: &str) -> EngineCapability {
         "mssql" => (true, ActualKind::Analyze, CostBasis::Cost),
         "sqlite" => (true, ActualKind::None, CostBasis::RowsProxy),
         "clickhouse" => (true, ActualKind::None, CostBasis::RowsProxy),
+        // Oracle: cost-based optimizer via EXPLAIN PLAN → PLAN_TABLE (estimated).
+        // Actual (GATHER_PLAN_STATISTICS + DISPLAY_CURSOR) is a later refinement.
+        "oracle" => (true, ActualKind::None, CostBasis::Cost),
         // MongoDB: planner tĩnh (queryPlanner) + executionStats (actual). Không có
         // per-stage cost số → xếp hạng theo rows (RowsProxy).
         "mongodb" => (true, ActualKind::Analyze, CostBasis::RowsProxy),
@@ -175,6 +178,20 @@ const LARGE_ROWS: f64 = 10_000.0;
 /// - `SCAN t` trần (SQLite, không index) → SeqScan.
 pub fn normalize_op(native: &str) -> String {
     let n = native.to_lowercase();
+    // Oracle PLAN_TABLE operations (operation||options) — these exact phrases are
+    // Oracle-only, so matching them here doesn't affect any other engine.
+    if n.contains("table access full") {
+        return "SeqScan".into();
+    }
+    if n.contains("table access by") {
+        return "IndexScan".into(); // BY INDEX ROWID — index-driven table access
+    }
+    if n.contains("index unique scan") {
+        return "IndexSeek".into();
+    }
+    if n.contains("index full scan") || n.contains("index skip scan") || n.contains("index fast full scan") {
+        return "IndexScan".into();
+    }
     let canon = if n.contains("index only scan") {
         "IndexOnlyScan"
     } else if n.contains("collscan") {
@@ -1115,6 +1132,69 @@ fn QueryPlan_ok(
         raw: raw.to_string(),
         missing_index: None,
     })
+}
+
+/// Oracle EXPLAIN PLAN → PLAN_TABLE rows (id/parent_id/operation/options/object/
+/// cardinality/cost) → chuẩn hóa cây theo parent_id. Cost là cumulative (đỉnh =
+/// tổng) → self-cost + % qua `assign_cost_pct`. Estimated-only (không actual).
+pub fn parse_oracle(rows: &[Value]) -> QueryPlan {
+    struct Raw {
+        id: i64,
+        parent: Option<i64>,
+        native: String,
+        card: Option<f64>,
+        cost: Option<f64>,
+    }
+    let ji64 = |v: Option<&Value>| v.and_then(|x| x.as_i64().or_else(|| x.as_str().and_then(|s| s.trim().parse().ok())));
+    let jf64 = |v: Option<&Value>| v.and_then(|x| x.as_f64().or_else(|| x.as_str().and_then(|s| s.trim().parse().ok())));
+    let jstr = |v: Option<&Value>| v.and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
+
+    let raws: Vec<Raw> = rows
+        .iter()
+        .map(|r| {
+            let op = jstr(r.get("OP"));
+            let opts = jstr(r.get("OPTS"));
+            let obj = jstr(r.get("OBJ"));
+            let mut native = [op, opts].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" ");
+            if !obj.is_empty() {
+                native = format!("{native} ({obj})");
+            }
+            Raw {
+                id: ji64(r.get("ID")).unwrap_or(0),
+                parent: ji64(r.get("PARENT_ID")),
+                native,
+                card: jf64(r.get("CARD")),
+                cost: jf64(r.get("COST")),
+            }
+        })
+        .collect();
+
+    fn node_of(r: &Raw, raws: &[Raw]) -> PlanNode {
+        let op = normalize_op(&r.native);
+        let mut node = PlanNode::leaf(&op, &r.native);
+        node.estimated_rows = r.card;
+        node.estimated_cost = r.cost;
+        node.children = raws.iter().filter(|c| c.parent == Some(r.id)).map(|c| node_of(c, raws)).collect();
+        node
+    }
+
+    let mut warnings = Vec::new();
+    // Oracle plan root has parent_id NULL (usually id 0 = SELECT/INSERT STATEMENT).
+    let mut root = raws
+        .iter()
+        .find(|r| r.parent.is_none())
+        .map(|r| node_of(r, &raws))
+        .unwrap_or_else(|| PlanNode::leaf("Plan", "STATEMENT"));
+    assign_cost_pct(&mut root, true);
+    fn mark_all(node: &mut PlanNode, w: &mut Vec<String>) {
+        mark_hotspot(node, w);
+        for c in node.children.iter_mut() {
+            mark_all(c, w);
+        }
+    }
+    mark_all(&mut root, &mut warnings);
+    let raw = rows.iter().map(|r| r.to_string()).collect::<Vec<_>>().join("\n");
+    QueryPlan_ok("oracle", false, root, None, warnings, &raw).unwrap_or_else(|_| QueryPlan::not_applicable("oracle"))
 }
 
 /// Gán `cost_self` + `cost_pct` cho toàn cây (P3.1 — hiển thị "Cost: N%" kiểu SSMS).

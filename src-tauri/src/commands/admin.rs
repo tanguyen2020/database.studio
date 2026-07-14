@@ -121,6 +121,22 @@ pub fn admin_query(system: &str, view: &str) -> Option<String> {
              LEFT JOIN pg_extension i ON i.extname = a.name \
              ORDER BY (i.extversion IS NULL), a.name"
         }
+        // --- Oracle (V$/DBA views). Aliases quoted-lowercase so row keys match the
+        //     frontend (`r['pid']`); Oracle would otherwise fold them to UPPERCASE. ---
+        ("oracle", "sessions") => {
+            "SELECT s.sid AS \"pid\", s.username AS \"username\", s.status AS \"state\", \
+                    s.machine AS \"machine\", SUBSTR(NVL(q.sql_text, ' '), 1, 120) AS \"query\" \
+             FROM v$session s LEFT JOIN v$sql q ON s.sql_id = q.sql_id \
+             WHERE s.type = 'USER' ORDER BY s.sid"
+        }
+        ("oracle", "locks") => {
+            "SELECT sid AS \"pid\", type AS \"locktype\", lmode AS \"mode\", request AS \"request\", block AS \"block\" \
+             FROM v$lock ORDER BY sid"
+        }
+        ("oracle", "users") => {
+            "SELECT username AS \"role\", account_status AS \"status\", default_tablespace AS \"tablespace\", \
+                    TO_CHAR(created, 'YYYY-MM-DD') AS \"created\" FROM dba_users ORDER BY username"
+        }
         _ => return None,
     };
     Some(sql.to_string())
@@ -132,6 +148,12 @@ pub fn kill_query(system: &str, pid: i64) -> Option<String> {
         "postgres" => format!("SELECT pg_terminate_backend({pid})"),
         "mysql" | "mariadb" => format!("KILL {pid}"),
         "mssql" => format!("KILL {pid}"),
+        // Oracle needs 'sid,serial#'. We only get the SID → resolve serial# from
+        // V$SESSION in a PL/SQL block and kill (no session found → no-op).
+        "oracle" => format!(
+            "BEGIN FOR s IN (SELECT sid, serial# AS sq FROM v$session WHERE sid = {pid}) LOOP \
+             EXECUTE IMMEDIATE 'ALTER SYSTEM KILL SESSION ''' || s.sid || ',' || s.sq || ''' IMMEDIATE'; END LOOP; END;"
+        ),
         _ => return None,
     };
     Some(sql)

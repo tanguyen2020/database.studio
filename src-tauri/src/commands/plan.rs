@@ -70,6 +70,11 @@ pub async fn explain_plan(
         return explain_mssql(state.inner(), &conn_id, &sql, actual).await;
     }
 
+    // Oracle: EXPLAIN PLAN FOR <sql> (no execution) → read PLAN_TABLE.
+    if system == "oracle" {
+        return explain_oracle(state.inner(), &conn_id, &sql).await;
+    }
+
     let explain_sql = build_explain(&system, &sql, actual);
     let outcome = state
         .registry
@@ -138,6 +143,39 @@ async fn explain_mssql(
         .find(|s| s.contains("<ShowPlanXML"))
         .ok_or_else(|| AppError::Driver("MSSQL plan XML is empty".into()))?;
     plan::parse_mssql_xml(xml, actual).map_err(AppError::Driver)
+}
+
+/// Oracle query plan: `EXPLAIN PLAN SET STATEMENT_ID = 'dbstudio' FOR <sql>` (this
+/// only populates PLAN_TABLE, it does NOT run the statement — safe for writes too),
+/// then read the structured plan rows back and normalize by parent_id. Estimated
+/// only (actual via GATHER_PLAN_STATISTICS + DISPLAY_CURSOR is a later refinement).
+async fn explain_oracle(state: &AppState, conn_id: &str, sql: &str) -> Result<QueryPlan, AppError> {
+    let sql = sql.trim().trim_end_matches(';');
+    let sid = "dbstudio";
+    // Clear any prior plan under our statement id (best-effort).
+    let _ = state
+        .registry
+        .exec_statement(conn_id, format!("DELETE FROM PLAN_TABLE WHERE statement_id = '{sid}'"))
+        .await;
+    state
+        .registry
+        .exec_statement(conn_id, format!("EXPLAIN PLAN SET STATEMENT_ID = '{sid}' FOR {sql}"))
+        .await?
+        .map_err(|e| AppError::Driver(e.message))?;
+    let read = format!(
+        "SELECT id, parent_id, operation AS op, options AS opts, object_name AS obj, cardinality AS card, cost AS cost \
+         FROM plan_table WHERE statement_id = '{sid}' ORDER BY id"
+    );
+    let outcome = state
+        .registry
+        .exec_statement(conn_id, read)
+        .await?
+        .map_err(|e| AppError::Driver(e.message))?;
+    let rows = match outcome {
+        StatementOutcome::Rows { result } => result.rows,
+        _ => return Err(AppError::Driver("EXPLAIN PLAN returned no plan rows".into())),
+    };
+    Ok(plan::parse_oracle(&rows))
 }
 
 /// PostgreSQL Actual plan cho câu GHI (INSERT/UPDATE/DELETE/…): bọc trong

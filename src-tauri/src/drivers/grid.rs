@@ -16,6 +16,8 @@ pub enum Placeholder {
     Question,
     /// MSSQL: @P1, @P2, ...
     AtP,
+    /// Oracle: :1, :2, ...
+    Colon,
 }
 
 impl Placeholder {
@@ -23,6 +25,7 @@ impl Placeholder {
         match system {
             "postgres" => Placeholder::Dollar,
             "mssql" => Placeholder::AtP,
+            "oracle" => Placeholder::Colon,
             _ => Placeholder::Question, // mysql, mariadb, sqlite
         }
     }
@@ -31,6 +34,7 @@ impl Placeholder {
             Placeholder::Dollar => format!("${idx}"),
             Placeholder::Question => "?".into(),
             Placeholder::AtP => format!("@P{idx}"),
+            Placeholder::Colon => format!(":{idx}"),
         }
     }
 }
@@ -351,6 +355,9 @@ pub fn build_select(
         if orders.is_empty() {
             sql.push_str(" ORDER BY (SELECT NULL)");
         }
+        sql.push_str(&format!(" OFFSET {offset} ROWS FETCH NEXT {lim} ROWS ONLY"));
+    } else if system == "oracle" {
+        // Oracle 12c+ row limiting; unlike MSSQL it does not require an ORDER BY.
         sql.push_str(&format!(" OFFSET {offset} ROWS FETCH NEXT {lim} ROWS ONLY"));
     } else {
         sql.push_str(&format!(" LIMIT {lim} OFFSET {offset}"));

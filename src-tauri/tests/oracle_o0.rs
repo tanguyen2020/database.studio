@@ -4,8 +4,12 @@
 //!   docker run -d --name ora-o0 -p 1521:1521 -e ORACLE_PASSWORD=Oracle123 gvenzl/oracle-free:23-slim-faststart
 //!   cargo test --test oracle_o0 -- --nocapture --test-threads=1
 
+use database_studio_lib::commands::admin;
+use database_studio_lib::drivers::grid::{self, Col, GridChange, SortSpec};
 use database_studio_lib::drivers::oracle::{OracleConnParams, OracleDriver};
+use database_studio_lib::drivers::plan;
 use database_studio_lib::drivers::types::StatementOutcome;
+use serde_json::json;
 
 fn params() -> OracleConnParams {
     OracleConnParams {
@@ -138,4 +142,76 @@ async fn o1_introspection() {
 
     let _ = d.exec(drop_user).await;
     println!("O1 INTROSPECTION OK — schemas/tables/columns/indexes/constraints/FKs/sequences/triggers/routines/functions/partitions/scan verified");
+}
+
+/// O2: editable grid (apply_changes) + FETCH paging + query plan + admin.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs a live Oracle container (gvenzl/oracle-free) — run with --ignored"]
+async fn o2_grid_plan_admin() {
+    let mut d = OracleDriver::connect(&params()).await.expect("connect");
+    let _ = d.exec("BEGIN EXECUTE IMMEDIATE 'DROP TABLE o2_t'; EXCEPTION WHEN OTHERS THEN NULL; END;").await;
+    d.exec("CREATE TABLE o2_t (id NUMBER PRIMARY KEY, name VARCHAR2(50))").await.expect("create");
+
+    let col = |n: &str, v: serde_json::Value| Col { name: n.into(), value: v, col_type: None };
+    let ins = |id: i64, name: &str| GridChange::Insert {
+        schema: Some("SYSTEM".into()),
+        table: "O2_T".into(),
+        values: vec![col("ID", json!(id)), col("NAME", json!(name))],
+    };
+    assert_eq!(d.apply_changes(&[ins(1, "Ann"), ins(2, "Bob")]).await.expect("insert"), 2, "2 inserted");
+
+    let upd = GridChange::Update {
+        schema: Some("SYSTEM".into()),
+        table: "O2_T".into(),
+        pk: vec![col("ID", json!(1))],
+        set: vec![col("NAME", json!("Ann2"))],
+    };
+    assert_eq!(d.apply_changes(&[upd]).await.expect("update"), 1, "1 updated");
+
+    let del = GridChange::Delete { schema: Some("SYSTEM".into()), table: "O2_T".into(), pk: vec![col("ID", json!(2))] };
+    assert_eq!(d.apply_changes(&[del]).await.expect("delete"), 1, "1 deleted");
+
+    match d.exec("SELECT id, name FROM o2_t").await.expect("select") {
+        StatementOutcome::Rows { result } => {
+            assert_eq!(result.total, 1, "one row left");
+            assert_eq!(result.rows[0]["NAME"], json!("Ann2"), "update applied");
+        }
+        o => panic!("expected rows: {o:?}"),
+    }
+
+    // build_select → Oracle FETCH paging, bound params.
+    let bs = grid::build_select("oracle", &Some("SYSTEM".into()), "O2_T", &[], false, &[SortSpec { col: "ID".into(), desc: false }], 10, 0);
+    assert!(bs.sql.contains("FETCH NEXT 10 ROWS ONLY"), "FETCH paging: {}", bs.sql);
+    assert!(matches!(d.exec_params(&bs.sql, &bs.params).await.expect("paged select"), StatementOutcome::Rows { .. }));
+
+    // EXPLAIN PLAN → PLAN_TABLE → parse_oracle.
+    let _ = d.exec("DELETE FROM plan_table WHERE statement_id = 't2'").await;
+    d.exec("EXPLAIN PLAN SET STATEMENT_ID = 't2' FOR SELECT * FROM o2_t WHERE id = 1").await.expect("explain plan");
+    match d
+        .exec("SELECT id, parent_id, operation AS op, options AS opts, object_name AS obj, cardinality AS card, cost AS cost FROM plan_table WHERE statement_id = 't2' ORDER BY id")
+        .await
+        .expect("read plan")
+    {
+        StatementOutcome::Rows { result } => {
+            let qp = plan::parse_oracle(&result.rows);
+            let root = qp.root.expect("plan root");
+            println!("plan root op = {} (native {})", root.operation, root.native_op);
+            assert!(!root.children.is_empty() || !root.native_op.is_empty(), "plan has structure");
+        }
+        o => panic!("expected plan rows: {o:?}"),
+    }
+
+    // Admin: sessions query exposes a `pid` column; kill block runs (no-op on bogus sid).
+    let sess_sql = admin::admin_query("oracle", "sessions").expect("sessions sql");
+    match d.exec(&sess_sql).await.expect("sessions") {
+        StatementOutcome::Rows { result } => {
+            assert!(result.cols.iter().any(|(n, _)| n == "pid"), "pid column present: {:?}", result.cols);
+        }
+        o => panic!("expected session rows: {o:?}"),
+    }
+    let kill = admin::kill_query("oracle", 999_999).expect("kill sql");
+    d.exec(&kill).await.expect("kill block runs");
+
+    let _ = d.exec("DROP TABLE o2_t").await;
+    println!("O2 OK — grid apply (insert/update/delete) + FETCH paging + EXPLAIN PLAN parse + admin sessions/kill verified");
 }
