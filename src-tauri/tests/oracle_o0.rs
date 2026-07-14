@@ -231,3 +231,24 @@ async fn o2_grid_plan_admin() {
     let _ = d.exec("DROP TABLE o2_t").await;
     println!("O2 OK — grid apply (insert/update/delete) + FETCH paging + EXPLAIN PLAN parse + admin sessions/kill verified");
 }
+
+/// Crate-A pivot: verify result sets are NOT truncated (oracle-rs capped at ~100).
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs a live Oracle container (gvenzl/oracle-free) + Instant Client — run with --ignored"]
+async fn a_full_resultset_no_100_cap() {
+    let mut d = OracleDriver::connect(&params()).await.expect("connect");
+    let _ = d.exec("BEGIN EXECUTE IMMEDIATE 'DROP TABLE a_big'; EXCEPTION WHEN OTHERS THEN NULL; END;").await;
+    d.exec("CREATE TABLE a_big (id NUMBER, name VARCHAR2(20))").await.expect("create");
+    d.exec("INSERT INTO a_big SELECT LEVEL, 'r' || LEVEL FROM DUAL CONNECT BY LEVEL <= 2500").await.expect("seed");
+    let _ = d.exec("COMMIT").await;
+    match d.exec("SELECT id, name FROM a_big ORDER BY id").await.expect("select") {
+        StatementOutcome::Rows { result } => {
+            assert_eq!(result.total, 2500, "crate A returns the full result set (no 100-row cap)");
+            assert_eq!(result.rows[0]["ID"], serde_json::json!("1"));
+            assert_eq!(result.rows[2499]["NAME"], serde_json::json!("r2500"));
+        }
+        o => panic!("expected rows: {o:?}"),
+    }
+    let _ = d.exec("DROP TABLE a_big").await;
+    println!("A OK — full 2500-row result set returned (100-row cap gone)");
+}

@@ -93,9 +93,12 @@ async-trait = "0.1"
 # (no OpenSSL/nasm), đồng bộ TLS toàn repo. bson đi kèm (re-export mongodb::bson).
 mongodb = "3"
 
-# Oracle — PURE-RUST async driver (TNS protocol), rustls TLS, NO Oracle Instant
-# Client / OCI required (unlike the `oracle` ODPI-C crate). O0 spike (crate B).
-oracle-rs = "0.1"
+# Oracle — `oracle` crate (ODPI-C/OCI). Mature, returns full result sets. BLOCKING
+# (driven via a per-connection actor thread) and needs Oracle Instant Client at
+# runtime. Pivoted from the pure-Rust `oracle-rs` (0.1.7 truncated results at ~100
+# rows + broke fetch_more — unusable). ODPI-C builds with the C compiler; OCI is
+# dlopen'd at runtime.
+oracle = "0.6"
 
 # Misc
 uuid = { version = "1", features = ["v4"] }

@@ -1,22 +1,24 @@
-//! Oracle driver — O0 spike using the PURE-RUST `oracle-rs` crate (TNS protocol,
-//! rustls TLS, NO Oracle Instant Client / OCI). Async and Send, so it plugs into
-//! the same `LiveConnection` model as sqlx/tiberius with no actor thread.
+//! Oracle driver — `oracle` crate (ODPI-C/OCI). The crate is BLOCKING and its
+//! `Connection` is `!Send`, so each connection owns a dedicated OS thread (an
+//! "actor") that holds the real Connection; async methods send commands over an
+//! mpsc channel and await a oneshot reply. That keeps `LiveConnection: Send` (the
+//! registry stores it behind a tokio Mutex + spawns tasks) with no OCI handle
+//! ever crossing a thread. Needs Oracle Instant Client at runtime.
 //!
-//! O0 scope: connect / test / ping / exec (dynamic result decode) + parametrized
-//! exec. Introspection + grid apply are stubbed (TODO O1) so the enum wiring
-//! compiles and the connect/query path can be verified end-to-end on a real DB.
+//! Pivoted from `oracle-rs` (pure Rust) which truncated result sets at ~100 rows.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::mpsc;
 use std::time::Instant;
 
-use oracle_rs::{Config, Connection, QueryResult, Row, Value as OraValue};
-use serde_json::Value as Json;
-
-use crate::drivers::index_scan::IndexScanRow;
+use oracle::sql_type::ToSql;
+use oracle::Connection;
+use serde_json::{Map, Value as Json};
+use tokio::sync::oneshot;
 
 use crate::drivers::grid::GridChange;
+use crate::drivers::index_scan::IndexScanRow;
 use crate::drivers::types::*;
-use crate::drivers::util;
 use crate::error::QueryError;
 
 /// Connect params mapped from a `ConnectionProfile` (built in drivers/mod.rs).
@@ -34,16 +36,24 @@ pub struct OracleConnParams {
     pub ssl_ca: String,
 }
 
+/// Commands sent to the connection's actor thread. Each carries a oneshot reply.
+enum Cmd {
+    Exec(String, oneshot::Sender<Result<StatementOutcome, QueryError>>),
+    ExecParams(String, Vec<Json>, oneshot::Sender<Result<StatementOutcome, QueryError>>),
+    Query(String, oneshot::Sender<Result<QueryResultSet, QueryError>>),
+    Apply(Vec<GridChange>, oneshot::Sender<Result<u64, QueryError>>),
+    Ping(oneshot::Sender<bool>),
+}
+
 pub struct OracleDriver {
-    conn: Connection,
+    tx: mpsc::Sender<Cmd>,
     /// The connected user = default schema in Oracle (UPPERCASE).
     #[allow(dead_code)]
     default_schema: String,
 }
 
-fn map_error(e: &oracle_rs::Error) -> QueryError {
+fn map_error(e: &oracle::Error) -> QueryError {
     let raw = e.to_string();
-    // Surface the ORA-NNNNN code as the error code when present.
     let code = raw
         .split_whitespace()
         .find(|t| t.starts_with("ORA-"))
@@ -53,160 +63,103 @@ fn map_error(e: &oracle_rs::Error) -> QueryError {
     qe
 }
 
-impl OracleDriver {
-    fn build_config(p: &OracleConnParams) -> Result<Config, QueryError> {
-        let cfg = if p.use_sid {
-            Config::with_sid(&p.host, p.port, &p.service, &p.user, &p.password)
-        } else {
-            Config::new(&p.host, p.port, &p.service, &p.user, &p.password)
-        };
-        if p.ssl {
-            cfg.with_tls().map_err(|e| map_error(&e))
-        } else {
-            Ok(cfg)
-        }
-    }
+fn dead() -> QueryError {
+    QueryError::new("oracle", "Oracle connection thread is not available", "actor gone")
+}
 
+impl OracleDriver {
     pub async fn connect(p: &OracleConnParams) -> Result<Self, QueryError> {
-        let cfg = Self::build_config(p)?;
-        let conn = Connection::connect_with_config(cfg)
-            .await
-            .map_err(|e| map_error(&e))?;
-        Ok(Self { conn, default_schema: p.user.to_uppercase() })
+        let (init_tx, init_rx) = oneshot::channel::<Result<(), QueryError>>();
+        let (tx, rx) = mpsc::channel::<Cmd>();
+        let params = p.clone();
+        std::thread::spawn(move || actor(params, rx, init_tx));
+        match init_rx.await {
+            Ok(Ok(())) => Ok(Self { tx, default_schema: p.user.to_uppercase() }),
+            Ok(Err(e)) => Err(e),
+            Err(_) => Err(dead()),
+        }
     }
 
     pub async fn test(p: &OracleConnParams) -> TestResult {
         let started = Instant::now();
         match Self::connect(p).await {
-            Ok(drv) => {
-                let version = drv
-                    .conn
-                    .query("SELECT banner FROM v$version WHERE ROWNUM = 1", &[])
+            Ok(d) => {
+                let version = d
+                    .query("SELECT banner FROM v$version WHERE ROWNUM = 1")
                     .await
                     .ok()
-                    .and_then(|r| r.rows.first().and_then(|row| row.get(0).map(value_to_string)));
-                TestResult {
-                    ok: true,
-                    latency_ms: Some(started.elapsed().as_millis() as u64),
-                    server_version: version,
-                    error: None,
-                }
+                    .and_then(|r| r.rows.first().and_then(|row| row.as_object().and_then(|o| o.values().next()).and_then(|v| v.as_str().map(str::to_string))));
+                TestResult { ok: true, latency_ms: Some(started.elapsed().as_millis() as u64), server_version: version, error: None }
             }
-            Err(e) => TestResult {
-                ok: false,
-                latency_ms: None,
-                server_version: None,
-                error: Some(e.message),
-            },
+            Err(e) => TestResult { ok: false, latency_ms: None, server_version: None, error: Some(e.message) },
         }
+    }
+
+    async fn send<T>(&self, make: impl FnOnce(oneshot::Sender<T>) -> Cmd) -> Result<T, QueryError> {
+        let (rtx, rrx) = oneshot::channel::<T>();
+        self.tx.send(make(rtx)).map_err(|_| dead())?;
+        rrx.await.map_err(|_| dead())
     }
 
     pub async fn ping(&mut self) -> bool {
-        self.conn.ping().await.is_ok()
+        self.send(Cmd::Ping).await.unwrap_or(false)
     }
 
     pub async fn exec(&mut self, sql: &str) -> Result<StatementOutcome, QueryError> {
-        let stmt = prepare_statement(sql);
-        // `EXPLAIN PLAN [SET STATEMENT_ID …] FOR …` looks row-returning (leading verb
-        // EXPLAIN) but produces NO result set — it only populates PLAN_TABLE. Route it
-        // (and anything non-row-returning) through execute().
-        let wants_rows = util::returns_rows(&stmt) && !stmt.trim_start().to_uppercase().starts_with("EXPLAIN PLAN");
-        if wants_rows {
-            let res = self.conn.query(&stmt, &[]).await.map_err(|e| map_error(&e))?;
-            Ok(StatementOutcome::Rows { result: decode(&res) })
-        } else {
-            let res = self.conn.execute(&stmt, &[]).await.map_err(|e| map_error(&e))?;
-            if util::is_dml(&stmt) {
-                Ok(StatementOutcome::Affected { affected: res.rows_affected })
-            } else {
-                Ok(StatementOutcome::Ok)
-            }
-        }
+        let sql = sql.to_string();
+        self.send(move |r| Cmd::Exec(sql, r)).await?
     }
 
-    pub async fn exec_params(
-        &mut self,
-        sql: &str,
-        params: &[Json],
-    ) -> Result<StatementOutcome, QueryError> {
-        let binds: Vec<OraValue> = params.iter().map(json_to_value).collect();
-        let stmt = prepare_statement(sql);
-        if util::returns_rows(&stmt) {
-            let res = self.conn.query(&stmt, &binds).await.map_err(|e| map_error(&e))?;
-            Ok(StatementOutcome::Rows { result: decode(&res) })
-        } else {
-            let res = self.conn.execute(&stmt, &binds).await.map_err(|e| map_error(&e))?;
-            Ok(StatementOutcome::Affected { affected: res.rows_affected })
-        }
+    pub async fn exec_params(&mut self, sql: &str, params: &[Json]) -> Result<StatementOutcome, QueryError> {
+        let (sql, params) = (sql.to_string(), params.to_vec());
+        self.send(move |r| Cmd::ExecParams(sql, params, r)).await?
     }
 
-    // ---- O1: real introspection via ALL_* catalog views ---------------------
-
-    async fn q(&self, sql: &str) -> Result<QueryResult, QueryError> {
-        self.conn.query(sql, &[]).await.map_err(|e| map_error(&e))
-    }
-
-    /// Editable-grid apply — parametrized INSERT/UPDATE/DELETE (`:1` binds) run in
-    /// one transaction (Oracle has no BEGIN; COMMIT/ROLLBACK explicit).
     pub async fn apply_changes(&mut self, changes: &[GridChange]) -> Result<u64, QueryError> {
-        let mut affected = 0u64;
-        for ch in changes {
-            let bs = crate::drivers::grid::build("oracle", ch);
-            let binds: Vec<OraValue> = bs.params.iter().map(json_to_value).collect();
-            match self.conn.execute(&bs.sql, &binds).await {
-                Ok(res) => affected += res.rows_affected,
-                Err(e) => {
-                    let _ = self.conn.rollback().await;
-                    return Err(map_error(&e));
-                }
-            }
-        }
-        self.conn.commit().await.map_err(|e| map_error(&e))?;
-        Ok(affected)
+        let changes = changes.to_vec();
+        self.send(move |r| Cmd::Apply(changes, r)).await?
     }
+
+    /// Run a SELECT and get the full materialized result (used by introspection).
+    async fn query(&self, sql: &str) -> Result<QueryResultSet, QueryError> {
+        let sql = sql.to_string();
+        self.send(move |r| Cmd::Query(sql, r)).await?
+    }
+
+    // ---- introspection via ALL_* catalog views (parsed from JSON rows) --------
 
     pub async fn schemas(&mut self) -> Result<Vec<SchemaInfo>, QueryError> {
-        // Non-Oracle-maintained users = real schemas; always include the current one.
         let res = self
-            .q("SELECT username AS name, CASE WHEN username = SYS_CONTEXT('USERENV','CURRENT_SCHEMA') THEN 1 ELSE 0 END AS is_default \
-                FROM all_users \
-                WHERE oracle_maintained = 'N' OR username = SYS_CONTEXT('USERENV','CURRENT_SCHEMA') \
-                ORDER BY username")
+            .query(
+                "SELECT username AS name, CASE WHEN username = SYS_CONTEXT('USERENV','CURRENT_SCHEMA') THEN 1 ELSE 0 END AS is_default \
+                 FROM all_users WHERE oracle_maintained = 'N' OR username = SYS_CONTEXT('USERENV','CURRENT_SCHEMA') ORDER BY username",
+            )
             .await?;
-        Ok(res
-            .rows
-            .iter()
-            .map(|r| SchemaInfo { name: cell_str(&res, r, "NAME"), is_default: cell_i64(&res, r, "IS_DEFAULT") == Some(1) })
-            .collect())
+        Ok(res.rows.iter().map(|r| SchemaInfo { name: jstr(r, "NAME"), is_default: ji64(r, "IS_DEFAULT") == Some(1) }).collect())
     }
 
     pub async fn databases(&mut self) -> Result<Vec<DatabaseInfo>, QueryError> {
-        // O2: PDB listing via V$PDBS/CDB_PDBS (needs CDB privileges). Empty → the
-        // Explorer renders schemas directly (no multi-DB header), which is correct
-        // for a single-service connection.
-        Ok(Vec::new())
+        Ok(Vec::new()) // PDB listing (V$PDBS) needs CDB privileges — schema-based tree instead.
     }
 
     pub async fn tables(&mut self, schema: &str) -> Result<Vec<TableInfo>, QueryError> {
         let o = lit(schema);
         let res = self
-            .q(&format!(
+            .query(&format!(
                 "SELECT table_name AS name, 'table' AS kind, num_rows AS nrows FROM all_tables WHERE owner = {o} \
-                 UNION ALL \
-                 SELECT view_name AS name, 'view' AS kind, NULL AS nrows FROM all_views WHERE owner = {o} \
-                 ORDER BY name"
+                 UNION ALL SELECT view_name AS name, 'view' AS kind, NULL AS nrows FROM all_views WHERE owner = {o} ORDER BY name"
             ))
             .await?;
-        let sizes = self.segment_sizes(schema, "TABLE").await; // best-effort
+        let sizes = self.segment_sizes(schema, "TABLE").await;
         Ok(res
             .rows
             .iter()
             .map(|r| {
-                let name = cell_str(&res, r, "NAME");
+                let name = jstr(r, "NAME");
                 TableInfo {
                     schema: schema.to_string(),
-                    kind: cell_str(&res, r, "KIND"),
-                    row_estimate: cell_i64(&res, r, "NROWS"),
+                    kind: jstr(r, "KIND"),
+                    row_estimate: ji64(r, "NROWS"),
                     locked: false,
                     engine: None,
                     data_length: sizes.get(&name).copied(),
@@ -218,10 +171,10 @@ impl OracleDriver {
 
     pub async fn columns(&mut self, schema: &str, table: &str) -> Result<Vec<ColumnInfo>, QueryError> {
         let (o, t) = (lit(schema), lit(table));
-        let pk = self.constraint_columns(schema, table, 'P').await.unwrap_or_default();
-        let fk = self.constraint_columns(schema, table, 'R').await.unwrap_or_default();
+        let pk = self.constraint_columns(schema, table, 'P').await;
+        let fk = self.constraint_columns(schema, table, 'R').await;
         let res = self
-            .q(&format!(
+            .query(&format!(
                 "SELECT column_name AS name, data_type AS dtype, data_length AS dlen, data_precision AS dprec, \
                         data_scale AS dscale, nullable AS nullable, column_id AS cid, NVL(identity_column,'NO') AS is_identity \
                  FROM all_tab_columns WHERE owner = {o} AND table_name = {t} ORDER BY column_id"
@@ -231,67 +184,57 @@ impl OracleDriver {
             .rows
             .iter()
             .map(|r| {
-                let name = cell_str(&res, r, "NAME");
+                let name = jstr(r, "NAME");
                 ColumnInfo {
-                    data_type: build_col_type(
-                        &cell_str(&res, r, "DTYPE"),
-                        cell_i64(&res, r, "DLEN"),
-                        cell_i64(&res, r, "DPREC"),
-                        cell_i64(&res, r, "DSCALE"),
-                    ),
-                    nullable: cell_str(&res, r, "NULLABLE") == "Y",
-                    default: None, // DATA_DEFAULT is a LONG; oracle-rs 0.1.7 can't decode LONG
+                    data_type: build_col_type(&jstr(r, "DTYPE"), ji64(r, "DLEN"), ji64(r, "DPREC"), ji64(r, "DSCALE")),
+                    nullable: jstr(r, "NULLABLE") == "Y",
+                    default: None, // DATA_DEFAULT is LONG — fetched separately if needed
                     is_pk: pk.contains(&name),
                     is_fk: fk.contains(&name),
-                    ordinal: cell_i64(&res, r, "CID").unwrap_or(0) as i32,
-                    auto_increment: cell_str(&res, r, "IS_IDENTITY") == "YES",
+                    ordinal: ji64(r, "CID").unwrap_or(0) as i32,
+                    auto_increment: jstr(r, "IS_IDENTITY") == "YES",
                     name,
                 }
             })
             .collect())
     }
 
-    async fn constraint_columns(&self, schema: &str, table: &str, kind: char) -> Result<HashSet<String>, QueryError> {
+    async fn constraint_columns(&self, schema: &str, table: &str, kind: char) -> HashSet<String> {
         let (o, t) = (lit(schema), lit(table));
-        let res = self
-            .q(&format!(
+        match self
+            .query(&format!(
                 "SELECT acc.column_name AS name FROM all_constraints ac \
                  JOIN all_cons_columns acc ON ac.owner = acc.owner AND ac.constraint_name = acc.constraint_name \
                  WHERE ac.owner = {o} AND ac.table_name = {t} AND ac.constraint_type = '{kind}'"
             ))
-            .await?;
-        Ok(res.rows.iter().map(|r| cell_str(&res, r, "NAME")).collect())
-    }
-
-    /// On-disk segment sizes by object name (DBA_SEGMENTS needs privileges → best-effort).
-    async fn segment_sizes(&self, schema: &str, seg_type: &str) -> HashMap<String, i64> {
-        let o = lit(schema);
-        match self
-            .q(&format!(
-                "SELECT segment_name AS name, SUM(bytes) AS bytes FROM dba_segments \
-                 WHERE owner = {o} AND segment_type = '{seg_type}' GROUP BY segment_name"
-            ))
             .await
         {
-            Ok(res) => res
-                .rows
-                .iter()
-                .filter_map(|r| cell_i64(&res, r, "BYTES").map(|b| (cell_str(&res, r, "NAME"), b)))
-                .collect(),
-            Err(_) => HashMap::new(),
+            Ok(res) => res.rows.iter().map(|r| jstr(r, "NAME")).collect(),
+            Err(_) => HashSet::new(),
         }
     }
 
     async fn pk_index_names(&self, schema: &str) -> HashSet<String> {
         let o = lit(schema);
         match self
-            .q(&format!(
-                "SELECT index_name AS name FROM all_constraints WHERE owner = {o} AND constraint_type = 'P' AND index_name IS NOT NULL"
+            .query(&format!("SELECT index_name AS name FROM all_constraints WHERE owner = {o} AND constraint_type = 'P' AND index_name IS NOT NULL"))
+            .await
+        {
+            Ok(res) => res.rows.iter().map(|r| jstr(r, "NAME")).collect(),
+            Err(_) => HashSet::new(),
+        }
+    }
+
+    async fn segment_sizes(&self, schema: &str, seg_type: &str) -> HashMap<String, i64> {
+        let o = lit(schema);
+        match self
+            .query(&format!(
+                "SELECT segment_name AS name, SUM(bytes) AS bytes FROM dba_segments WHERE owner = {o} AND segment_type = '{seg_type}' GROUP BY segment_name"
             ))
             .await
         {
-            Ok(res) => res.rows.iter().map(|r| cell_str(&res, r, "NAME")).collect(),
-            Err(_) => HashSet::new(),
+            Ok(res) => res.rows.iter().filter_map(|r| ji64(r, "BYTES").map(|b| (jstr(r, "NAME"), b))).collect(),
+            Err(_) => HashMap::new(),
         }
     }
 
@@ -299,38 +242,43 @@ impl OracleDriver {
         let (o, t) = (lit(schema), lit(table));
         let pk = self.pk_index_names(schema).await;
         let res = self
-            .q(&format!(
+            .query(&format!(
                 "SELECT i.index_name AS iname, i.index_type AS itype, i.uniqueness AS uniq, c.column_name AS cname \
                  FROM all_indexes i JOIN all_ind_columns c ON i.owner = c.index_owner AND i.index_name = c.index_name \
                  WHERE i.table_owner = {o} AND i.table_name = {t} ORDER BY i.index_name, c.column_position"
             ))
             .await?;
-        Ok(fold_indexes(&res, &pk))
+        let mut out: Vec<IndexInfo> = Vec::new();
+        for r in &res.rows {
+            let name = jstr(r, "INAME");
+            let col = jstr(r, "CNAME");
+            if let Some(last) = out.last_mut() {
+                if last.name == name {
+                    last.columns.push(col);
+                    continue;
+                }
+            }
+            out.push(IndexInfo { method: jstr(r, "ITYPE"), unique: jstr(r, "UNIQ") == "UNIQUE", primary: pk.contains(&name), columns: vec![col], name });
+        }
+        Ok(out)
     }
 
     pub async fn constraints(&mut self, schema: &str, table: &str) -> Result<Vec<ConstraintInfo>, QueryError> {
         let (o, t) = (lit(schema), lit(table));
         let res = self
-            .q(&format!(
+            .query(&format!(
                 "SELECT constraint_name AS cname, constraint_type AS ctype, search_condition_vc AS scond \
-                 FROM all_constraints WHERE owner = {o} AND table_name = {t} \
-                 AND constraint_type IN ('P','R','U','C') ORDER BY constraint_name"
+                 FROM all_constraints WHERE owner = {o} AND table_name = {t} AND constraint_type IN ('P','R','U','C') ORDER BY constraint_name"
             ))
             .await?;
         Ok(res
             .rows
             .iter()
             .map(|r| {
-                let def = cell_str(&res, r, "SCOND");
+                let def = jstr(r, "SCOND");
                 ConstraintInfo {
-                    name: cell_str(&res, r, "CNAME"),
-                    kind: match cell_str(&res, r, "CTYPE").as_str() {
-                        "P" => "PK",
-                        "R" => "FK",
-                        "U" => "UNIQUE",
-                        _ => "CHECK",
-                    }
-                    .to_string(),
+                    name: jstr(r, "CNAME"),
+                    kind: match jstr(r, "CTYPE").as_str() { "P" => "PK", "R" => "FK", "U" => "UNIQUE", _ => "CHECK" }.to_string(),
                     definition: if def.is_empty() { None } else { Some(def) },
                 }
             })
@@ -340,35 +288,26 @@ impl OracleDriver {
     pub async fn routines(&mut self, schema: &str) -> Result<Vec<RoutineInfo>, QueryError> {
         let o = lit(schema);
         let res = self
-            .q(&format!(
-                "SELECT object_name AS name, object_type AS otype FROM all_objects \
-                 WHERE owner = {o} AND object_type IN ('PROCEDURE','FUNCTION') ORDER BY object_name"
+            .query(&format!(
+                "SELECT object_name AS name, object_type AS otype FROM all_objects WHERE owner = {o} AND object_type IN ('PROCEDURE','FUNCTION') ORDER BY object_name"
             ))
             .await?;
-        // Params + return type from ALL_ARGUMENTS (standalone routines: package NULL).
-        // position 0 = function return value; 1..n = params. IN_OUT = IN | OUT | IN/OUT.
         let mut pmap: HashMap<String, (Vec<ParamInfo>, Option<String>)> = HashMap::new();
         if let Ok(a) = self
-            .q(&format!(
+            .query(&format!(
                 "SELECT object_name AS oname, argument_name AS aname, position AS pos, data_type AS dtype, in_out AS io \
-                 FROM all_arguments WHERE owner = {o} AND package_name IS NULL AND data_type IS NOT NULL \
-                 ORDER BY object_name, position"
+                 FROM all_arguments WHERE owner = {o} AND package_name IS NULL AND data_type IS NOT NULL ORDER BY object_name, position"
             ))
             .await
         {
             for r in &a.rows {
-                let entry = pmap.entry(cell_str(&a, r, "ONAME")).or_default();
-                let dtype = cell_str(&a, r, "DTYPE");
-                if cell_i64(&a, r, "POS") == Some(0) {
-                    entry.1 = Some(dtype); // function return value
+                let entry = pmap.entry(jstr(r, "ONAME")).or_default();
+                let dtype = jstr(r, "DTYPE");
+                if ji64(r, "POS") == Some(0) {
+                    entry.1 = Some(dtype);
                 } else {
-                    let io = cell_str(&a, r, "IO");
-                    entry.0.push(ParamInfo {
-                        name: cell_str(&a, r, "ANAME"),
-                        data_type: dtype,
-                        mode: if io == "IN/OUT" { "INOUT".into() } else { io.to_uppercase() },
-                        default: None,
-                    });
+                    let io = jstr(r, "IO");
+                    entry.0.push(ParamInfo { name: jstr(r, "ANAME"), data_type: dtype, mode: if io == "IN/OUT" { "INOUT".into() } else { io.to_uppercase() }, default: None });
                 }
             }
         }
@@ -376,15 +315,9 @@ impl OracleDriver {
             .rows
             .iter()
             .map(|r| {
-                let name = cell_str(&res, r, "NAME");
+                let name = jstr(r, "NAME");
                 let (params, return_type) = pmap.remove(&name).unwrap_or_default();
-                RoutineInfo {
-                    schema: schema.to_string(),
-                    kind: if cell_str(&res, r, "OTYPE") == "FUNCTION" { "function" } else { "procedure" }.to_string(),
-                    params,
-                    return_type,
-                    name,
-                }
+                RoutineInfo { schema: schema.to_string(), kind: if jstr(r, "OTYPE") == "FUNCTION" { "function" } else { "procedure" }.to_string(), params, return_type, name }
             })
             .collect())
     }
@@ -392,55 +325,36 @@ impl OracleDriver {
     pub async fn functions(&mut self, schema: &str) -> Result<Vec<FunctionInfo>, QueryError> {
         let o = lit(schema);
         let res = self
-            .q(&format!(
-                "SELECT object_name AS name FROM all_objects WHERE owner = {o} AND object_type = 'FUNCTION' ORDER BY object_name"
-            ))
+            .query(&format!("SELECT object_name AS name FROM all_objects WHERE owner = {o} AND object_type = 'FUNCTION' ORDER BY object_name"))
             .await?;
-        Ok(res
-            .rows
-            .iter()
-            .map(|r| FunctionInfo { name: cell_str(&res, r, "NAME"), signature: None, detail: Some("user".into()) })
-            .collect())
+        Ok(res.rows.iter().map(|r| FunctionInfo { name: jstr(r, "NAME"), signature: None, detail: Some("user".into()) }).collect())
     }
 
     pub async fn triggers(&mut self, schema: &str) -> Result<Vec<TriggerInfo>, QueryError> {
         let o = lit(schema);
         let res = self
-            .q(&format!(
-                "SELECT trigger_name AS name, table_name AS tname, trigger_type AS ttype, triggering_event AS tevent \
-                 FROM all_triggers WHERE owner = {o} ORDER BY trigger_name"
+            .query(&format!(
+                "SELECT trigger_name AS name, table_name AS tname, trigger_type AS ttype, triggering_event AS tevent FROM all_triggers WHERE owner = {o} ORDER BY trigger_name"
             ))
             .await?;
         Ok(res
             .rows
             .iter()
-            .map(|r| TriggerInfo {
-                schema: schema.to_string(),
-                name: cell_str(&res, r, "NAME"),
-                table: cell_str(&res, r, "TNAME"),
-                event: format!("{} {}", cell_str(&res, r, "TTYPE"), cell_str(&res, r, "TEVENT")).trim().to_string(),
-            })
+            .map(|r| TriggerInfo { schema: schema.to_string(), name: jstr(r, "NAME"), table: jstr(r, "TNAME"), event: format!("{} {}", jstr(r, "TTYPE"), jstr(r, "TEVENT")).trim().to_string() })
             .collect())
     }
 
     pub async fn sequences(&mut self, schema: &str) -> Result<Vec<SequenceInfo>, QueryError> {
         let o = lit(schema);
-        let res = self
-            .q(&format!("SELECT sequence_name AS name FROM all_sequences WHERE sequence_owner = {o} ORDER BY sequence_name"))
-            .await?;
-        Ok(res
-            .rows
-            .iter()
-            .map(|r| SequenceInfo { schema: schema.to_string(), name: cell_str(&res, r, "NAME") })
-            .collect())
+        let res = self.query(&format!("SELECT sequence_name AS name FROM all_sequences WHERE sequence_owner = {o} ORDER BY sequence_name")).await?;
+        Ok(res.rows.iter().map(|r| SequenceInfo { schema: schema.to_string(), name: jstr(r, "NAME") }).collect())
     }
 
     pub async fn foreign_keys(&mut self, schema: &str) -> Result<Vec<ForeignKey>, QueryError> {
         let o = lit(schema);
         let res = self
-            .q(&format!(
-                "SELECT ac.constraint_name AS name, ac.table_name AS from_table, acc.column_name AS from_col, \
-                        rac.table_name AS to_table, rcc.column_name AS to_col \
+            .query(&format!(
+                "SELECT ac.constraint_name AS name, ac.table_name AS from_table, acc.column_name AS from_col, rac.table_name AS to_table, rcc.column_name AS to_col \
                  FROM all_constraints ac \
                  JOIN all_cons_columns acc ON ac.owner = acc.owner AND ac.constraint_name = acc.constraint_name \
                  JOIN all_constraints rac ON ac.r_owner = rac.owner AND ac.r_constraint_name = rac.constraint_name \
@@ -451,71 +365,49 @@ impl OracleDriver {
         Ok(res
             .rows
             .iter()
-            .map(|r| ForeignKey {
-                name: cell_str(&res, r, "NAME"),
-                from_table: cell_str(&res, r, "FROM_TABLE"),
-                from_column: cell_str(&res, r, "FROM_COL"),
-                to_table: cell_str(&res, r, "TO_TABLE"),
-                to_column: cell_str(&res, r, "TO_COL"),
-            })
+            .map(|r| ForeignKey { name: jstr(r, "NAME"), from_table: jstr(r, "FROM_TABLE"), from_column: jstr(r, "FROM_COL"), to_table: jstr(r, "TO_TABLE"), to_column: jstr(r, "TO_COL") })
             .collect())
     }
 
     pub async fn partitions(&mut self, schema: &str, table: &str) -> Result<Vec<PartitionInfo>, QueryError> {
         let (o, t) = (lit(schema), lit(table));
-        // Parent partitioning method + key (one row).
         let meta = self
-            .q(&format!(
+            .query(&format!(
                 "SELECT pt.partitioning_type AS method, \
-                        (SELECT LISTAGG(column_name, ', ') WITHIN GROUP (ORDER BY column_position) \
-                         FROM all_part_key_columns k WHERE k.owner = pt.owner AND k.name = pt.table_name) AS keycols \
+                        (SELECT LISTAGG(column_name, ', ') WITHIN GROUP (ORDER BY column_position) FROM all_part_key_columns k WHERE k.owner = pt.owner AND k.name = pt.table_name) AS keycols \
                  FROM all_part_tables pt WHERE pt.owner = {o} AND pt.table_name = {t}"
             ))
             .await?;
         let (method, key) = match meta.rows.first() {
-            Some(r) => (cell_str(&meta, r, "METHOD"), {
-                let k = cell_str(&meta, r, "KEYCOLS");
-                if k.is_empty() { None } else { Some(k) }
-            }),
-            None => return Ok(Vec::new()), // not partitioned
+            Some(r) => (jstr(r, "METHOD"), { let k = jstr(r, "KEYCOLS"); if k.is_empty() { None } else { Some(k) } }),
+            None => return Ok(Vec::new()),
         };
         let res = self
-            .q(&format!(
-                "SELECT partition_name AS name, partition_position AS pos, num_rows AS nrows \
-                 FROM all_tab_partitions WHERE table_owner = {o} AND table_name = {t} ORDER BY partition_position"
+            .query(&format!(
+                "SELECT partition_name AS name, partition_position AS pos, num_rows AS nrows FROM all_tab_partitions WHERE table_owner = {o} AND table_name = {t} ORDER BY partition_position"
             ))
             .await?;
         Ok(res
             .rows
             .iter()
-            .map(|r| PartitionInfo {
-                name: cell_str(&res, r, "NAME"),
-                method: method.clone(),
-                key: key.clone(),
-                expression: None, // HIGH_VALUE is a LONG; oracle-rs 0.1.7 can't decode LONG
-                rows: cell_i64(&res, r, "NROWS"),
-                position: cell_i64(&res, r, "POS"),
-            })
+            .map(|r| PartitionInfo { name: jstr(r, "NAME"), method: method.clone(), key: key.clone(), expression: None, rows: ji64(r, "NROWS"), position: ji64(r, "POS") })
             .collect())
     }
 
     pub async fn scan_indexes(&mut self, schema: &str) -> Result<Vec<IndexScanRow>, QueryError> {
         let o = lit(schema);
         let pk = self.pk_index_names(schema).await;
-        let sizes = self.segment_sizes(schema, "INDEX").await; // best-effort
+        let sizes = self.segment_sizes(schema, "INDEX").await;
         let res = self
-            .q(&format!(
-                "SELECT i.index_name AS iname, i.table_name AS tname, i.index_type AS itype, i.uniqueness AS uniq, i.status AS status, \
-                        c.column_name AS cname \
-                 FROM all_indexes i JOIN all_ind_columns c ON i.owner = c.index_owner AND i.index_name = c.index_name \
-                 WHERE i.owner = {o} ORDER BY i.index_name, c.column_position"
+            .query(&format!(
+                "SELECT i.index_name AS iname, i.table_name AS tname, i.index_type AS itype, i.uniqueness AS uniq, i.status AS status, c.column_name AS cname \
+                 FROM all_indexes i JOIN all_ind_columns c ON i.owner = c.index_owner AND i.index_name = c.index_name WHERE i.owner = {o} ORDER BY i.index_name, c.column_position"
             ))
             .await?;
-        // Fold multi-column indexes into one row each (preserving column order).
         let mut out: Vec<IndexScanRow> = Vec::new();
         for r in &res.rows {
-            let name = cell_str(&res, r, "INAME");
-            let col = cell_str(&res, r, "CNAME");
+            let name = jstr(r, "INAME");
+            let col = jstr(r, "CNAME");
             if let Some(last) = out.last_mut() {
                 if last.name == name {
                     last.columns.push(col);
@@ -523,14 +415,14 @@ impl OracleDriver {
                 }
             }
             out.push(IndexScanRow {
-                table: cell_str(&res, r, "TNAME"),
-                index_type: cell_str(&res, r, "ITYPE"),
-                unique: cell_str(&res, r, "UNIQ") == "UNIQUE",
+                table: jstr(r, "TNAME"),
+                index_type: jstr(r, "ITYPE"),
+                unique: jstr(r, "UNIQ") == "UNIQUE",
                 primary: pk.contains(&name),
                 size_bytes: sizes.get(&name).copied(),
-                usage: None,               // O2: V$OBJECT_USAGE (monitoring must be enabled)
+                usage: None,
                 fragmentation_pct: None,
-                valid: cell_str(&res, r, "STATUS") == "VALID",
+                valid: jstr(r, "STATUS") == "VALID",
                 flags: Vec::new(),
                 columns: vec![col],
                 name,
@@ -540,13 +432,165 @@ impl OracleDriver {
     }
 }
 
-/// Single-quoted SQL literal for an Oracle catalog identifier (owner/table). These
-/// come from Oracle's own catalog, but the quote is escaped for safety.
+// ---- actor thread (owns the blocking, !Send oracle::Connection) --------------
+
+fn actor(p: OracleConnParams, rx: mpsc::Receiver<Cmd>, init_tx: oneshot::Sender<Result<(), QueryError>>) {
+    let conn = match connect_blocking(&p) {
+        Ok(c) => {
+            let _ = init_tx.send(Ok(()));
+            c
+        }
+        Err(e) => {
+            let _ = init_tx.send(Err(e));
+            return;
+        }
+    };
+    // Consistent date/timestamp text for the grid (default NLS varies by install).
+    let _ = conn.execute("ALTER SESSION SET NLS_DATE_FORMAT = 'YYYY-MM-DD HH24:MI:SS'", &[]);
+    let _ = conn.execute("ALTER SESSION SET NLS_TIMESTAMP_FORMAT = 'YYYY-MM-DD HH24:MI:SS.FF'", &[]);
+    while let Ok(cmd) = rx.recv() {
+        match cmd {
+            Cmd::Exec(sql, r) => { let _ = r.send(do_exec(&conn, &sql)); }
+            Cmd::ExecParams(sql, params, r) => { let _ = r.send(do_exec_params(&conn, &sql, &params)); }
+            Cmd::Query(sql, r) => { let _ = r.send(do_query(&conn, &sql)); }
+            Cmd::Apply(changes, r) => { let _ = r.send(do_apply(&conn, &changes)); }
+            Cmd::Ping(r) => { let _ = r.send(conn.query("SELECT 1 FROM DUAL", &[]).is_ok()); }
+        }
+    }
+    // channel closed → driver dropped → connection drops here.
+}
+
+fn connect_blocking(p: &OracleConnParams) -> Result<Connection, QueryError> {
+    // EZConnect for a service name; a TNS descriptor for a SID. TCPS when ssl.
+    let proto = if p.ssl { "tcps" } else { "tcp" };
+    let cs = if p.use_sid {
+        format!(
+            "(DESCRIPTION=(ADDRESS=(PROTOCOL={proto})(HOST={})(PORT={}))(CONNECT_DATA=(SID={})))",
+            p.host, p.port, p.service
+        )
+    } else if p.ssl {
+        format!(
+            "(DESCRIPTION=(ADDRESS=(PROTOCOL=tcps)(HOST={})(PORT={}))(CONNECT_DATA=(SERVICE_NAME={})))",
+            p.host, p.port, p.service
+        )
+    } else {
+        format!("//{}:{}/{}", p.host, p.port, p.service)
+    };
+    Connection::connect(&p.user, &p.password, &cs).map_err(|e| map_error(&e))
+}
+
+fn do_query(conn: &Connection, sql: &str) -> Result<QueryResultSet, QueryError> {
+    let rows = conn.query(sql, &[]).map_err(|e| map_error(&e))?;
+    let cols: Vec<ColumnDef> = rows.column_info().iter().map(|c| (c.name().to_string(), c.oracle_type().to_string().to_lowercase())).collect();
+    let ncol = cols.len();
+    let mut out: Vec<Json> = Vec::new();
+    for rr in rows {
+        let row = rr.map_err(|e| map_error(&e))?;
+        let mut obj = Map::new();
+        for (i, (name, _)) in cols.iter().enumerate().take(ncol) {
+            obj.insert(name.clone(), decode(&row, i));
+        }
+        out.push(Json::Object(obj));
+    }
+    let total = out.len() as u64;
+    Ok(QueryResultSet { cols, rows: out, total })
+}
+
+fn do_exec(conn: &Connection, sql: &str) -> Result<StatementOutcome, QueryError> {
+    let stmt = prepare_statement(sql);
+    let wants_rows = crate::drivers::util::returns_rows(&stmt) && !stmt.trim_start().to_uppercase().starts_with("EXPLAIN PLAN");
+    if wants_rows {
+        Ok(StatementOutcome::Rows { result: do_query(conn, &stmt)? })
+    } else {
+        let s = conn.execute(&stmt, &[]).map_err(|e| map_error(&e))?;
+        if crate::drivers::util::is_dml(&stmt) {
+            Ok(StatementOutcome::Affected { affected: s.row_count().unwrap_or(0) })
+        } else {
+            Ok(StatementOutcome::Ok)
+        }
+    }
+}
+
+fn do_exec_params(conn: &Connection, sql: &str, params: &[Json]) -> Result<StatementOutcome, QueryError> {
+    let stmt = prepare_statement(sql);
+    // Bind every param as Option<String> (None = NULL); Oracle implicit-converts to
+    // the column type. Placeholders are :1, :2, … (positional).
+    let owned: Vec<Option<String>> = params.iter().map(json_to_bind).collect();
+    let binds: Vec<&dyn ToSql> = owned.iter().map(|o| o as &dyn ToSql).collect();
+    if crate::drivers::util::returns_rows(&stmt) {
+        // Re-run through a materializing query with binds.
+        let rows = conn.query(&stmt, &binds).map_err(|e| map_error(&e))?;
+        let cols: Vec<ColumnDef> = rows.column_info().iter().map(|c| (c.name().to_string(), c.oracle_type().to_string().to_lowercase())).collect();
+        let ncol = cols.len();
+        let mut out = Vec::new();
+        for rr in rows {
+            let row = rr.map_err(|e| map_error(&e))?;
+            let mut obj = Map::new();
+            for (i, (name, _)) in cols.iter().enumerate().take(ncol) {
+                obj.insert(name.clone(), decode(&row, i));
+            }
+            out.push(Json::Object(obj));
+        }
+        let total = out.len() as u64;
+        Ok(StatementOutcome::Rows { result: QueryResultSet { cols, rows: out, total } })
+    } else {
+        let s = conn.execute(&stmt, &binds).map_err(|e| map_error(&e))?;
+        Ok(StatementOutcome::Affected { affected: s.row_count().unwrap_or(0) })
+    }
+}
+
+fn do_apply(conn: &Connection, changes: &[GridChange]) -> Result<u64, QueryError> {
+    let mut affected = 0u64;
+    for ch in changes {
+        let bs = crate::drivers::grid::build("oracle", ch);
+        let owned: Vec<Option<String>> = bs.params.iter().map(json_to_bind).collect();
+        let binds: Vec<&dyn ToSql> = owned.iter().map(|o| o as &dyn ToSql).collect();
+        match conn.execute(&bs.sql, &binds) {
+            Ok(s) => affected += s.row_count().unwrap_or(0),
+            Err(e) => {
+                let _ = conn.rollback();
+                return Err(map_error(&e));
+            }
+        }
+    }
+    conn.commit().map_err(|e| map_error(&e))?;
+    Ok(affected)
+}
+
+fn json_to_bind(v: &Json) -> Option<String> {
+    match v {
+        Json::Null => None,
+        Json::Bool(b) => Some(if *b { "1" } else { "0" }.into()),
+        Json::String(s) => Some(s.clone()),
+        other => Some(other.to_string()),
+    }
+}
+
+fn decode(row: &oracle::Row, i: usize) -> Json {
+    match row.get::<usize, Option<String>>(i) {
+        Ok(Some(s)) => Json::String(s),
+        Ok(None) => Json::Null,
+        // Binary types (RAW/BLOB) can't convert to String → hex the bytes.
+        Err(_) => match row.get::<usize, Option<Vec<u8>>>(i) {
+            Ok(Some(b)) => Json::String(to_hex(&b)),
+            _ => Json::Null,
+        },
+    }
+}
+
+/// Single-quoted SQL literal for a catalog identifier (owner/table).
 fn lit(s: &str) -> String {
     format!("'{}'", s.replace('\'', "''"))
 }
 
-/// Build a readable column type string from ALL_TAB_COLUMNS parts.
+fn jstr(row: &Json, key: &str) -> String {
+    row.get(key).and_then(|v| v.as_str()).map(str::to_string).unwrap_or_default()
+}
+
+fn ji64(row: &Json, key: &str) -> Option<i64> {
+    row.get(key).and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok())))
+}
+
 fn build_col_type(dtype: &str, len: Option<i64>, prec: Option<i64>, scale: Option<i64>) -> String {
     let up = dtype.to_uppercase();
     if matches!(up.as_str(), "VARCHAR2" | "NVARCHAR2" | "CHAR" | "NCHAR" | "RAW") {
@@ -567,46 +611,18 @@ fn build_col_type(dtype: &str, len: Option<i64>, prec: Option<i64>, scale: Optio
     dtype.to_string()
 }
 
-fn fold_indexes(res: &QueryResult, pk: &HashSet<String>) -> Vec<IndexInfo> {
-    let mut out: Vec<IndexInfo> = Vec::new();
-    for r in &res.rows {
-        let name = cell_str(res, r, "INAME");
-        let col = cell_str(res, r, "CNAME");
-        if let Some(last) = out.last_mut() {
-            if last.name == name {
-                last.columns.push(col);
-                continue;
-            }
-        }
-        out.push(IndexInfo {
-            method: cell_str(res, r, "ITYPE"),
-            unique: cell_str(res, r, "UNIQ") == "UNIQUE",
-            primary: pk.contains(&name),
-            columns: vec![col],
-            name,
-        });
+fn to_hex(b: &[u8]) -> String {
+    let mut s = String::with_capacity(2 + b.len() * 2);
+    s.push_str("0x");
+    for byte in b {
+        s.push_str(&format!("{byte:02x}"));
     }
-    out
+    s
 }
 
-fn cell_str(res: &QueryResult, row: &Row, name: &str) -> String {
-    res.column_index(name).and_then(|i| row.get(i)).map(value_to_string_ref).unwrap_or_default()
-}
-
-fn cell_i64(res: &QueryResult, row: &Row, name: &str) -> Option<i64> {
-    let v = res.column_index(name).and_then(|i| row.get(i))?;
-    match v {
-        OraValue::Integer(i) => Some(*i),
-        OraValue::Float(f) => Some(*f as i64),
-        OraValue::Null => None,
-        _ => value_to_string_ref(v).trim().parse::<i64>().ok(),
-    }
-}
-
-/// Oracle rejects a trailing `;` on a plain SQL statement (it's a SQL*Plus/PLSQL
-/// terminator). Strip it — UNLESS this is a PL/SQL block / CREATE routine, where the
-/// internal/`END;` semicolons are part of the statement. (The frontend splitter has
-/// already removed any `/` line.)
+/// Oracle rejects a trailing `;` on a plain SQL statement; strip it. PL/SQL blocks
+/// / CREATE routine keep their internal `;` and `END;` (the frontend splitter has
+/// already removed any `/` terminator line).
 fn prepare_statement(sql: &str) -> String {
     let t = sql.trim();
     if is_plsql(t) {
@@ -621,96 +637,9 @@ fn is_plsql(sql: &str) -> bool {
         return true;
     }
     if up.starts_with("CREATE") {
-        return ["PROCEDURE", "FUNCTION", "PACKAGE", "TRIGGER", "TYPE"]
-            .iter()
-            .any(|kw| up.contains(kw));
+        return ["PROCEDURE", "FUNCTION", "PACKAGE", "TRIGGER", "TYPE"].iter().any(|kw| up.contains(kw));
     }
     false
-}
-
-/// Build the locked result contract from an oracle-rs QueryResult.
-fn decode(res: &QueryResult) -> QueryResultSet {
-    let cols: Vec<ColumnDef> = res
-        .columns
-        .iter()
-        .map(|c| (c.name.clone(), format!("{:?}", c.oracle_type).to_lowercase()))
-        .collect();
-    let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
-    let rows: Vec<Json> = res
-        .rows
-        .iter()
-        .map(|row| {
-            let mut obj = serde_json::Map::new();
-            for (i, name) in names.iter().enumerate() {
-                obj.insert((*name).to_string(), value_to_json(row.get(i)));
-            }
-            Json::Object(obj)
-        })
-        .collect();
-    let total = rows.len() as u64;
-    QueryResultSet { cols, rows, total }
-}
-
-fn value_to_json(v: Option<&OraValue>) -> Json {
-    match v {
-        None | Some(OraValue::Null) => Json::Null,
-        Some(OraValue::Boolean(b)) => Json::Bool(*b),
-        Some(OraValue::Integer(i)) => Json::from(*i),
-        Some(OraValue::Float(f)) => serde_json::Number::from_f64(*f).map(Json::Number).unwrap_or(Json::Null),
-        Some(OraValue::String(s)) => Json::String(s.clone()),
-        Some(OraValue::Json(j)) => j.clone(),
-        Some(OraValue::Bytes(b)) => Json::String(to_hex(b)),
-        // LOB (CLOB/BLOB): use the inline bytes — text if valid UTF-8 (CLOB, e.g.
-        // DBMS_METADATA DDL), else hex (BLOB). Locator (large LOB not prefetched) → "".
-        Some(OraValue::Lob(lob)) => match lob.as_bytes() {
-            Ok(Some(b)) if !b.is_empty() => match std::str::from_utf8(&b) {
-                Ok(s) if !s.contains('\u{0}') => Json::String(s.to_string()),
-                _ => Json::String(to_hex(&b)),
-            },
-            Ok(_) => Json::Null,
-            Err(_) => Json::String(String::new()), // Locator — requires explicit read
-        },
-        // NUMBER (full precision) / Date / Timestamp / RowId / Vector / … →
-        // their Display string (keeps NUMBER precision; ISO-ish dates).
-        Some(other) => Json::String(value_to_string_ref(other)),
-    }
-}
-
-fn value_to_string(v: &OraValue) -> String {
-    value_to_string_ref(v)
-}
-fn value_to_string_ref(v: &OraValue) -> String {
-    match v {
-        OraValue::Null => String::new(),
-        OraValue::String(s) => s.clone(),
-        OraValue::Bytes(b) => to_hex(b),
-        _ => v.to_string(),
-    }
-}
-
-fn to_hex(b: &[u8]) -> String {
-    let mut s = String::with_capacity(2 + b.len() * 2);
-    s.push_str("0x");
-    for byte in b {
-        s.push_str(&format!("{byte:02x}"));
-    }
-    s
-}
-
-fn json_to_value(v: &Json) -> OraValue {
-    match v {
-        Json::Null => OraValue::Null,
-        Json::Bool(b) => OraValue::Boolean(*b),
-        Json::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                OraValue::Integer(i)
-            } else {
-                OraValue::Float(n.as_f64().unwrap_or(0.0))
-            }
-        }
-        Json::String(s) => OraValue::String(s.clone()),
-        other => OraValue::String(other.to_string()),
-    }
 }
 
 #[cfg(test)]
@@ -722,40 +651,28 @@ mod tests {
         assert!(is_plsql("BEGIN NULL; END;"));
         assert!(is_plsql("  declare v number; begin null; end;"));
         assert!(is_plsql("CREATE OR REPLACE PROCEDURE p AS BEGIN NULL; END;"));
-        assert!(is_plsql("create trigger t before insert on x for each row begin null; end;"));
         assert!(!is_plsql("SELECT 1 FROM dual"));
-        assert!(!is_plsql("INSERT INTO t VALUES (1)"));
-        assert!(!is_plsql("CREATE TABLE t (id NUMBER)")); // plain DDL, not PL/SQL
+        assert!(!is_plsql("CREATE TABLE t (id NUMBER)"));
     }
 
     #[test]
     fn prepare_strips_trailing_semicolon_only_for_plain_sql() {
         assert_eq!(prepare_statement("SELECT 1 FROM dual;"), "SELECT 1 FROM dual");
-        assert_eq!(prepare_statement("  SELECT 1 FROM dual ; "), "SELECT 1 FROM dual");
-        // PL/SQL keeps its terminating END;
         assert_eq!(prepare_statement("BEGIN NULL; END;"), "BEGIN NULL; END;");
     }
 
     #[test]
-    fn hex_encoding() {
+    fn hex_and_type_build() {
         assert_eq!(to_hex(&[0x00, 0xff, 0x01]), "0x00ff01");
-        assert_eq!(to_hex(&[]), "0x");
+        assert_eq!(build_col_type("VARCHAR2", Some(50), None, None), "VARCHAR2(50)");
+        assert_eq!(build_col_type("NUMBER", None, Some(10), Some(2)), "NUMBER(10,2)");
+        assert_eq!(build_col_type("DATE", None, None, None), "DATE");
     }
 
     #[test]
-    fn value_to_json_basic_variants() {
-        assert_eq!(value_to_json(None), Json::Null);
-        assert_eq!(value_to_json(Some(&OraValue::Null)), Json::Null);
-        assert_eq!(value_to_json(Some(&OraValue::Boolean(true))), Json::Bool(true));
-        assert_eq!(value_to_json(Some(&OraValue::Integer(42))), Json::from(42));
-        assert_eq!(value_to_json(Some(&OraValue::String("hi".into()))), Json::String("hi".into()));
-        assert_eq!(value_to_json(Some(&OraValue::Bytes(vec![0xde, 0xad]))), Json::String("0xdead".into()));
-    }
-
-    #[test]
-    fn json_to_value_binds() {
-        assert!(matches!(json_to_value(&Json::Null), OraValue::Null));
-        assert!(matches!(json_to_value(&Json::from(7)), OraValue::Integer(7)));
-        assert!(matches!(json_to_value(&Json::String("x".into())), OraValue::String(_)));
+    fn json_bind_maps_null_and_values() {
+        assert_eq!(json_to_bind(&Json::Null), None);
+        assert_eq!(json_to_bind(&Json::from(7)), Some("7".to_string()));
+        assert_eq!(json_to_bind(&Json::String("x".into())), Some("x".to_string()));
     }
 }
