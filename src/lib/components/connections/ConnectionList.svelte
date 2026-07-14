@@ -336,7 +336,7 @@
     <ContextMenu.Root>
       <ContextMenu.Trigger>
         <div class="hoverable" onclick={() => (myDbOpen = !myDbOpen)} onkeydown={(e) => e.key === 'Enter' && (myDbOpen = !myDbOpen)} role="button" tabindex="0" style="display:flex;align-items:center;gap:var(--px-7);padding:var(--px-5) var(--px-6);border-radius:var(--px-6);cursor:pointer">
-          <span class="mono" style="width:var(--px-12);text-align:center;font-size:var(--px-12);color:var(--muted)">{myDbOpen ? '▾' : '▸'}</span>
+          <span class="mono" style="width:var(--px-16);text-align:center;font-size:var(--px-16);color:var(--text2)">{myDbOpen ? '▾' : '▸'}</span>
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--muted)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path></svg>
           <span style="font-size:var(--px-11_5);font-weight:700">My Databases</span>
           <span class="mono" style="margin-left:auto;font-size:var(--px-10);color:var(--muted)">{connections.profiles.length}</span>
@@ -362,7 +362,7 @@
           <!-- nhóm theo folder (group field) — Section 8 -->
           {#each folders as folder (folder.name)}
             <div class="hoverable" onclick={() => toggleGroup(`folder:${folder.name}`)} onkeydown={(e) => e.key === 'Enter' && toggleGroup(`folder:${folder.name}`)} role="button" tabindex="0" style="display:flex;align-items:center;gap:var(--px-7);padding:var(--px-8) var(--px-8) var(--px-4) var(--px-4);cursor:pointer">
-              <span class="mono" style="width:var(--px-12);text-align:center;font-size:var(--px-12);color:var(--muted)">{collapsed.has(`folder:${folder.name}`) ? '▸' : '▾'}</span>
+              <span class="mono" style="width:var(--px-16);text-align:center;font-size:var(--px-16);color:var(--text2)">{collapsed.has(`folder:${folder.name}`) ? '▸' : '▾'}</span>
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--muted)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path></svg>
               <span style="font-size:var(--px-10);font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--muted)">{folder.name}</span>
               <span class="mono" style="margin-left:auto;font-size:var(--px-10);color:var(--muted)">{folder.items.length}</span>
@@ -380,7 +380,7 @@
               <div style="font-size:var(--px-9_5);font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);padding:var(--px-9) var(--px-12) var(--px-2) var(--px-4)">{group.category}</div>
             {/if}
             <div class="hoverable" onclick={() => toggleGroup(group.system)} onkeydown={(e) => e.key === 'Enter' && toggleGroup(group.system)} role="button" tabindex="0" style="display:flex;align-items:center;gap:var(--px-7);padding:var(--px-8) var(--px-8) var(--px-4) var(--px-4);cursor:pointer">
-              <span class="mono" style="width:var(--px-12);text-align:center;font-size:var(--px-12);color:var(--muted)">{collapsed.has(group.system) ? '▸' : '▾'}</span>
+              <span class="mono" style="width:var(--px-16);text-align:center;font-size:var(--px-16);color:var(--text2)">{collapsed.has(group.system) ? '▸' : '▾'}</span>
               <span style="display:flex;align-items:center;flex:none"><SystemIcon system={group.system} size={16} /></span>
               <span style="font-size:var(--px-10);font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--muted)">{systemMeta(group.system).label}</span>
               <span class="mono" style="margin-left:auto;font-size:var(--px-10);color:var(--muted)">{group.items.length}</span>

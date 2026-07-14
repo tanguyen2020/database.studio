@@ -1086,7 +1086,7 @@
         class="mono"
         role={p.expandable ? 'button' : undefined}
         onclick={(e) => { if (p.expandable) { e.stopPropagation(); treeSel = p.key; p.onClick?.() } }}
-        style="flex:none;width:var(--px-10);text-align:center;font-size:var(--px-9);color:var(--muted);cursor:{p.expandable ? 'pointer' : 'default'}"
+        style="flex:none;width:var(--px-16);text-align:center;font-size:var(--px-16);color:var(--text2);cursor:{p.expandable ? 'pointer' : 'default'}"
       >{p.expandable ? (expanded.has(p.key) ? '▾' : '▸') : ''}</span>
       <span class="mono" style="flex:none;width:var(--px-15);display:flex;align-items:center;justify-content:center;font-size:var(--px-12);color:{p.color}">{#if p.svg}{@html p.svg}{:else}{p.glyph}{/if}</span>
       <span class="mono" style="font-size:var(--px-12_5);font-weight:{p.head ? 700 : 500};color:{p.nameColor ?? (sel || p.head ? 'var(--text)' : 'var(--text2)')};overflow:hidden;text-overflow:ellipsis">{p.name}</span>
