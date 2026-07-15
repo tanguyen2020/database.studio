@@ -810,7 +810,7 @@
         onkeydown={(e) => e.key === 'Enter' && profile && connections.connect(profile.id)}
         role="button"
         tabindex="0"
-        style="margin-left:auto;color:var(--primary);cursor:pointer"
+        style="margin-left:auto;color:var(--error);font-weight:700;cursor:pointer"
       >Reconnect</div>
     </div>
   {/if}
@@ -882,6 +882,7 @@
           options={dbOptions}
           placeholder="(database)"
           title="Database"
+          legible
           onChange={(v) => v && pickDatabase(v)}
         />
       </div>
@@ -897,6 +898,7 @@
           options={schemaOptions}
           placeholder="(schema)"
           title="Schema"
+          legible
           onChange={(v) => v && pickSchema(v)}
         />
       </div>

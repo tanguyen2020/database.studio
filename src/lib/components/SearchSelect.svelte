@@ -12,10 +12,15 @@
     placeholder?: string
     title?: string
     disabled?: boolean
+    /** legible mode: sans-serif UI font, larger + medium weight (for name pickers
+     *  like database/schema where monospace reads poorly). Default keeps `.mono`. */
+    legible?: boolean
     /** called when the user picks an option (for one-way / optional-field usage) */
     onChange?: (v: string | null) => void
   }
-  let { value = $bindable(), options, placeholder = 'Select…', title = '', disabled = false, onChange }: Props = $props()
+  let { value = $bindable(), options, placeholder = 'Select…', title = '', disabled = false, legible = false, onChange }: Props = $props()
+
+  const textFont = $derived(legible ? 'font-size:var(--px-13);font-weight:500' : 'font-size:var(--px-12)')
 
   let open = $state(false)
   let query = $state('')
@@ -100,7 +105,7 @@
 <span style="position:relative;display:inline-flex;align-items:center">
   <input
     bind:this={inputEl}
-    class="mono"
+    class={legible ? '' : 'mono'}
     {title}
     {disabled}
     value={open ? query : selectedLabel}
@@ -110,7 +115,7 @@
     onclick={openMenu}
     onkeydown={onKey}
     spellcheck="false"
-    style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-7);padding:var(--px-5) var(--px-22) var(--px-5) var(--px-10);font-size:var(--px-12);color:var(--text);outline:none;cursor:pointer;min-width:var(--px-150)"
+    style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-7);padding:var(--px-5) var(--px-22) var(--px-5) var(--px-10);{textFont};color:var(--text);outline:none;cursor:pointer;min-width:var(--px-150)"
   />
   <span class="mono" style="position:absolute;right:var(--px-7);color:var(--muted);font-size:var(--px-9);pointer-events:none">▾</span>
   {#if open && filtered.length}
@@ -123,13 +128,13 @@
     >
       {#each filtered as o, i (o.value ?? o.label)}
         <div
-          class="mono"
+          class={legible ? '' : 'mono'}
           role="option"
           aria-selected={o.value === value}
           tabindex="-1"
           onmousedown={(e) => { e.preventDefault(); choose(o) }}
           onmouseenter={() => (active = i)}
-          style="padding:var(--px-5) var(--px-12);font-size:var(--px-12);cursor:pointer;white-space:nowrap;color:var(--text);background:{i === active ? 'var(--hover)' : o.value === value ? 'var(--panel)' : 'transparent'}"
+          style="padding:var(--px-5) var(--px-12);{textFont};cursor:pointer;white-space:nowrap;color:var(--text);background:{i === active ? 'var(--hover)' : o.value === value ? 'var(--panel)' : 'transparent'}"
         >{o.label}</div>
       {/each}
     </div>
