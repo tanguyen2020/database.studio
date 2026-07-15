@@ -73,6 +73,11 @@ jobs:
           workspaces: src-tauri
 
       # Tauri v2 Linux prerequisites (WebKitGTK 4.1 + GTK3 + tray + AppImage tools).
+      # libcurl4-openssl-dev provides curl/curl.h: librdkafka 2.12.1's rdkafka_conf.c
+      # includes it under a buggy `#ifdef WITH_OAUTHBEARER_OIDC` (config.h uses
+      # #cmakedefine01, so the macro is always *defined* → the #include is always
+      # compiled even though the curl-using code, gated by `#if WITH_CURL`==0, is
+      # not). Only the header is needed; nothing links against libcurl.
       - name: Install Linux build dependencies
         if: matrix.os == 'ubuntu-latest'
         run: |
@@ -82,6 +87,7 @@ jobs:
             libgtk-3-dev \
             librsvg2-dev \
             libayatana-appindicator3-dev \
+            libcurl4-openssl-dev \
             patchelf \
             build-essential \
             file
