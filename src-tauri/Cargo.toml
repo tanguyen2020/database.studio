@@ -46,8 +46,12 @@ rusqlite = { version = "0.32", features = ["bundled", "backup", "column_decltype
 russh = { version = "0.54", default-features = false, features = ["ring", "flate2", "rsa"] }
 
 # Security: password encryption + OS keychain
+# NOTE: keyring is declared per-target below (`[target.…dependencies]`) so each
+# OS compiles its NATIVE backend. Without a native backend keyring 3.x silently
+# falls back to an in-memory MOCK store → the master key is never persisted →
+# every launch derives a fresh key → AES-GCM decrypt of stored passwords fails
+# with `aead::Error`. (Was Windows-only before, which broke macOS/Linux.)
 aes-gcm = "0.10"
-keyring = { version = "3", features = ["windows-native"] }
 rand = "0.8"
 base64 = "0.22"
 
@@ -108,6 +112,18 @@ rust_decimal = "1"
 bigdecimal = "0.4"
 regex = "1"
 dirs = "5"
+
+# OS keychain — native backend per platform (see NOTE by `aes-gcm` above).
+[target.'cfg(windows)'.dependencies]
+keyring = { version = "3", features = ["windows-native"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3", features = ["apple-native"] }
+
+# Linux: persistent Secret Service (GNOME Keyring / KWallet) via D-Bus.
+# `crypto-rust` keeps the session encryption pure-Rust (no OpenSSL system dep on CI).
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3", features = ["sync-secret-service", "crypto-rust"] }
 
 [dev-dependencies]
 # Integration test: container tự bật/tắt cho từng hệ (không phụ thuộc DB cài sẵn)

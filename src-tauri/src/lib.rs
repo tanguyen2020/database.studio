@@ -33,6 +33,9 @@ pub fn run() {
                 .path()
                 .app_data_dir()
                 .expect("cannot resolve app data dir");
+            // File-based fallback for the encryption master key (durable even
+            // when the OS keychain is unavailable, e.g. an unsigned macOS build).
+            crate::storage::crypto::set_key_dir(data_dir.clone());
             let storage = Storage::open(data_dir)?;
             app.manage(AppState {
                 storage,
