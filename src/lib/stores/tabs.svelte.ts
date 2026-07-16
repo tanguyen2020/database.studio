@@ -461,6 +461,35 @@ class TabsStore {
     return tab
   }
 
+  /** Open the User Manager tab (singleton per connection). `focus` optionally
+   *  preselects a principal so double-clicking a tree node lands on it. */
+  openUserManager(connectionId: string, focus?: string): TabState {
+    const existing = this.tabs.find(
+      (t) => t.contentType === 'user-manager' && t.connectionId === connectionId,
+    )
+    if (existing) {
+      if (focus) existing.state = { ...existing.state, focus }
+      this.activeTabId = existing.id
+      return existing
+    }
+    const profile = connections.byId(connectionId)
+    const tab: TabState = {
+      id: uuid(),
+      connectionId,
+      connectionName: profile?.name ?? '',
+      systemType: (profile?.system as SystemType) ?? 'orphan',
+      contentType: 'user-manager',
+      title: `Users · ${profile?.name ?? ''}`,
+      isPinned: false,
+      isDirty: false,
+      state: focus ? { focus } : {},
+    }
+    this.tabs.push(tab)
+    this.activeTabId = tab.id
+    this.schedulePersist()
+    return tab
+  }
+
   /** Mở tab Schema Compare (singleton). `opts` presets source/target — pass the
    *  same connection for both (with different databases picked in the UI) to
    *  compare two databases within one connection. `presetTick` lets the reused

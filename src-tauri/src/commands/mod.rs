@@ -17,3 +17,4 @@ pub mod redis;
 pub mod schema;
 pub mod sqlite;
 pub mod tabs;
+pub mod users_admin;

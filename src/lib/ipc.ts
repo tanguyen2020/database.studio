@@ -590,6 +590,16 @@ export const adminView = (connId: string, view: string) =>
 export const killSession = (connId: string, pid: number) =>
   invoke<null>('kill_session', { connId, pid })
 
+// ---- Users / Roles & Privileges (User Manager) -----------------------------
+// Read-side introspection: per (system, view) → result set. `arg` = principal
+// name for per-user views (SHOW GRANTS FOR, dba_role_privs WHERE grantee, …).
+export const usersView = (connId: string, view: string, arg?: string) =>
+  invoke<{ cols: [string, string][]; rows: Record<string, unknown>[]; total: number }>('users_view', {
+    connId,
+    view,
+    arg: arg ?? null,
+  })
+
 // ---- Query Plan Visualizer (Phase 5 · T1) ----------------------------------
 
 export interface PlanNode {

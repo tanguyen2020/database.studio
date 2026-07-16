@@ -170,6 +170,7 @@ pub fn run() {
             commands::backup::restore_database,
             commands::admin::admin_view,
             commands::admin::kill_session,
+            commands::users_admin::users_view,
             // files
             commands::files::write_text_file,
             commands::files::write_file_base64,

@@ -236,6 +236,7 @@ export type TabContentType =
   | 'index-manager'
   | 'admin'
   | 'objects'
+  | 'user-manager'
 
 export interface TabState {
   id: string

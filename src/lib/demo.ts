@@ -429,6 +429,23 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
     }
     case 'kill_session':
       return ok(null)
+    case 'users_view': {
+      // User Manager (U0 skeleton) — fixture roles/users per view so the shell
+      // and per-engine managers render in the browser/e2e (no real server).
+      const view = String(args?.view ?? 'roles')
+      if (view === 'roles')
+        return ok({ cols: [['name', 'text'], ['rolsuper', 'bool'], ['rolcanlogin', 'bool'], ['rolcreatedb', 'bool'], ['rolcreaterole', 'bool']], rows: [
+          { name: 'postgres', rolsuper: true, rolcanlogin: true, rolcreatedb: true, rolcreaterole: true },
+          { name: 'app_user', rolsuper: false, rolcanlogin: true, rolcreatedb: false, rolcreaterole: false },
+          { name: 'readonly_group', rolsuper: false, rolcanlogin: false, rolcreatedb: false, rolcreaterole: false },
+        ], total: 3 })
+      if (view === 'users')
+        return ok({ cols: [['user', 'text'], ['host', 'text'], ['locked', 'bool']], rows: [
+          { user: 'root', host: 'localhost', locked: false },
+          { user: 'app', host: '%', locked: false },
+        ], total: 2 })
+      return ok({ cols: [] as [string, string][], rows: [] as Record<string, unknown>[], total: 0 })
+    }
     case 'backup_tool_status':
       return ok({ tool: 'pg_dump', available: true })
     case 'backup_database':
