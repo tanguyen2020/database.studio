@@ -50,6 +50,7 @@
   import ExecuteRoutineDialog from '$lib/components/ExecuteRoutineDialog.svelte'
   import ClickHouseCreateDialog from '$lib/components/ClickHouseCreateDialog.svelte'
   import PgCreateRoleDialog from '$lib/components/PgCreateRoleDialog.svelte'
+  import MySqlCreateUserDialog from '$lib/components/MySqlCreateUserDialog.svelte'
   import AddPartitionDialog from '$lib/components/AddPartitionDialog.svelte'
   import TruncateDialog from '$lib/components/TruncateDialog.svelte'
   import NewDatabaseDialog from '$lib/components/NewDatabaseDialog.svelte'
@@ -358,6 +359,7 @@
 <ExecuteRoutineDialog />
 <ClickHouseCreateDialog />
 <PgCreateRoleDialog />
+<MySqlCreateUserDialog />
 <AddPartitionDialog />
 <TruncateDialog />
 <NewDatabaseDialog />

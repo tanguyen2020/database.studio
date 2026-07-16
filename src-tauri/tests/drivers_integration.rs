@@ -512,6 +512,150 @@ async fn mysql_columns_detect_auto_increment() {
     assert!(result.rows.iter().all(|r| !r["id"].is_null()), "AUTO_INCREMENT assigned ids: {:?}", result.rows);
 }
 
+/// U2 — MySQL User Manager, Definition-of-Done (spec §1.9). Runs EXACTLY the
+/// SQL the frontend builders (`src/lib/users/mysql.ts`) produce, over the driver
+/// exec path (TEXT protocol — proving CREATE USER/GRANT do NOT hit error 1295).
+/// 6 steps: create → login as new account → denied → grant db read-only → OK →
+/// write still denied → revoke → denied again → drop.
+#[tokio::test]
+async fn mysql_user_manager_end_to_end() {
+    let c = GenericImage::new("mysql", "8")
+        .with_exposed_port(3306.tcp())
+        .with_env_var("MYSQL_ROOT_PASSWORD", PASS)
+        .with_env_var("MYSQL_DATABASE", "testdb")
+        .start()
+        .await
+        .expect("start mysql container");
+    let port = c.get_host_port_ipv4(3306).await.unwrap();
+    // The admin binds to testdb; the new account connects with NO default
+    // database (a fresh account cannot open testdb until granted) and uses
+    // fully-qualified table names.
+    let mk = |user: &str, password: &str, db: &str| MySqlConnParams {
+        host: "localhost".into(),
+        port,
+        database: db.into(),
+        user: user.into(),
+        password: password.into(),
+        ssl: false,
+        ssl_ca: String::new(),
+        ssl_cert: String::new(),
+        ssl_key: String::new(),
+    };
+    let admin_params = mk("root", PASS, "testdb");
+    let user_params = mk("u_spec", "p'wd", "");
+    let mut admin = retry("mysql", || MySqlDriver::connect(&admin_params, "mysql")).await;
+
+    admin.exec("CREATE TABLE secret (id int PRIMARY KEY, v text)").await.unwrap();
+    admin.exec("INSERT INTO secret VALUES (1,'x'),(2,'y')").await.unwrap();
+
+    // 1. CREATE — exact output of createUser('mysql', {user:'u_spec', host:'%',
+    //    password:"p'wd"}) — default plugin (caching_sha2_password).
+    admin.exec(r#"CREATE USER 'u_spec'@'%' IDENTIFIED BY 'p''wd'"#).await.unwrap();
+
+    // 2. LOGIN as the new account (TEXT-protocol driver path)
+    let mut user = retry("mysql", || MySqlDriver::connect(&user_params, "mysql")).await;
+    let out = user.exec("SELECT 1 AS ok").await.expect("login ok");
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    assert_eq!(result.rows[0]["ok"], serde_json::json!(1));
+
+    // 3. DENIED before grant
+    assert!(user.exec("SELECT * FROM testdb.secret").await.is_err(), "denied before grant");
+
+    // 4. GRANT — exact output of dbPreset('read-only','testdb','u_spec','%')
+    admin.exec("GRANT SELECT ON `testdb`.* TO 'u_spec'@'%'").await.unwrap();
+    // reconnect so the new privileges take effect for the session
+    let mut user = retry("mysql", || MySqlDriver::connect(&user_params, "mysql")).await;
+    let out = user.exec("SELECT count(*) AS n FROM testdb.secret").await.expect("select after grant");
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    assert_eq!(result.rows[0]["n"], serde_json::json!(2));
+
+    // 5. WRITE still denied
+    assert!(user.exec("INSERT INTO testdb.secret VALUES (3,'z')").await.is_err(), "read-only cannot INSERT");
+
+    // 6. REVOKE — exact output of dbPreset('revoke-all','testdb','u_spec','%')
+    admin.exec("REVOKE ALL PRIVILEGES ON `testdb`.* FROM 'u_spec'@'%'").await.unwrap();
+    let mut user = retry("mysql", || MySqlDriver::connect(&user_params, "mysql")).await;
+    assert!(user.exec("SELECT * FROM testdb.secret").await.is_err(), "denied again after revoke");
+
+    admin.exec("DROP USER 'u_spec'@'%'").await.unwrap();
+    let out = admin
+        .exec("SELECT count(*) AS n FROM mysql.user WHERE user = 'u_spec'")
+        .await
+        .unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    assert_eq!(result.rows[0]["n"], serde_json::json!(0), "account gone");
+}
+
+/// U2 — MariaDB variant: same 6-step golden path + prove the `is_role` flag and
+/// `SET DEFAULT ROLE … FOR` (MariaDB-only) grammar actually run.
+#[tokio::test]
+async fn mariadb_user_manager_end_to_end() {
+    let c = GenericImage::new("mariadb", "11")
+        .with_exposed_port(3306.tcp())
+        .with_env_var("MARIADB_ROOT_PASSWORD", PASS)
+        .with_env_var("MARIADB_DATABASE", "testdb")
+        .start()
+        .await
+        .expect("start mariadb container");
+    let port = c.get_host_port_ipv4(3306).await.unwrap();
+    let mk = |user: &str, password: &str, db: &str| MySqlConnParams {
+        host: "localhost".into(),
+        port,
+        database: db.into(),
+        user: user.into(),
+        password: password.into(),
+        ssl: false,
+        ssl_ca: String::new(),
+        ssl_cert: String::new(),
+        ssl_key: String::new(),
+    };
+    let admin_params = mk("root", PASS, "testdb");
+    let user_params = mk("u_spec", "pw", "");
+    let mut admin = retry("mariadb", || MySqlDriver::connect(&admin_params, "mariadb")).await;
+
+    admin.exec("CREATE TABLE secret (id int PRIMARY KEY, v text)").await.unwrap();
+    admin.exec("INSERT INTO secret VALUES (1,'x'),(2,'y')").await.unwrap();
+
+    // 1. CREATE — createUser('mariadb', {user:'u_spec', host:'%', password:'pw'})
+    admin.exec(r#"CREATE USER 'u_spec'@'%' IDENTIFIED BY 'pw'"#).await.unwrap();
+
+    // 2. LOGIN (no default database — fresh account can't open testdb yet)
+    let mut user = retry("mariadb", || MySqlDriver::connect(&user_params, "mariadb")).await;
+    user.exec("SELECT 1 AS ok").await.expect("login ok");
+
+    // 3. denied → 4. grant → OK
+    assert!(user.exec("SELECT * FROM testdb.secret").await.is_err(), "denied before grant");
+    admin.exec("GRANT SELECT ON `testdb`.* TO 'u_spec'@'%'").await.unwrap();
+    let mut user = retry("mariadb", || MySqlDriver::connect(&user_params, "mariadb")).await;
+    let out = user.exec("SELECT count(*) AS n FROM testdb.secret").await.expect("ok after grant");
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    assert_eq!(result.rows[0]["n"], serde_json::json!(2));
+
+    // 5. write denied → 6. revoke → denied
+    assert!(user.exec("INSERT INTO testdb.secret VALUES (3,'z')").await.is_err(), "read-only cannot INSERT");
+    admin.exec("REVOKE ALL PRIVILEGES ON `testdb`.* FROM 'u_spec'@'%'").await.unwrap();
+
+    // MariaDB-specific: is_role flag + roles_mapping + `SET DEFAULT ROLE … FOR`
+    admin.exec("CREATE ROLE 'reader'").await.unwrap();
+    admin.exec("GRANT SELECT ON `testdb`.* TO 'reader'").await.unwrap();
+    admin.exec("GRANT 'reader' TO 'u_spec'@'%'").await.unwrap();
+    admin.exec("SET DEFAULT ROLE 'reader' FOR 'u_spec'@'%'").await.unwrap();
+    let out = admin
+        .exec("SELECT is_role FROM mysql.user WHERE user = 'reader'")
+        .await
+        .unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    assert_eq!(result.rows[0]["is_role"], serde_json::json!("Y"), "reader is flagged is_role=Y");
+    // default role active → the user reads via the role after reconnect
+    let mut user = retry("mariadb", || MySqlDriver::connect(&user_params, "mariadb")).await;
+    let out = user.exec("SELECT count(*) AS n FROM testdb.secret").await.expect("reads via default role");
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    assert_eq!(result.rows[0]["n"], serde_json::json!(2), "default role grants SELECT");
+
+    admin.exec("DROP USER 'u_spec'@'%'").await.unwrap();
+    admin.exec("DROP ROLE 'reader'").await.unwrap();
+}
+
 /// columns() flags a SQL Server IDENTITY column as auto_increment; the generator's
 /// INSERT (identity omitted, bit bool as 1/0) round-trips with server-assigned ids.
 #[tokio::test]

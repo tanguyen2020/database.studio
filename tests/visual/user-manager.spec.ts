@@ -90,3 +90,44 @@ test('user manager: privilege grid preset queues GRANT statements', async ({ pag
 
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
+
+// U2 — MySQL User Manager: account list (user@host), Add Account popup, and the
+// per-database privilege grid whose preset queues the exact backtick GRANT.
+test('user manager: MySQL account list + preset + Add Account popup', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(String(e)))
+  await blockRemoteFonts(page)
+  await page.goto(APP_URL)
+  await page.waitForSelector('#app > *', { timeout: 15_000 })
+  await page.waitForTimeout(300)
+  await page.getByText('localhost:3306', { exact: false }).first().click() // MySQL connection
+  await page.waitForTimeout(500)
+  await page.getByText('public', { exact: true }).first().click()
+  await page.waitForTimeout(200)
+  await page.getByTitle(/Users & privileges: /).click()
+  await page.waitForTimeout(500)
+
+  await expect(page.getByText('Users and Privileges').first()).toBeVisible()
+  await expect(page.getByRole('option', { name: /app@%/ }).first()).toBeVisible()
+
+  // privileges grid: select app@% → apply Read-only on the public database
+  await page.getByRole('option', { name: /app@%/ }).first().click()
+  await page.waitForTimeout(150)
+  await page.getByRole('tab', { name: 'Schema Privileges' }).click()
+  await page.waitForTimeout(200)
+  await page.getByRole('button', { name: 'R', exact: true }).nth(1).click() // row 0 = Global, row 1 = public
+  await page.waitForTimeout(200)
+  await expect(page.getByText(/GRANT SELECT ON `public`\.\* TO 'app'@'%'/).first()).toBeVisible()
+
+  // Add Account → popup (not a tab), host required, live preview
+  const tabsBefore = await page.getByRole('tab').count()
+  await page.getByRole('button', { name: '+ Add Account' }).click()
+  await page.waitForTimeout(300)
+  await expect(page.getByRole('dialog')).toBeVisible()
+  expect(await page.getByRole('tab').count()).toBe(tabsBefore)
+  await page.getByRole('dialog').locator('input').first().fill('spec')
+  await page.waitForTimeout(150)
+  await expect(page.getByText(/CREATE USER 'spec'@'%'/).first()).toBeVisible()
+
+  expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
+})

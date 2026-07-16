@@ -55,7 +55,13 @@ pub fn mysql_account(system: &str, user: &str, host: &str) -> String {
 /// Read SQL for a (system, view). `arg` = principal name for per-user views
 /// (already trusted — quoted by the caller as needed). Returns None if the
 /// view is not applicable to the system.
-pub fn users_query(system: &str, view: &str, _arg: Option<&str>) -> Option<String> {
+pub fn users_query(system: &str, view: &str, arg: Option<&str>) -> Option<String> {
+    // SHOW GRANTS FOR <account> — the account literal ('u'@'h') is built + quoted
+    // by the frontend escaper and passed as `arg` (SHOW GRANTS can't be prepared).
+    if view == "grants_for" && matches!(system, "mysql" | "mariadb") {
+        let acct = arg?;
+        return Some(format!("SHOW GRANTS FOR {acct}"));
+    }
     let sql = match (system, view) {
         // ---- PostgreSQL (U1) --------------------------------------------
         // "users" is an alias of "roles" so the generic shell can request a
@@ -112,6 +118,47 @@ pub fn users_query(system: &str, view: &str, _arg: Option<&str>) -> Option<Strin
         ("postgres", "can_manage") => {
             "SELECT (rolsuper OR rolcreaterole) AS can_manage FROM pg_roles WHERE rolname = current_user"
         }
+
+        // ---- MySQL (U2) -------------------------------------------------
+        ("mysql", "users") => {
+            "SELECT user, host, plugin, account_locked, password_expired, \
+                    CAST(password_last_changed AS CHAR) AS password_last_changed \
+             FROM mysql.user ORDER BY user, host"
+        }
+        ("mysql", "schema_privs") | ("mariadb", "schema_privs") => {
+            "SELECT GRANTEE AS grantee, TABLE_SCHEMA AS table_schema, PRIVILEGE_TYPE AS privilege_type, \
+                    IS_GRANTABLE AS is_grantable \
+             FROM information_schema.SCHEMA_PRIVILEGES ORDER BY GRANTEE, TABLE_SCHEMA"
+        }
+        ("mysql", "table_privs") | ("mariadb", "table_privs") => {
+            "SELECT GRANTEE AS grantee, TABLE_SCHEMA AS table_schema, TABLE_NAME AS table_name, \
+                    PRIVILEGE_TYPE AS privilege_type, IS_GRANTABLE AS is_grantable \
+             FROM information_schema.TABLE_PRIVILEGES ORDER BY GRANTEE, TABLE_SCHEMA, TABLE_NAME"
+        }
+        ("mysql", "global_privs") | ("mariadb", "global_privs") => {
+            "SELECT GRANTEE AS grantee, PRIVILEGE_TYPE AS privilege_type, IS_GRANTABLE AS is_grantable \
+             FROM information_schema.USER_PRIVILEGES ORDER BY GRANTEE, PRIVILEGE_TYPE"
+        }
+        ("mysql", "role_edges") => {
+            "SELECT FROM_USER AS role_user, FROM_HOST AS role_host, TO_USER AS member_user, \
+                    TO_HOST AS member_host, WITH_ADMIN_OPTION AS with_admin_option \
+             FROM mysql.role_edges ORDER BY 1, 3"
+        }
+        ("mysql", "default_roles") | ("mariadb", "default_roles") => {
+            "SELECT USER AS member_user, HOST AS member_host, DEFAULT_ROLE_USER, DEFAULT_ROLE_HOST \
+             FROM mysql.default_roles ORDER BY 1"
+        }
+
+        // ---- MariaDB (U2) — has a real is_role flag + roles_mapping ------
+        ("mariadb", "users") => {
+            "SELECT user, host, plugin, account_locked, password_expired, is_role \
+             FROM mysql.user ORDER BY user, host"
+        }
+        ("mariadb", "roles_mapping") => {
+            "SELECT Host AS member_host, User AS member_user, Role AS role, Admin_option AS admin_option \
+             FROM mysql.roles_mapping ORDER BY Role, User"
+        }
+
         _ => return None,
     };
     Some(sql.to_string())
@@ -196,7 +243,7 @@ mod tests {
         // "users" is an alias of "roles" for PG
         assert_eq!(users_query("postgres", "users", None), users_query("postgres", "roles", None));
         // unsupported (filled in later phases) → None
-        assert!(users_query("mysql", "users", None).is_none());
+        assert!(users_query("clickhouse", "users", None).is_none());
         assert!(users_query("postgres", "nope", None).is_none());
     }
 
@@ -210,5 +257,29 @@ mod tests {
         assert!(users_query("postgres", "schema_owners", None).unwrap().contains("nspowner"));
         assert!(users_query("postgres", "can_manage", None).unwrap().contains("rolcreaterole"));
         assert!(users_query("mysql", "can_manage", None).is_none());
+    }
+
+    #[test]
+    fn users_query_mysql_mariadb() {
+        // MySQL users view (no is_role)
+        let my = users_query("mysql", "users", None).unwrap();
+        assert!(my.contains("mysql.user") && my.contains("account_locked") && !my.contains("is_role"));
+        // MariaDB users view (has is_role)
+        let ma = users_query("mariadb", "users", None).unwrap();
+        assert!(ma.contains("mysql.user") && ma.contains("is_role"));
+        // shared grant catalogs
+        assert!(users_query("mysql", "schema_privs", None).unwrap().contains("SCHEMA_PRIVILEGES"));
+        assert!(users_query("mariadb", "table_privs", None).unwrap().contains("TABLE_PRIVILEGES"));
+        assert!(users_query("mysql", "global_privs", None).unwrap().contains("USER_PRIVILEGES"));
+        // role catalogs differ
+        assert!(users_query("mysql", "role_edges", None).unwrap().contains("mysql.role_edges"));
+        assert!(users_query("mariadb", "roles_mapping", None).unwrap().contains("mysql.roles_mapping"));
+        assert!(users_query("mysql", "roles_mapping", None).is_none());
+        // SHOW GRANTS uses arg
+        assert_eq!(
+            users_query("mysql", "grants_for", Some("'app'@'%'")).unwrap(),
+            "SHOW GRANTS FOR 'app'@'%'",
+        );
+        assert!(users_query("mysql", "grants_for", None).is_none());
     }
 }

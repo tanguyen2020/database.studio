@@ -440,10 +440,29 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
           { name: 'readonly_group', rolsuper: false, rolcanlogin: false, rolcreatedb: false, rolcreaterole: false },
         ], total: 3 })
       if (view === 'users')
-        return ok({ cols: [['user', 'text'], ['host', 'text'], ['locked', 'bool']], rows: [
-          { user: 'root', host: 'localhost', locked: false },
-          { user: 'app', host: '%', locked: false },
-        ], total: 2 })
+        return ok({ cols: [['user', 'text'], ['host', 'text'], ['plugin', 'text'], ['account_locked', 'text'], ['password_expired', 'text'], ['is_role', 'text']], rows: [
+          { user: 'root', host: 'localhost', plugin: 'caching_sha2_password', account_locked: 'N', password_expired: 'N', is_role: 'N' },
+          { user: 'app', host: '%', plugin: 'caching_sha2_password', account_locked: 'N', password_expired: 'N', is_role: 'N' },
+          { user: 'read_only', host: '%', plugin: '', account_locked: 'N', password_expired: 'N', is_role: 'Y' },
+        ], total: 3 })
+      if (view === 'schema_privs')
+        return ok({ cols: [['grantee', 'text'], ['table_schema', 'text'], ['privilege_type', 'text'], ['is_grantable', 'text']], rows: [
+          { grantee: "'app'@'%'", table_schema: 'library_db', privilege_type: 'SELECT', is_grantable: 'NO' },
+        ], total: 1 })
+      if (view === 'table_privs')
+        return ok({ cols: [['grantee', 'text'], ['table_schema', 'text'], ['table_name', 'text'], ['privilege_type', 'text'], ['is_grantable', 'text']], rows: [], total: 0 })
+      if (view === 'global_privs')
+        return ok({ cols: [['grantee', 'text'], ['privilege_type', 'text'], ['is_grantable', 'text']], rows: [
+          { grantee: "'root'@'localhost'", privilege_type: 'ALL PRIVILEGES', is_grantable: 'YES' },
+        ], total: 1 })
+      if (view === 'role_edges')
+        return ok({ cols: [['role_user', 'text'], ['role_host', 'text'], ['member_user', 'text'], ['member_host', 'text'], ['with_admin_option', 'text']], rows: [], total: 0 })
+      if (view === 'roles_mapping')
+        return ok({ cols: [['member_host', 'text'], ['member_user', 'text'], ['role', 'text'], ['admin_option', 'text']], rows: [], total: 0 })
+      if (view === 'default_roles')
+        return ok({ cols: [['member_user', 'text'], ['member_host', 'text'], ['DEFAULT_ROLE_USER', 'text'], ['DEFAULT_ROLE_HOST', 'text']], rows: [], total: 0 })
+      if (view === 'grants_for')
+        return ok({ cols: [['Grants', 'text']], rows: [{ Grants: "GRANT SELECT ON `library_db`.* TO `app`@`%`" }], total: 1 })
       if (view === 'members')
         return ok({ cols: [['role', 'text'], ['member', 'text'], ['admin_option', 'bool'], ['grantor', 'text']], rows: [
           { role: 'readonly_group', member: 'app_user', admin_option: false, grantor: 'postgres' },
