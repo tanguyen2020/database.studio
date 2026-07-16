@@ -10,6 +10,7 @@
   import type { TabState } from '$lib/types'
   import PgUserManager from './users/PgUserManager.svelte'
   import MySqlUserManager from './users/MySqlUserManager.svelte'
+  import MssqlUserManager from './users/MssqlUserManager.svelte'
 
   interface Props {
     tab: TabState
@@ -115,6 +116,8 @@
   <PgUserManager {tab} />
 {:else if tab.systemType === 'mysql' || tab.systemType === 'mariadb'}
   <MySqlUserManager {tab} />
+{:else if tab.systemType === 'mssql'}
+  <MssqlUserManager {tab} />
 {:else}
 <div style="flex:1;display:flex;flex-direction:column;min-height:0">
   <div style="flex:none;display:flex;align-items:center;gap:var(--px-8);padding:var(--px-9) var(--px-14);border-bottom:var(--px-1) solid var(--border);background:var(--surface);flex-wrap:wrap">

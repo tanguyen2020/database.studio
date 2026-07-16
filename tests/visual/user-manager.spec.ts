@@ -91,6 +91,42 @@ test('user manager: privilege grid preset queues GRANT statements', async ({ pag
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
 
+// U3 — MSSQL User Manager: 2-tier Server(Logins)/Database, DENY-capable grid.
+test('user manager: MSSQL server logins + database permission grid', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(String(e)))
+  await blockRemoteFonts(page)
+  await page.goto(APP_URL)
+  await page.waitForSelector('#app > *', { timeout: 15_000 })
+  await page.waitForTimeout(300)
+  await page.getByText('MSSQL', { exact: true }).first().click() // MSSQL connection (c3, disconnected)
+  await page.waitForTimeout(300)
+  await page.getByText('Connect', { exact: true }).first().click() // demo connects
+  await page.waitForTimeout(500)
+  await page.getByText('public', { exact: true }).first().click() // demo schema node
+  await page.waitForTimeout(200)
+  await page.getByTitle(/Users & privileges: /).click()
+  await page.waitForTimeout(500)
+
+  // Server scope: logins list
+  await expect(page.getByRole('option', { name: /app_login/ }).first()).toBeVisible()
+  // New Login button (server scope)
+  await expect(page.getByRole('button', { name: '+ New Login' })).toBeVisible()
+
+  // switch to Database scope → users + permission grid with presets + Deny
+  await page.getByRole('button', { name: 'Database', exact: true }).click()
+  await page.waitForTimeout(400)
+  await expect(page.getByRole('option', { name: /app_user/ }).first()).toBeVisible()
+  await page.getByRole('option', { name: /app_user/ }).first().click()
+  await page.waitForTimeout(150)
+  // apply Deny on the schema → pending shows the DENY statement (DENY wins)
+  await page.getByRole('button', { name: 'Deny', exact: true }).first().click()
+  await page.waitForTimeout(200)
+  await expect(page.getByText(/DENY SELECT, INSERT, UPDATE, DELETE ON SCHEMA::\[public\] TO \[app_user\]/).first()).toBeVisible()
+
+  expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
+})
+
 // U2 — MySQL User Manager: account list (user@host), Add Account popup, and the
 // per-database privilege grid whose preset queues the exact backtick GRANT.
 test('user manager: MySQL account list + preset + Add Account popup', async ({ page }) => {

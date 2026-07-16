@@ -159,6 +159,61 @@ pub fn users_query(system: &str, view: &str, arg: Option<&str>) -> Option<String
              FROM mysql.roles_mapping ORDER BY Role, User"
         }
 
+        // ---- MSSQL (U3) — server-level Logins + database-level Users -----
+        ("mssql", "logins") => {
+            "SELECT p.name, p.type_desc, p.is_disabled, CAST(p.create_date AS varchar(19)) AS create_date, \
+                    p.default_database_name, COALESCE(l.is_policy_checked, 0) AS is_policy_checked \
+             FROM sys.server_principals p LEFT JOIN sys.sql_logins l ON l.principal_id = p.principal_id \
+             WHERE p.type IN ('S','U','G','E','X') AND p.name NOT LIKE '##%' ORDER BY p.name"
+        }
+        ("mssql", "server_roles") => {
+            "SELECT name FROM sys.server_principals WHERE type = 'R' ORDER BY name"
+        }
+        ("mssql", "server_role_members") => {
+            "SELECT r.name AS role, m.name AS member \
+             FROM sys.server_role_members rm \
+             JOIN sys.server_principals r ON r.principal_id = rm.role_principal_id \
+             JOIN sys.server_principals m ON m.principal_id = rm.member_principal_id \
+             ORDER BY r.name, m.name"
+        }
+        ("mssql", "db_users") => {
+            "SELECT dp.name, dp.type_desc, COALESCE(dp.default_schema_name,'') AS default_schema, \
+                    COALESCE(sp.name,'') AS login_name, \
+                    CASE WHEN dp.type = 'S' AND sp.sid IS NULL AND dp.authentication_type <> 0 THEN 1 ELSE 0 END AS orphaned \
+             FROM sys.database_principals dp LEFT JOIN sys.server_principals sp ON sp.sid = dp.sid \
+             WHERE dp.type IN ('S','U','G','E','X') AND dp.name NOT IN ('sys','INFORMATION_SCHEMA','guest') \
+             ORDER BY dp.name"
+        }
+        ("mssql", "db_roles") => {
+            "SELECT name, is_fixed_role FROM sys.database_principals WHERE type = 'R' \
+             ORDER BY is_fixed_role DESC, name"
+        }
+        ("mssql", "db_role_members") => {
+            "SELECT r.name AS role, m.name AS member \
+             FROM sys.database_role_members rm \
+             JOIN sys.database_principals r ON r.principal_id = rm.role_principal_id \
+             JOIN sys.database_principals m ON m.principal_id = rm.member_principal_id \
+             ORDER BY r.name, m.name"
+        }
+        ("mssql", "db_permissions") => {
+            "SELECT pr.name AS principal, pe.state_desc, pe.permission_name, \
+                    CASE pe.class WHEN 0 THEN 'DATABASE' \
+                                  WHEN 1 THEN COALESCE(OBJECT_SCHEMA_NAME(pe.major_id) + '.' + OBJECT_NAME(pe.major_id), '?') \
+                                  WHEN 3 THEN 'SCHEMA::' + SCHEMA_NAME(pe.major_id) \
+                                  ELSE pe.class_desc END AS securable, \
+                    COALESCE(c.name, '') AS column_name \
+             FROM sys.database_permissions pe \
+             JOIN sys.database_principals pr ON pr.principal_id = pe.grantee_principal_id \
+             LEFT JOIN sys.columns c ON pe.class = 1 AND c.object_id = pe.major_id AND c.column_id = pe.minor_id \
+             ORDER BY pr.name, securable"
+        }
+        ("mssql", "server_permissions") => {
+            "SELECT pr.name AS principal, pe.state_desc, pe.permission_name, pe.class_desc \
+             FROM sys.server_permissions pe \
+             JOIN sys.server_principals pr ON pr.principal_id = pe.grantee_principal_id \
+             ORDER BY pr.name"
+        }
+
         _ => return None,
     };
     Some(sql.to_string())
@@ -281,5 +336,18 @@ mod tests {
             "SHOW GRANTS FOR 'app'@'%'",
         );
         assert!(users_query("mysql", "grants_for", None).is_none());
+    }
+
+    #[test]
+    fn users_query_mssql() {
+        assert!(users_query("mssql", "logins", None).unwrap().contains("sys.server_principals"));
+        assert!(users_query("mssql", "server_roles", None).unwrap().contains("type = 'R'"));
+        assert!(users_query("mssql", "db_users", None).unwrap().contains("sys.database_principals") &&
+                users_query("mssql", "db_users", None).unwrap().contains("orphaned"));
+        assert!(users_query("mssql", "db_roles", None).unwrap().contains("is_fixed_role"));
+        assert!(users_query("mssql", "db_role_members", None).unwrap().contains("sys.database_role_members"));
+        let dbp = users_query("mssql", "db_permissions", None).unwrap();
+        assert!(dbp.contains("sys.database_permissions") && dbp.contains("state_desc") && dbp.contains("SCHEMA::"));
+        assert!(users_query("mssql", "server_permissions", None).unwrap().contains("sys.server_permissions"));
     }
 }

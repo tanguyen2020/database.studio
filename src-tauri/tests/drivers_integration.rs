@@ -1636,6 +1636,95 @@ async fn mssql_roundtrip_and_line_error() {
     assert!(err.position.is_some(), "MSSQL line phải map sang position");
 }
 
+/// U3 — MSSQL User Manager, Definition-of-Done (spec §1.9 + §5.4). Two-tier
+/// Login↔User, and DENY overriding a schema GRANT. Runs EXACTLY the SQL the
+/// frontend builders (`src/lib/users/mssql.ts`) produce, over the raw-batch
+/// path (is_raw_batch now covers GRANT/DENY/REVOKE).
+#[tokio::test]
+async fn mssql_user_manager_end_to_end() {
+    let c = GenericImage::new("mcr.microsoft.com/mssql/server", "2022-latest")
+        .with_exposed_port(1433.tcp())
+        .with_env_var("ACCEPT_EULA", "Y")
+        .with_env_var("MSSQL_SA_PASSWORD", MSSQL_PASS)
+        .start()
+        .await
+        .expect("start mssql container");
+    let port = c.get_host_port_ipv4(1433).await.unwrap();
+    let mk = |db: &str, user: &str, password: &str| MssqlConnParams {
+        host: "localhost".into(),
+        port,
+        database: db.into(),
+        user: user.into(),
+        password: password.into(),
+        ssl: false,
+        ssl_ca: String::new(),
+        auth: "sql".into(),
+    };
+    // admin on master → create the app database
+    let admin_params = mk("", "sa", MSSQL_PASS);
+    let mut admin = retry("mssql", || MssqlDriver::connect(&admin_params)).await;
+    admin.exec("CREATE DATABASE appdb").await.unwrap();
+    // admin bound to appdb for database-scoped statements
+    let app_params = mk("appdb", "sa", MSSQL_PASS);
+    let mut app = retry("mssql", || MssqlDriver::connect(&app_params)).await;
+    app.exec("CREATE TABLE dbo.secret (id int PRIMARY KEY, v nvarchar(20))").await.unwrap();
+    app.exec("INSERT INTO dbo.secret VALUES (1, N'x'), (2, N'y')").await.unwrap();
+    app.exec("CREATE TABLE dbo.other (id int PRIMARY KEY)").await.unwrap();
+    app.exec("INSERT INTO dbo.other VALUES (1)").await.unwrap();
+
+    // 1. CREATE LOGIN — exact output of createLogin({name:'u_spec', password, checkPolicy:false})
+    admin
+        .exec("CREATE LOGIN [u_spec] WITH PASSWORD = N'Str0ngPwd!', CHECK_POLICY = OFF")
+        .await
+        .unwrap();
+    // CREATE USER FOR LOGIN (needed to open appdb) — createUser('u_spec','u_spec')
+    app.exec("CREATE USER [u_spec] FOR LOGIN [u_spec]").await.unwrap();
+
+    // 2. LOGIN as the new principal into appdb
+    let user_params = mk("appdb", "u_spec", "Str0ngPwd!");
+    let mut user = retry("mssql", || MssqlDriver::connect(&user_params)).await;
+    user.exec("SELECT 1 AS ok").await.expect("login + connect to appdb");
+
+    // 3. DENIED before grant
+    assert!(user.exec("SELECT * FROM dbo.secret").await.is_err(), "denied before grant");
+
+    // 4. GRANT — schemaPreset('read-only','dbo','u_spec'). Reassign (not shadow)
+    // so the previous session is dropped — else stale u_spec logins block DROP.
+    app.exec("GRANT SELECT ON SCHEMA::[dbo] TO [u_spec]").await.unwrap();
+    user = retry("mssql", || MssqlDriver::connect(&user_params)).await;
+    let out = user.exec("SELECT count(*) AS n FROM dbo.secret").await.expect("select after grant");
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    assert_eq!(result.rows[0]["n"], serde_json::json!(2));
+
+    // 5a. WRITE denied (read-only)
+    assert!(user.exec("INSERT INTO dbo.secret VALUES (3, N'z')").await.is_err(), "read-only cannot INSERT");
+
+    // 5b. DENY on one table overrides the schema GRANT (DENY wins)
+    app.exec("DENY SELECT ON [dbo].[secret] TO [u_spec]").await.unwrap();
+    user = retry("mssql", || MssqlDriver::connect(&user_params)).await;
+    assert!(user.exec("SELECT * FROM dbo.secret").await.is_err(), "DENY overrides schema GRANT on secret");
+    let out = user.exec("SELECT count(*) AS n FROM dbo.other").await.expect("other still readable");
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    assert_eq!(result.rows[0]["n"], serde_json::json!(1), "schema GRANT still applies to other");
+
+    // 6. REVOKE + DROP — permission('REVOKE', …) → uses FROM (removes GRANT & DENY)
+    app.exec("REVOKE SELECT ON [dbo].[secret] FROM [u_spec]").await.unwrap();
+    app.exec("REVOKE SELECT ON SCHEMA::[dbo] FROM [u_spec]").await.unwrap();
+    user = retry("mssql", || MssqlDriver::connect(&user_params)).await;
+    assert!(user.exec("SELECT * FROM dbo.other").await.is_err(), "denied again after revoke");
+    // close the user's session before dropping its login (else error 15434)
+    drop(user);
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    app.exec("DROP USER [u_spec]").await.unwrap();
+    admin.exec("DROP LOGIN [u_spec]").await.unwrap();
+    let out = admin
+        .exec("SELECT count(*) AS n FROM sys.server_principals WHERE name = 'u_spec'")
+        .await
+        .unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    assert_eq!(result.rows[0]["n"], serde_json::json!(0), "login gone");
+}
+
 /// AUDIT-3 item 4 — MSSQL Explorer must list every (user) database. `databases()`
 /// returns the server catalog excluding the system DBs (master/tempdb/model/msdb).
 #[tokio::test]

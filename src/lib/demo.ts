@@ -463,6 +463,33 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
         return ok({ cols: [['member_user', 'text'], ['member_host', 'text'], ['DEFAULT_ROLE_USER', 'text'], ['DEFAULT_ROLE_HOST', 'text']], rows: [], total: 0 })
       if (view === 'grants_for')
         return ok({ cols: [['Grants', 'text']], rows: [{ Grants: "GRANT SELECT ON `library_db`.* TO `app`@`%`" }], total: 1 })
+      // MSSQL views
+      if (view === 'logins')
+        return ok({ cols: [['name', 'text'], ['type_desc', 'text'], ['is_disabled', 'bit'], ['create_date', 'text'], ['default_database_name', 'text'], ['is_policy_checked', 'bit']], rows: [
+          { name: 'sa', type_desc: 'SQL_LOGIN', is_disabled: false, create_date: '2026-01-01 00:00:00', default_database_name: 'master', is_policy_checked: true },
+          { name: 'app_login', type_desc: 'SQL_LOGIN', is_disabled: false, create_date: '2026-02-01 00:00:00', default_database_name: 'AppDb', is_policy_checked: true },
+        ], total: 2 })
+      if (view === 'server_role_members')
+        return ok({ cols: [['role', 'text'], ['member', 'text']], rows: [{ role: 'sysadmin', member: 'sa' }], total: 1 })
+      if (view === 'server_roles')
+        return ok({ cols: [['name', 'text']], rows: [{ name: 'sysadmin' }, { name: 'dbcreator' }], total: 2 })
+      if (view === 'db_users')
+        return ok({ cols: [['name', 'text'], ['type_desc', 'text'], ['default_schema', 'text'], ['login_name', 'text'], ['orphaned', 'bit']], rows: [
+          { name: 'app_user', type_desc: 'SQL_USER', default_schema: 'dbo', login_name: 'app_login', orphaned: false },
+          { name: 'report_user', type_desc: 'SQL_USER', default_schema: 'dbo', login_name: '', orphaned: true },
+        ], total: 2 })
+      if (view === 'db_roles')
+        return ok({ cols: [['name', 'text'], ['is_fixed_role', 'bit']], rows: [
+          { name: 'db_owner', is_fixed_role: true }, { name: 'db_datareader', is_fixed_role: true }, { name: 'audit', is_fixed_role: false },
+        ], total: 3 })
+      if (view === 'db_role_members')
+        return ok({ cols: [['role', 'text'], ['member', 'text']], rows: [{ role: 'db_datareader', member: 'app_user' }], total: 1 })
+      if (view === 'db_permissions')
+        return ok({ cols: [['principal', 'text'], ['state_desc', 'text'], ['permission_name', 'text'], ['securable', 'text'], ['column_name', 'text']], rows: [
+          { principal: 'app_user', state_desc: 'GRANT', permission_name: 'SELECT', securable: 'SCHEMA::dbo', column_name: '' },
+        ], total: 1 })
+      if (view === 'server_permissions')
+        return ok({ cols: [['principal', 'text'], ['state_desc', 'text'], ['permission_name', 'text'], ['class_desc', 'text']], rows: [], total: 0 })
       if (view === 'members')
         return ok({ cols: [['role', 'text'], ['member', 'text'], ['admin_option', 'bool'], ['grantor', 'text']], rows: [
           { role: 'readonly_group', member: 'app_user', admin_option: false, grantor: 'postgres' },
