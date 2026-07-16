@@ -3347,6 +3347,127 @@ async fn cassandra_cql_semantics_paging_and_ddl_roundtrip() {
     eprintln!("CHK (6) DDL + metadata round-trip composite PK OK — test end");
 }
 
+/// U7 — Cassandra User Manager, Definition-of-Done (spec §1.9 + §7.5). Runs a
+/// container with PasswordAuthenticator + CassandraAuthorizer (via an entrypoint
+/// that seds cassandra.yaml). Runs EXACTLY the CQL the frontend builders
+/// (`src/lib/users/cassandra.ts`) produce.
+#[tokio::test]
+async fn cassandra_user_manager_end_to_end() {
+    use database_studio_lib::drivers::cassandra::{CassandraConnParams, CassandraDriver};
+
+    let c = GenericImage::new("cassandra", "5.0")
+        .with_exposed_port(9042.tcp())
+        .with_env_var("HEAP_NEWSIZE", "128M")
+        .with_env_var("MAX_HEAP_SIZE", "512M")
+        // Enable auth by rewriting cassandra.yaml before the normal entrypoint.
+        .with_cmd(vec![
+            "bash".to_string(),
+            "-c".to_string(),
+            "sed -i 's/AllowAllAuthenticator/PasswordAuthenticator/; s/AllowAllAuthorizer/CassandraAuthorizer/' \
+             /etc/cassandra/cassandra.yaml && exec docker-entrypoint.sh cassandra -f"
+                .to_string(),
+        ])
+        .start()
+        .await
+        .expect("start cassandra container with auth");
+    let port = c.get_host_port_ipv4(9042).await.unwrap();
+
+    let mk = |user: &str, password: &str| CassandraConnParams {
+        contact_points: vec![format!("127.0.0.1:{port}")],
+        user: user.into(),
+        password: password.into(),
+        datacenter: "datacenter1".into(),
+        consistency: "ONE".into(),
+        keyspace: String::new(),
+        ssl: false,
+        ssl_ca: String::new(),
+    };
+
+    // superuser cassandra/cassandra is created asynchronously after auth is up —
+    // retry login + a real query. Deadline generous (auth bootstrap ~30-60s).
+    let admin_params = mk("cassandra", "cassandra");
+    let admin = {
+        let deadline = Instant::now() + Duration::from_secs(300);
+        let mut last = String::new();
+        loop {
+            match CassandraDriver::connect_translating_to(&admin_params, "127.0.0.1", port).await {
+                Ok(d) => match d.exec_cql("LIST ROLES", None, None).await {
+                    Ok(_) => break d,
+                    Err(e) => last = format!("query: {}", e.message),
+                },
+                Err(e) => last = format!("connect: {}", e.message),
+            }
+            assert!(Instant::now() < deadline, "cassandra(auth) not ready: {last}");
+            tokio::time::sleep(Duration::from_secs(3)).await;
+        }
+    };
+
+    // seed keyspace + table + row
+    admin
+        .exec_cql(
+            "CREATE KEYSPACE app_ks WITH replication = {'class':'SimpleStrategy','replication_factor':1}",
+            None,
+            None,
+        )
+        .await
+        .expect("create keyspace");
+    admin.exec_cql("CREATE TABLE app_ks.secret (id int PRIMARY KEY, v text)", None, None).await.expect("create table");
+    admin.exec_cql("INSERT INTO app_ks.secret (id, v) VALUES (1, 'x')", None, None).await.expect("seed row");
+
+    // 1. CREATE — createRole({name:'app_role', password:'pw', login:true})
+    admin
+        .exec_cql("CREATE ROLE app_role WITH PASSWORD = 'pw' AND LOGIN = true AND SUPERUSER = false", None, None)
+        .await
+        .expect("create role");
+
+    // 2. LOGIN as the new role
+    let user_params = mk("app_role", "pw");
+    let connect_user = || async {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        loop {
+            if let Ok(d) = CassandraDriver::connect_translating_to(&user_params, "127.0.0.1", port).await {
+                if d.exec_cql("SELECT release_version FROM system.local", None, None).await.is_ok() {
+                    return d;
+                }
+            }
+            assert!(Instant::now() < deadline, "app_role cannot log in");
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+    };
+    let user = connect_user().await;
+
+    // 3. DENIED before grant
+    assert!(user.exec_cql("SELECT * FROM app_ks.secret", None, None).await.is_err(), "denied before grant");
+
+    // 4. GRANT — keyspacePreset('read-only','app_ks','app_role'). Cassandra caches
+    // permissions per-role (~2s) → wait past the cache + reconnect a fresh session.
+    admin.exec_cql("GRANT SELECT ON KEYSPACE app_ks TO app_role", None, None).await.expect("grant select");
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let user = connect_user().await;
+    let out = user.exec_cql("SELECT count(*) AS n FROM app_ks.secret", None, None).await.expect("select after grant");
+    let StatementOutcome::Rows { result } = out.outcome else { panic!("expected rows") };
+    // count(*) is a bigint — accept number or string form.
+    let n = result.rows[0]["n"].as_i64().or_else(|| result.rows[0]["n"].as_str().and_then(|s| s.parse().ok()));
+    assert_eq!(n, Some(1), "read granted (count via role): {:?}", result.rows[0]["n"]);
+
+    // 5. WRITE (MODIFY) denied
+    assert!(
+        user.exec_cql("INSERT INTO app_ks.secret (id, v) VALUES (2, 'z')", None, None).await.is_err(),
+        "SELECT-only role cannot MODIFY",
+    );
+
+    // 6. REVOKE → denied; DROP → gone (wait past the permission cache + reconnect)
+    admin.exec_cql("REVOKE ALL PERMISSIONS ON KEYSPACE app_ks FROM app_role", None, None).await.expect("revoke");
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let user = connect_user().await;
+    assert!(user.exec_cql("SELECT * FROM app_ks.secret", None, None).await.is_err(), "denied again after revoke");
+    admin.exec_cql("DROP ROLE IF EXISTS app_role", None, None).await.expect("drop role");
+    let roles = admin.exec_cql("LIST ROLES", None, None).await.expect("list roles");
+    let StatementOutcome::Rows { result } = roles.outcome else { panic!("expected rows") };
+    assert!(!result.rows.iter().any(|r| r["role"] == serde_json::json!("app_role")), "role gone");
+    eprintln!("U7 OK — Cassandra role create/login/deny/grant/deny-write/revoke/drop verified");
+}
+
 /// Schema Registry (T7) — Confluent REST API là HTTP thuần (như driver ClickHouse
 /// qua HTTP). Container `cp-schema-registry` cần cả Kafka + shared network + JVM
 /// khởi động chậm → dễ EXIT=124. Thay bằng HTTP server in-process phục vụ đúng

@@ -920,6 +920,23 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
     case 'cql_exec': {
       const cql = String((args?.cql as string) ?? '').toLowerCase()
       const pageToken = (args?.pageToken as string | undefined) ?? undefined
+      // User Manager (U7): LIST ROLES / LIST ALL PERMISSIONS OF … + CREATE/ALTER/
+      // DROP/GRANT/REVOKE ROLE fixtures.
+      if (cql.startsWith('list roles') && !cql.includes(' of ')) {
+        return ok({ ok: true, result: { cols: [['role', 'text'], ['super', 'boolean'], ['login', 'boolean'], ['options', 'text']], rows: [
+          { role: 'cassandra', super: true, login: true, options: '{}' },
+          { role: 'app_role', super: false, login: true, options: '{}' },
+          { role: 'analysts', super: false, login: false, options: '{}' },
+        ], total: 3 }, duration_ms: 2, warnings: [] })
+      }
+      if (cql.startsWith('list all permissions')) {
+        return ok({ ok: true, result: { cols: [['role', 'text'], ['username', 'text'], ['resource', 'text'], ['permission', 'text']], rows: [
+          { role: 'app_role', username: 'app_role', resource: '<keyspace app_keyspace>', permission: 'SELECT' },
+        ], total: 1 }, duration_ms: 2, warnings: [] })
+      }
+      if (/^(create|alter|drop)\s+role\b/.test(cql) || /^(grant|revoke)\b/.test(cql)) {
+        return ok({ ok: true, duration_ms: 2, warnings: [] })
+      }
       // JOIN/subquery đã bị lint chặn ở editor; ở đây engine cũng từ chối rõ.
       if (/\bjoin\b/.test(cql)) {
         return ok({
