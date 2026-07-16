@@ -7,6 +7,7 @@
   import * as ipc from '$lib/ipc'
   import { toasts } from '$lib/stores/toast.svelte'
   import { chUserWizard } from '$lib/stores/chuser.svelte'
+  import { grantWizard, STANDARD_LEVELS } from '$lib/stores/grantwizard.svelte'
   import { highlightSql, sqlTokenColor } from '$lib/format/sql'
   import {
     alterUserPassword,
@@ -116,6 +117,20 @@
     return has ? 'grant' : 'none'
   }
   const cellGlyph = (s: CellState) => (s === 'grant' ? '✓' : '☐')
+
+  let showMatrix = $state(false)
+  function openGrantWizard() {
+    if (!selected) return
+    grantWizard.show({
+      title: 'Grant access',
+      role: selected,
+      scopeLabel: 'Database',
+      scopes: databases,
+      levels: STANDARD_LEVELS,
+      build: (kind, db) => [dbPreset(kind as PresetKind, db, selected)],
+      onApply: (stmts) => (pending = [...pending, ...stmts]),
+    })
+  }
 
   function applyPreset(db: string, k: PresetKind) {
     if (!selected) return
@@ -247,6 +262,12 @@
               {/if}
             {/if}
           {:else if detailTab === 'grants'}
+            <div style="display:flex;align-items:center;gap:var(--px-10);margin-bottom:var(--px-10);flex-wrap:wrap">
+              <span onclick={openGrantWizard} onkeydown={(e) => e.key === 'Enter' && openGrantWizard()} role="button" tabindex="0" style="font-size:var(--px-12_5);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-7);padding:var(--px-6) var(--px-14);cursor:pointer;font-weight:600">＋ Grant access…</span>
+              <span style="font-size:var(--px-11);color:var(--muted)">Pick a database and an access level (Read-only / Read-Write / Full).</span>
+            </div>
+            <div onclick={() => (showMatrix = !showMatrix)} onkeydown={(e) => e.key === 'Enter' && (showMatrix = !showMatrix)} role="button" tabindex="0" style="font-size:var(--px-11_5);color:var(--text2);cursor:pointer;margin-bottom:var(--px-8);user-select:none">{showMatrix ? '▾' : '▸'} Advanced — grant matrix</div>
+            {#if showMatrix}
             <div style="overflow:auto">
               <table class="mono" style="border-collapse:collapse;font-size:var(--px-12);width:100%">
                 <thead><tr>
@@ -272,6 +293,7 @@
               </table>
             </div>
             <div style="font-size:var(--px-10_5);color:var(--muted);margin-top:var(--px-8)">UPDATE/DELETE map to the ALTER UPDATE / ALTER DELETE privileges (mutations). ✓ = granted.</div>
+            {/if}
           {:else}
             <!-- Roles (users only) -->
             <div style="font-size:var(--px-12);color:var(--text2);font-weight:600;margin-bottom:var(--px-6)">Granted roles</div>

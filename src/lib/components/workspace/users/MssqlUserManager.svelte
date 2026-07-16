@@ -8,6 +8,7 @@
   import * as ipc from '$lib/ipc'
   import { toasts } from '$lib/stores/toast.svelte'
   import { mssqlUserWizard } from '$lib/stores/mssqluser.svelte'
+  import { grantWizard, STANDARD_LEVELS } from '$lib/stores/grantwizard.svelte'
   import { highlightSql, sqlTokenColor } from '$lib/format/sql'
   import {
     alterLoginPassword,
@@ -161,6 +162,20 @@
   }
   const cellGlyph = (s: CellState) => (s === 'grant' ? '✓' : s === 'deny' ? '✕' : '☐')
 
+  let showMatrix = $state(false)
+  function openGrantWizard() {
+    if (!selectedUser) return
+    grantWizard.show({
+      title: 'Grant access',
+      role: selectedUser,
+      scopeLabel: 'Schema',
+      scopes: schemas,
+      levels: STANDARD_LEVELS,
+      build: (kind, schema) => [schemaPreset(kind as PresetKind, schema, selectedUser)],
+      onApply: (stmts) => (pending = [...pending, ...stmts]),
+    })
+  }
+
   function applyPreset(schema: string, kind: PresetKind) {
     if (!selectedUser) return
     pending = [...pending, schemaPreset(kind, schema, selectedUser)]
@@ -313,6 +328,12 @@
                 </label>
               {/each}
             </div>
+            <div style="display:flex;align-items:center;gap:var(--px-10);margin-bottom:var(--px-10);flex-wrap:wrap">
+              <span onclick={openGrantWizard} onkeydown={(e) => e.key === 'Enter' && openGrantWizard()} role="button" tabindex="0" style="font-size:var(--px-12_5);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-7);padding:var(--px-6) var(--px-14);cursor:pointer;font-weight:600">＋ Grant access…</span>
+              <span style="font-size:var(--px-11);color:var(--muted)">Pick a schema and an access level (Read-only / Read-Write / Full).</span>
+            </div>
+            <div onclick={() => (showMatrix = !showMatrix)} onkeydown={(e) => e.key === 'Enter' && (showMatrix = !showMatrix)} role="button" tabindex="0" style="font-size:var(--px-11_5);color:var(--text2);cursor:pointer;margin-bottom:var(--px-8);user-select:none">{showMatrix ? '▾' : '▸'} Advanced — permission matrix (GRANT / DENY per privilege)</div>
+            {#if showMatrix}
             <div style="font-size:var(--px-12);color:var(--text2);font-weight:600;margin-bottom:var(--px-6)">Schema permissions</div>
             <div style="overflow:auto">
               <table class="mono" style="border-collapse:collapse;font-size:var(--px-12);width:100%">
@@ -340,6 +361,7 @@
               </table>
             </div>
             <div style="font-size:var(--px-10_5);color:var(--muted);margin-top:var(--px-8)">✓ = granted · ✕ = DENY (overrides GRANT) · ☐ = none.</div>
+            {/if}
             {#if confirmDropUser}
               <div style="display:flex;gap:var(--px-8);align-items:center;margin-top:var(--px-12);padding:var(--px-8);background:var(--panel);border:var(--px-1) solid var(--error);border-radius:var(--px-6)">
                 <span style="font-size:var(--px-12);color:var(--error)">Drop user “{selectedUser}”?</span>

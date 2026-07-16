@@ -8,6 +8,7 @@
   import * as ipc from '$lib/ipc'
   import { toasts } from '$lib/stores/toast.svelte'
   import { pgRoleWizard } from '$lib/stores/pgrole.svelte'
+  import { grantWizard, STANDARD_LEVELS } from '$lib/stores/grantwizard.svelte'
   import { highlightSql, sqlTokenColor } from '$lib/format/sql'
   import {
     alterPassword,
@@ -125,6 +126,26 @@
   }
 
   let futureTables = $state(true)
+  let showMatrix = $state(false)
+
+  // Guided grant wizard — Read-only / Read-Write / Full / Revoke on a schema.
+  function openGrantWizard() {
+    if (!selected) return
+    grantWizard.show({
+      title: 'Grant access',
+      role: selected,
+      scopeLabel: 'Schema',
+      scopes: schemas,
+      levels: STANDARD_LEVELS,
+      build: (kind, schema) =>
+        schemaPreset(kind as PresetKind, schema, selected, {
+          futureTables,
+          owner: ownerOf(schema),
+          owners: kind === 'revoke-all' ? [...new Set([ownerOf(schema), 'postgres'].filter(Boolean) as string[])] : undefined,
+        }),
+      onApply: (stmts) => (pending = [...pending, ...stmts]),
+    })
+  }
 
   function ownerOf(schema: string): string | undefined {
     return schemaOwners.find((o) => String(o.schema) === schema)?.owner as string | undefined
@@ -288,7 +309,14 @@
               {#each hasMembers as m (m.member)}<div class="mono" style="font-size:var(--px-12);padding:var(--px-2) 0">{m.member}</div>{/each}
             {/if}
           {:else}
-            <!-- Privileges grid §1.8.3 -->
+            <!-- Guided grant (primary path) -->
+            <div style="display:flex;align-items:center;gap:var(--px-10);margin-bottom:var(--px-10);flex-wrap:wrap">
+              <span onclick={openGrantWizard} onkeydown={(e) => e.key === 'Enter' && openGrantWizard()} role="button" tabindex="0" style="font-size:var(--px-12_5);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-7);padding:var(--px-6) var(--px-14);cursor:pointer;font-weight:600">＋ Grant access…</span>
+              <span style="font-size:var(--px-11);color:var(--muted)">Pick a schema and an access level (Read-only / Read-Write / Full).</span>
+            </div>
+            <!-- Advanced: full permission matrix (collapsed) -->
+            <div onclick={() => (showMatrix = !showMatrix)} onkeydown={(e) => e.key === 'Enter' && (showMatrix = !showMatrix)} role="button" tabindex="0" style="font-size:var(--px-11_5);color:var(--text2);cursor:pointer;margin-bottom:var(--px-8);user-select:none">{showMatrix ? '▾' : '▸'} Advanced — permission matrix</div>
+            {#if showMatrix}
             <div style="display:flex;align-items:center;gap:var(--px-10);margin-bottom:var(--px-8);flex-wrap:wrap">
               <label style="font-size:var(--px-11_5);color:var(--text2);display:flex;align-items:center;gap:var(--px-4)"><input type="checkbox" bind:checked={futureTables} /> Also apply to future tables (ALTER DEFAULT PRIVILEGES)</label>
             </div>
@@ -319,6 +347,7 @@
               </table>
             </div>
             <div style="font-size:var(--px-10_5);color:var(--muted);margin-top:var(--px-8)">✓ = all objects · ■ = partial · ☐ = none. EXECUTE on functions defaults to PUBLIC in PostgreSQL.</div>
+            {/if}
           {/if}
         </div>
       {:else if !loading}

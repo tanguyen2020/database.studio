@@ -9,6 +9,7 @@
   import * as ipc from '$lib/ipc'
   import { toasts } from '$lib/stores/toast.svelte'
   import { myUserWizard } from '$lib/stores/myuser.svelte'
+  import { grantWizard, STANDARD_LEVELS } from '$lib/stores/grantwizard.svelte'
   import { highlightSql, sqlTokenColor } from '$lib/format/sql'
   import {
     acct,
@@ -124,6 +125,20 @@
   function applyPreset(db: string | null, kind: PresetKind) {
     if (!selectedAcct) return
     pending = [...pending, dbPreset(kind, db, selUser, selHost)]
+  }
+
+  let showMatrix = $state(false)
+  function openGrantWizard() {
+    if (!selectedAcct) return
+    grantWizard.show({
+      title: 'Grant access',
+      role: `${selUser}@${selHost}`,
+      scopeLabel: 'Database',
+      scopes: ['* (all databases)', ...databases],
+      levels: STANDARD_LEVELS,
+      build: (kind, db) => [dbPreset(kind as PresetKind, db.startsWith('* ') ? null : db, selUser, selHost)],
+      onApply: (stmts) => (pending = [...pending, ...stmts]),
+    })
   }
 
   // ---- General --------------------------------------------------------------
@@ -261,6 +276,12 @@
               <span onclick={() => (confirmDrop = true)} onkeydown={(e) => e.key === 'Enter' && (confirmDrop = true)} role="button" tabindex="0" style="font-size:var(--px-11_5);color:var(--error);border:var(--px-1) solid var(--error);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">Drop account…</span>
             {/if}
           {:else if detailTab === 'privileges'}
+            <div style="display:flex;align-items:center;gap:var(--px-10);margin-bottom:var(--px-10);flex-wrap:wrap">
+              <span onclick={openGrantWizard} onkeydown={(e) => e.key === 'Enter' && openGrantWizard()} role="button" tabindex="0" style="font-size:var(--px-12_5);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-7);padding:var(--px-6) var(--px-14);cursor:pointer;font-weight:600">＋ Grant access…</span>
+              <span style="font-size:var(--px-11);color:var(--muted)">Pick a database and an access level (Read-only / Read-Write / Full).</span>
+            </div>
+            <div onclick={() => (showMatrix = !showMatrix)} onkeydown={(e) => e.key === 'Enter' && (showMatrix = !showMatrix)} role="button" tabindex="0" style="font-size:var(--px-11_5);color:var(--text2);cursor:pointer;margin-bottom:var(--px-8);user-select:none">{showMatrix ? '▾' : '▸'} Advanced — permission matrix</div>
+            {#if showMatrix}
             <div style="overflow:auto">
               <table class="mono" style="border-collapse:collapse;font-size:var(--px-12);width:100%">
                 <thead>
@@ -288,6 +309,7 @@
               </table>
             </div>
             <div style="font-size:var(--px-10_5);color:var(--muted);margin-top:var(--px-8)">✓ = whole scope · ■ = some tables · ☐ = none.</div>
+            {/if}
           {:else}
             <!-- Roles -->
             <div style="font-size:var(--px-12);color:var(--text2);font-weight:600;margin-bottom:var(--px-6)">Granted roles</div>

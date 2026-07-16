@@ -69,7 +69,7 @@ test('user manager: New Role opens a popup dialog (not a tab)', async ({ page })
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
 
-test('user manager: privilege grid preset queues GRANT statements', async ({ page }) => {
+test('user manager: guided Grant access wizard queues GRANT statements', async ({ page }) => {
   const errors: string[] = []
   page.on('pageerror', (e) => errors.push(String(e)))
   await blockRemoteFonts(page)
@@ -80,13 +80,23 @@ test('user manager: privilege grid preset queues GRANT statements', async ({ pag
   await page.getByRole('tab', { name: 'Privileges' }).click()
   await page.waitForTimeout(200)
 
-  // grid shows the public schema row + preset buttons
-  await expect(page.getByRole('cell', { name: 'public' }).first()).toBeVisible()
-  // apply Read-only preset → pending changes appear with the exact GRANT SQL
-  await page.getByRole('button', { name: 'R', exact: true }).first().click()
+  // primary path: the guided "Grant access…" wizard (not the raw matrix)
+  await page.getByRole('button', { name: '＋ Grant access…' }).click()
+  await page.waitForTimeout(300)
+  await expect(page.getByRole('dialog')).toBeVisible()
+  // pick the Read-only access level → live SQL preview shows the exact GRANT
+  await page.getByText('Read-only', { exact: true }).first().click()
+  await page.waitForTimeout(200)
+  await expect(page.getByText(/GRANT SELECT ON ALL TABLES IN SCHEMA "public" TO "app_user"/).first()).toBeVisible()
+  // Add to pending → dialog closes, Pending changes panel shows the SQL
+  await page.getByRole('button', { name: 'Add to pending' }).click()
   await page.waitForTimeout(200)
   await expect(page.getByText(/Pending changes/).first()).toBeVisible()
-  await expect(page.getByText(/GRANT SELECT ON ALL TABLES IN SCHEMA "public" TO "app_user"/).first()).toBeVisible()
+
+  // the detailed matrix is still available under Advanced
+  await page.getByText(/Advanced — permission matrix/).first().click()
+  await page.waitForTimeout(150)
+  await expect(page.getByRole('cell', { name: 'public' }).first()).toBeVisible()
 
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
@@ -110,8 +120,10 @@ test('user manager: Cassandra roles + keyspace permission preset', async ({ page
   await page.waitForTimeout(150)
   await page.getByRole('tab', { name: 'Permissions' }).click()
   await page.waitForTimeout(200)
-  // apply Read-write on a keyspace → pending shows GRANT MODIFY
-  await page.getByRole('button', { name: 'RW', exact: true }).first().click()
+  // guided grant: Read-Write on a keyspace → GRANT MODIFY
+  await page.getByRole('button', { name: '＋ Grant access…' }).click()
+  await page.waitForTimeout(300)
+  await page.getByText('Read-Write', { exact: true }).first().click()
   await page.waitForTimeout(200)
   await expect(page.getByText(/GRANT MODIFY ON KEYSPACE .* TO app_role/).first()).toBeVisible()
 
@@ -209,7 +221,10 @@ test('user manager: ClickHouse users + grant grid preset', async ({ page }) => {
   await page.waitForTimeout(150)
   await page.getByRole('tab', { name: 'Grants' }).click()
   await page.waitForTimeout(200)
-  await page.getByRole('button', { name: 'R', exact: true }).first().click()
+  await page.getByRole('button', { name: '＋ Grant access…' }).click()
+  await page.waitForTimeout(300)
+  await page.getByRole('dialog').locator('select').selectOption('public')
+  await page.getByText('Read-only', { exact: true }).first().click()
   await page.waitForTimeout(200)
   await expect(page.getByText(/GRANT SELECT ON `public`\.\* TO `app`/).first()).toBeVisible()
 
@@ -244,7 +259,17 @@ test('user manager: MSSQL server logins + database permission grid', async ({ pa
   await expect(page.getByRole('option', { name: /app_user/ }).first()).toBeVisible()
   await page.getByRole('option', { name: /app_user/ }).first().click()
   await page.waitForTimeout(150)
-  // apply Deny on the schema → pending shows the DENY statement (DENY wins)
+  // guided grant: Read-only on the schema
+  await page.getByRole('button', { name: '＋ Grant access…' }).click()
+  await page.waitForTimeout(300)
+  await page.getByText('Read-only', { exact: true }).first().click()
+  await page.waitForTimeout(200)
+  await expect(page.getByText(/GRANT SELECT ON SCHEMA::\[public\] TO \[app_user\]/).first()).toBeVisible()
+  await page.getByRole('button', { name: 'Add to pending' }).click()
+  await page.waitForTimeout(150)
+  // DENY (overrides GRANT) stays in the Advanced matrix
+  await page.getByText(/Advanced — permission matrix/).first().click()
+  await page.waitForTimeout(150)
   await page.getByRole('button', { name: 'Deny', exact: true }).first().click()
   await page.waitForTimeout(200)
   await expect(page.getByText(/DENY SELECT, INSERT, UPDATE, DELETE ON SCHEMA::\[public\] TO \[app_user\]/).first()).toBeVisible()
@@ -276,9 +301,15 @@ test('user manager: MySQL account list + preset + Add Account popup', async ({ p
   await page.waitForTimeout(150)
   await page.getByRole('tab', { name: 'Schema Privileges' }).click()
   await page.waitForTimeout(200)
-  await page.getByRole('button', { name: 'R', exact: true }).nth(1).click() // row 0 = Global, row 1 = public
+  await page.getByRole('button', { name: '＋ Grant access…' }).click()
+  await page.waitForTimeout(300)
+  // pick database "public" in the scope dropdown, then Read-only
+  await page.getByRole('dialog').locator('select').selectOption('public')
+  await page.getByText('Read-only', { exact: true }).first().click()
   await page.waitForTimeout(200)
   await expect(page.getByText(/GRANT SELECT ON `public`\.\* TO 'app'@'%'/).first()).toBeVisible()
+  await page.getByRole('button', { name: 'Add to pending' }).click() // close wizard
+  await page.waitForTimeout(200)
 
   // Add Account → popup (not a tab), host required, live preview
   const tabsBefore = await page.getByRole('tab').count()

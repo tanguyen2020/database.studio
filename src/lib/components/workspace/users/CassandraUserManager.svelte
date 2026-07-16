@@ -7,6 +7,7 @@
   import * as ipc from '$lib/ipc'
   import { toasts } from '$lib/stores/toast.svelte'
   import { cassUserWizard } from '$lib/stores/cassuser.svelte'
+  import { grantWizard, STANDARD_LEVELS } from '$lib/stores/grantwizard.svelte'
   import { highlightSql, sqlTokenColor } from '$lib/format/sql'
   import {
     alterRole,
@@ -107,6 +108,20 @@
       const pm = String(p.permission ?? '')
       const scopeMatch = res.includes(`keyspace ${keyspace}`) || res.includes('all keyspaces')
       return scopeMatch && pm === perm
+    })
+  }
+
+  let showMatrix = $state(false)
+  function openGrantWizard() {
+    if (!selected) return
+    grantWizard.show({
+      title: 'Grant access',
+      role: selected,
+      scopeLabel: 'Keyspace',
+      scopes: keyspaces,
+      levels: STANDARD_LEVELS,
+      build: (kind, ks) => [keyspacePreset(kind as PresetKind, ks, selected)],
+      onApply: (stmts) => (pending = [...pending, ...stmts]),
     })
   }
 
@@ -243,7 +258,13 @@
             </div>
             <div style="font-size:var(--px-10_5);color:var(--muted);margin-top:var(--px-8)">GRANT &lt;role&gt; TO {selected} — role membership (a role can inherit another role's permissions).</div>
           {:else}
-            <!-- Permissions grid -->
+            <!-- Permissions -->
+            <div style="display:flex;align-items:center;gap:var(--px-10);margin-bottom:var(--px-10);flex-wrap:wrap">
+              <span onclick={openGrantWizard} onkeydown={(e) => e.key === 'Enter' && openGrantWizard()} role="button" tabindex="0" style="font-size:var(--px-12_5);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-7);padding:var(--px-6) var(--px-14);cursor:pointer;font-weight:600">＋ Grant access…</span>
+              <span style="font-size:var(--px-11);color:var(--muted)">Pick a keyspace and an access level (Read-only / Read-Write / Full).</span>
+            </div>
+            <div onclick={() => (showMatrix = !showMatrix)} onkeydown={(e) => e.key === 'Enter' && (showMatrix = !showMatrix)} role="button" tabindex="0" style="font-size:var(--px-11_5);color:var(--text2);cursor:pointer;margin-bottom:var(--px-8);user-select:none">{showMatrix ? '▾' : '▸'} Advanced — permission matrix</div>
+            {#if showMatrix}
             <div style="overflow:auto">
               <table class="mono" style="border-collapse:collapse;font-size:var(--px-12);width:100%">
                 <thead><tr>
@@ -269,6 +290,7 @@
               </table>
             </div>
             <div style="font-size:var(--px-10_5);color:var(--muted);margin-top:var(--px-8)">MODIFY = INSERT + UPDATE + DELETE + TRUNCATE (Cassandra doesn't split writes). ✓ = granted (incl. via ALL KEYSPACES).</div>
+            {/if}
           {/if}
         </div>
       {:else if !loading}

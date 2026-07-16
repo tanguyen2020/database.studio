@@ -56,6 +56,7 @@
   import MongoCreateUserDialog from '$lib/components/MongoCreateUserDialog.svelte'
   import OracleCreateUserDialog from '$lib/components/OracleCreateUserDialog.svelte'
   import CassandraCreateRoleDialog from '$lib/components/CassandraCreateRoleDialog.svelte'
+  import GrantAccessDialog from '$lib/components/GrantAccessDialog.svelte'
   import AddPartitionDialog from '$lib/components/AddPartitionDialog.svelte'
   import TruncateDialog from '$lib/components/TruncateDialog.svelte'
   import NewDatabaseDialog from '$lib/components/NewDatabaseDialog.svelte'
@@ -370,6 +371,7 @@
 <MongoCreateUserDialog />
 <OracleCreateUserDialog />
 <CassandraCreateRoleDialog />
+<GrantAccessDialog />
 <AddPartitionDialog />
 <TruncateDialog />
 <NewDatabaseDialog />
