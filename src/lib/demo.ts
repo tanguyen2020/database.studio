@@ -444,6 +444,22 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
           { user: 'root', host: 'localhost', locked: false },
           { user: 'app', host: '%', locked: false },
         ], total: 2 })
+      if (view === 'members')
+        return ok({ cols: [['role', 'text'], ['member', 'text'], ['admin_option', 'bool'], ['grantor', 'text']], rows: [
+          { role: 'readonly_group', member: 'app_user', admin_option: false, grantor: 'postgres' },
+        ], total: 1 })
+      if (view === 'table_grants')
+        return ok({ cols: [['schema', 'text'], ['object', 'text'], ['kind', 'text'], ['grantee', 'text'], ['privilege_type', 'text'], ['is_grantable', 'bool']], rows: [
+          { schema: 'public', object: 'students', kind: 'r', grantee: 'app_user', privilege_type: 'SELECT', is_grantable: false },
+        ], total: 1 })
+      if (view === 'schema_owners')
+        return ok({ cols: [['schema', 'text'], ['owner', 'text']], rows: [
+          { schema: 'public', owner: 'postgres' },
+        ], total: 1 })
+      if (view === 'schema_grants' || view === 'db_grants' || view === 'default_acl')
+        return ok({ cols: [] as [string, string][], rows: [] as Record<string, unknown>[], total: 0 })
+      if (view === 'can_manage')
+        return ok({ cols: [['can_manage', 'bool']], rows: [{ can_manage: true }], total: 1 })
       return ok({ cols: [] as [string, string][], rows: [] as Record<string, unknown>[], total: 0 })
     }
     case 'backup_tool_status':

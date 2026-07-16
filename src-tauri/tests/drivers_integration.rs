@@ -694,6 +694,87 @@ async fn pg_connection_to_other_database_sees_its_own_catalog() {
     assert!(!b_tables.iter().any(|t| t.name == "only_in_a"), "B does NOT see A's table");
 }
 
+/// U1 — PostgreSQL User Manager, Definition-of-Done (spec §1.9): the 6-step
+/// golden path proven on a real container. Runs EXACTLY the SQL the frontend
+/// builders (`src/lib/users/postgres.ts`) produce (locked by unit tests).
+///   1 CREATE role+password → 2 LOGIN as it → 3 SELECT denied → 4 GRANT (preset
+///   read-only) → SELECT OK → 5 INSERT still denied → 6 REVOKE → denied again,
+///   DROP → gone.
+#[tokio::test]
+async fn pg_user_manager_end_to_end() {
+    let (_c, port) = start_pg().await;
+    let admin_params = PgConnParams {
+        host: "localhost".into(),
+        port,
+        database: "testdb".into(),
+        user: "postgres".into(),
+        password: PASS.into(),
+        ssl: false,
+        ssl_ca: String::new(),
+        ssl_cert: String::new(),
+        ssl_key: String::new(),
+    };
+    let mut admin = retry("postgres", || PgDriver::connect(&admin_params)).await;
+
+    // seed a table the new role must NOT be able to read until granted
+    admin.exec("CREATE TABLE secret (id int PRIMARY KEY, v text)").await.unwrap();
+    admin.exec("INSERT INTO secret VALUES (1,'x'), (2,'y')").await.unwrap();
+
+    // 1. CREATE — exact output of createRole('u_spec', {login:true, password:"p'wd"})
+    admin.exec(r#"CREATE ROLE "u_spec" LOGIN PASSWORD 'p''wd'"#).await.unwrap();
+
+    // 2. LOGIN — connect a NEW driver as the created role
+    let user_params = PgConnParams {
+        host: "localhost".into(),
+        port,
+        database: "testdb".into(),
+        user: "u_spec".into(),
+        password: "p'wd".into(),
+        ssl: false,
+        ssl_ca: String::new(),
+        ssl_cert: String::new(),
+        ssl_key: String::new(),
+    };
+    let mut user = retry("postgres", || PgDriver::connect(&user_params)).await;
+    let out = user.exec("SELECT 1 AS ok").await.expect("login + trivial select");
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    assert_eq!(result.rows[0]["ok"], serde_json::json!(1));
+
+    // 3. DENIED before grant
+    assert!(user.exec("SELECT * FROM secret").await.is_err(), "must be denied before grant");
+
+    // 4. GRANT — exact output of presetReadOnly('public','u_spec')
+    admin.exec(r#"GRANT USAGE ON SCHEMA "public" TO "u_spec""#).await.unwrap();
+    admin.exec(r#"GRANT SELECT ON ALL TABLES IN SCHEMA "public" TO "u_spec""#).await.unwrap();
+    admin.exec(r#"GRANT SELECT ON ALL SEQUENCES IN SCHEMA "public" TO "u_spec""#).await.unwrap();
+    let out = user.exec("SELECT count(*) AS n FROM secret").await.expect("select after grant");
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    assert_eq!(result.rows[0]["n"], serde_json::json!(2), "read-only user can now SELECT");
+
+    // 5. WRITE still denied (read-only boundary)
+    assert!(
+        user.exec("INSERT INTO secret VALUES (3,'z')").await.is_err(),
+        "read-only user must NOT be able to INSERT",
+    );
+
+    // 6. REVOKE — exact output of presetRevokeAll('public','u_spec', ['postgres'])
+    admin.exec(r#"REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA "public" FROM "u_spec""#).await.unwrap();
+    admin.exec(r#"REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA "public" FROM "u_spec""#).await.unwrap();
+    admin.exec(r#"REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA "public" FROM "u_spec""#).await.unwrap();
+    admin.exec(r#"REVOKE USAGE, CREATE ON SCHEMA "public" FROM "u_spec""#).await.unwrap();
+    assert!(user.exec("SELECT * FROM secret").await.is_err(), "must be denied again after revoke");
+
+    // DROP — clean up (DROP OWNED clears any residual grants first)
+    admin.exec(r#"DROP OWNED BY "u_spec""#).await.unwrap();
+    admin.exec(r#"DROP ROLE "u_spec""#).await.unwrap();
+    let out = admin
+        .exec("SELECT count(*) AS n FROM pg_roles WHERE rolname = 'u_spec'")
+        .await
+        .unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    assert_eq!(result.rows[0]["n"], serde_json::json!(0), "role must be gone");
+}
+
 /// Item 5 — a `timestamp`/`timestamptz`/`date` value of ±infinity or beyond
 /// chrono's range must NOT panic (sqlx's decoder does `NaiveDateTime + Duration`
 /// which panics; under `panic = "abort"` that kills the app). We decode raw bytes

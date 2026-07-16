@@ -8,6 +8,7 @@
   import { untrack } from 'svelte'
   import * as ipc from '$lib/ipc'
   import type { TabState } from '$lib/types'
+  import PgUserManager from './users/PgUserManager.svelte'
 
   interface Props {
     tab: TabState
@@ -109,6 +110,9 @@
   const fmt = (v: unknown) => (v == null ? '' : typeof v === 'boolean' ? (v ? '✓' : '') : typeof v === 'object' ? JSON.stringify(v) : String(v))
 </script>
 
+{#if tab.systemType === 'postgres'}
+  <PgUserManager {tab} />
+{:else}
 <div style="flex:1;display:flex;flex-direction:column;min-height:0">
   <div style="flex:none;display:flex;align-items:center;gap:var(--px-8);padding:var(--px-9) var(--px-14);border-bottom:var(--px-1) solid var(--border);background:var(--surface);flex-wrap:wrap">
     <span style="font-size:var(--px-12);font-weight:700">{groupLabel}</span>
@@ -167,3 +171,4 @@
     </div>
   </div>
 </div>
+{/if}

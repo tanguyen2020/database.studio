@@ -66,6 +66,52 @@ pub fn users_query(system: &str, view: &str, _arg: Option<&str>) -> Option<Strin
                     COALESCE(rolvaliduntil::text,'') AS valid_until \
              FROM pg_roles WHERE rolname NOT LIKE 'pg\\_%' ORDER BY rolname"
         }
+        ("postgres", "members") => {
+            "SELECT m.roleid::regrole::text AS role, m.member::regrole::text AS member, \
+                    m.admin_option, m.grantor::regrole::text AS grantor \
+             FROM pg_auth_members m ORDER BY 1, 2"
+        }
+        ("postgres", "db_grants") => {
+            "SELECT d.datname AS database, \
+                    CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE a.grantee::regrole::text END AS grantee, \
+                    a.privilege_type, a.is_grantable \
+             FROM pg_database d, LATERAL aclexplode(d.datacl) a \
+             WHERE d.datacl IS NOT NULL ORDER BY 1, 2"
+        }
+        ("postgres", "schema_grants") => {
+            "SELECT n.nspname AS schema, \
+                    CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE a.grantee::regrole::text END AS grantee, \
+                    a.privilege_type, a.is_grantable \
+             FROM pg_namespace n, LATERAL aclexplode(n.nspacl) a \
+             WHERE n.nspacl IS NOT NULL AND n.nspname NOT LIKE 'pg\\_%' ORDER BY 1, 2"
+        }
+        ("postgres", "table_grants") => {
+            "SELECT n.nspname AS schema, c.relname AS object, c.relkind::text AS kind, \
+                    CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE a.grantee::regrole::text END AS grantee, \
+                    a.privilege_type, a.is_grantable \
+             FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace, \
+                  LATERAL aclexplode(c.relacl) a \
+             WHERE c.relacl IS NOT NULL AND n.nspname NOT IN ('pg_catalog','information_schema') \
+             ORDER BY 1, 2, 4"
+        }
+        ("postgres", "default_acl") => {
+            "SELECT pg_get_userbyid(d.defaclrole) AS owner, COALESCE(n.nspname,'') AS schema, \
+                    d.defaclobjtype::text AS objtype, \
+                    CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE a.grantee::regrole::text END AS grantee, \
+                    a.privilege_type, a.is_grantable \
+             FROM pg_default_acl d LEFT JOIN pg_namespace n ON n.oid = d.defaclnamespace, \
+                  LATERAL aclexplode(d.defaclacl) a ORDER BY 1, 2"
+        }
+        // schema owners — for the "future tables" default-privileges preset.
+        ("postgres", "schema_owners") => {
+            "SELECT nspname AS schema, pg_get_userbyid(nspowner) AS owner \
+             FROM pg_namespace WHERE nspname NOT LIKE 'pg\\_%' AND nspname <> 'information_schema' \
+             ORDER BY 1"
+        }
+        // whether the current connection can manage roles (banner gate).
+        ("postgres", "can_manage") => {
+            "SELECT (rolsuper OR rolcreaterole) AS can_manage FROM pg_roles WHERE rolname = current_user"
+        }
         _ => return None,
     };
     Some(sql.to_string())
@@ -152,5 +198,17 @@ mod tests {
         // unsupported (filled in later phases) → None
         assert!(users_query("mysql", "users", None).is_none());
         assert!(users_query("postgres", "nope", None).is_none());
+    }
+
+    #[test]
+    fn users_query_postgres_grant_views() {
+        assert!(users_query("postgres", "members", None).unwrap().contains("pg_auth_members"));
+        assert!(users_query("postgres", "db_grants", None).unwrap().contains("aclexplode(d.datacl)"));
+        assert!(users_query("postgres", "schema_grants", None).unwrap().contains("aclexplode(n.nspacl)"));
+        assert!(users_query("postgres", "table_grants", None).unwrap().contains("aclexplode(c.relacl)"));
+        assert!(users_query("postgres", "default_acl", None).unwrap().contains("pg_default_acl"));
+        assert!(users_query("postgres", "schema_owners", None).unwrap().contains("nspowner"));
+        assert!(users_query("postgres", "can_manage", None).unwrap().contains("rolcreaterole"));
+        assert!(users_query("mysql", "can_manage", None).is_none());
     }
 }
