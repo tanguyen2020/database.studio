@@ -159,6 +159,34 @@ pub fn users_query(system: &str, view: &str, arg: Option<&str>) -> Option<String
              FROM mysql.roles_mapping ORDER BY Role, User"
         }
 
+        // ---- ClickHouse (U4) — SQL-driven RBAC (system.*) ---------------
+        // toString() keeps version-safe (auth_type/host_* became Arrays in newer CH).
+        ("clickhouse", "users") => {
+            "SELECT name, storage, toString(auth_type) AS auth_type, toString(host_ip) AS host_ip, \
+                    toString(host_names) AS host_names, default_roles_all, \
+                    toString(default_roles_list) AS default_roles, toString(default_database) AS default_database \
+             FROM system.users ORDER BY name"
+        }
+        ("clickhouse", "roles") => "SELECT name, storage FROM system.roles ORDER BY name",
+        ("clickhouse", "grants") => {
+            "SELECT COALESCE(user_name, '') AS user, COALESCE(role_name, '') AS role, \
+                    toString(access_type) AS access_type, COALESCE(database, '') AS database, \
+                    COALESCE(table, '') AS table, COALESCE(column, '') AS column, \
+                    is_partial_revoke, grant_option \
+             FROM system.grants ORDER BY user, role, access_type"
+        }
+        ("clickhouse", "role_grants") => {
+            "SELECT COALESCE(user_name,'') AS user, COALESCE(role_name,'') AS role, \
+                    granted_role_name, with_admin_option \
+             FROM system.role_grants ORDER BY 1, 3"
+        }
+        ("clickhouse", "can_manage") => {
+            // access_management shows up as an ACCESS MANAGEMENT grant in SHOW GRANTS;
+            // probe by counting the current user's access-management grants.
+            "SELECT count() > 0 AS can_manage FROM system.grants \
+             WHERE user_name = currentUser() AND access_type = 'ACCESS MANAGEMENT'"
+        }
+
         // ---- MSSQL (U3) — server-level Logins + database-level Users -----
         ("mssql", "logins") => {
             "SELECT p.name, p.type_desc, p.is_disabled, CAST(p.create_date AS varchar(19)) AS create_date, \
@@ -298,7 +326,7 @@ mod tests {
         // "users" is an alias of "roles" for PG
         assert_eq!(users_query("postgres", "users", None), users_query("postgres", "roles", None));
         // unsupported (filled in later phases) → None
-        assert!(users_query("clickhouse", "users", None).is_none());
+        assert!(users_query("cassandra", "users", None).is_none());
         assert!(users_query("postgres", "nope", None).is_none());
     }
 
@@ -349,5 +377,15 @@ mod tests {
         let dbp = users_query("mssql", "db_permissions", None).unwrap();
         assert!(dbp.contains("sys.database_permissions") && dbp.contains("state_desc") && dbp.contains("SCHEMA::"));
         assert!(users_query("mssql", "server_permissions", None).unwrap().contains("sys.server_permissions"));
+    }
+
+    #[test]
+    fn users_query_clickhouse() {
+        assert!(users_query("clickhouse", "users", None).unwrap().contains("system.users"));
+        assert!(users_query("clickhouse", "users", None).unwrap().contains("storage"));
+        assert!(users_query("clickhouse", "roles", None).unwrap().contains("system.roles"));
+        assert!(users_query("clickhouse", "grants", None).unwrap().contains("system.grants"));
+        assert!(users_query("clickhouse", "role_grants", None).unwrap().contains("system.role_grants"));
+        assert!(users_query("clickhouse", "can_manage", None).unwrap().contains("ACCESS MANAGEMENT"));
     }
 }

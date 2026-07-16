@@ -1813,6 +1813,75 @@ async fn mssql_showplan_xml_estimated_plan() {
 // (Phase 2 basics — CLICKHOUSE_SPEC_ADDENDUM)
 // ---------------------------------------------------------------------------
 
+/// U4 — ClickHouse User Manager, Definition-of-Done (spec §1.9). Requires
+/// ACCESS MANAGEMENT (env CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1). Runs EXACTLY
+/// the SQL the frontend builders (`src/lib/users/clickhouse.ts`) produce, and
+/// locks the `storage` value ('local_directory') the read-only badge depends on.
+#[tokio::test]
+async fn clickhouse_user_manager_end_to_end() {
+    let c = GenericImage::new("clickhouse/clickhouse-server", "24.8")
+        .with_exposed_port(8123.tcp())
+        .with_env_var("CLICKHOUSE_PASSWORD", PASS)
+        .with_env_var("CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT", "1")
+        .start()
+        .await
+        .expect("start clickhouse container");
+    let port = c.get_host_port_ipv4(8123).await.unwrap();
+    let mk = |user: &str, password: &str| ChConnParams {
+        host: "localhost".into(),
+        port,
+        database: "default".into(),
+        user: user.into(),
+        password: password.into(),
+        ssl: false,
+    };
+    let admin_params = mk("default", PASS);
+    let mut admin = retry("clickhouse", || ChDriver::connect(&admin_params)).await;
+
+    admin.exec("CREATE DATABASE appdb").await.unwrap();
+    admin.exec("CREATE TABLE appdb.secret (id UInt64, v String) ENGINE = MergeTree ORDER BY id").await.unwrap();
+    admin.exec("INSERT INTO appdb.secret VALUES (1,'x'),(2,'y')").await.unwrap();
+
+    // 1. CREATE — createUser({name:'app', password:'pw'})
+    admin.exec("CREATE USER `app` IDENTIFIED WITH sha256_password BY 'pw'").await.unwrap();
+    // lock the storage value the UI's read-only badge depends on
+    let out = admin.exec("SELECT storage FROM system.users WHERE name = 'app'").await.unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    assert_eq!(result.rows[0]["storage"], serde_json::json!("local_directory"), "SQL-created user storage is local_directory");
+
+    // 2. LOGIN as the new user
+    let user_params = mk("app", "pw");
+    let mut user = retry("clickhouse", || ChDriver::connect(&user_params)).await;
+    user.exec("SELECT 1 AS ok").await.expect("login ok");
+
+    // 3. DENIED before grant
+    assert!(user.exec("SELECT * FROM appdb.secret").await.is_err(), "denied before grant");
+
+    // 4. GRANT via a role — createRole + grant + grantRole + set default role
+    admin.exec("CREATE ROLE `reader`").await.unwrap();
+    admin.exec("GRANT SELECT ON `appdb`.* TO `reader`").await.unwrap();
+    admin.exec("GRANT `reader` TO `app`").await.unwrap();
+    admin.exec("SET DEFAULT ROLE ALL TO `app`").await.unwrap();
+    let mut user = retry("clickhouse", || ChDriver::connect(&user_params)).await;
+    let out = user.exec("SELECT count() AS n FROM appdb.secret").await.expect("select after grant via role");
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    // ClickHouse's HTTP driver returns UInt64 as a string.
+    assert_eq!(result.rows[0]["n"], serde_json::json!("2"));
+
+    // 5. WRITE still denied (role only granted SELECT)
+    assert!(user.exec("INSERT INTO appdb.secret VALUES (3,'z')").await.is_err(), "read-only cannot INSERT");
+
+    // 6. REVOKE + DROP
+    admin.exec("REVOKE SELECT ON `appdb`.* FROM `reader`").await.unwrap();
+    let mut user = retry("clickhouse", || ChDriver::connect(&user_params)).await;
+    assert!(user.exec("SELECT * FROM appdb.secret").await.is_err(), "denied again after revoke");
+    admin.exec("DROP USER `app`").await.unwrap();
+    admin.exec("DROP ROLE `reader`").await.unwrap();
+    let out = admin.exec("SELECT count() AS n FROM system.users WHERE name = 'app'").await.unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    assert_eq!(result.rows[0]["n"], serde_json::json!("0"), "user gone");
+}
+
 /// T30 — Create a ClickHouse Materialized View + Dictionary (as emitted by
 /// buildCreateMaterializedView / buildCreateDictionary). Both appear in the
 /// system catalog.

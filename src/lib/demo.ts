@@ -430,9 +430,32 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
     case 'kill_session':
       return ok(null)
     case 'users_view': {
-      // User Manager (U0 skeleton) — fixture roles/users per view so the shell
-      // and per-engine managers render in the browser/e2e (no real server).
+      // User Manager — fixture roles/users/grants per view so the per-engine
+      // managers render in the browser/e2e (no real server). View names are
+      // shared across engines (e.g. 'users', 'roles'), so resolve the engine
+      // from the connection to return the right shape.
       const view = String(args?.view ?? 'roles')
+      const uvCid = String(args?.connId ?? '').split('::')[0].split('#')[0]
+      const uvSys = DEMO_PROFILES.find((p) => p.id === uvCid)?.system ?? 'postgres'
+      // ClickHouse-specific shapes (name/storage) for the shared view names.
+      if (uvSys === 'clickhouse') {
+        if (view === 'users')
+          return ok({ cols: [['name', 'text'], ['storage', 'text'], ['auth_type', 'text'], ['default_database', 'text'], ['default_roles', 'text']], rows: [
+            { name: 'default', storage: 'users.xml', auth_type: 'sha256_password', default_database: '', default_roles: '[]' },
+            { name: 'app', storage: 'local_directory', auth_type: 'sha256_password', default_database: 'analytics', default_roles: '[]' },
+          ], total: 2 })
+        if (view === 'roles')
+          return ok({ cols: [['name', 'text'], ['storage', 'text']], rows: [{ name: 'readers', storage: 'local_directory' }, { name: 'writers', storage: 'local_directory' }], total: 2 })
+        if (view === 'grants')
+          return ok({ cols: [['user', 'text'], ['role', 'text'], ['access_type', 'text'], ['database', 'text'], ['table', 'text'], ['column', 'text'], ['is_partial_revoke', 'bool'], ['grant_option', 'bool']], rows: [
+            { user: 'app', role: '', access_type: 'SELECT', database: 'analytics', table: '', column: '', is_partial_revoke: false, grant_option: false },
+          ], total: 1 })
+        if (view === 'role_grants')
+          return ok({ cols: [['user', 'text'], ['role', 'text'], ['granted_role_name', 'text'], ['with_admin_option', 'bool']], rows: [], total: 0 })
+        if (view === 'can_manage')
+          return ok({ cols: [['can_manage', 'bool']], rows: [{ can_manage: true }], total: 1 })
+        return ok({ cols: [] as [string, string][], rows: [] as Record<string, unknown>[], total: 0 })
+      }
       if (view === 'roles')
         return ok({ cols: [['name', 'text'], ['rolsuper', 'bool'], ['rolcanlogin', 'bool'], ['rolcreatedb', 'bool'], ['rolcreaterole', 'bool']], rows: [
           { name: 'postgres', rolsuper: true, rolcanlogin: true, rolcreatedb: true, rolcreaterole: true },

@@ -52,6 +52,7 @@
   import PgCreateRoleDialog from '$lib/components/PgCreateRoleDialog.svelte'
   import MySqlCreateUserDialog from '$lib/components/MySqlCreateUserDialog.svelte'
   import MssqlCreateDialog from '$lib/components/MssqlCreateDialog.svelte'
+  import ChCreateUserDialog from '$lib/components/ChCreateUserDialog.svelte'
   import AddPartitionDialog from '$lib/components/AddPartitionDialog.svelte'
   import TruncateDialog from '$lib/components/TruncateDialog.svelte'
   import NewDatabaseDialog from '$lib/components/NewDatabaseDialog.svelte'
@@ -362,6 +363,7 @@
 <PgCreateRoleDialog />
 <MySqlCreateUserDialog />
 <MssqlCreateDialog />
+<ChCreateUserDialog />
 <AddPartitionDialog />
 <TruncateDialog />
 <NewDatabaseDialog />

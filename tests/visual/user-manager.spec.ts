@@ -91,6 +91,42 @@ test('user manager: privilege grid preset queues GRANT statements', async ({ pag
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
 
+// U4 — ClickHouse User Manager: Users/Roles, users.xml read-only badge, grant grid.
+test('user manager: ClickHouse users + grant grid preset', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(String(e)))
+  await blockRemoteFonts(page)
+  await page.goto(APP_URL)
+  await page.waitForSelector('#app > *', { timeout: 15_000 })
+  await page.waitForTimeout(300)
+  await page.getByText('10.0.4.2', { exact: false }).first().click() // ClickHouse connection
+  await page.waitForTimeout(300)
+  const connectBtn = page.getByText('Connect', { exact: true })
+  if (await connectBtn.count()) {
+    await connectBtn.first().click()
+    await page.waitForTimeout(500)
+  }
+  await page.getByText('public', { exact: true }).first().click()
+  await page.waitForTimeout(200)
+  await page.getByTitle(/Users & privileges: /).click()
+  await page.waitForTimeout(500)
+
+  // users list: 'app' (local_directory, editable) + 'default' (users.xml, read-only badge)
+  await expect(page.getByRole('option', { name: /app/ }).first()).toBeVisible()
+  await expect(page.getByText('users.xml').first()).toBeVisible()
+
+  // select app → Grants tab → Read-only preset queues the exact GRANT
+  await page.getByRole('option', { name: /^app/ }).first().click()
+  await page.waitForTimeout(150)
+  await page.getByRole('tab', { name: 'Grants' }).click()
+  await page.waitForTimeout(200)
+  await page.getByRole('button', { name: 'R', exact: true }).first().click()
+  await page.waitForTimeout(200)
+  await expect(page.getByText(/GRANT SELECT ON `public`\.\* TO `app`/).first()).toBeVisible()
+
+  expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
+})
+
 // U3 — MSSQL User Manager: 2-tier Server(Logins)/Database, DENY-capable grid.
 test('user manager: MSSQL server logins + database permission grid', async ({ page }) => {
   const errors: string[] = []
