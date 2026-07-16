@@ -600,6 +600,24 @@ export const usersView = (connId: string, view: string, arg?: string) =>
     arg: arg ?? null,
   })
 
+// MongoDB User Manager (U5) — command-based (not SQL). A role ref is either a
+// string (a role in `database`) or { role, db }.
+export type MongoRoleRef = string | { role: string; db: string }
+export const mongoUsers = (connId: string) =>
+  invoke<{ cols: [string, string][]; rows: Record<string, unknown>[]; total: number }>('mongo_users', { connId })
+export const mongoRoles = (connId: string, database: string) =>
+  invoke<{ cols: [string, string][]; rows: Record<string, unknown>[]; total: number }>('mongo_roles', { connId, database })
+export const mongoCreateUser = (connId: string, database: string, user: string, pwd: string, roles: MongoRoleRef[]) =>
+  invoke<null>('mongo_create_user', { connId, database, user, pwd, roles })
+export const mongoChangePassword = (connId: string, database: string, user: string, pwd: string) =>
+  invoke<null>('mongo_change_password', { connId, database, user, pwd })
+export const mongoDropUser = (connId: string, database: string, user: string) =>
+  invoke<null>('mongo_drop_user', { connId, database, user })
+export const mongoGrantRoles = (connId: string, database: string, user: string, roles: MongoRoleRef[]) =>
+  invoke<null>('mongo_grant_roles', { connId, database, user, roles })
+export const mongoRevokeRoles = (connId: string, database: string, user: string, roles: MongoRoleRef[]) =>
+  invoke<null>('mongo_revoke_roles', { connId, database, user, roles })
+
 // ---- Query Plan Visualizer (Phase 5 · T1) ----------------------------------
 
 export interface PlanNode {

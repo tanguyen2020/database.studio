@@ -150,6 +150,16 @@
   // is disabled.
   const RELATIONAL_TOOLS = ['postgres', 'mysql', 'mariadb', 'mssql', 'sqlite', 'clickhouse', 'oracle']
   const toolTarget = $derived(erTarget && RELATIONAL_TOOLS.includes(erTarget.system) ? erTarget : null)
+  // User Manager target (U5): relational needs a schema (toolTarget); the
+  // non-relational user-managed engines (MongoDB, Cassandra) only need the
+  // connection selected. sqlite/redis/kafka/nats have no user system.
+  const userMgrConn = $derived(
+    toolTarget
+      ? toolTarget.base
+      : selected && (selected.system === 'mongodb' || selected.system === 'cassandra')
+        ? selected.id
+        : null,
+  )
   // "database.schema" of the current toolbar target (for the button tooltips);
   // schema-as-database engines already have db === schema, so just the schema.
   const toolTargetLabel = $derived.by(() => {
@@ -2536,7 +2546,7 @@
     <span class="xbtn" class:off={!toolTarget} onclick={() => toolTarget && tabs.openAdminView(toolTarget.base, 'sessions')} onkeydown={(e) => e.key === 'Enter' && toolTarget && tabs.openAdminView(toolTarget.base, 'sessions')} role="button" tabindex="0" title={toolTarget ? `Session Monitor: ${toolTargetLabel}` : 'Select a schema / database first'}>
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l3 8 4-16 3 8h4"></path></svg>
     </span>
-    <span class="xbtn" class:off={!toolTarget} onclick={() => toolTarget && tabs.openUserManager(toolTarget.base)} onkeydown={(e) => e.key === 'Enter' && toolTarget && tabs.openUserManager(toolTarget.base)} role="button" tabindex="0" title={toolTarget ? `Users & privileges: ${toolTargetLabel}` : 'Select a schema / database first'}>
+    <span class="xbtn" class:off={!userMgrConn} onclick={() => userMgrConn && tabs.openUserManager(userMgrConn)} onkeydown={(e) => e.key === 'Enter' && userMgrConn && tabs.openUserManager(userMgrConn)} role="button" tabindex="0" title={userMgrConn ? `Users & privileges: ${toolTargetLabel || (selected?.name ?? '')}` : 'Select a schema / database first'}>
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3"></circle><path d="M3 20c0-3 3-5 6-5s6 2 6 5"></path><path d="M17 7a3 3 0 0 1 0 6M22 20c0-2.5-2-4-4-4.5"></path></svg>
     </span>
   </div>

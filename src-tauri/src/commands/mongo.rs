@@ -82,3 +82,135 @@ pub async fn mongo_exec(
         },
     })
 }
+
+// ---- User Manager (U5) — command-based (run_command via driver) -----------
+
+#[tauri::command]
+pub async fn mongo_users(state: State<'_, AppState>, conn_id: String) -> Result<QueryResultSet, AppError> {
+    state
+        .registry
+        .with_driver(&conn_id, move |driver| async move {
+            let d = driver.lock().await;
+            match &*d {
+                LiveConnection::Mongo(m) => m.um_list_users().await,
+                _ => Err(not_mongo()),
+            }
+        })
+        .await?
+        .map_err(|e| AppError::Driver(e.message))
+}
+
+#[tauri::command]
+pub async fn mongo_roles(state: State<'_, AppState>, conn_id: String, database: String) -> Result<QueryResultSet, AppError> {
+    state
+        .registry
+        .with_driver(&conn_id, move |driver| async move {
+            let d = driver.lock().await;
+            match &*d {
+                LiveConnection::Mongo(m) => m.um_list_roles(&database).await,
+                _ => Err(not_mongo()),
+            }
+        })
+        .await?
+        .map_err(|e| AppError::Driver(e.message))
+}
+
+#[tauri::command]
+pub async fn mongo_create_user(
+    state: State<'_, AppState>,
+    conn_id: String,
+    database: String,
+    user: String,
+    pwd: String,
+    roles: Vec<serde_json::Value>,
+) -> Result<(), AppError> {
+    state
+        .registry
+        .with_driver(&conn_id, move |driver| async move {
+            let d = driver.lock().await;
+            match &*d {
+                LiveConnection::Mongo(m) => m.um_create_user(&database, &user, &pwd, &roles).await,
+                _ => Err(not_mongo()),
+            }
+        })
+        .await?
+        .map_err(|e| AppError::Driver(e.message))
+}
+
+#[tauri::command]
+pub async fn mongo_change_password(
+    state: State<'_, AppState>,
+    conn_id: String,
+    database: String,
+    user: String,
+    pwd: String,
+) -> Result<(), AppError> {
+    state
+        .registry
+        .with_driver(&conn_id, move |driver| async move {
+            let d = driver.lock().await;
+            match &*d {
+                LiveConnection::Mongo(m) => m.um_change_password(&database, &user, &pwd).await,
+                _ => Err(not_mongo()),
+            }
+        })
+        .await?
+        .map_err(|e| AppError::Driver(e.message))
+}
+
+#[tauri::command]
+pub async fn mongo_drop_user(state: State<'_, AppState>, conn_id: String, database: String, user: String) -> Result<(), AppError> {
+    state
+        .registry
+        .with_driver(&conn_id, move |driver| async move {
+            let d = driver.lock().await;
+            match &*d {
+                LiveConnection::Mongo(m) => m.um_drop_user(&database, &user).await,
+                _ => Err(not_mongo()),
+            }
+        })
+        .await?
+        .map_err(|e| AppError::Driver(e.message))
+}
+
+#[tauri::command]
+pub async fn mongo_grant_roles(
+    state: State<'_, AppState>,
+    conn_id: String,
+    database: String,
+    user: String,
+    roles: Vec<serde_json::Value>,
+) -> Result<(), AppError> {
+    state
+        .registry
+        .with_driver(&conn_id, move |driver| async move {
+            let d = driver.lock().await;
+            match &*d {
+                LiveConnection::Mongo(m) => m.um_grant_roles(&database, &user, &roles).await,
+                _ => Err(not_mongo()),
+            }
+        })
+        .await?
+        .map_err(|e| AppError::Driver(e.message))
+}
+
+#[tauri::command]
+pub async fn mongo_revoke_roles(
+    state: State<'_, AppState>,
+    conn_id: String,
+    database: String,
+    user: String,
+    roles: Vec<serde_json::Value>,
+) -> Result<(), AppError> {
+    state
+        .registry
+        .with_driver(&conn_id, move |driver| async move {
+            let d = driver.lock().await;
+            match &*d {
+                LiveConnection::Mongo(m) => m.um_revoke_roles(&database, &user, &roles).await,
+                _ => Err(not_mongo()),
+            }
+        })
+        .await?
+        .map_err(|e| AppError::Driver(e.message))
+}

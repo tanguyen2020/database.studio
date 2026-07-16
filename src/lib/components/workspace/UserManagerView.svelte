@@ -12,6 +12,7 @@
   import MySqlUserManager from './users/MySqlUserManager.svelte'
   import MssqlUserManager from './users/MssqlUserManager.svelte'
   import ClickHouseUserManager from './users/ClickHouseUserManager.svelte'
+  import MongoUserManager from './users/MongoUserManager.svelte'
 
   interface Props {
     tab: TabState
@@ -121,6 +122,8 @@
   <MssqlUserManager {tab} />
 {:else if tab.systemType === 'clickhouse'}
   <ClickHouseUserManager {tab} />
+{:else if tab.systemType === 'mongodb'}
+  <MongoUserManager {tab} />
 {:else}
 <div style="flex:1;display:flex;flex-direction:column;min-height:0">
   <div style="flex:none;display:flex;align-items:center;gap:var(--px-8);padding:var(--px-9) var(--px-14);border-bottom:var(--px-1) solid var(--border);background:var(--surface);flex-wrap:wrap">

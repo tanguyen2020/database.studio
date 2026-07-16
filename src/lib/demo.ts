@@ -1136,6 +1136,23 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
       })
     }
     // MongoDB query editor / collection viewer (browser & Playwright demo path).
+    case 'mongo_users':
+      return ok({ cols: [['user', 'text'], ['db', 'text'], ['roles', 'text'], ['mechanisms', 'text']], rows: [
+        { user: 'app', db: 'appdb', roles: 'readWrite@appdb', mechanisms: 'SCRAM-SHA-256' },
+        { user: 'analyst', db: 'appdb', roles: 'read@appdb', mechanisms: 'SCRAM-SHA-256' },
+        { user: 'root', db: 'admin', roles: 'root@admin', mechanisms: 'SCRAM-SHA-256' },
+      ], total: 3 })
+    case 'mongo_roles':
+      return ok({ cols: [['role', 'text'], ['db', 'text'], ['isBuiltin', 'text']], rows: [
+        { role: 'read', db: String(args?.database ?? 'admin'), isBuiltin: true },
+        { role: 'readWrite', db: String(args?.database ?? 'admin'), isBuiltin: true },
+      ], total: 2 })
+    case 'mongo_create_user':
+    case 'mongo_change_password':
+    case 'mongo_drop_user':
+    case 'mongo_grant_roles':
+    case 'mongo_revoke_roles':
+      return ok(null)
     case 'mongo_exec': {
       const q = String(args?.query ?? '')
       if (/\.(insertOne|insertMany|updateOne|updateMany|deleteOne|deleteMany|createIndex|createCollection|renameCollection|drop)\s*\(/i.test(q))

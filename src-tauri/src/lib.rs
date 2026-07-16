@@ -143,6 +143,13 @@ pub fn run() {
             commands::cassandra::cassandra_columns,
             // mongodb
             commands::mongo::mongo_exec,
+            commands::mongo::mongo_users,
+            commands::mongo::mongo_roles,
+            commands::mongo::mongo_create_user,
+            commands::mongo::mongo_change_password,
+            commands::mongo::mongo_drop_user,
+            commands::mongo::mongo_grant_roles,
+            commands::mongo::mongo_revoke_roles,
             // clickhouse advanced (Phase 5)
             commands::clickhouse::ch_table_meta,
             commands::clickhouse::ch_dictionaries,

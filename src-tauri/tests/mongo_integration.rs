@@ -727,3 +727,88 @@ async fn mongo_suggested_methods_and_operators_execute() {
     let left = rows(drv.exec_mongo("db.u.countDocuments({})", None, None).await.unwrap().outcome);
     assert_eq!(left.rows[0]["count"].as_i64(), Some(2), "còn 2 doc");
 }
+
+/// U5 — MongoDB User Manager, Definition-of-Done (spec §1.9). Command-based via
+/// the driver's um_* methods (createUser / grantRolesToUser / revokeRolesFromUser
+/// / updateUser / dropUser / usersInfo). Auth-enabled container.
+#[tokio::test]
+async fn mongo_user_manager_end_to_end() {
+    let c = GenericImage::new("mongo", "7")
+        .with_exposed_port(27017.tcp())
+        .with_env_var("MONGO_INITDB_ROOT_USERNAME", "root")
+        .with_env_var("MONGO_INITDB_ROOT_PASSWORD", "test123")
+        .start()
+        .await
+        .expect("start mongo container with auth");
+    let port = c.get_host_port_ipv4(27017).await.unwrap();
+
+    let root_params = MongoConnParams {
+        host: "localhost".into(),
+        port,
+        database: "admin".into(),
+        user: "root".into(),
+        password: "test123".into(),
+        ssl: false,
+        ssl_ca: String::new(),
+    };
+    // wait for readiness
+    let deadline = Instant::now() + Duration::from_secs(180);
+    let admin = loop {
+        match MongoDriver::connect(&root_params).await {
+            Ok(d) => break d,
+            Err(e) => {
+                assert!(Instant::now() < deadline, "mongo(auth) not ready: {}", e.message);
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+        }
+    };
+
+    // seed appdb.secret with a raw root client
+    let seed = Client::with_uri_str(format!("mongodb://root:test123@localhost:{port}/?authSource=admin"))
+        .await
+        .expect("seed client");
+    seed.database("appdb")
+        .collection::<Document>("secret")
+        .insert_many(vec![doc! { "_id": 1, "v": "x" }, doc! { "_id": 2, "v": "y" }])
+        .await
+        .expect("seed secret");
+
+    // 1. CREATE user in admin with NO roles yet — um_create_user
+    admin.um_create_user("admin", "app", "pw", &[]).await.expect("create user");
+
+    // 2. LOGIN as app (authSource defaults to admin)
+    let app_params = MongoConnParams {
+        host: "localhost".into(),
+        port,
+        database: "appdb".into(),
+        user: "app".into(),
+        password: "pw".into(),
+        ssl: false,
+        ssl_ca: String::new(),
+    };
+    let app = MongoDriver::connect(&app_params).await.expect("login as app");
+
+    // 3. DENIED before grant
+    assert!(app.exec_mongo_in(Some("appdb"), "db.secret.find({})", None, None).await.is_err(), "denied before grant");
+
+    // 4. GRANT read@appdb — um_grant_roles
+    admin.um_grant_roles("admin", "app", &[json!({ "role": "read", "db": "appdb" })]).await.expect("grant read");
+    let app = MongoDriver::connect(&app_params).await.expect("reconnect app");
+    let out = app.exec_mongo_in(Some("appdb"), "db.secret.countDocuments({})", None, None).await.expect("count after grant");
+    let StatementOutcome::Rows { result } = out.outcome else { panic!("expected rows") };
+    assert_eq!(result.rows[0]["count"].as_i64(), Some(2), "read granted");
+
+    // 5. WRITE denied (read only)
+    assert!(
+        app.exec_mongo_in(Some("appdb"), "db.secret.insertOne({\"_id\":3,\"v\":\"z\"})", None, None).await.is_err(),
+        "read-only cannot insert",
+    );
+
+    // 6. REVOKE → denied; DROP → gone
+    admin.um_revoke_roles("admin", "app", &[json!({ "role": "read", "db": "appdb" })]).await.expect("revoke");
+    let app = MongoDriver::connect(&app_params).await.expect("reconnect app");
+    assert!(app.exec_mongo_in(Some("appdb"), "db.secret.find({})", None, None).await.is_err(), "denied again after revoke");
+    admin.um_drop_user("admin", "app").await.expect("drop user");
+    let users = admin.um_list_users().await.expect("list users");
+    assert!(!users.rows.iter().any(|r| r["user"] == json!("app")), "app gone");
+}

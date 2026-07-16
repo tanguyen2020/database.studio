@@ -1340,6 +1340,154 @@ impl MongoDriver {
         }
     }
 
+    // ---- User Manager (U5) — command-based (run_command) ------------------
+
+    /// List users across all databases (usersInfo forAllDBs on admin); falls
+    /// back to the connection database on permission error.
+    pub async fn um_list_users(&self) -> Result<QueryResultSet, QueryError> {
+        let cols = vec![
+            ("user".to_string(), "text".to_string()),
+            ("db".to_string(), "text".to_string()),
+            ("roles".to_string(), "text".to_string()),
+            ("mechanisms".to_string(), "text".to_string()),
+        ];
+        let admin = self.client.database("admin");
+        let res = match admin
+            .run_command(doc! { "usersInfo": doc! { "forAllDBs": true }, "showCredentials": false })
+            .await
+        {
+            Ok(r) => r,
+            Err(_) => self
+                .client
+                .database(&self.database)
+                .run_command(doc! { "usersInfo": 1i32 })
+                .await
+                .map_err(exec_err)?,
+        };
+        let mut rows = Vec::new();
+        if let Ok(users) = res.get_array("users") {
+            for b in users {
+                if let Bson::Document(u) = b {
+                    let roles = u
+                        .get_array("roles")
+                        .map(|rs| {
+                            rs.iter()
+                                .filter_map(|r| r.as_document())
+                                .map(|r| format!("{}@{}", r.get_str("role").unwrap_or(""), r.get_str("db").unwrap_or("")))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        })
+                        .unwrap_or_default();
+                    let mechs = u
+                        .get_array("mechanisms")
+                        .map(|ms| ms.iter().filter_map(|m| m.as_str()).collect::<Vec<_>>().join(", "))
+                        .unwrap_or_default();
+                    rows.push(json!({
+                        "user": u.get_str("user").unwrap_or(""),
+                        "db": u.get_str("db").unwrap_or(""),
+                        "roles": roles,
+                        "mechanisms": mechs,
+                    }));
+                }
+            }
+        }
+        let total = rows.len() as u64;
+        Ok(QueryResultSet { cols, rows, total })
+    }
+
+    /// List roles of a database (built-in + custom).
+    pub async fn um_list_roles(&self, db: &str) -> Result<QueryResultSet, QueryError> {
+        let res = self
+            .client
+            .database(db)
+            .run_command(doc! { "rolesInfo": 1i32, "showBuiltinRoles": true })
+            .await
+            .map_err(exec_err)?;
+        let cols = vec![
+            ("role".to_string(), "text".to_string()),
+            ("db".to_string(), "text".to_string()),
+            ("isBuiltin".to_string(), "text".to_string()),
+        ];
+        let mut rows = Vec::new();
+        if let Ok(roles) = res.get_array("roles") {
+            for b in roles {
+                if let Bson::Document(r) = b {
+                    rows.push(json!({
+                        "role": r.get_str("role").unwrap_or(""),
+                        "db": r.get_str("db").unwrap_or(""),
+                        "isBuiltin": r.get_bool("isBuiltin").unwrap_or(false),
+                    }));
+                }
+            }
+        }
+        let total = rows.len() as u64;
+        Ok(QueryResultSet { cols, rows, total })
+    }
+
+    /// Build a bson roles array from JSON [{role, db}] (strings become
+    /// {role, db: current}). Whitelist-safe: only role + db strings are copied.
+    fn role_docs(roles: &[Value], default_db: &str) -> Vec<Bson> {
+        roles
+            .iter()
+            .filter_map(|r| {
+                if let Some(s) = r.as_str() {
+                    Some(Bson::Document(doc! { "role": s, "db": default_db }))
+                } else if let Some(o) = r.as_object() {
+                    let role = o.get("role").and_then(|v| v.as_str())?;
+                    let db = o.get("db").and_then(|v| v.as_str()).unwrap_or(default_db);
+                    Some(Bson::Document(doc! { "role": role, "db": db }))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    pub async fn um_create_user(&self, db: &str, user: &str, pwd: &str, roles: &[Value]) -> Result<(), QueryError> {
+        self.client
+            .database(db)
+            .run_command(doc! { "createUser": user, "pwd": pwd, "roles": Self::role_docs(roles, db) })
+            .await
+            .map_err(exec_err)?;
+        Ok(())
+    }
+
+    pub async fn um_change_password(&self, db: &str, user: &str, pwd: &str) -> Result<(), QueryError> {
+        self.client
+            .database(db)
+            .run_command(doc! { "updateUser": user, "pwd": pwd })
+            .await
+            .map_err(exec_err)?;
+        Ok(())
+    }
+
+    pub async fn um_drop_user(&self, db: &str, user: &str) -> Result<(), QueryError> {
+        self.client
+            .database(db)
+            .run_command(doc! { "dropUser": user })
+            .await
+            .map_err(exec_err)?;
+        Ok(())
+    }
+
+    pub async fn um_grant_roles(&self, db: &str, user: &str, roles: &[Value]) -> Result<(), QueryError> {
+        self.client
+            .database(db)
+            .run_command(doc! { "grantRolesToUser": user, "roles": Self::role_docs(roles, db) })
+            .await
+            .map_err(exec_err)?;
+        Ok(())
+    }
+
+    pub async fn um_revoke_roles(&self, db: &str, user: &str, roles: &[Value]) -> Result<(), QueryError> {
+        self.client
+            .database(db)
+            .run_command(doc! { "revokeRolesFromUser": user, "roles": Self::role_docs(roles, db) })
+            .await
+            .map_err(exec_err)?;
+        Ok(())
+    }
+
     /// Stream a `find()` to `out` one batch at a time via cursor getMore (bounded
     /// memory, T24). JSON → an array of Extended-JSON documents; CSV → header from
     /// the first batch's keys; SQL → `db.<coll>.insertOne(<doc>);` lines. Calls

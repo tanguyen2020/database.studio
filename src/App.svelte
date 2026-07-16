@@ -53,6 +53,7 @@
   import MySqlCreateUserDialog from '$lib/components/MySqlCreateUserDialog.svelte'
   import MssqlCreateDialog from '$lib/components/MssqlCreateDialog.svelte'
   import ChCreateUserDialog from '$lib/components/ChCreateUserDialog.svelte'
+  import MongoCreateUserDialog from '$lib/components/MongoCreateUserDialog.svelte'
   import AddPartitionDialog from '$lib/components/AddPartitionDialog.svelte'
   import TruncateDialog from '$lib/components/TruncateDialog.svelte'
   import NewDatabaseDialog from '$lib/components/NewDatabaseDialog.svelte'
@@ -364,6 +365,7 @@
 <MySqlCreateUserDialog />
 <MssqlCreateDialog />
 <ChCreateUserDialog />
+<MongoCreateUserDialog />
 <AddPartitionDialog />
 <TruncateDialog />
 <NewDatabaseDialog />

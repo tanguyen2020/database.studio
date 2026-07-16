@@ -91,6 +91,38 @@ test('user manager: privilege grid preset queues GRANT statements', async ({ pag
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
 
+// U5 — MongoDB User Manager: users (user@db), per-database built-in role toggle,
+// Add User popup (command-based, no SQL).
+test('user manager: MongoDB users + role toggle + Add User popup', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(String(e)))
+  await blockRemoteFonts(page)
+  await page.goto(APP_URL)
+  await page.waitForSelector('#app > *', { timeout: 15_000 })
+  await page.waitForTimeout(300)
+  await page.getByText('10.0.6.2', { exact: false }).first().click() // MongoDB connection (connected)
+  await page.waitForTimeout(500)
+  // MongoDB is user-managed at the connection level — selecting the connection
+  // enables the toolbar Users button (no relational schema needed).
+  await page.getByTitle(/Users & privileges: /).click()
+  await page.waitForTimeout(500)
+
+  await expect(page.getByText('Users', { exact: true }).first()).toBeVisible()
+  await expect(page.getByRole('option', { name: /app@appdb/ }).first()).toBeVisible()
+
+  // Add User → popup (not a tab)
+  const tabsBefore = await page.getByRole('tab').count()
+  await page.getByRole('button', { name: '+ Add User' }).click()
+  await page.waitForTimeout(300)
+  await expect(page.getByRole('dialog')).toBeVisible()
+  expect(await page.getByRole('tab').count()).toBe(tabsBefore)
+  await page.getByRole('dialog').locator('input').first().fill('spec')
+  await page.waitForTimeout(150)
+  await expect(page.getByText(/createUser\("spec"|createUser: "spec"|user: "spec"/).first()).toBeVisible()
+
+  expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
+})
+
 // U4 — ClickHouse User Manager: Users/Roles, users.xml read-only badge, grant grid.
 test('user manager: ClickHouse users + grant grid preset', async ({ page }) => {
   const errors: string[] = []
