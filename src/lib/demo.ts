@@ -456,6 +456,36 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
           return ok({ cols: [['can_manage', 'bool']], rows: [{ can_manage: true }], total: 1 })
         return ok({ cols: [] as [string, string][], rows: [] as Record<string, unknown>[], total: 0 })
       }
+      // Oracle-specific shapes (name uppercased, DBA_* aliases).
+      if (uvSys === 'oracle') {
+        if (view === 'users')
+          return ok({ cols: [['name', 'text'], ['status', 'text'], ['tablespace', 'text'], ['profile', 'text'], ['created', 'text'], ['expires', 'text']], rows: [
+            { name: 'SYSTEM', status: 'OPEN', tablespace: 'SYSTEM', profile: 'DEFAULT', created: '2026-01-01', expires: '' },
+            { name: 'APP_USER', status: 'OPEN', tablespace: 'USERS', profile: 'DEFAULT', created: '2026-02-01', expires: '' },
+            { name: 'OLD_SVC', status: 'LOCKED', tablespace: 'USERS', profile: 'DEFAULT', created: '2026-01-15', expires: '' },
+          ], total: 3 })
+        if (view === 'roles')
+          return ok({ cols: [['name', 'text'], ['auth_type', 'text']], rows: [
+            { name: 'CONNECT', auth_type: 'NONE' }, { name: 'RESOURCE', auth_type: 'NONE' }, { name: 'APP_READ_ROLE', auth_type: 'NONE' },
+          ], total: 3 })
+        if (view === 'role_privs')
+          return ok({ cols: [['grantee', 'text'], ['role', 'text'], ['admin_option', 'text'], ['default_role', 'text']], rows: [
+            { grantee: 'APP_USER', role: 'CONNECT', admin_option: 'NO', default_role: 'YES' },
+          ], total: 1 })
+        if (view === 'sys_privs')
+          return ok({ cols: [['grantee', 'text'], ['privilege', 'text'], ['admin_option', 'text']], rows: [
+            { grantee: 'APP_USER', privilege: 'CREATE SESSION', admin_option: 'NO' },
+          ], total: 1 })
+        if (view === 'tab_privs')
+          return ok({ cols: [['grantee', 'text'], ['owner', 'text'], ['object', 'text'], ['privilege', 'text'], ['grantable', 'text']], rows: [], total: 0 })
+        if (view === 'profiles')
+          return ok({ cols: [['name', 'text']], rows: [{ name: 'DEFAULT' }], total: 1 })
+        if (view === 'tablespaces')
+          return ok({ cols: [['name', 'text']], rows: [{ name: 'USERS' }, { name: 'SYSTEM' }], total: 2 })
+        if (view === 'quotas')
+          return ok({ cols: [['name', 'text'], ['tablespace', 'text'], ['quota', 'text']], rows: [], total: 0 })
+        return ok({ cols: [] as [string, string][], rows: [] as Record<string, unknown>[], total: 0 })
+      }
       if (view === 'roles')
         return ok({ cols: [['name', 'text'], ['rolsuper', 'bool'], ['rolcanlogin', 'bool'], ['rolcreatedb', 'bool'], ['rolcreaterole', 'bool']], rows: [
           { name: 'postgres', rolsuper: true, rolcanlogin: true, rolcreatedb: true, rolcreaterole: true },

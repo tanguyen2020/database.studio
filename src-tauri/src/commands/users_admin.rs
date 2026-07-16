@@ -242,9 +242,67 @@ pub fn users_query(system: &str, view: &str, arg: Option<&str>) -> Option<String
              ORDER BY pr.name"
         }
 
+        // ---- Oracle (U6) — DBA_* catalog. Aliases quoted-lowercase so row keys
+        //      match the frontend (Oracle folds bare aliases to UPPERCASE). Views
+        //      that can be large are filtered by principal (arg) to dodge the
+        //      driver's ~100-row fetch cap (§1.4c).
+        ("oracle", "users") => {
+            "SELECT username AS \"name\", account_status AS \"status\", default_tablespace AS \"tablespace\", \
+                    temporary_tablespace AS \"temp_tablespace\", profile AS \"profile\", \
+                    authentication_type AS \"auth_type\", TO_CHAR(created,'YYYY-MM-DD') AS \"created\", \
+                    TO_CHAR(expiry_date,'YYYY-MM-DD') AS \"expires\" \
+             FROM dba_users ORDER BY username"
+        }
+        ("oracle", "roles") => {
+            "SELECT role AS \"name\", authentication_type AS \"auth_type\" FROM dba_roles ORDER BY role"
+        }
+        ("oracle", "role_privs") => {
+            return Some(format!(
+                "SELECT grantee AS \"grantee\", granted_role AS \"role\", admin_option AS \"admin_option\", \
+                        default_role AS \"default_role\" FROM dba_role_privs{} ORDER BY grantee, granted_role",
+                ora_grantee_filter(arg)
+            ));
+        }
+        ("oracle", "sys_privs") => {
+            return Some(format!(
+                "SELECT grantee AS \"grantee\", privilege AS \"privilege\", admin_option AS \"admin_option\" \
+                 FROM dba_sys_privs{} ORDER BY grantee, privilege",
+                ora_grantee_filter(arg)
+            ));
+        }
+        ("oracle", "tab_privs") => {
+            return Some(format!(
+                "SELECT grantee AS \"grantee\", owner AS \"owner\", table_name AS \"object\", \
+                        privilege AS \"privilege\", grantable AS \"grantable\" \
+                 FROM dba_tab_privs{} ORDER BY grantee, owner, table_name",
+                ora_grantee_filter(arg)
+            ));
+        }
+        ("oracle", "quotas") => {
+            "SELECT username AS \"name\", tablespace_name AS \"tablespace\", \
+                    CASE WHEN max_bytes = -1 THEN 'UNLIMITED' ELSE TO_CHAR(max_bytes) END AS \"quota\" \
+             FROM dba_ts_quotas ORDER BY username"
+        }
+        ("oracle", "profiles") => {
+            "SELECT DISTINCT profile AS \"name\" FROM dba_profiles ORDER BY profile"
+        }
+        ("oracle", "tablespaces") => {
+            "SELECT tablespace_name AS \"name\" FROM dba_tablespaces ORDER BY tablespace_name"
+        }
+
         _ => return None,
     };
     Some(sql.to_string())
+}
+
+/// Optional `WHERE grantee = '<ARG>'` clause for Oracle per-principal views.
+/// The name is uppercased (Oracle stores grantees uppercase) and single-quotes
+/// are doubled — arg is a principal name from our own escaper, never free SQL.
+fn ora_grantee_filter(arg: Option<&str>) -> String {
+    match arg {
+        Some(g) if !g.is_empty() => format!(" WHERE grantee = '{}'", g.to_uppercase().replace('\'', "''")),
+        _ => String::new(),
+    }
 }
 
 #[tauri::command]
@@ -387,5 +445,20 @@ mod tests {
         assert!(users_query("clickhouse", "grants", None).unwrap().contains("system.grants"));
         assert!(users_query("clickhouse", "role_grants", None).unwrap().contains("system.role_grants"));
         assert!(users_query("clickhouse", "can_manage", None).unwrap().contains("ACCESS MANAGEMENT"));
+    }
+
+    #[test]
+    fn users_query_oracle() {
+        assert!(users_query("oracle", "users", None).unwrap().contains("dba_users"));
+        assert!(users_query("oracle", "roles", None).unwrap().contains("dba_roles"));
+        // per-principal views filter by grantee (uppercased) to dodge the row cap
+        let rp = users_query("oracle", "role_privs", Some("app")).unwrap();
+        assert!(rp.contains("dba_role_privs") && rp.contains("WHERE grantee = 'APP'"));
+        assert!(users_query("oracle", "sys_privs", None).unwrap().contains("dba_sys_privs"));
+        assert!(!users_query("oracle", "sys_privs", None).unwrap().contains("WHERE"));
+        assert!(users_query("oracle", "tab_privs", Some("app")).unwrap().contains("WHERE grantee = 'APP'"));
+        assert!(users_query("oracle", "quotas", None).unwrap().contains("dba_ts_quotas"));
+        assert!(users_query("oracle", "profiles", None).unwrap().contains("dba_profiles"));
+        assert!(users_query("oracle", "tablespaces", None).unwrap().contains("dba_tablespaces"));
     }
 }

@@ -252,3 +252,63 @@ async fn a_full_resultset_no_100_cap() {
     let _ = d.exec("DROP TABLE a_big").await;
     println!("A OK — full 2500-row result set returned (100-row cap gone)");
 }
+
+/// U6 — Oracle User Manager, Definition-of-Done (spec §1.9). Runs EXACTLY the
+/// SQL the frontend builders (`src/lib/users/oracle.ts`) produce. Needs a live
+/// gvenzl/oracle-free container on localhost:1521 (see file header).
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs a live Oracle container (gvenzl/oracle-free) — run with --ignored"]
+async fn u6_user_manager_end_to_end() {
+    let mut admin = OracleDriver::connect(&params()).await.expect("connect as system");
+
+    // idempotent cleanup from a prior run
+    let _ = admin.exec("BEGIN EXECUTE IMMEDIATE 'DROP USER app_spec CASCADE'; EXCEPTION WHEN OTHERS THEN NULL; END;").await;
+    let _ = admin.exec("BEGIN EXECUTE IMMEDIATE 'DROP TABLE system.um_secret'; EXCEPTION WHEN OTHERS THEN NULL; END;").await;
+
+    admin.exec("CREATE TABLE system.um_secret (id NUMBER PRIMARY KEY, v VARCHAR2(20))").await.expect("seed table");
+    admin.exec("INSERT INTO system.um_secret VALUES (1, 'x')").await.expect("seed row");
+    admin.exec("INSERT INTO system.um_secret VALUES (2, 'y')").await.expect("seed row");
+
+    // 1. CREATE — createUser({name:'app_spec', password:'Pw12345', grantCreateSession:true})
+    admin.exec(r#"CREATE USER APP_SPEC IDENTIFIED BY "Pw12345""#).await.expect("create user");
+    admin.exec("GRANT CREATE SESSION TO APP_SPEC").await.expect("grant session");
+
+    // 2. LOGIN as the new user
+    let app_params = OracleConnParams {
+        host: "127.0.0.1".into(),
+        port: 1521,
+        service: "FREEPDB1".into(),
+        use_sid: false,
+        user: "app_spec".into(),
+        password: "Pw12345".into(),
+        ssl: false,
+        ssl_ca: String::new(),
+    };
+    let mut app = OracleDriver::connect(&app_params).await.expect("login as app_spec");
+    app.exec("SELECT 1 AS ok FROM dual").await.expect("trivial select");
+
+    // 3. DENIED before grant
+    assert!(app.exec("SELECT * FROM system.um_secret").await.is_err(), "denied before grant");
+
+    // 4. GRANT — grantObjPrivs(['SELECT'],'system','um_secret','app_spec')
+    admin.exec("GRANT SELECT ON SYSTEM.UM_SECRET TO APP_SPEC").await.expect("grant select");
+    let out = app.exec("SELECT count(*) AS n FROM system.um_secret").await.expect("select after grant");
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    assert_eq!(result.rows[0]["N"].to_string(), "2", "read granted");
+
+    // 5. WRITE denied (only SELECT granted)
+    assert!(app.exec("INSERT INTO system.um_secret VALUES (3, 'z')").await.is_err(), "read-only cannot insert");
+
+    // 6. REVOKE → denied; DROP → gone
+    admin.exec("REVOKE SELECT ON SYSTEM.UM_SECRET FROM APP_SPEC").await.expect("revoke");
+    assert!(app.exec("SELECT * FROM system.um_secret").await.is_err(), "denied again after revoke");
+    admin.exec("DROP USER APP_SPEC CASCADE").await.expect("drop user");
+    let out = admin
+        .exec("SELECT count(*) AS n FROM dba_users WHERE username = 'APP_SPEC'")
+        .await
+        .expect("count users");
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    assert_eq!(result.rows[0]["N"].to_string(), "0", "user gone");
+    let _ = admin.exec("DROP TABLE system.um_secret").await;
+    println!("U6 OK — Oracle create/login/deny/grant/deny-write/revoke/drop verified");
+}

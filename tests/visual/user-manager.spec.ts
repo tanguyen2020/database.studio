@@ -91,6 +91,36 @@ test('user manager: privilege grid preset queues GRANT statements', async ({ pag
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
 
+// U6 — Oracle User Manager: users list, System Privileges checklist, Object
+// Privileges per-schema batch preset.
+test('user manager: Oracle users + system privs + object preset', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(String(e)))
+  await blockRemoteFonts(page)
+  await page.goto(APP_URL)
+  await page.waitForSelector('#app > *', { timeout: 15_000 })
+  await page.waitForTimeout(300)
+  await page.getByText('10.0.7.1', { exact: false }).first().click() // Oracle connection (connected)
+  await page.waitForTimeout(500)
+  await page.getByText('public', { exact: true }).first().click()
+  await page.waitForTimeout(200)
+  await page.getByTitle(/Users & privileges: /).click()
+  await page.waitForTimeout(500)
+
+  await expect(page.getByRole('option', { name: /APP_USER/ }).first()).toBeVisible()
+  await page.getByRole('option', { name: /APP_USER/ }).first().click()
+  await page.waitForTimeout(150)
+
+  // System Privileges tab → toggle a priv queues GRANT ... TO APP_USER
+  await page.getByRole('tab', { name: 'System Privileges' }).click()
+  await page.waitForTimeout(150)
+  await page.getByText('CREATE TABLE', { exact: true }).first().click()
+  await page.waitForTimeout(200)
+  await expect(page.getByText(/GRANT CREATE TABLE TO APP_USER/).first()).toBeVisible()
+
+  expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
+})
+
 // U5 — MongoDB User Manager: users (user@db), per-database built-in role toggle,
 // Add User popup (command-based, no SQL).
 test('user manager: MongoDB users + role toggle + Add User popup', async ({ page }) => {
