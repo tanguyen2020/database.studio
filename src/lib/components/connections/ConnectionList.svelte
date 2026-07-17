@@ -63,6 +63,9 @@
   // dispatch dòng 2731 (có mariadb/sqlite) và README; theo dispatch + README.
   const REL_SYSTEMS = ['postgres', 'mysql', 'mariadb', 'mssql', 'clickhouse', 'sqlite', 'oracle']
   const isRelational = (system: string) => REL_SYSTEMS.includes(system)
+  // Engines with a user/privilege system (User Manager entry — §1.1).
+  const USER_MGR_SYSTEMS = ['postgres', 'mysql', 'mariadb', 'mssql', 'clickhouse', 'oracle', 'cassandra', 'mongodb']
+  const hasUserMgr = (system: string) => USER_MGR_SYSTEMS.includes(system)
   const selRel = $derived(!!selConn && isRelational(selConn.system))
   // View ER / Generate Scripts enable only when a schema/database node (public / dbo /
   // a database) is selected in the Explorer tree AND it belongs to the picked connection.
@@ -265,6 +268,9 @@
       {#if isRelational(p.system)}
         <ContextMenu.Separator />
         <ContextMenu.Item onclick={() => tabs.openSchemaCompare(p.id)}>Compare Schemas…</ContextMenu.Item>
+      {/if}
+      {#if hasUserMgr(p.system)}
+        <ContextMenu.Item onclick={() => tabs.openUserManager(p.id)}>Users &amp; Privileges…</ContextMenu.Item>
       {/if}
       <ContextMenu.Separator />
       {#if p.ephemeral}

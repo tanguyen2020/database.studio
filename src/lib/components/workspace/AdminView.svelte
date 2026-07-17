@@ -4,6 +4,7 @@
   import { untrack } from 'svelte'
   import * as ipc from '$lib/ipc'
   import { toasts } from '$lib/stores/toast.svelte'
+  import { tabs } from '$lib/stores/tabs.svelte'
   import type { TabState } from '$lib/types'
 
   interface Props {
@@ -133,7 +134,12 @@
       {/each}
     </div>
     <span style="font-size:var(--px-11);color:var(--muted)">{rows.length} rows</span>
-    <span onclick={load} onkeydown={(e) => e.key === 'Enter' && load()} role="button" tabindex="0" style="margin-left:auto;font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">⟳ Refresh</span>
+    {#if view === 'users' && tab.connectionId}
+      <span onclick={() => tab.connectionId && tabs.openUserManager(tab.connectionId)} onkeydown={(e) => e.key === 'Enter' && tab.connectionId && tabs.openUserManager(tab.connectionId)} role="button" tabindex="0" title="Open the full Users & Privileges manager" style="margin-left:auto;font-size:var(--px-11_5);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer;font-weight:600">Manage…</span>
+      <span onclick={load} onkeydown={(e) => e.key === 'Enter' && load()} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">⟳ Refresh</span>
+    {:else}
+      <span onclick={load} onkeydown={(e) => e.key === 'Enter' && load()} role="button" tabindex="0" style="margin-left:auto;font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">⟳ Refresh</span>
+    {/if}
   </div>
   <div style="flex:1;overflow:auto;min-height:0">
     {#if error}
