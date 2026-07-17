@@ -104,7 +104,7 @@ test('user manager: guided Grant access wizard queues GRANT statements', async (
 
   await page.getByRole('option', { name: /app_user/ }).first().click()
   await page.waitForTimeout(150)
-  await page.getByRole('tab', { name: 'Privileges' }).click()
+  await page.getByRole('tab', { name: 'Privileges', exact: true }).click()
   await page.waitForTimeout(200)
 
   // primary path: the guided "Grant access…" wizard (not the raw matrix)

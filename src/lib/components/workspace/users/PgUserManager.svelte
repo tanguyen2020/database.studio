@@ -42,7 +42,8 @@
   let refreshing = $state(false)
   let error = $state<string | null>(null)
   let selected = $state<string>('')
-  let detailTab = $state<'general' | 'membership' | 'privileges'>('general')
+  let detailTab = $state<'general' | 'membership' | 'privileges' | 'default'>('general')
+  let defaultAcl = $state<Row[]>([])
 
   // Pending mutation statements (built by the active tab), shown as a preview.
   let pending = $state<string[]>([])
@@ -69,6 +70,7 @@
       tableGrants = tg.rows
       schemaGrants = sg.rows
       schemaOwners = so.rows
+      ipc.usersView(cid, 'default_acl').then((d) => (defaultAcl = d.rows)).catch(() => (defaultAcl = []))
       schemas = sc.map((s) => s.name)
       canManage = cm.rows[0]?.can_manage !== false
       // table counts per schema for ✓ (100%) vs ■ (partial) cell state
@@ -315,7 +317,7 @@
     <div style="flex:1;display:flex;flex-direction:column;min-height:0">
       {#if selectedRole}
         <div style="flex:none;display:flex;gap:var(--px-2);padding:var(--px-8) var(--px-12) 0;border-bottom:var(--px-1) solid var(--border)">
-          {#each [['general', 'General'], ['membership', 'Membership'], ['privileges', 'Privileges']] as [k, label] (k)}
+          {#each [['general', 'General'], ['membership', 'Membership'], ['privileges', 'Privileges'], ['default', 'Default privileges']] as [k, label] (k)}
             <span onclick={() => (detailTab = k as typeof detailTab)} onkeydown={(e) => e.key === 'Enter' && (detailTab = k as typeof detailTab)} role="tab" tabindex="0" aria-selected={detailTab === k} style="padding:var(--px-6) var(--px-12);font-size:var(--px-12);cursor:pointer;font-weight:600;border-bottom:var(--px-2) solid {detailTab === k ? 'var(--primary)' : 'transparent'};color:{detailTab === k ? 'var(--text)' : 'var(--muted)'}">{label}</span>
           {/each}
         </div>
@@ -371,7 +373,7 @@
               <div style="font-size:var(--px-12);color:var(--text2);font-weight:600;margin:var(--px-12) 0 var(--px-6)">Members</div>
               {#each hasMembers as m (m.member)}<div class="mono" style="font-size:var(--px-12);padding:var(--px-2) 0">{m.member}</div>{/each}
             {/if}
-          {:else}
+          {:else if detailTab === 'privileges'}
             <!-- Guided grant (primary path) -->
             <div style="display:flex;align-items:center;gap:var(--px-10);margin-bottom:var(--px-10);flex-wrap:wrap">
               <span onclick={openGrantWizard} onkeydown={(e) => e.key === 'Enter' && openGrantWizard()} role="button" tabindex="0" style="font-size:var(--px-12_5);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-7);padding:var(--px-6) var(--px-14);cursor:pointer;font-weight:600">＋ Grant access…</span>
@@ -394,6 +396,29 @@
               note="EXECUTE on functions defaults to PUBLIC in PostgreSQL."
             />
             {/if}
+          {:else}
+            <!-- Default privileges (read-only, §2.3) — ALTER DEFAULT PRIVILEGES already granted -->
+            <div style="font-size:var(--px-11);color:var(--muted);margin-bottom:var(--px-8)">Privileges automatically granted on objects created LATER, by owner. (Read-only — set via the future-tables checkbox in Privileges.)</div>
+            {#each [defaultAcl.filter((d) => String(d.grantee) === selected)] as list (0)}
+              {#if list.length}
+                <table class="mono" style="border-collapse:collapse;font-size:var(--px-12)">
+                  <thead><tr>{#each ['Owner', 'Schema', 'Object type', 'Privilege', 'Grantable'] as h (h)}<th style="text-align:left;padding:var(--px-4) var(--px-12) var(--px-4) 0;color:var(--text2);border-bottom:var(--px-1) solid var(--border2)">{h}</th>{/each}</tr></thead>
+                  <tbody>
+                    {#each list as d (`${d.owner}:${d.schema}:${d.objtype}:${d.privilege_type}`)}
+                      <tr>
+                        <td style="padding:var(--px-3) var(--px-12) var(--px-3) 0;color:var(--text)">{d.owner}</td>
+                        <td style="padding:var(--px-3) var(--px-12) var(--px-3) 0;color:var(--text)">{d.schema || '—'}</td>
+                        <td style="padding:var(--px-3) var(--px-12) var(--px-3) 0;color:var(--text2)">{d.objtype}</td>
+                        <td style="padding:var(--px-3) var(--px-12) var(--px-3) 0;color:var(--text)">{d.privilege_type}</td>
+                        <td style="padding:var(--px-3) 0;color:var(--muted)">{d.is_grantable ? 'yes' : ''}</td>
+                      </tr>
+                    {/each}
+                  </tbody>
+                </table>
+              {:else}
+                <div style="font-size:var(--px-11_5);color:var(--muted)">No default privileges for this role.</div>
+              {/if}
+            {/each}
           {/if}
         </div>
       {:else if !loading}

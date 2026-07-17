@@ -40,7 +40,8 @@
   let refreshing = $state(false)
   let error = $state<string | null>(null)
   let selected = $state<string>('')
-  let detailTab = $state<'general' | 'sys' | 'roles' | 'objects'>('general')
+  let detailTab = $state<'general' | 'sys' | 'roles' | 'objects' | 'quotas'>('general')
+  let quotas = $state<Row[]>([])
   let pending = $state<string[]>([])
   let executing = $state(false)
 
@@ -71,12 +72,14 @@
 
   async function loadPrivs() {
     if (!cid || !selected) return
-    const [rp, sp] = await Promise.all([
+    const [rp, sp, qt] = await Promise.all([
       ipc.usersView(cid, 'role_privs', selected).catch(() => ({ rows: [] as Row[] })),
       ipc.usersView(cid, 'sys_privs', selected).catch(() => ({ rows: [] as Row[] })),
+      ipc.usersView(cid, 'quotas').catch(() => ({ rows: [] as Row[] })),
     ])
     rolePrivs = rp.rows
     sysPrivs = sp.rows
+    quotas = qt.rows
   }
 
   async function refresh() {
@@ -204,7 +207,7 @@
     <div style="flex:1;display:flex;flex-direction:column;min-height:0">
       {#if selectedUser}
         <div style="flex:none;display:flex;gap:var(--px-2);padding:var(--px-8) var(--px-12) 0;border-bottom:var(--px-1) solid var(--border)">
-          {#each [['general', 'General'], ['sys', 'System Privileges'], ['roles', 'Granted Roles'], ['objects', 'Object Privileges']] as [k, label] (k)}
+          {#each [['general', 'General'], ['sys', 'System Privileges'], ['roles', 'Granted Roles'], ['objects', 'Object Privileges'], ['quotas', 'Quotas']] as [k, label] (k)}
             <span onclick={() => (detailTab = k as typeof detailTab)} onkeydown={(e) => e.key === 'Enter' && (detailTab = k as typeof detailTab)} role="tab" tabindex="0" aria-selected={detailTab === k} style="padding:var(--px-6) var(--px-12);font-size:var(--px-12);cursor:pointer;font-weight:600;border-bottom:var(--px-2) solid {detailTab === k ? 'var(--primary)' : 'transparent'};color:{detailTab === k ? 'var(--text)' : 'var(--muted)'}">{label}</span>
           {/each}
         </div>
@@ -268,6 +271,22 @@
               <span onclick={queueGrantRole} onkeydown={(e) => e.key === 'Enter' && queueGrantRole()} role="button" tabindex="0" aria-disabled={!grantRoleName} style="font-size:var(--px-11_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:{grantRoleName ? 'pointer' : 'not-allowed'};opacity:{grantRoleName ? 1 : 0.5}">Queue grant</span>
               <span onclick={queueDefaultRoleAll} onkeydown={(e) => e.key === 'Enter' && queueDefaultRoleAll()} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">Default role ALL</span>
             </div>
+          {:else if detailTab === 'quotas'}
+            <div style="font-size:var(--px-11);color:var(--muted);margin-bottom:var(--px-8)">Tablespace quotas for {selected} (set new quotas in the Create/General flow).</div>
+            {#each [quotas.filter((q) => String(q.name) === selected)] as list (0)}
+              {#if list.length}
+                <table class="mono" style="border-collapse:collapse;font-size:var(--px-12)">
+                  <thead><tr><th style="text-align:left;padding:var(--px-4) var(--px-14) var(--px-4) 0;color:var(--text2);border-bottom:var(--px-1) solid var(--border2)">Tablespace</th><th style="text-align:left;padding:var(--px-4) 0;color:var(--text2);border-bottom:var(--px-1) solid var(--border2)">Quota</th></tr></thead>
+                  <tbody>
+                    {#each list as q (q.tablespace)}
+                      <tr><td style="padding:var(--px-3) var(--px-14) var(--px-3) 0;color:var(--text)">{q.tablespace}</td><td style="padding:var(--px-3) 0;color:var(--text)">{q.quota}</td></tr>
+                    {/each}
+                  </tbody>
+                </table>
+              {:else}
+                <div style="font-size:var(--px-11_5);color:var(--muted)">No tablespace quotas.</div>
+              {/if}
+            {/each}
           {:else}
             <!-- Object privileges — per owner, batched (Oracle has no GRANT ON SCHEMA) -->
             <div style="display:flex;align-items:center;gap:var(--px-8);margin-bottom:var(--px-8);flex-wrap:wrap">

@@ -46,7 +46,15 @@
   let refreshing = $state(false)
   let error = $state<string | null>(null)
   let selectedKey = $state<string>('')
-  let detailTab = $state<'general' | 'privileges' | 'roles'>('general')
+  let detailTab = $state<'general' | 'admin' | 'privileges' | 'roles' | 'showgrants'>('general')
+  let showGrants = $state<string>('')
+  // Global (administrative) privileges checklist — granted ON *.*.
+  const GLOBAL_PRIVS = [
+    'SELECT', 'INSERT', 'UPDATE', 'DELETE', 'CREATE', 'DROP', 'INDEX', 'ALTER', 'CREATE VIEW', 'SHOW VIEW',
+    'CREATE ROUTINE', 'ALTER ROUTINE', 'EXECUTE', 'EVENT', 'TRIGGER', 'REFERENCES', 'LOCK TABLES',
+    'CREATE TEMPORARY TABLES', 'CREATE USER', 'RELOAD', 'PROCESS', 'SHOW DATABASES', 'REPLICATION CLIENT',
+    'REPLICATION SLAVE', 'SUPER', 'FILE', 'SHUTDOWN', 'GRANT OPTION',
+  ]
   let pending = $state<string[]>([])
   let executing = $state(false)
 
@@ -185,6 +193,12 @@
     confirmDrop = false
   }
 
+  async function loadShowGrants() {
+    if (!cid || !selectedAcct) return
+    const r = await ipc.usersView(cid, 'grants_for', selLit).catch(() => ({ rows: [] as Row[] }))
+    showGrants = r.rows.map((x) => String(Object.values(x)[0] ?? '')).join(';\n') + (r.rows.length ? ';' : '')
+  }
+
   // ---- Roles ----------------------------------------------------------------
   let grantRoleName = $state('')
   let grantAdmin = $state(false)
@@ -266,7 +280,7 @@
     <div style="flex:1;display:flex;flex-direction:column;min-height:0">
       {#if selectedAcct}
         <div style="flex:none;display:flex;gap:var(--px-2);padding:var(--px-8) var(--px-12) 0;border-bottom:var(--px-1) solid var(--border)">
-          {#each [['general', 'General'], ['privileges', 'Schema Privileges'], ['roles', 'Roles']] as [k, label] (k)}
+          {#each [['general', 'General'], ['admin', 'Administrative'], ['privileges', 'Schema Privileges'], ['roles', 'Roles'], ['showgrants', 'SHOW GRANTS']] as [k, label] (k)}
             <span onclick={() => (detailTab = k as typeof detailTab)} onkeydown={(e) => e.key === 'Enter' && (detailTab = k as typeof detailTab)} role="tab" tabindex="0" aria-selected={detailTab === k} style="padding:var(--px-6) var(--px-12);font-size:var(--px-12);cursor:pointer;font-weight:600;border-bottom:var(--px-2) solid {detailTab === k ? 'var(--primary)' : 'transparent'};color:{detailTab === k ? 'var(--text)' : 'var(--muted)'}">{label}</span>
           {/each}
         </div>
@@ -301,6 +315,21 @@
             {:else}
               <span onclick={() => (confirmDrop = true)} onkeydown={(e) => e.key === 'Enter' && (confirmDrop = true)} role="button" tabindex="0" style="font-size:var(--px-11_5);color:var(--error);border:var(--px-1) solid var(--error);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">Drop account…</span>
             {/if}
+          {:else if detailTab === 'admin'}
+            <div style="font-size:var(--px-11);color:var(--muted);margin-bottom:var(--px-8)">Global (administrative) privileges — granted ON *.* (whole server). Click to grant/revoke.</div>
+            <div style="display:flex;flex-wrap:wrap;gap:var(--px-8) var(--px-14)">
+              {#each GLOBAL_PRIVS as p (p)}
+                <label style="font-size:var(--px-11_5);color:var(--text);display:flex;align-items:center;gap:var(--px-4)">
+                  <input type="checkbox" checked={directOf(selLit, null, p) !== 'none'} onchange={(e) => onCell(null, p, (e.currentTarget as HTMLInputElement).checked ? 'none' : 'direct')} /> {p}
+                </label>
+              {/each}
+            </div>
+          {:else if detailTab === 'showgrants'}
+            <div style="display:flex;align-items:center;gap:var(--px-8);margin-bottom:var(--px-8)">
+              <span style="font-size:var(--px-11);color:var(--muted)">Raw output of SHOW GRANTS FOR {selLit} (source of truth).</span>
+              <span onclick={loadShowGrants} onkeydown={(e) => e.key === 'Enter' && loadShowGrants()} role="button" tabindex="0" style="font-size:var(--px-11);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-3) var(--px-9);cursor:pointer">Load</span>
+            </div>
+            <pre class="selectable mono" style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-10);font-size:var(--px-11_5);white-space:pre-wrap;color:var(--text2)">{showGrants || '-- click Load'}</pre>
           {:else if detailTab === 'privileges'}
             <div style="display:flex;align-items:center;gap:var(--px-10);margin-bottom:var(--px-10);flex-wrap:wrap">
               <span onclick={openGrantWizard} onkeydown={(e) => e.key === 'Enter' && openGrantWizard()} role="button" tabindex="0" style="font-size:var(--px-12_5);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-7);padding:var(--px-6) var(--px-14);cursor:pointer;font-weight:600">＋ Grant access…</span>
