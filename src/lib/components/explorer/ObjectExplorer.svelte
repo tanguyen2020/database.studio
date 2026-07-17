@@ -26,6 +26,12 @@
   import { natsAddWizard } from '$lib/stores/natsAdd.svelte'
   import { natsCreateStream } from '$lib/stores/natsCreateStream.svelte'
   import { kafkaTopicWizard } from '$lib/stores/kafkaTopic.svelte'
+  import { pgRoleWizard } from '$lib/stores/pgrole.svelte'
+  import { myUserWizard } from '$lib/stores/myuser.svelte'
+  import { mssqlUserWizard } from '$lib/stores/mssqluser.svelte'
+  import { chUserWizard } from '$lib/stores/chuser.svelte'
+  import { oraUserWizard } from '$lib/stores/orauser.svelte'
+  import { cassUserWizard } from '$lib/stores/cassuser.svelte'
   import { properties, type PropTarget } from '$lib/stores/properties.svelte'
   import { newDatabaseWizard } from '$lib/stores/newdatabase.svelte'
   import { genRenameRoutine } from '$lib/sql/routines'
@@ -160,6 +166,98 @@
         ? selected.id
         : null,
   )
+  // ---- Security tree (Users & Privileges · §1.2b/§1.2c) --------------------
+  // A connection-level "Security" section appended below the tree, per engine,
+  // using the native tool's terminology. Lazy-loads principals on expand.
+  interface SecFolder {
+    key: string
+    label: string
+    /** users_view name to load, OR 'cql:LIST ROLES' for Cassandra. */
+    source: string
+    onNew?: () => void
+  }
+  interface SecItem {
+    name: string
+    badge?: string
+    group?: boolean
+  }
+  const secFolders = $derived.by<SecFolder[]>(() => {
+    const cid = selected?.id
+    if (!cid || !selected?.connected) return []
+    switch (selected.system) {
+      case 'postgres':
+        return [{ key: 'sec:pg:roles', label: 'Login/Group Roles', source: 'roles', onNew: () => pgRoleWizard.show(cid) }]
+      case 'mysql':
+        return [{ key: 'sec:my:users', label: 'Users and Privileges', source: 'users', onNew: () => myUserWizard.show(cid, 'mysql') }]
+      case 'mariadb':
+        return [{ key: 'sec:ma:users', label: 'Users and Privileges', source: 'users', onNew: () => myUserWizard.show(cid, 'mariadb') }]
+      case 'mssql':
+        return [{ key: 'sec:ms:logins', label: 'Security · Logins', source: 'logins', onNew: () => mssqlUserWizard.show(cid, 'login') }]
+      case 'clickhouse':
+        return [
+          { key: 'sec:ch:users', label: 'Access · Users', source: 'users', onNew: () => chUserWizard.show(cid, 'user') },
+          { key: 'sec:ch:roles', label: 'Access · Roles', source: 'roles', onNew: () => chUserWizard.show(cid, 'role') },
+        ]
+      case 'oracle':
+        return [
+          { key: 'sec:or:users', label: 'Other Users', source: 'users', onNew: () => oraUserWizard.show(cid) },
+          { key: 'sec:or:roles', label: 'Roles', source: 'roles' },
+        ]
+      case 'cassandra':
+        return [{ key: 'sec:ca:roles', label: 'Roles', source: 'cql:LIST ROLES', onNew: () => cassUserWizard.show(cid) }]
+      default:
+        return []
+    }
+  })
+  let secRows = $state<Record<string, SecItem[]>>({})
+  const boolTrue = (v: unknown) => v === true || v === 1 || v === '1' || v === 'Y' || v === 't' || v === 'true'
+  async function loadSec(f: SecFolder) {
+    const cid = selected?.id
+    if (!cid) return
+    try {
+      let rows: Record<string, unknown>[]
+      if (f.source.startsWith('cql:')) {
+        const r = await ipc.cqlExec(cid, f.source.slice(4))
+        rows = r.result?.rows ?? []
+      } else {
+        rows = (await ipc.usersView(cid, f.source)).rows
+      }
+      secRows = { ...secRows, [f.key]: rows.map((x) => secItemOf(f, x)) }
+    } catch {
+      secRows = { ...secRows, [f.key]: [] }
+    }
+  }
+  function secItemOf(f: SecFolder, x: Record<string, unknown>): SecItem {
+    if (f.source === 'cql:LIST ROLES') {
+      const badges = [boolTrue(x.super) ? 'SUPER' : '', boolTrue(x.login) ? '' : 'group'].filter(Boolean)
+      return { name: String(x.role), badge: badges[0] || undefined, group: !boolTrue(x.login) }
+    }
+    if (selected?.system === 'postgres')
+      return { name: String(x.name), badge: boolTrue(x.rolsuper) ? 'SUPER' : undefined, group: x.rolcanlogin === false }
+    if (selected?.system === 'mysql' || selected?.system === 'mariadb')
+      return { name: `${x.user}@${x.host}`, badge: boolTrue(x.account_locked) ? 'locked' : boolTrue(x.is_role) ? 'role' : undefined, group: boolTrue(x.is_role) }
+    if (selected?.system === 'mssql')
+      return { name: String(x.name), badge: boolTrue(x.is_disabled) ? 'disabled' : undefined }
+    if (selected?.system === 'clickhouse')
+      return { name: String(x.name), badge: x.storage && String(x.storage) !== 'local_directory' ? String(x.storage) : undefined }
+    if (selected?.system === 'oracle')
+      return { name: String(x.name), badge: x.status && String(x.status) !== 'OPEN' ? String(x.status) : undefined }
+    return { name: String(x.name ?? x.role ?? x.user ?? '') }
+  }
+  function toggleSec(f: SecFolder) {
+    if (expanded.has(f.key)) {
+      expanded = new Set([...expanded].filter((k) => k !== f.key))
+    } else {
+      expanded = new Set([...expanded, f.key])
+      if (!secRows[f.key]) void loadSec(f)
+    }
+  }
+  /** double-click a principal → open the User Manager focused on it. */
+  function openPrincipal(name: string) {
+    const cid = selected?.id
+    if (cid) tabs.openUserManager(cid, name)
+  }
+
   // "database.schema" of the current toolbar target (for the button tooltips);
   // schema-as-database engines already have db === schema, so just the schema.
   const toolTargetLabel = $derived.by(() => {
@@ -2512,6 +2610,37 @@
           {/if}
         {/each}
       {/if}
+    {/if}
+
+    <!-- Security (Users & Privileges · §1.2b/§1.2c) — connection-level nodes
+         appended below the tree; native terminology per engine. -->
+    {#if secFolders.length}
+      {#each secFolders as f (f.key)}
+        {#snippet secFolderMenu()}
+          <ContextMenu.Content>
+            {#if f.onNew}<ContextMenu.Item onclick={() => f.onNew?.()}>New…</ContextMenu.Item>{/if}
+            <ContextMenu.Item onclick={() => void loadSec(f)}>Refresh</ContextMenu.Item>
+          </ContextMenu.Content>
+        {/snippet}
+        {@render row({ key: f.key, depth: 0, glyph: '🔐', color: C.folder, name: f.label, meta: secRows[f.key] ? String(secRows[f.key].length) : '', head: true, expandable: true, onClick: () => toggleSec(f) }, secFolderMenu)}
+        {#if expanded.has(f.key)}
+          {#if !secRows[f.key]}
+            {@render row({ key: `${f.key}:loading`, depth: 1, glyph: '', color: C.col, name: 'Loading…' })}
+          {:else if secRows[f.key].length === 0}
+            {@render row({ key: `${f.key}:empty`, depth: 1, glyph: '', color: C.col, name: '(none)' })}
+          {:else}
+            {#each secRows[f.key] as it (it.name)}
+              {#snippet secItemMenu()}
+                <ContextMenu.Content>
+                  <ContextMenu.Item onclick={() => openPrincipal(it.name)}>Properties…</ContextMenu.Item>
+                  <ContextMenu.Item onclick={() => openPrincipal(it.name)}>Change Password / Drop…</ContextMenu.Item>
+                </ContextMenu.Content>
+              {/snippet}
+              {@render row({ key: `${f.key}:${it.name}`, depth: 1, glyph: it.group ? '👥' : '👤', color: C.col, name: it.name, meta: it.badge ?? '', onClick: () => openPrincipal(it.name) }, secItemMenu)}
+            {/each}
+          {/if}
+        {/if}
+      {/each}
     {/if}
   </div>
 

@@ -17,6 +17,33 @@ async function openManager(page: import('@playwright/test').Page) {
   await page.waitForTimeout(500)
 }
 
+// §1.2b/§1.2c — the Explorer tree has a per-engine Security node (here PG's
+// "Login/Group Roles"); double-clicking a principal opens the User Manager.
+test('explorer: PG Security node lists roles + opens the manager', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(String(e)))
+  await blockRemoteFonts(page)
+  await page.goto(APP_URL)
+  await page.waitForSelector('#app > *', { timeout: 15_000 })
+  await page.waitForTimeout(300)
+  await page.getByRole('button', { name: /Postgres/ }).first().click()
+  await page.waitForTimeout(500)
+
+  // the Security node (native pgAdmin term) sits in the tree
+  const node = page.getByText('Login/Group Roles', { exact: true }).first()
+  await expect(node).toBeVisible()
+  await node.dblclick() // expand → loads roles
+  await page.waitForTimeout(400)
+  await expect(page.getByText('app_user', { exact: true }).first()).toBeVisible()
+
+  // double-click a principal → opens the User Manager tab
+  await page.getByText('app_user', { exact: true }).first().dblclick()
+  await page.waitForTimeout(500)
+  await expect(page.getByRole('tab', { name: /Users · / }).first()).toBeVisible()
+
+  expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
+})
+
 test('user manager: PG shell lists roles and shows attributes', async ({ page }) => {
   const errors: string[] = []
   page.on('pageerror', (e) => errors.push(String(e)))
