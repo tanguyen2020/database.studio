@@ -215,6 +215,54 @@ export function grantConnect(database: string, user: string): string {
   return `GRANT CONNECT ON DATABASE ${qi(database)} TO ${qi(user)}`
 }
 
+// ---- §1.8.3 full grid columns + per-column (single-priv) grant/revoke --------
+// Each column maps to a (target, privilege) pair so a cell click emits exactly
+// one GRANT/REVOKE (natural diff).
+export interface GridCol {
+  key: string
+  label: string
+  tip: string
+  target: 'schema' | 'tables' | 'sequences' | 'functions'
+  priv: string
+}
+export const PG_GRID_COLUMNS: GridCol[] = [
+  { key: 'USAGE', label: 'USAGE', tip: 'USAGE on the schema', target: 'schema', priv: 'USAGE' },
+  { key: 'CREATE', label: 'CREATE', tip: 'CREATE on the schema', target: 'schema', priv: 'CREATE' },
+  { key: 'SELECT', label: 'SELECT', tip: 'SELECT on all tables', target: 'tables', priv: 'SELECT' },
+  { key: 'INSERT', label: 'INSERT', tip: 'INSERT on all tables', target: 'tables', priv: 'INSERT' },
+  { key: 'UPDATE', label: 'UPDATE', tip: 'UPDATE on all tables', target: 'tables', priv: 'UPDATE' },
+  { key: 'DELETE', label: 'DELETE', tip: 'DELETE on all tables', target: 'tables', priv: 'DELETE' },
+  { key: 'TRUNCATE', label: 'TRUNCATE', tip: 'TRUNCATE on all tables', target: 'tables', priv: 'TRUNCATE' },
+  { key: 'REFERENCES', label: 'REFS', tip: 'REFERENCES on all tables', target: 'tables', priv: 'REFERENCES' },
+  { key: 'TRIGGER', label: 'TRIGGER', tip: 'TRIGGER on all tables', target: 'tables', priv: 'TRIGGER' },
+  { key: 'SEQ_USAGE', label: 'seqUSAGE', tip: 'USAGE on all sequences', target: 'sequences', priv: 'USAGE' },
+  { key: 'SEQ_SELECT', label: 'seqSELECT', tip: 'SELECT on all sequences', target: 'sequences', priv: 'SELECT' },
+  { key: 'EXECUTE', label: 'EXECUTE', tip: 'EXECUTE on all functions', target: 'functions', priv: 'EXECUTE' },
+]
+
+function targetSql(col: GridCol, schema: string): string {
+  const s = qi(schema)
+  switch (col.target) {
+    case 'schema':
+      return `SCHEMA ${s}`
+    case 'tables':
+      return `ALL TABLES IN SCHEMA ${s}`
+    case 'sequences':
+      return `ALL SEQUENCES IN SCHEMA ${s}`
+    case 'functions':
+      return `ALL FUNCTIONS IN SCHEMA ${s}`
+  }
+}
+
+export function grantColumn(schema: string, colKey: string, user: string): string {
+  const col = PG_GRID_COLUMNS.find((c) => c.key === colKey)!
+  return `GRANT ${col.priv} ON ${targetSql(col, schema)} TO ${qi(user)}`
+}
+export function revokeColumn(schema: string, colKey: string, user: string): string {
+  const col = PG_GRID_COLUMNS.find((c) => c.key === colKey)!
+  return `REVOKE ${col.priv} ON ${targetSql(col, schema)} FROM ${qi(user)}`
+}
+
 export type PresetKind = 'read-only' | 'read-write' | 'read-write-execute' | 'full' | 'revoke-all'
 
 /** Dispatch a preset by kind → ordered statements (schema scope). */

@@ -66,6 +66,14 @@ describe('mssql user builders', () => {
     )
   })
 
+  it('§1.8.4 full grid columns + per-column GRANT/DENY/REVOKE', async () => {
+    const m = await import('./mssql')
+    expect(m.MSSQL_GRID_COLUMNS.map((c) => c.key)).toContain('VIEW DEFINITION')
+    expect(m.grantColumn('dbo', 'SELECT', 'app')).toBe(`GRANT SELECT ON SCHEMA::[dbo] TO [app]`)
+    expect(m.denyColumn('dbo', 'DELETE', 'app')).toBe(`DENY DELETE ON SCHEMA::[dbo] TO [app]`)
+    expect(m.revokeColumn('dbo', 'SELECT', 'app')).toBe(`REVOKE SELECT ON SCHEMA::[dbo] FROM [app]`)
+  })
+
   it('§1.8.4 schema presets', () => {
     expect(schemaPreset('read-only', 'dbo', 'app')).toBe(`GRANT SELECT ON SCHEMA::[dbo] TO [app]`)
     expect(schemaPreset('read-write', 'dbo', 'app')).toBe(`GRANT SELECT, INSERT, UPDATE, DELETE ON SCHEMA::[dbo] TO [app]`)

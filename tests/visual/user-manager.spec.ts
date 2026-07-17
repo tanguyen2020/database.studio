@@ -294,12 +294,12 @@ test('user manager: MSSQL server logins + database permission grid', async ({ pa
   await expect(page.getByText(/GRANT SELECT ON SCHEMA::\[public\] TO \[app_user\]/).first()).toBeVisible()
   await page.getByRole('button', { name: 'Add to pending' }).click()
   await page.waitForTimeout(150)
-  // DENY (overrides GRANT) stays in the Advanced matrix
+  // DENY (overrides GRANT) — right-click a cell in the Advanced matrix
   await page.getByText(/Advanced — permission matrix/).first().click()
-  await page.waitForTimeout(150)
-  await page.getByRole('button', { name: 'Deny', exact: true }).first().click()
   await page.waitForTimeout(200)
-  await expect(page.getByText(/DENY SELECT, INSERT, UPDATE, DELETE ON SCHEMA::\[public\] TO \[app_user\]/).first()).toBeVisible()
+  await page.getByTitle(/ALTER — click: grant/).first().click({ button: 'right' })
+  await page.waitForTimeout(200)
+  await expect(page.getByText(/DENY ALTER ON SCHEMA::\[public\] TO \[app_user\]/).first()).toBeVisible()
 
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })

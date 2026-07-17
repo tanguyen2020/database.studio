@@ -89,6 +89,23 @@ export function revokePermission(perm: Permission, resource: Resource, role: str
   return `REVOKE ${perm} ON ${resourceSql(resource)} FROM ${rid(role)}`
 }
 
+// ---- §1.8.2 full grid columns + per-column grant/revoke --------------------
+export const CASS_GRID_COLUMNS: { key: string; label: string; tip: string }[] = [
+  { key: 'SELECT', label: 'SELECT', tip: 'SELECT' },
+  { key: 'MODIFY', label: 'MODIFY', tip: 'MODIFY = INSERT + UPDATE + DELETE + TRUNCATE' },
+  { key: 'CREATE', label: 'CREATE', tip: 'CREATE' },
+  { key: 'ALTER', label: 'ALTER', tip: 'ALTER' },
+  { key: 'DROP', label: 'DROP', tip: 'DROP' },
+  { key: 'AUTHORIZE', label: 'AUTH', tip: 'AUTHORIZE' },
+  { key: 'DESCRIBE', label: 'DESC', tip: 'DESCRIBE' },
+]
+export function grantColumn(keyspace: string, perm: string, role: string): string {
+  return grantPermission(perm as Permission, { kind: 'keyspace', keyspace }, role)
+}
+export function revokeColumn(keyspace: string, perm: string, role: string): string {
+  return revokePermission(perm as Permission, { kind: 'keyspace', keyspace }, role)
+}
+
 // ---- §1.8.2 keyspace presets -----------------------------------------------
 // MODIFY = INSERT + UPDATE + DELETE + TRUNCATE (Cassandra doesn't split writes).
 

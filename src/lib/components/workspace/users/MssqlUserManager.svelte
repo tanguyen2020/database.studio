@@ -12,9 +12,12 @@
   import { highlightSql, sqlTokenColor } from '$lib/format/sql'
   import {
     alterLoginPassword,
+    denyColumn,
     dropLogin,
     dropUser,
-    permission,
+    grantColumn,
+    MSSQL_GRID_COLUMNS,
+    revokeColumn,
     schemaPreset,
     setDbRoleMember,
     setLoginEnabled,
@@ -22,6 +25,7 @@
     FIXED_SERVER_ROLES,
     type PresetKind,
   } from '$lib/users/mssql'
+  import PrivilegeGrid from './PrivilegeGrid.svelte'
   import type { TabState } from '$lib/types'
 
   interface Props {
@@ -145,22 +149,61 @@
     confirmDropLogin = false
   }
 
-  // ---- Database: permission grid -------------------------------------------
-  const GRID_PRIVS = ['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'EXECUTE'] as const
-  type CellState = 'none' | 'grant' | 'deny'
+  // ---- Database: permission grid (full columns, clickable, DENY, inherited) -
+  type CellState = 'none' | 'direct' | 'partial' | 'inherited' | 'deny'
   const rolesOfUser = $derived(dbRoleMembers.filter((m) => String(m.member) === selectedUser).map((m) => String(m.role)))
-
-  function cellState(schema: string, priv: string): CellState {
+  // fixed-role → implied privileges (for the ◐ inherited indicator).
+  const FIXED_IMPLIES: Record<string, string[]> = {
+    db_datareader: ['SELECT'],
+    db_datawriter: ['INSERT', 'UPDATE', 'DELETE'],
+    db_owner: ['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'EXECUTE', 'ALTER', 'REFERENCES', 'VIEW DEFINITION', 'CONTROL'],
+    db_ddladmin: ['ALTER', 'REFERENCES', 'VIEW DEFINITION'],
+  }
+  function directPerm(principal: string, schema: string, priv: string): 'none' | 'deny' | 'direct' | 'partial' {
     const secSchema = `SCHEMA::${schema}`
-    const rows = dbPerms.filter((p) => String(p.principal) === selectedUser && String(p.permission_name) === priv)
-    // DENY wins
+    const rows = dbPerms.filter((p) => String(p.principal) === principal && String(p.permission_name) === priv)
     if (rows.some((r) => String(r.securable) === secSchema && String(r.state_desc) === 'DENY')) return 'deny'
-    if (rows.some((r) => String(r.securable) === secSchema && String(r.state_desc).startsWith('GRANT'))) return 'grant'
-    // object-level grant under this schema shows as grant too (approx)
-    if (rows.some((r) => String(r.securable).startsWith(`${schema}.`) && String(r.state_desc).startsWith('GRANT'))) return 'grant'
+    if (rows.some((r) => String(r.securable) === secSchema && String(r.state_desc).startsWith('GRANT'))) return 'direct'
+    if (rows.some((r) => String(r.securable).startsWith(`${schema}.`) && String(r.state_desc).startsWith('GRANT'))) return 'partial'
     return 'none'
   }
-  const cellGlyph = (s: CellState) => (s === 'grant' ? '✓' : s === 'deny' ? '✕' : '☐')
+  function cellState(schema: string, priv: string): CellState {
+    const d = directPerm(selectedUser, schema, priv)
+    if (d === 'deny') return 'deny' // DENY overrides everything
+    if (d === 'direct') return 'direct'
+    // inherited via fixed or custom db roles
+    for (const role of rolesOfUser) {
+      if (FIXED_IMPLIES[role]?.includes(priv)) return 'inherited'
+      if (directPerm(role, schema, priv) === 'direct') return 'inherited'
+    }
+    if (d === 'partial') return 'partial'
+    return 'none'
+  }
+  function cellTip(schema: string, priv: string): string {
+    const st = cellState(schema, priv)
+    if (st === 'inherited') {
+      const role = rolesOfUser.find((r) => FIXED_IMPLIES[r]?.includes(priv) || directPerm(r, schema, priv) === 'direct')
+      return `via role ${role ?? ''}`
+    }
+    return `${priv} — click: grant/revoke · right-click: deny`
+  }
+  function onCell(schema: string, priv: string, st: CellState) {
+    if (!selectedUser) return
+    // deny → revoke (clears deny); direct → revoke; none/partial → grant
+    pending = [...pending, st === 'none' || st === 'partial' ? grantColumn(schema, priv, selectedUser) : revokeColumn(schema, priv, selectedUser)]
+  }
+  function onDenyCell(schema: string, priv: string) {
+    if (!selectedUser) return
+    pending = [...pending, denyColumn(schema, priv, selectedUser)]
+  }
+  const gridScopes = $derived(schemas.map((s) => ({ value: s, label: s })))
+  const gridPresets = [
+    { kind: 'read-only', label: 'R' },
+    { kind: 'read-write', label: 'RW' },
+    { kind: 'read-write-execute', label: 'RW+X' },
+    { kind: 'full', label: 'Full' },
+    { kind: 'revoke-all', label: 'Revoke', danger: true },
+  ]
 
   let showMatrix = $state(false)
   function openGrantWizard() {
@@ -179,10 +222,6 @@
   function applyPreset(schema: string, kind: PresetKind) {
     if (!selectedUser) return
     pending = [...pending, schemaPreset(kind, schema, selectedUser)]
-  }
-  function applyDeny(schema: string) {
-    if (!selectedUser) return
-    pending = [...pending, permission('DENY', ['SELECT', 'INSERT', 'UPDATE', 'DELETE'], { kind: 'schema', schema }, selectedUser)]
   }
   function queueFixedRole(role: string, add: boolean) {
     if (!selectedUser) return
@@ -335,32 +374,17 @@
             <div onclick={() => (showMatrix = !showMatrix)} onkeydown={(e) => e.key === 'Enter' && (showMatrix = !showMatrix)} role="button" tabindex="0" style="font-size:var(--px-11_5);color:var(--text2);cursor:pointer;margin-bottom:var(--px-8);user-select:none">{showMatrix ? '▾' : '▸'} Advanced — permission matrix (GRANT / DENY per privilege)</div>
             {#if showMatrix}
             <div style="font-size:var(--px-12);color:var(--text2);font-weight:600;margin-bottom:var(--px-6)">Schema permissions</div>
-            <div style="overflow:auto">
-              <table class="mono" style="border-collapse:collapse;font-size:var(--px-12);width:100%">
-                <thead><tr>
-                  <th style="text-align:left;padding:var(--px-5) var(--px-10);border-bottom:var(--px-1) solid var(--border2);color:var(--text2)">Schema</th>
-                  {#each GRID_PRIVS as p (p)}<th style="padding:var(--px-5) var(--px-10);border-bottom:var(--px-1) solid var(--border2);color:var(--text2)">{p}</th>{/each}
-                  <th style="padding:var(--px-5) var(--px-10);border-bottom:var(--px-1) solid var(--border2);color:var(--text2)">Presets</th>
-                </tr></thead>
-                <tbody>
-                  {#each schemas as s (s)}
-                    <tr>
-                      <td style="padding:var(--px-4) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:var(--text)">{s}</td>
-                      {#each GRID_PRIVS as p (p)}
-                        <td style="text-align:center;padding:var(--px-4) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:{cellState(s, p) === 'grant' ? 'var(--sacc-green)' : cellState(s, p) === 'deny' ? 'var(--error)' : 'var(--muted)'}">{cellGlyph(cellState(s, p))}</td>
-                      {/each}
-                      <td style="padding:var(--px-4) var(--px-10);border-bottom:var(--px-1) solid var(--border);white-space:nowrap">
-                        {#each [['read-only', 'R'], ['read-write', 'RW'], ['read-write-execute', 'RW+X'], ['full', 'Full'], ['revoke-all', 'Revoke']] as [kind, label] (kind)}
-                          <span onclick={() => applyPreset(s, kind as PresetKind)} onkeydown={(e) => e.key === 'Enter' && applyPreset(s, kind as PresetKind)} role="button" tabindex="0" title={String(kind)} style="font-size:var(--px-10_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-5);padding:var(--px-2) var(--px-7);margin-right:var(--px-4);cursor:pointer;color:{kind === 'revoke-all' ? 'var(--error)' : 'var(--text2)'}">{label}</span>
-                        {/each}
-                        <span onclick={() => applyDeny(s)} onkeydown={(e) => e.key === 'Enter' && applyDeny(s)} role="button" tabindex="0" title="DENY write+read" style="font-size:var(--px-10_5);background:var(--panel);border:var(--px-1) solid var(--error);border-radius:var(--px-5);padding:var(--px-2) var(--px-7);cursor:pointer;color:var(--error)">Deny</span>
-                      </td>
-                    </tr>
-                  {/each}
-                </tbody>
-              </table>
-            </div>
-            <div style="font-size:var(--px-10_5);color:var(--muted);margin-top:var(--px-8)">✓ = granted · ✕ = DENY (overrides GRANT) · ☐ = none.</div>
+            <PrivilegeGrid
+              columns={MSSQL_GRID_COLUMNS}
+              scopes={gridScopes}
+              {cellState}
+              {cellTip}
+              {onCell}
+              onDeny={onDenyCell}
+              presets={gridPresets}
+              onPreset={(s, kind) => applyPreset(s, kind as PresetKind)}
+              note="DENY overrides GRANT (incl. via roles)."
+            />
             {/if}
             {#if confirmDropUser}
               <div style="display:flex;gap:var(--px-8);align-items:center;margin-top:var(--px-12);padding:var(--px-8);background:var(--panel);border:var(--px-1) solid var(--error);border-radius:var(--px-6)">

@@ -11,14 +11,18 @@
   import { highlightSql, sqlTokenColor } from '$lib/format/sql'
   import {
     alterUserPassword,
+    CH_GRID_COLUMNS,
     dbPreset,
     dropUser,
     dropRole,
+    grantColumn,
     grantRole,
+    revokeColumn,
     revokeRole,
     setDefaultRole,
     type PresetKind,
   } from '$lib/users/clickhouse'
+  import PrivilegeGrid from './PrivilegeGrid.svelte'
   import type { TabState } from '$lib/types'
 
   interface Props {
@@ -95,28 +99,43 @@
   const selectedRow = $derived(list.find((x) => String(x.name) === selected))
   const isReadOnly = (r: Row | undefined) => !!r && String(r.storage) !== 'local_directory'
 
-  // ---- Grant grid (§1.8.2) --------------------------------------------------
-  // UPDATE/DELETE are ALTER mutations in ClickHouse → the access_type is
-  // `ALTER UPDATE` / `ALTER DELETE` (the column header stays UPDATE/DELETE).
-  const GRID = [
-    { col: 'SELECT', access: 'SELECT' },
-    { col: 'INSERT', access: 'INSERT' },
-    { col: 'UPDATE', access: 'ALTER UPDATE' },
-    { col: 'DELETE', access: 'ALTER DELETE' },
-  ] as const
-  type CellState = 'none' | 'grant'
-
-  function cellState(db: string, access: string): CellState {
-    const has = grants.some(
+  // ---- Grant grid (§1.8.2 — full columns, clickable, inherited) -------------
+  type CellState = 'none' | 'direct' | 'partial' | 'inherited' | 'deny'
+  function directGrant(who: 'user' | 'role', name: string, db: string, access: string): boolean {
+    return grants.some(
       (g) =>
-        String(g.user) === selected &&
+        String(g[who]) === name &&
         String(g.database) === db &&
         String(g.table) === '' &&
         (String(g.access_type) === access || String(g.access_type) === 'ALL'),
     )
-    return has ? 'grant' : 'none'
   }
-  const cellGlyph = (s: CellState) => (s === 'grant' ? '✓' : '☐')
+  function rolesOf(): string[] {
+    return roleGrants.filter((r) => String(r.user) === selected).map((r) => String(r.granted_role_name))
+  }
+  function cellState(db: string, access: string): CellState {
+    if (directGrant('user', selected, db, access)) return 'direct'
+    if (rolesOf().some((r) => directGrant('role', r, db, access))) return 'inherited'
+    return 'none'
+  }
+  function cellTip(db: string, access: string): string {
+    if (cellState(db, access) === 'inherited') {
+      const r = rolesOf().find((x) => directGrant('role', x, db, access))
+      return `via role ${r ?? ''}`
+    }
+    return access
+  }
+  function onCell(db: string, access: string, st: CellState) {
+    if (!selected) return
+    pending = [...pending, st === 'none' || st === 'partial' ? grantColumn(db, access, selected) : revokeColumn(db, access, selected)]
+  }
+  const gridScopes = $derived(databases.map((d) => ({ value: d, label: d })))
+  const gridPresets = [
+    { kind: 'read-only', label: 'R' },
+    { kind: 'read-write', label: 'RW' },
+    { kind: 'full', label: 'Full' },
+    { kind: 'revoke-all', label: 'Revoke', danger: true },
+  ]
 
   let showMatrix = $state(false)
   function openGrantWizard() {
@@ -268,31 +287,16 @@
             </div>
             <div onclick={() => (showMatrix = !showMatrix)} onkeydown={(e) => e.key === 'Enter' && (showMatrix = !showMatrix)} role="button" tabindex="0" style="font-size:var(--px-11_5);color:var(--text2);cursor:pointer;margin-bottom:var(--px-8);user-select:none">{showMatrix ? '▾' : '▸'} Advanced — grant matrix</div>
             {#if showMatrix}
-            <div style="overflow:auto">
-              <table class="mono" style="border-collapse:collapse;font-size:var(--px-12);width:100%">
-                <thead><tr>
-                  <th style="text-align:left;padding:var(--px-5) var(--px-10);border-bottom:var(--px-1) solid var(--border2);color:var(--text2)">Database</th>
-                  {#each GRID as g (g.col)}<th title={g.access} style="padding:var(--px-5) var(--px-10);border-bottom:var(--px-1) solid var(--border2);color:var(--text2)">{g.col}</th>{/each}
-                  <th style="padding:var(--px-5) var(--px-10);border-bottom:var(--px-1) solid var(--border2);color:var(--text2)">Presets</th>
-                </tr></thead>
-                <tbody>
-                  {#each databases as db (db)}
-                    <tr>
-                      <td style="padding:var(--px-4) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:var(--text)">{db}</td>
-                      {#each GRID as g (g.col)}
-                        <td style="text-align:center;padding:var(--px-4) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:{cellState(db, g.access) === 'grant' ? 'var(--sacc-green)' : 'var(--muted)'}">{cellGlyph(cellState(db, g.access))}</td>
-                      {/each}
-                      <td style="padding:var(--px-4) var(--px-10);border-bottom:var(--px-1) solid var(--border);white-space:nowrap">
-                        {#each [['read-only', 'R'], ['read-write', 'RW'], ['full', 'Full'], ['revoke-all', 'Revoke']] as [k, label] (k)}
-                          <span onclick={() => applyPreset(db, k as PresetKind)} onkeydown={(e) => e.key === 'Enter' && applyPreset(db, k as PresetKind)} role="button" tabindex="0" title={String(k)} style="font-size:var(--px-10_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-5);padding:var(--px-2) var(--px-7);margin-right:var(--px-4);cursor:pointer;color:{k === 'revoke-all' ? 'var(--error)' : 'var(--text2)'}">{label}</span>
-                        {/each}
-                      </td>
-                    </tr>
-                  {/each}
-                </tbody>
-              </table>
-            </div>
-            <div style="font-size:var(--px-10_5);color:var(--muted);margin-top:var(--px-8)">UPDATE/DELETE map to the ALTER UPDATE / ALTER DELETE privileges (mutations). ✓ = granted.</div>
+            <PrivilegeGrid
+              columns={CH_GRID_COLUMNS}
+              scopes={gridScopes}
+              {cellState}
+              {cellTip}
+              {onCell}
+              presets={gridPresets}
+              onPreset={(db, kind) => applyPreset(db, kind as PresetKind)}
+              note="UPDATE/DELETE map to the ALTER UPDATE / ALTER DELETE privileges (mutations)."
+            />
             {/if}
           {:else}
             <!-- Roles (users only) -->

@@ -116,6 +116,28 @@ export function permission(
   return `${state} ${p} ON ${target} TO ${qi(principal)}${go}`
 }
 
+// ---- §1.8.4 full grid columns + per-column GRANT/DENY/REVOKE ----------------
+export const MSSQL_GRID_COLUMNS: { key: string; label: string; tip: string }[] = [
+  { key: 'SELECT', label: 'SELECT', tip: 'SELECT' },
+  { key: 'INSERT', label: 'INSERT', tip: 'INSERT' },
+  { key: 'UPDATE', label: 'UPDATE', tip: 'UPDATE' },
+  { key: 'DELETE', label: 'DELETE', tip: 'DELETE' },
+  { key: 'EXECUTE', label: 'EXECUTE', tip: 'EXECUTE' },
+  { key: 'ALTER', label: 'ALTER', tip: 'ALTER' },
+  { key: 'REFERENCES', label: 'REFS', tip: 'REFERENCES' },
+  { key: 'VIEW DEFINITION', label: 'viewDEF', tip: 'VIEW DEFINITION' },
+  { key: 'CONTROL', label: 'CONTROL', tip: 'CONTROL' },
+]
+export function grantColumn(schema: string, priv: string, principal: string): string {
+  return permission('GRANT', [priv], { kind: 'schema', schema }, principal)
+}
+export function revokeColumn(schema: string, priv: string, principal: string): string {
+  return permission('REVOKE', [priv], { kind: 'schema', schema }, principal)
+}
+export function denyColumn(schema: string, priv: string, principal: string): string {
+  return permission('DENY', [priv], { kind: 'schema', schema }, principal)
+}
+
 // ---- §1.8.4 schema-scope presets -------------------------------------------
 
 export type PresetKind = 'read-only' | 'read-write' | 'read-write-execute' | 'full' | 'revoke-all'

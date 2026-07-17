@@ -16,12 +16,16 @@
     alterPassword,
     dbPreset,
     dropUser,
+    grantColumn,
     grantRole,
     lockAccount,
+    MYSQL_GRID_COLUMNS,
+    revokeColumn,
     revokeRole,
     setDefaultRole,
     type PresetKind,
   } from '$lib/users/mysql'
+  import PrivilegeGrid from './PrivilegeGrid.svelte'
   import type { TabState } from '$lib/types'
 
   interface Props {
@@ -101,26 +105,48 @@
   const selHost = $derived(selectedAcct ? String(selectedAcct.host) : '')
   const selLit = $derived(selectedAcct ? acct(selUser, selHost) : '')
 
-  // ---- Privilege grid §1.8.2 ------------------------------------------------
-  const GRID_PRIVS = ['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'EXECUTE'] as const
-  type CellState = 'none' | 'full' | 'partial'
+  // ---- Privilege grid §1.8.2 (full columns, clickable, inherited) -----------
+  type CellState = 'none' | 'direct' | 'partial' | 'inherited' | 'deny'
 
-  function cellState(db: string | null, priv: string): CellState {
-    if (db == null) {
-      // Global (*.*)
-      const has = globalPrivs.some((g) => String(g.grantee) === selLit && String(g.privilege_type) === priv)
-      return has ? 'full' : 'none'
-    }
-    const full = schemaPrivs.some(
-      (g) => String(g.grantee) === selLit && String(g.table_schema) === db && String(g.privilege_type) === priv,
-    )
-    if (full) return 'full'
-    const partial = tablePrivs.some(
-      (g) => String(g.grantee) === selLit && String(g.table_schema) === db && String(g.privilege_type) === priv,
-    )
-    return partial ? 'partial' : 'none'
+  // role accounts the user is a member of (mysql: role_edges; mariadb: roles_mapping).
+  function rolesOf(): string[] {
+    if (system === 'mariadb') return roleRows.filter((r) => String(r.member_user) === selUser).map((r) => acct(String(r.role), '%'))
+    return roleRows
+      .filter((r) => String(r.member_user) === selUser && String(r.member_host) === selHost)
+      .map((r) => acct(String(r.role_user), String(r.role_host)))
   }
-  const cellGlyph = (s: CellState) => (s === 'full' ? '✓' : s === 'partial' ? '■' : '☐')
+  function directOf(grantee: string, db: string | null, priv: string): 'none' | 'direct' | 'partial' {
+    if (db == null) return globalPrivs.some((g) => String(g.grantee) === grantee && String(g.privilege_type) === priv) ? 'direct' : 'none'
+    if (schemaPrivs.some((g) => String(g.grantee) === grantee && String(g.table_schema) === db && String(g.privilege_type) === priv)) return 'direct'
+    if (tablePrivs.some((g) => String(g.grantee) === grantee && String(g.table_schema) === db && String(g.privilege_type) === priv)) return 'partial'
+    return 'none'
+  }
+  function cellState(db: string | null, priv: string): CellState {
+    const d = directOf(selLit, db, priv)
+    if (d !== 'none') return d
+    if (rolesOf().some((r) => directOf(r, db, priv) !== 'none')) return 'inherited'
+    return 'none'
+  }
+  function cellTip(db: string | null, priv: string): string {
+    if (cellState(db, priv) === 'inherited') {
+      const r = rolesOf().find((x) => directOf(x, db, priv) !== 'none')
+      return `via role ${r ?? ''}`
+    }
+    return priv
+  }
+  function onCell(db: string | null, priv: string, st: CellState) {
+    if (!selectedAcct) return
+    pending = [...pending, st === 'none' || st === 'partial' ? grantColumn(db, priv, selUser, selHost) : revokeColumn(db, priv, selUser, selHost)]
+  }
+  const gridScopes = $derived([{ value: '*', label: '*.* (Global)' }, ...databases.map((d) => ({ value: d, label: d }))])
+  const scopeDb = (v: string) => (v === '*' ? null : v)
+  const gridPresets = [
+    { kind: 'read-only', label: 'R' },
+    { kind: 'read-write', label: 'RW' },
+    { kind: 'read-write-execute', label: 'RW+X' },
+    { kind: 'full', label: 'Full' },
+    { kind: 'revoke-all', label: 'Revoke', danger: true },
+  ]
 
   function applyPreset(db: string | null, kind: PresetKind) {
     if (!selectedAcct) return
@@ -282,33 +308,15 @@
             </div>
             <div onclick={() => (showMatrix = !showMatrix)} onkeydown={(e) => e.key === 'Enter' && (showMatrix = !showMatrix)} role="button" tabindex="0" style="font-size:var(--px-11_5);color:var(--text2);cursor:pointer;margin-bottom:var(--px-8);user-select:none">{showMatrix ? '▾' : '▸'} Advanced — permission matrix</div>
             {#if showMatrix}
-            <div style="overflow:auto">
-              <table class="mono" style="border-collapse:collapse;font-size:var(--px-12);width:100%">
-                <thead>
-                  <tr>
-                    <th style="text-align:left;padding:var(--px-5) var(--px-10);border-bottom:var(--px-1) solid var(--border2);color:var(--text2)">Scope</th>
-                    {#each GRID_PRIVS as p (p)}<th style="padding:var(--px-5) var(--px-10);border-bottom:var(--px-1) solid var(--border2);color:var(--text2)">{p}</th>{/each}
-                    <th style="padding:var(--px-5) var(--px-10);border-bottom:var(--px-1) solid var(--border2);color:var(--text2)">Presets</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {#each [null, ...databases] as db (db ?? '*')}
-                    <tr>
-                      <td style="padding:var(--px-4) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:var(--text)">{db ?? '*.* (Global)'}</td>
-                      {#each GRID_PRIVS as p (p)}
-                        <td style="text-align:center;padding:var(--px-4) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:{cellState(db, p) === 'full' ? 'var(--sacc-green)' : cellState(db, p) === 'partial' ? 'var(--warn2)' : 'var(--muted)'}">{cellGlyph(cellState(db, p))}</td>
-                      {/each}
-                      <td style="padding:var(--px-4) var(--px-10);border-bottom:var(--px-1) solid var(--border);white-space:nowrap">
-                        {#each [['read-only', 'R'], ['read-write', 'RW'], ['read-write-execute', 'RW+X'], ['full', 'Full'], ['revoke-all', 'Revoke']] as [kind, label] (kind)}
-                          <span onclick={() => applyPreset(db, kind as PresetKind)} onkeydown={(e) => e.key === 'Enter' && applyPreset(db, kind as PresetKind)} role="button" tabindex="0" title={String(kind)} style="font-size:var(--px-10_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-5);padding:var(--px-2) var(--px-7);margin-right:var(--px-4);cursor:pointer;color:{kind === 'revoke-all' ? 'var(--error)' : 'var(--text2)'}">{label}</span>
-                        {/each}
-                      </td>
-                    </tr>
-                  {/each}
-                </tbody>
-              </table>
-            </div>
-            <div style="font-size:var(--px-10_5);color:var(--muted);margin-top:var(--px-8)">✓ = whole scope · ■ = some tables · ☐ = none.</div>
+            <PrivilegeGrid
+              columns={MYSQL_GRID_COLUMNS}
+              scopes={gridScopes}
+              cellState={(v, p) => cellState(scopeDb(v), p)}
+              cellTip={(v, p) => cellTip(scopeDb(v), p)}
+              onCell={(v, p, st) => onCell(scopeDb(v), p, st)}
+              presets={gridPresets}
+              onPreset={(v, kind) => applyPreset(scopeDb(v), kind as PresetKind)}
+            />
             {/if}
           {:else}
             <!-- Roles -->

@@ -7,12 +7,15 @@ import {
   dbPreset,
   dropUser,
   grant,
+  grantColumn,
   grantColumns,
   grantRole,
   lockAccount,
+  MYSQL_GRID_COLUMNS,
   renameUser,
   revoke,
   revokeAll,
+  revokeColumn,
   setDefaultRole,
 } from './mysql'
 
@@ -82,6 +85,14 @@ describe('mysql/mariadb user builders', () => {
     expect(dbPreset('revoke-all', 'appdb', 'app', '%')).toBe("REVOKE ALL PRIVILEGES ON `appdb`.* FROM 'app'@'%'")
     // global scope
     expect(dbPreset('read-only', null, 'app', '%')).toBe("GRANT SELECT ON *.* TO 'app'@'%'")
+  })
+
+  it('§1.8.2 full grid columns + per-column grant/revoke', () => {
+    expect(MYSQL_GRID_COLUMNS.length).toBe(18)
+    expect(MYSQL_GRID_COLUMNS.map((c) => c.key)).toContain('CREATE TEMPORARY TABLES')
+    expect(grantColumn('appdb', 'SELECT', 'app', '%')).toBe("GRANT SELECT ON `appdb`.* TO 'app'@'%'")
+    expect(grantColumn(null, 'CREATE USER', 'app', '%')).toBe("GRANT CREATE USER ON *.* TO 'app'@'%'")
+    expect(revokeColumn('appdb', 'DROP', 'app', '%')).toBe("REVOKE DROP ON `appdb`.* FROM 'app'@'%'")
   })
 
   it('roles + default role (MySQL TO vs MariaDB FOR)', () => {

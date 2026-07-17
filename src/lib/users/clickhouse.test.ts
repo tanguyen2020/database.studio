@@ -52,6 +52,14 @@ describe('clickhouse user builders', () => {
     expect(revoke('ALL', { kind: 'global' }, 'app')).toBe(`REVOKE ALL ON *.* FROM \`app\``)
   })
 
+  it('§1.8.2 full grid columns + per-column grant/revoke', async () => {
+    const m = await import('./clickhouse')
+    expect(m.CH_GRID_COLUMNS.map((c) => c.key)).toContain('ALTER UPDATE')
+    expect(m.grantColumn('analytics', 'SELECT', 'app')).toBe(`GRANT SELECT ON \`analytics\`.* TO \`app\``)
+    expect(m.grantColumn('analytics', 'ALTER UPDATE', 'app')).toBe(`GRANT ALTER UPDATE ON \`analytics\`.* TO \`app\``)
+    expect(m.revokeColumn('analytics', 'INSERT', 'app')).toBe(`REVOKE INSERT ON \`analytics\`.* FROM \`app\``)
+  })
+
   it('§1.8.2 presets (UPDATE/DELETE are ALTER mutations)', () => {
     expect(dbPreset('read-only', 'analytics', 'app')).toBe(`GRANT SELECT ON \`analytics\`.* TO \`app\``)
     expect(dbPreset('read-write', 'analytics', 'app')).toBe(

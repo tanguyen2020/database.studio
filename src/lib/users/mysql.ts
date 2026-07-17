@@ -112,6 +112,38 @@ export function revokeAll(user: string, host: string): string {
   return `REVOKE ALL PRIVILEGES, GRANT OPTION FROM ${acct(user, host)}`
 }
 
+// ---- §1.8.2 full grid columns + per-column (single-priv) grant/revoke --------
+export const MYSQL_GRID_COLUMNS: { key: string; label: string; tip: string }[] = [
+  { key: 'SELECT', label: 'SELECT', tip: 'SELECT' },
+  { key: 'INSERT', label: 'INSERT', tip: 'INSERT' },
+  { key: 'UPDATE', label: 'UPDATE', tip: 'UPDATE' },
+  { key: 'DELETE', label: 'DELETE', tip: 'DELETE' },
+  { key: 'EXECUTE', label: 'EXECUTE', tip: 'EXECUTE' },
+  { key: 'CREATE', label: 'CREATE', tip: 'CREATE' },
+  { key: 'ALTER', label: 'ALTER', tip: 'ALTER' },
+  { key: 'DROP', label: 'DROP', tip: 'DROP' },
+  { key: 'INDEX', label: 'INDEX', tip: 'INDEX' },
+  { key: 'REFERENCES', label: 'REFS', tip: 'REFERENCES' },
+  { key: 'TRIGGER', label: 'TRIGGER', tip: 'TRIGGER' },
+  { key: 'CREATE VIEW', label: 'crtVIEW', tip: 'CREATE VIEW' },
+  { key: 'SHOW VIEW', label: 'showVIEW', tip: 'SHOW VIEW' },
+  { key: 'CREATE ROUTINE', label: 'crtROUT', tip: 'CREATE ROUTINE' },
+  { key: 'ALTER ROUTINE', label: 'altROUT', tip: 'ALTER ROUTINE' },
+  { key: 'EVENT', label: 'EVENT', tip: 'EVENT' },
+  { key: 'LOCK TABLES', label: 'lockTBL', tip: 'LOCK TABLES' },
+  { key: 'CREATE TEMPORARY TABLES', label: 'crtTMP', tip: 'CREATE TEMPORARY TABLES' },
+]
+
+function colLevel(db: string | null): GrantLevel {
+  return db == null ? { kind: 'global' } : { kind: 'schema', db }
+}
+export function grantColumn(db: string | null, priv: string, user: string, host: string): string {
+  return grant([priv], colLevel(db), user, host)
+}
+export function revokeColumn(db: string | null, priv: string, user: string, host: string): string {
+  return revoke([priv], colLevel(db), user, host)
+}
+
 // ---- §1.8.2 database-scope presets -----------------------------------------
 
 export type PresetKind = 'read-only' | 'read-write' | 'read-write-execute' | 'full' | 'revoke-all'

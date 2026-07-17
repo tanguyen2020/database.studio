@@ -52,6 +52,13 @@ describe('cassandra role builders', () => {
     )
   })
 
+  it('§1.8.2 full grid columns + per-column grant/revoke', async () => {
+    const m = await import('./cassandra')
+    expect(m.CASS_GRID_COLUMNS.map((c) => c.key)).toEqual(['SELECT', 'MODIFY', 'CREATE', 'ALTER', 'DROP', 'AUTHORIZE', 'DESCRIBE'])
+    expect(m.grantColumn('ks', 'MODIFY', 'app')).toBe(`GRANT MODIFY ON KEYSPACE ks TO app`)
+    expect(m.revokeColumn('ks', 'SELECT', 'app')).toBe(`REVOKE SELECT ON KEYSPACE ks FROM app`)
+  })
+
   it('§1.8.2 keyspace presets (MODIFY = all writes)', () => {
     expect(keyspacePreset('read-only', 'ks', 'app')).toBe(`GRANT SELECT ON KEYSPACE ks TO app`)
     expect(keyspacePreset('read-write', 'ks', 'app')).toBe(`GRANT MODIFY ON KEYSPACE ks TO app`)

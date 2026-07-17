@@ -11,12 +11,16 @@
   import { highlightSql, sqlTokenColor } from '$lib/format/sql'
   import {
     alterRole,
+    CASS_GRID_COLUMNS,
     dropRole,
+    grantColumn,
     grantRole,
     keyspacePreset,
+    revokeColumn,
     revokeRole,
     type PresetKind,
   } from '$lib/users/cassandra'
+  import PrivilegeGrid from './PrivilegeGrid.svelte'
   import type { TabState } from '$lib/types'
 
   interface Props {
@@ -98,11 +102,12 @@
 
   const selectedRole = $derived(roles.find((r) => String(r.role) === selected))
 
-  // ---- Permissions grid (per keyspace) --------------------------------------
-  const GRID_PERMS = ['SELECT', 'MODIFY', 'ALTER', 'DROP', 'AUTHORIZE'] as const
+  // ---- Permissions grid (per keyspace — full columns, clickable) ------------
+  // LIST ALL PERMISSIONS OF returns EFFECTIVE permissions (direct + inherited);
+  // Cassandra has no reliable way to split them here, so a present permission is
+  // shown as ✓ (direct) — clicking still emits a keyspace-scoped GRANT/REVOKE.
+  type CellState = 'none' | 'direct' | 'partial' | 'inherited' | 'deny'
   function hasPerm(keyspace: string, perm: string): boolean {
-    // permission rows expose a `resource` like "<keyspace ks>" / "<all keyspaces>"
-    // and a `permission` column. Match the keyspace (or all-keyspaces) + perm.
     return perms.some((p) => {
       const res = String(p.resource ?? '')
       const pm = String(p.permission ?? '')
@@ -110,6 +115,20 @@
       return scopeMatch && pm === perm
     })
   }
+  function cellState(keyspace: string, perm: string): CellState {
+    return hasPerm(keyspace, perm) ? 'direct' : 'none'
+  }
+  function onCell(keyspace: string, perm: string, st: CellState) {
+    if (!selected) return
+    pending = [...pending, st === 'none' ? grantColumn(keyspace, perm, selected) : revokeColumn(keyspace, perm, selected)]
+  }
+  const gridScopes = $derived(keyspaces.map((k) => ({ value: k, label: k })))
+  const gridPresets = [
+    { kind: 'read-only', label: 'R' },
+    { kind: 'read-write', label: 'RW' },
+    { kind: 'full', label: 'Full' },
+    { kind: 'revoke-all', label: 'Revoke', danger: true },
+  ]
 
   let showMatrix = $state(false)
   function openGrantWizard() {
@@ -265,31 +284,15 @@
             </div>
             <div onclick={() => (showMatrix = !showMatrix)} onkeydown={(e) => e.key === 'Enter' && (showMatrix = !showMatrix)} role="button" tabindex="0" style="font-size:var(--px-11_5);color:var(--text2);cursor:pointer;margin-bottom:var(--px-8);user-select:none">{showMatrix ? '▾' : '▸'} Advanced — permission matrix</div>
             {#if showMatrix}
-            <div style="overflow:auto">
-              <table class="mono" style="border-collapse:collapse;font-size:var(--px-12);width:100%">
-                <thead><tr>
-                  <th style="text-align:left;padding:var(--px-5) var(--px-10);border-bottom:var(--px-1) solid var(--border2);color:var(--text2)">Keyspace</th>
-                  {#each GRID_PERMS as p (p)}<th style="padding:var(--px-5) var(--px-10);border-bottom:var(--px-1) solid var(--border2);color:var(--text2)">{p}</th>{/each}
-                  <th style="padding:var(--px-5) var(--px-10);border-bottom:var(--px-1) solid var(--border2);color:var(--text2)">Presets</th>
-                </tr></thead>
-                <tbody>
-                  {#each keyspaces as ks (ks)}
-                    <tr>
-                      <td style="padding:var(--px-4) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:var(--text)">{ks}</td>
-                      {#each GRID_PERMS as p (p)}
-                        <td style="text-align:center;padding:var(--px-4) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:{hasPerm(ks, p) ? 'var(--sacc-green)' : 'var(--muted)'}">{hasPerm(ks, p) ? '✓' : '☐'}</td>
-                      {/each}
-                      <td style="padding:var(--px-4) var(--px-10);border-bottom:var(--px-1) solid var(--border);white-space:nowrap">
-                        {#each [['read-only', 'R'], ['read-write', 'RW'], ['full', 'Full'], ['revoke-all', 'Revoke']] as [kind, label] (kind)}
-                          <span onclick={() => applyPreset(ks, kind as PresetKind)} onkeydown={(e) => e.key === 'Enter' && applyPreset(ks, kind as PresetKind)} role="button" tabindex="0" title={String(kind)} style="font-size:var(--px-10_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-5);padding:var(--px-2) var(--px-7);margin-right:var(--px-4);cursor:pointer;color:{kind === 'revoke-all' ? 'var(--error)' : 'var(--text2)'}">{label}</span>
-                        {/each}
-                      </td>
-                    </tr>
-                  {/each}
-                </tbody>
-              </table>
-            </div>
-            <div style="font-size:var(--px-10_5);color:var(--muted);margin-top:var(--px-8)">MODIFY = INSERT + UPDATE + DELETE + TRUNCATE (Cassandra doesn't split writes). ✓ = granted (incl. via ALL KEYSPACES).</div>
+            <PrivilegeGrid
+              columns={CASS_GRID_COLUMNS}
+              scopes={gridScopes}
+              {cellState}
+              {onCell}
+              presets={gridPresets}
+              onPreset={(ks, kind) => applyPreset(ks, kind as PresetKind)}
+              note="MODIFY = INSERT + UPDATE + DELETE + TRUNCATE. Shows effective permissions (incl. via ALL KEYSPACES / roles)."
+            />
             {/if}
           {/if}
         </div>

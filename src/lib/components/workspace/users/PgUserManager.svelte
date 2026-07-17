@@ -13,11 +13,15 @@
   import {
     alterPassword,
     dropRole,
+    grantColumn,
     grantMembership,
+    PG_GRID_COLUMNS,
+    revokeColumn,
     revokeMembership,
     schemaPreset,
     type PresetKind,
   } from '$lib/users/postgres'
+  import PrivilegeGrid from './PrivilegeGrid.svelte'
   import type { TabState } from '$lib/types'
 
   interface Props {
@@ -29,6 +33,7 @@
   let roles = $state<Row[]>([])
   let members = $state<Row[]>([])
   let tableGrants = $state<Row[]>([])
+  let schemaGrants = $state<Row[]>([])
   let schemaOwners = $state<Row[]>([])
   let schemas = $state<string[]>([])
   let tablesBySchema = $state<Record<string, number>>({})
@@ -50,10 +55,11 @@
     loading = true
     error = null
     try {
-      const [r, m, tg, so, sc, cm] = await Promise.all([
+      const [r, m, tg, sg, so, sc, cm] = await Promise.all([
         ipc.usersView(cid, 'roles'),
         ipc.usersView(cid, 'members').catch(() => ({ rows: [] as Row[] })),
         ipc.usersView(cid, 'table_grants').catch(() => ({ rows: [] as Row[] })),
+        ipc.usersView(cid, 'schema_grants').catch(() => ({ rows: [] as Row[] })),
         ipc.usersView(cid, 'schema_owners').catch(() => ({ rows: [] as Row[] })),
         ipc.listSchemas(cid).catch(() => []),
         ipc.usersView(cid, 'can_manage').catch(() => ({ rows: [{ can_manage: true }] as Row[] })),
@@ -61,6 +67,7 @@
       roles = r.rows
       members = m.rows
       tableGrants = tg.rows
+      schemaGrants = sg.rows
       schemaOwners = so.rows
       schemas = sc.map((s) => s.name)
       canManage = cm.rows[0]?.can_manage !== false
@@ -103,27 +110,83 @@
   const isGroup = (r: Row) => r.rolcanlogin === false
   const boolY = (v: unknown) => v === true || v === 1 || v === '1' || v === 't'
 
-  // ---- Privileges grid ------------------------------------------------------
-  const GRID_PRIVS = ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] as const
-  type CellState = 'none' | 'full' | 'partial'
+  // ---- Privileges grid (§1.8.3 — full columns, clickable, inherited) --------
+  type CellState = 'none' | 'direct' | 'partial' | 'inherited' | 'deny'
+  const gcol = (key: string) => PG_GRID_COLUMNS.find((c) => c.key === key)!
 
-  function cellState(schema: string, priv: string): CellState {
-    const total = tablesBySchema[schema] ?? 0
-    const n = tableGrants.filter(
-      (g) => String(g.schema) === schema && String(g.grantee) === selected && String(g.privilege_type) === priv,
-    ).length
-    if (n === 0) return 'none'
-    if (total > 0 && n >= total) return 'full'
-    return 'partial'
+  // roles the user inherits from (recursive over pg_auth_members).
+  function rolesOf(user: string, seen = new Set<string>()): string[] {
+    for (const m of members) {
+      if (String(m.member) === user) {
+        const r = String(m.role)
+        if (!seen.has(r)) {
+          seen.add(r)
+          rolesOf(r, seen)
+        }
+      }
+    }
+    return [...seen]
   }
-  const cellGlyph = (s: CellState) => (s === 'full' ? '✓' : s === 'partial' ? '■' : '☐')
-  function cellCount(schema: string, priv: string): string {
-    const total = tablesBySchema[schema] ?? 0
+
+  // direct grant count for a (grantee, schema, column).
+  function directOf(grantee: string, schema: string, key: string): { n: number; total: number } {
+    const col = gcol(key)
+    if (col.target === 'schema') {
+      const has = schemaGrants.some(
+        (g) => String(g.schema) === schema && String(g.grantee) === grantee && String(g.privilege_type) === col.priv,
+      )
+      return { n: has ? 1 : 0, total: 1 }
+    }
+    const seq = col.target === 'sequences'
     const n = tableGrants.filter(
-      (g) => String(g.schema) === schema && String(g.grantee) === selected && String(g.privilege_type) === priv,
+      (g) =>
+        String(g.schema) === schema &&
+        String(g.grantee) === grantee &&
+        String(g.privilege_type) === col.priv &&
+        (seq ? String(g.kind) === 'S' : String(g.kind) !== 'S'),
     ).length
-    return total ? `${n}/${total}` : `${n}`
+    return { n, total: seq ? (n > 0 ? n : 0) : (tablesBySchema[schema] ?? 0) }
   }
+
+  function cellState(schema: string, key: string): CellState {
+    const col = gcol(key)
+    // EXECUTE defaults to PUBLIC in PostgreSQL → shown as inherited (read-only).
+    if (col.target === 'functions') return 'inherited'
+    const d = directOf(selected, schema, key)
+    if (d.n > 0) {
+      if (col.target === 'schema') return 'direct'
+      return d.total > 0 && d.n >= d.total ? 'direct' : 'partial'
+    }
+    // inherited via a role the user is a member of
+    if (rolesOf(selected).some((r) => directOf(r, schema, key).n > 0)) return 'inherited'
+    return 'none'
+  }
+  function cellTip(schema: string, key: string): string {
+    const col = gcol(key)
+    if (col.target === 'functions') return 'EXECUTE via PUBLIC (PostgreSQL default)'
+    const st = cellState(schema, key)
+    if (st === 'inherited') {
+      const r = rolesOf(selected).find((x) => directOf(x, schema, key).n > 0)
+      return `via role ${r ?? ''}`
+    }
+    if (col.target !== 'schema') {
+      const d = directOf(selected, schema, key)
+      return `${col.tip} — ${d.n}/${d.total || '?'}`
+    }
+    return col.tip
+  }
+  function onCell(schema: string, key: string, st: CellState) {
+    if (!selected) return
+    pending = [...pending, st === 'none' || st === 'partial' ? grantColumn(schema, key, selected) : revokeColumn(schema, key, selected)]
+  }
+  const gridScopes = $derived(schemas.map((s) => ({ value: s, label: s })))
+  const gridPresets = [
+    { kind: 'read-only', label: 'R' },
+    { kind: 'read-write', label: 'RW' },
+    { kind: 'read-write-execute', label: 'RW+X' },
+    { kind: 'full', label: 'Full' },
+    { kind: 'revoke-all', label: 'Revoke', danger: true },
+  ]
 
   let futureTables = $state(true)
   let showMatrix = $state(false)
@@ -320,33 +383,16 @@
             <div style="display:flex;align-items:center;gap:var(--px-10);margin-bottom:var(--px-8);flex-wrap:wrap">
               <label style="font-size:var(--px-11_5);color:var(--text2);display:flex;align-items:center;gap:var(--px-4)"><input type="checkbox" bind:checked={futureTables} /> Also apply to future tables (ALTER DEFAULT PRIVILEGES)</label>
             </div>
-            <div style="overflow:auto">
-              <table class="mono" style="border-collapse:collapse;font-size:var(--px-12);width:100%">
-                <thead>
-                  <tr>
-                    <th style="text-align:left;padding:var(--px-5) var(--px-10);border-bottom:var(--px-1) solid var(--border2);color:var(--text2)">Schema</th>
-                    {#each GRID_PRIVS as p (p)}<th style="padding:var(--px-5) var(--px-10);border-bottom:var(--px-1) solid var(--border2);color:var(--text2)">{p}</th>{/each}
-                    <th style="padding:var(--px-5) var(--px-10);border-bottom:var(--px-1) solid var(--border2);color:var(--text2)">Presets</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {#each schemas as s (s)}
-                    <tr>
-                      <td style="padding:var(--px-4) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:var(--text)">{s}</td>
-                      {#each GRID_PRIVS as p (p)}
-                        <td title={cellCount(s, p)} style="text-align:center;padding:var(--px-4) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:{cellState(s, p) === 'full' ? 'var(--sacc-green)' : cellState(s, p) === 'partial' ? 'var(--warn2)' : 'var(--muted)'}">{cellGlyph(cellState(s, p))}</td>
-                      {/each}
-                      <td style="padding:var(--px-4) var(--px-10);border-bottom:var(--px-1) solid var(--border);white-space:nowrap">
-                        {#each [['read-only', 'R'], ['read-write', 'RW'], ['read-write-execute', 'RW+X'], ['full', 'Full'], ['revoke-all', 'Revoke']] as [kind, label] (kind)}
-                          <span onclick={() => applyPreset(s, kind as PresetKind)} onkeydown={(e) => e.key === 'Enter' && applyPreset(s, kind as PresetKind)} role="button" tabindex="0" title={String(kind)} style="font-size:var(--px-10_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-5);padding:var(--px-2) var(--px-7);margin-right:var(--px-4);cursor:pointer;color:{kind === 'revoke-all' ? 'var(--error)' : 'var(--text2)'}">{label}</span>
-                        {/each}
-                      </td>
-                    </tr>
-                  {/each}
-                </tbody>
-              </table>
-            </div>
-            <div style="font-size:var(--px-10_5);color:var(--muted);margin-top:var(--px-8)">✓ = all objects · ■ = partial · ☐ = none. EXECUTE on functions defaults to PUBLIC in PostgreSQL.</div>
+            <PrivilegeGrid
+              columns={PG_GRID_COLUMNS.map((c) => ({ key: c.key, label: c.label, tip: c.tip }))}
+              scopes={gridScopes}
+              {cellState}
+              {cellTip}
+              {onCell}
+              presets={gridPresets}
+              onPreset={(s, kind) => applyPreset(s, kind as PresetKind)}
+              note="EXECUTE on functions defaults to PUBLIC in PostgreSQL."
+            />
             {/if}
           {/if}
         </div>

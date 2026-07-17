@@ -97,6 +97,28 @@ export function revoke(privs: string[] | 'ALL', scope: Scope, grantee: string): 
   return `REVOKE ${p} ON ${scopeSql(scope)} FROM ${qi(grantee)}`
 }
 
+// ---- §1.8.2 full grid columns + per-column grant/revoke ---------------------
+// UPDATE/DELETE are ALTER mutations → access_type is `ALTER UPDATE`/`ALTER DELETE`.
+export const CH_GRID_COLUMNS: { key: string; label: string; tip: string }[] = [
+  { key: 'SELECT', label: 'SELECT', tip: 'SELECT' },
+  { key: 'INSERT', label: 'INSERT', tip: 'INSERT' },
+  { key: 'ALTER UPDATE', label: 'UPDATE', tip: 'ALTER UPDATE (mutation)' },
+  { key: 'ALTER DELETE', label: 'DELETE', tip: 'ALTER DELETE (mutation)' },
+  { key: 'ALTER', label: 'ALTER', tip: 'ALTER (DDL)' },
+  { key: 'CREATE TABLE', label: 'crtTBL', tip: 'CREATE TABLE' },
+  { key: 'CREATE VIEW', label: 'crtVIEW', tip: 'CREATE VIEW' },
+  { key: 'DROP TABLE', label: 'dropTBL', tip: 'DROP TABLE' },
+  { key: 'TRUNCATE', label: 'TRUNC', tip: 'TRUNCATE' },
+  { key: 'OPTIMIZE', label: 'OPTIM', tip: 'OPTIMIZE' },
+  { key: 'SHOW', label: 'SHOW', tip: 'SHOW' },
+]
+export function grantColumn(db: string, priv: string, grantee: string): string {
+  return grant([priv], { kind: 'db', db }, grantee)
+}
+export function revokeColumn(db: string, priv: string, grantee: string): string {
+  return revoke([priv], { kind: 'db', db }, grantee)
+}
+
 // ---- §1.8.2 database-scope presets -----------------------------------------
 // Note: ClickHouse UPDATE/DELETE are mutations → the privileges are named
 // `ALTER UPDATE` / `ALTER DELETE`. No EXECUTE object-privilege exists.

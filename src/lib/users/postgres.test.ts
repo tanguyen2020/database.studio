@@ -118,6 +118,17 @@ describe('postgres user builders', () => {
     )
   })
 
+  it('§1.8.3 per-column grant/revoke (clickable cells)', async () => {
+    const m = await import('./postgres')
+    expect(m.PG_GRID_COLUMNS.map((c) => c.key)).toContain('SELECT')
+    expect(m.PG_GRID_COLUMNS.map((c) => c.key)).toContain('USAGE')
+    expect(m.grantColumn('public', 'SELECT', 'app')).toBe(`GRANT SELECT ON ALL TABLES IN SCHEMA "public" TO "app"`)
+    expect(m.grantColumn('public', 'USAGE', 'app')).toBe(`GRANT USAGE ON SCHEMA "public" TO "app"`)
+    expect(m.grantColumn('public', 'SEQ_USAGE', 'app')).toBe(`GRANT USAGE ON ALL SEQUENCES IN SCHEMA "public" TO "app"`)
+    expect(m.grantColumn('public', 'EXECUTE', 'app')).toBe(`GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA "public" TO "app"`)
+    expect(m.revokeColumn('public', 'DELETE', 'app')).toBe(`REVOKE DELETE ON ALL TABLES IN SCHEMA "public" FROM "app"`)
+  })
+
   it('grantConnect + schemaPreset dispatch', () => {
     expect(grantConnect('appdb', 'app')).toBe(`GRANT CONNECT ON DATABASE "appdb" TO "app"`)
     expect(schemaPreset('read-only', 'public', 'app')).toEqual(presetReadOnly('public', 'app'))
