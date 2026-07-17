@@ -11,25 +11,52 @@
     dlgOpen = grantWizard.open
   })
 
-  let scope = $state('')
+  // Multi-select scopes: granting a user/role commonly spans many databases/
+  // schemas, so scope is a checkbox set (not a single dropdown).
+  let selected = $state<Set<string>>(new Set())
   let level = $state('')
+  let filter = $state('')
 
   let wasOpen = false
   $effect(() => {
     if (dlgOpen && !wasOpen) {
-      scope = grantWizard.scopes[0] ?? ''
+      selected = new Set()
       level = ''
+      filter = ''
     }
     wasOpen = dlgOpen
   })
 
+  const shownScopes = $derived(
+    filter.trim() ? grantWizard.scopes.filter((s) => s.toLowerCase().includes(filter.trim().toLowerCase())) : grantWizard.scopes,
+  )
+  const allShownSelected = $derived(shownScopes.length > 0 && shownScopes.every((s) => selected.has(s)))
+  function toggleScope(s: string) {
+    const next = new Set(selected)
+    next.has(s) ? next.delete(s) : next.add(s)
+    selected = next
+  }
+  function toggleAllShown() {
+    const next = new Set(selected)
+    if (allShownSelected) shownScopes.forEach((s) => next.delete(s))
+    else shownScopes.forEach((s) => next.add(s))
+    selected = next
+  }
+
+  // build one access level across EVERY selected scope.
   const statements = $derived.by<string[]>(() => {
-    if (!scope || !level) return []
-    try {
-      return grantWizard.build(level, scope)
-    } catch {
-      return []
+    if (!selected.size || !level) return []
+    const out: string[] = []
+    for (const s of grantWizard.scopes) {
+      if (selected.has(s)) {
+        try {
+          out.push(...grantWizard.build(level, s))
+        } catch {
+          /* skip a scope that fails to build */
+        }
+      }
     }
+    return out
   })
 
   function apply() {
@@ -52,12 +79,25 @@
           <span style="font-size:var(--px-11);color:var(--muted);width:var(--px-70)">1 · Role</span>
           <span class="mono" style="font-size:var(--px-13);font-weight:600;color:var(--text);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-3) var(--px-10)">{grantWizard.role}</span>
         </div>
-        <!-- step 2: scope -->
-        <div style="display:flex;align-items:center;gap:var(--px-8)">
-          <span style="font-size:var(--px-11);color:var(--muted);width:var(--px-70)">2 · {grantWizard.scopeLabel}</span>
-          <select bind:value={scope} class="mono" style="flex:1;background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-8);color:var(--text);font-size:var(--px-12_5)">
-            {#each grantWizard.scopes as s (s)}<option value={s}>{s}</option>{/each}
-          </select>
+        <!-- step 2: scope (multi-select) -->
+        <div style="display:flex;flex-direction:column;gap:var(--px-6)">
+          <div style="display:flex;align-items:center;gap:var(--px-8)">
+            <span style="font-size:var(--px-11);color:var(--muted)">2 · {grantWizard.scopeLabel}s</span>
+            <span style="font-size:var(--px-11);color:var(--text2)">— pick one or more ({selected.size} selected)</span>
+            <span onclick={toggleAllShown} onkeydown={(e) => e.key === 'Enter' && toggleAllShown()} role="button" tabindex="0" style="margin-left:auto;font-size:var(--px-11);color:var(--primary);cursor:pointer">{allShownSelected ? 'Clear all' : 'Select all'}</span>
+          </div>
+          {#if grantWizard.scopes.length > 6}
+            <input bind:value={filter} placeholder="Filter {grantWizard.scopeLabel.toLowerCase()}s…" class="mono" style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-8);color:var(--text);font-size:var(--px-12)" />
+          {/if}
+          <div style="max-height:var(--px-180);overflow:auto;border:var(--px-1) solid var(--border);border-radius:var(--px-7);padding:var(--px-6) var(--px-8);display:flex;flex-direction:column;gap:var(--px-2)">
+            {#each shownScopes as s (s)}
+              <label style="font-size:var(--px-12_5);color:var(--text);display:flex;align-items:center;gap:var(--px-6);cursor:pointer">
+                <input type="checkbox" checked={selected.has(s)} onchange={() => toggleScope(s)} /> <span class="mono">{s}</span>
+              </label>
+            {:else}
+              <span style="font-size:var(--px-11_5);color:var(--muted)">No {grantWizard.scopeLabel.toLowerCase()}s.</span>
+            {/each}
+          </div>
         </div>
         <!-- step 3: access level cards -->
         <div>
@@ -77,7 +117,7 @@
         <!-- preview -->
         <div>
           <div style="font-size:var(--px-11);color:var(--muted);margin-bottom:var(--px-4)">SQL to run</div>
-          <pre class="selectable mono" style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-10);font-size:var(--px-11_5);margin:0;max-height:var(--px-150);overflow:auto;white-space:pre-wrap">{#if statements.length}{#each statements as s (s)}{#each highlightSql(s + ';\n') as tk (tk)}<span style="color:{sqlTokenColor(tk.kind)}">{tk.text}</span>{/each}{/each}{:else}<span style="color:var(--muted)">-- pick a {grantWizard.scopeLabel.toLowerCase()} and an access level</span>{/if}</pre>
+          <pre class="selectable mono" style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-10);font-size:var(--px-11_5);margin:0;max-height:var(--px-150);overflow:auto;white-space:pre-wrap">{#if statements.length}{#each statements as s (s)}{#each highlightSql(s + ';\n') as tk (tk)}<span style="color:{sqlTokenColor(tk.kind)}">{tk.text}</span>{/each}{/each}{:else}<span style="color:var(--muted)">-- pick one or more {grantWizard.scopeLabel.toLowerCase()}s and an access level</span>{/if}</pre>
         </div>
       </div>
       <div style="flex:none;display:flex;gap:var(--px-9);padding:var(--px-13) var(--px-18);border-top:var(--px-1) solid var(--border);background:var(--panel)">

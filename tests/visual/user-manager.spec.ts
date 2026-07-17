@@ -111,7 +111,8 @@ test('user manager: guided Grant access wizard queues GRANT statements', async (
   await page.getByRole('button', { name: '＋ Grant access…' }).click()
   await page.waitForTimeout(300)
   await expect(page.getByRole('dialog')).toBeVisible()
-  // pick the Read-only access level → live SQL preview shows the exact GRANT
+  // pick a schema (multi-select) then the Read-only access level
+  await page.getByRole('dialog').getByText('public', { exact: true }).click()
   await page.getByText('Read-only', { exact: true }).first().click()
   await page.waitForTimeout(200)
   await expect(page.getByText(/GRANT SELECT ON ALL TABLES IN SCHEMA "public" TO "app_user"/).first()).toBeVisible()
@@ -147,9 +148,10 @@ test('user manager: Cassandra roles + keyspace permission preset', async ({ page
   await page.waitForTimeout(150)
   await page.getByRole('tab', { name: 'Permissions' }).click()
   await page.waitForTimeout(200)
-  // guided grant: Read-Write on a keyspace → GRANT MODIFY
+  // guided grant: pick a keyspace + Read-Write → GRANT MODIFY
   await page.getByRole('button', { name: '＋ Grant access…' }).click()
   await page.waitForTimeout(300)
+  await page.getByRole('dialog').getByText('public', { exact: true }).click()
   await page.getByText('Read-Write', { exact: true }).first().click()
   await page.waitForTimeout(200)
   await expect(page.getByText(/GRANT MODIFY ON KEYSPACE .* TO app_role/).first()).toBeVisible()
@@ -250,7 +252,7 @@ test('user manager: ClickHouse users + grant grid preset', async ({ page }) => {
   await page.waitForTimeout(200)
   await page.getByRole('button', { name: '＋ Grant access…' }).click()
   await page.waitForTimeout(300)
-  await page.getByRole('dialog').locator('select').selectOption('public')
+  await page.getByRole('dialog').getByText('public', { exact: true }).click()
   await page.getByText('Read-only', { exact: true }).first().click()
   await page.waitForTimeout(200)
   await expect(page.getByText(/GRANT SELECT ON `public`\.\* TO `app`/).first()).toBeVisible()
@@ -286,9 +288,10 @@ test('user manager: MSSQL server logins + database permission grid', async ({ pa
   await expect(page.getByRole('option', { name: /app_user/ }).first()).toBeVisible()
   await page.getByRole('option', { name: /app_user/ }).first().click()
   await page.waitForTimeout(150)
-  // guided grant: Read-only on the schema
+  // guided grant: pick a schema + Read-only
   await page.getByRole('button', { name: '＋ Grant access…' }).click()
   await page.waitForTimeout(300)
+  await page.getByRole('dialog').getByText('public', { exact: true }).click()
   await page.getByText('Read-only', { exact: true }).first().click()
   await page.waitForTimeout(200)
   await expect(page.getByText(/GRANT SELECT ON SCHEMA::\[public\] TO \[app_user\]/).first()).toBeVisible()
@@ -331,7 +334,7 @@ test('user manager: MySQL account list + preset + Add Account popup', async ({ p
   await page.getByRole('button', { name: '＋ Grant access…' }).click()
   await page.waitForTimeout(300)
   // pick database "public" in the scope dropdown, then Read-only
-  await page.getByRole('dialog').locator('select').selectOption('public')
+  await page.getByRole('dialog').getByText('public', { exact: true }).click()
   await page.getByText('Read-only', { exact: true }).first().click()
   await page.waitForTimeout(200)
   await expect(page.getByText(/GRANT SELECT ON `public`\.\* TO 'app'@'%'/).first()).toBeVisible()
