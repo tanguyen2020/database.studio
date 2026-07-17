@@ -129,6 +129,30 @@ test('user manager: guided Grant access wizard queues GRANT statements', async (
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
 
+// #1 — creating a role immediately cues the Grant Access wizard on the new
+// principal (grant-right-after-create). We name it after an existing demo role
+// so the manager's reload surfaces it and the wizard opens automatically.
+test('user manager: creating a role opens the Grant access wizard on it', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(String(e)))
+  await blockRemoteFonts(page)
+  await openManager(page)
+
+  await page.getByRole('button', { name: '+ New Role' }).click()
+  await page.waitForTimeout(300)
+  await page.getByRole('dialog').locator('input').first().fill('app_user')
+  await page.waitForTimeout(150)
+  await page.getByRole('button', { name: 'Create login role' }).click()
+  await page.waitForTimeout(600)
+
+  // the Grant Access wizard auto-opens, scoped to the just-created role
+  await expect(page.getByText('Grant access').first()).toBeVisible()
+  const dialog = page.getByRole('dialog')
+  await expect(dialog.getByText('app_user', { exact: true }).first()).toBeVisible()
+
+  expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
+})
+
 // U7 — Cassandra User Manager: roles list, permission grid keyspace preset.
 test('user manager: Cassandra roles + keyspace permission preset', async ({ page }) => {
   const errors: string[] = []

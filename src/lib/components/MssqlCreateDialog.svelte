@@ -4,6 +4,8 @@
   // LOGIN), Role. User/Role run on the bound database via a sub-connection.
   import { mssqlUserWizard } from '$lib/stores/mssqluser.svelte'
   import { explorer } from '$lib/stores/explorer.svelte'
+  import { grantWizard } from '$lib/stores/grantwizard.svelte'
+  import { tabs } from '$lib/stores/tabs.svelte'
   import { toasts } from '$lib/stores/toast.svelte'
   import * as ipc from '$lib/ipc'
   import { createLogin, createUser, createDbRole, createWindowsLogin } from '$lib/users/mssql'
@@ -85,6 +87,10 @@
       }
       toasts.success(`${title} ${name.trim()} created`, 'mssql')
       await explorer.refresh(cid, { kind: 'connection' }).catch(() => {})
+      tabs.openUserManager(cid, name.trim())
+      // Only a database User maps cleanly to the (database-scoped) Grant wizard;
+      // a Login/Role just focuses the manager.
+      if (mode === 'user') grantWizard.requestAfterCreate(cid, name.trim(), mssqlUserWizard.database)
       mssqlUserWizard.close()
     } catch (e) {
       err = String(e)

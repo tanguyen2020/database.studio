@@ -5,6 +5,8 @@
   // in the manager detail tabs.
   import { myUserWizard } from '$lib/stores/myuser.svelte'
   import { explorer } from '$lib/stores/explorer.svelte'
+  import { grantWizard } from '$lib/stores/grantwizard.svelte'
+  import { tabs } from '$lib/stores/tabs.svelte'
   import { toasts } from '$lib/stores/toast.svelte'
   import * as ipc from '$lib/ipc'
   import { createUser, ql } from '$lib/users/mysql'
@@ -81,6 +83,9 @@
       }
       toasts.success(`Account ${user.trim()}@${host.trim()} created`, myUserWizard.system)
       await explorer.refresh(cid, { kind: 'connection' }).catch(() => {})
+      const acctKey = `${user.trim()}@${host.trim()}`
+      tabs.openUserManager(cid, acctKey)
+      grantWizard.requestAfterCreate(cid, acctKey)
       myUserWizard.close()
     } catch (e) {
       err = String(e)

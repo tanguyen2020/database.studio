@@ -4,6 +4,7 @@
   // picked as built-in role @ database.
   import { mongoUserWizard } from '$lib/stores/mongouser.svelte'
   import { explorer } from '$lib/stores/explorer.svelte'
+  import { tabs } from '$lib/stores/tabs.svelte'
   import { toasts } from '$lib/stores/toast.svelte'
   import * as ipc from '$lib/ipc'
   import { DB_BUILTIN_ROLES, type RoleRef } from '$lib/users/mongodb'
@@ -61,6 +62,8 @@
       await ipc.mongoCreateUser(cid, mongoUserWizard.database, user.trim(), password, roles)
       toasts.success(`User ${user.trim()} created`, 'mongodb')
       await explorer.refresh(cid, { kind: 'connection' }).catch(() => {})
+      // Mongo assigns roles at creation time, so just land on the new user.
+      tabs.openUserManager(cid, `${user.trim()}@${mongoUserWizard.database}`)
       mongoUserWizard.close()
     } catch (e) {
       err = String(e)

@@ -4,6 +4,7 @@
   // Password goes in IDENTIFIED BY "…" (double-quoted, no " allowed).
   import { oraUserWizard } from '$lib/stores/orauser.svelte'
   import { explorer } from '$lib/stores/explorer.svelte'
+  import { tabs } from '$lib/stores/tabs.svelte'
   import { toasts } from '$lib/stores/toast.svelte'
   import * as ipc from '$lib/ipc'
   import { createUser } from '$lib/users/oracle'
@@ -93,6 +94,9 @@
       }
       toasts.success(`User ${name.trim().toUpperCase()} created`, 'oracle')
       await explorer.refresh(cid, { kind: 'connection' }).catch(() => {})
+      // Oracle uses per-owner grant buttons (no shared wizard) → just focus the
+      // manager on the new user; grants are assigned from its Privileges tabs.
+      tabs.openUserManager(cid, name.trim().toUpperCase())
       oraUserWizard.close()
     } catch (e) {
       err = String(e)

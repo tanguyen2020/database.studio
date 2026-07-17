@@ -95,6 +95,22 @@
     void cid
     untrack(() => void load())
   })
+
+  // Grant-right-after-create: reload, select the new role, open the wizard.
+  $effect(() => {
+    const req = grantWizard.afterCreate
+    if (req && req.connId === cid) untrack(() => void handleAfterCreate(req.principal))
+  })
+  async function handleAfterCreate(principal: string) {
+    grantWizard.afterCreate = null
+    await load()
+    if (roles.some((r) => String(r.role) === principal)) {
+      selected = principal
+      detailTab = 'perms'
+      openGrantWizard()
+    }
+  }
+
   $effect(() => {
     void selected
     untrack(() => void loadPerms())

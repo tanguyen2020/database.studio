@@ -126,6 +126,24 @@
     if (scope === 'database' && selectedDb) untrack(() => void loadDatabase())
   })
 
+  // Grant-right-after-create: a new database User → switch to database scope on
+  // its DB, select it, and open the Grant Access wizard.
+  $effect(() => {
+    const req = grantWizard.afterCreate
+    if (req && req.connId === baseCid) untrack(() => void handleAfterCreate(req.principal, req.database))
+  })
+  async function handleAfterCreate(principal: string, database?: string) {
+    grantWizard.afterCreate = null
+    scope = 'database'
+    if (database) selectedDb = database
+    await loadServer()
+    await loadDatabase()
+    if (dbUsers.some((u) => String(u.name) === principal)) {
+      selectedUser = principal
+      openGrantWizard()
+    }
+  }
+
   // ---- User Mapping (login → databases) -------------------------------------
   let mappingLoaded = $state(false)
   let mappedDbs = $state<Set<string>>(new Set())

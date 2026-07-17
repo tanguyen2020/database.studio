@@ -108,6 +108,21 @@
     untrack(() => void load())
   })
 
+  // Grant-right-after-create: reload, select the new account, open the wizard.
+  $effect(() => {
+    const req = grantWizard.afterCreate
+    if (req && req.connId === cid) untrack(() => void handleAfterCreate(req.principal))
+  })
+  async function handleAfterCreate(principal: string) {
+    grantWizard.afterCreate = null
+    await load()
+    if (accounts.some((a) => keyOf(a) === principal)) {
+      selectedKey = principal
+      detailTab = 'privileges'
+      openGrantWizard()
+    }
+  }
+
   const selectedAcct = $derived(accounts.find((a) => keyOf(a) === selectedKey))
   const selUser = $derived(selectedAcct ? String(selectedAcct.user) : '')
   const selHost = $derived(selectedAcct ? String(selectedAcct.host) : '')

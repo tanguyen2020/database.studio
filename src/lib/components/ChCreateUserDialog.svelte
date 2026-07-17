@@ -4,6 +4,8 @@
   // (password masked). Runs via exec_statement (HTTP) then refreshes Explorer.
   import { chUserWizard } from '$lib/stores/chuser.svelte'
   import { explorer } from '$lib/stores/explorer.svelte'
+  import { grantWizard } from '$lib/stores/grantwizard.svelte'
+  import { tabs } from '$lib/stores/tabs.svelte'
   import { toasts } from '$lib/stores/toast.svelte'
   import * as ipc from '$lib/ipc'
   import { createRole, createUser, type ChAuth } from '$lib/users/clickhouse'
@@ -68,6 +70,8 @@
       }
       toasts.success(`${mode === 'role' ? 'Role' : 'User'} ${name.trim()} created`, 'clickhouse')
       await explorer.refresh(cid, { kind: 'connection' }).catch(() => {})
+      tabs.openUserManager(cid, name.trim())
+      grantWizard.requestAfterCreate(cid, name.trim())
       chUserWizard.close()
     } catch (e) {
       err = String(e)

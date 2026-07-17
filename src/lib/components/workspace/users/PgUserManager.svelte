@@ -108,6 +108,22 @@
     untrack(() => void load())
   })
 
+  // Grant-right-after-create: a create dialog cued the new principal → reload,
+  // select it, switch to Privileges, and open the Grant Access wizard.
+  $effect(() => {
+    const req = grantWizard.afterCreate
+    if (req && req.connId === cid) untrack(() => void handleAfterCreate(req.principal))
+  })
+  async function handleAfterCreate(principal: string) {
+    grantWizard.afterCreate = null
+    await load()
+    if (roles.some((r) => String(r.name) === principal)) {
+      selected = principal
+      detailTab = 'privileges'
+      openGrantWizard()
+    }
+  }
+
   const selectedRole = $derived(roles.find((r) => String(r.name) === selected))
   const isGroup = (r: Row) => r.rolcanlogin === false
   const boolY = (v: unknown) => v === true || v === 1 || v === '1' || v === 't'

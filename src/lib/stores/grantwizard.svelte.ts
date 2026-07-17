@@ -29,6 +29,16 @@ class GrantWizardStore {
   build = $state<(kind: string, scope: string) => string[]>(() => [])
   onApply = $state<(statements: string[]) => void>(() => {})
 
+  // After a user/role is created, a manager picks this up (matching connId),
+  // reloads, selects the new principal, and opens the wizard on it. `database`
+  // is an optional hint (MSSQL: the database the new user lives in).
+  afterCreate = $state<{ connId: string; principal: string; database?: string; tick: number } | null>(null)
+  private tick = 0
+  requestAfterCreate(connId: string, principal: string, database?: string) {
+    this.tick += 1
+    this.afterCreate = { connId, principal, database, tick: this.tick }
+  }
+
   show(opts: {
     title: string
     role: string

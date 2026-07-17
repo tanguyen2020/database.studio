@@ -95,6 +95,22 @@
     if (!list.some((x) => String(x.name) === selected)) untrack(() => (selected = String(list[0]?.name ?? '')))
   })
 
+  // Grant-right-after-create: reload, select the new user/role, open the wizard.
+  $effect(() => {
+    const req = grantWizard.afterCreate
+    if (req && req.connId === cid) untrack(() => void handleAfterCreate(req.principal))
+  })
+  async function handleAfterCreate(principal: string) {
+    grantWizard.afterCreate = null
+    await load()
+    if (users.some((x) => String(x.name) === principal)) kind = 'users'
+    else if (roles.some((x) => String(x.name) === principal)) kind = 'roles'
+    else return
+    selected = principal
+    detailTab = 'grants'
+    openGrantWizard()
+  }
+
   const list = $derived(kind === 'users' ? users : roles)
   const selectedRow = $derived(list.find((x) => String(x.name) === selected))
   const isReadOnly = (r: Row | undefined) => !!r && String(r.storage) !== 'local_directory'

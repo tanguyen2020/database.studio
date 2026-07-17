@@ -3,6 +3,8 @@
   // without login/password is a pure group. Runs via cql_exec, refreshes tree.
   import { cassUserWizard } from '$lib/stores/cassuser.svelte'
   import { explorer } from '$lib/stores/explorer.svelte'
+  import { grantWizard } from '$lib/stores/grantwizard.svelte'
+  import { tabs } from '$lib/stores/tabs.svelte'
   import { toasts } from '$lib/stores/toast.svelte'
   import * as ipc from '$lib/ipc'
   import { createRole } from '$lib/users/cassandra'
@@ -64,6 +66,8 @@
       }
       toasts.success(`Role ${name.trim()} created`, 'cassandra')
       await explorer.refresh(cid, { kind: 'connection' }).catch(() => {})
+      tabs.openUserManager(cid, name.trim())
+      grantWizard.requestAfterCreate(cid, name.trim())
       cassUserWizard.close()
     } catch (e) {
       err = String(e)

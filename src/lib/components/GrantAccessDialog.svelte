@@ -59,6 +59,16 @@
     return out
   })
 
+  // Warn on broad/destructive grants so a stray click can't over-privilege.
+  const warning = $derived.by<string | null>(() => {
+    if (!selected.size || !level) return null
+    const wide = [...selected].some((s) => /\*|all /i.test(s)) || selected.size >= 5
+    if (level === 'revoke-all') return `This removes ALL access on ${selected.size} ${grantWizard.scopeLabel.toLowerCase()}(s).`
+    if (level === 'full') return `This grants FULL privileges on ${selected.size} ${grantWizard.scopeLabel.toLowerCase()}(s).`
+    if (wide) return `Applies to ${selected.size} ${grantWizard.scopeLabel.toLowerCase()}(s).`
+    return null
+  })
+
   function apply() {
     if (!statements.length) return
     grantWizard.onApply(statements)
@@ -120,6 +130,9 @@
           <pre class="selectable mono" style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-10);font-size:var(--px-11_5);margin:0;max-height:var(--px-150);overflow:auto;white-space:pre-wrap">{#if statements.length}{#each statements as s (s)}{#each highlightSql(s + ';\n') as tk (tk)}<span style="color:{sqlTokenColor(tk.kind)}">{tk.text}</span>{/each}{/each}{:else}<span style="color:var(--muted)">-- pick one or more {grantWizard.scopeLabel.toLowerCase()}s and an access level</span>{/if}</pre>
         </div>
       </div>
+      {#if warning}
+        <div style="flex:none;padding:var(--px-6) var(--px-18);background:var(--panel);border-top:var(--px-1) solid var(--border);color:var(--warn2);font-size:var(--px-11_5)">⚠ {warning}</div>
+      {/if}
       <div style="flex:none;display:flex;gap:var(--px-9);padding:var(--px-13) var(--px-18);border-top:var(--px-1) solid var(--border);background:var(--panel)">
         <span onclick={() => grantWizard.close()} onkeydown={(e) => e.key === 'Enter' && grantWizard.close()} role="button" tabindex="0" style="font-size:var(--px-12_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-8);padding:var(--px-8) var(--px-16);cursor:pointer">Cancel</span>
         <span onclick={apply} onkeydown={(e) => e.key === 'Enter' && apply()} role="button" tabindex="0" aria-disabled={!statements.length} style="margin-left:auto;font-size:var(--px-12_5);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-8);padding:var(--px-8) var(--px-18);cursor:{statements.length ? 'pointer' : 'not-allowed'};opacity:{statements.length ? 1 : 0.5};font-weight:600">Add to pending</span>

@@ -4,6 +4,8 @@
   // Explorer roles node. "Can login?" flips the primary button label.
   import { pgRoleWizard } from '$lib/stores/pgrole.svelte'
   import { explorer } from '$lib/stores/explorer.svelte'
+  import { grantWizard } from '$lib/stores/grantwizard.svelte'
+  import { tabs } from '$lib/stores/tabs.svelte'
   import { toasts } from '$lib/stores/toast.svelte'
   import * as ipc from '$lib/ipc'
   import { createRole, type RoleOptions } from '$lib/users/postgres'
@@ -93,6 +95,10 @@
       }
       toasts.success(`Role ${name.trim()} created`, 'postgres')
       await explorer.refresh(cid, { kind: 'connection' }).catch(() => {})
+      // Grant right after create: open the manager on the new role and cue the
+      // Grant Access wizard so permissions can be assigned in one flow.
+      tabs.openUserManager(cid, name.trim())
+      grantWizard.requestAfterCreate(cid, name.trim())
       pgRoleWizard.close()
     } catch (e) {
       err = String(e)
