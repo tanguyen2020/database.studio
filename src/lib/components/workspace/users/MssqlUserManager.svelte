@@ -12,6 +12,7 @@
   import { highlightSql, sqlTokenColor } from '$lib/format/sql'
   import {
     alterLoginPassword,
+    createUser as createUserStmt,
     denyColumn,
     dropLogin,
     dropUser,
@@ -124,6 +125,43 @@
     void scope
     if (scope === 'database' && selectedDb) untrack(() => void loadDatabase())
   })
+
+  // ---- User Mapping (login → databases) -------------------------------------
+  let mappingLoaded = $state(false)
+  let mappedDbs = $state<Set<string>>(new Set())
+  let mappingBusy = $state(false)
+  async function loadUserMapping() {
+    if (!baseCid || !selectedLogin) return
+    mappingBusy = true
+    const found = new Set<string>()
+    try {
+      for (const db of databases) {
+        const sub = await ipc.attachDatabase(baseCid, db).catch(() => baseCid!)
+        const u = await ipc.usersView(sub, 'db_users').catch(() => ({ rows: [] as Row[] }))
+        if (u.rows.some((r) => String(r.login_name) === selectedLogin)) found.add(db)
+      }
+      mappedDbs = found
+      mappingLoaded = true
+    } finally {
+      mappingBusy = false
+    }
+  }
+  async function queueMapUser(db: string, add: boolean) {
+    if (!baseCid || !selectedLogin || mappingBusy) return
+    mappingBusy = true
+    try {
+      const sub = await ipc.attachDatabase(baseCid, db).catch(() => baseCid!)
+      const sql = add ? createUserStmt(selectedLogin, selectedLogin) : dropUser(selectedLogin)
+      const res = await ipc.execStatement(sub, sql, 0)
+      if (!res.ok) {
+        toasts.error(res.error?.message ?? 'error')
+        return
+      }
+      await loadUserMapping()
+    } finally {
+      mappingBusy = false
+    }
+  }
 
   // ---- Server: logins -------------------------------------------------------
   const selectedLoginRow = $derived(logins.find((l) => String(l.name) === selectedLogin))
@@ -327,6 +365,22 @@
                 </label>
               {/each}
             </div>
+            <!-- User Mapping (§5.3) — which databases this login has a user in -->
+            <div style="display:flex;align-items:center;gap:var(--px-8);margin-bottom:var(--px-6)">
+              <span style="font-size:var(--px-12);color:var(--text2);font-weight:600">User Mapping</span>
+              <span onclick={loadUserMapping} onkeydown={(e) => e.key === 'Enter' && loadUserMapping()} role="button" tabindex="0" style="font-size:var(--px-11);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-3) var(--px-9);cursor:pointer">Load</span>
+            </div>
+            {#if mappingLoaded}
+              <div style="display:flex;flex-direction:column;gap:var(--px-3);margin-bottom:var(--px-12)">
+                {#each databases as db (db)}
+                  <label style="font-size:var(--px-11_5);color:var(--text);display:flex;align-items:center;gap:var(--px-6)">
+                    <input type="checkbox" checked={mappedDbs.has(db)} onchange={(e) => queueMapUser(db, (e.currentTarget as HTMLInputElement).checked)} /> {db}
+                  </label>
+                {/each}
+              </div>
+            {:else}
+              <div style="font-size:var(--px-11);color:var(--muted);margin-bottom:var(--px-12)">Load to see which databases {selectedLogin} maps to (creates/drops a database user per checkbox).</div>
+            {/if}
             {#if confirmDropLogin}
               <div style="display:flex;gap:var(--px-8);align-items:center;padding:var(--px-8);background:var(--panel);border:var(--px-1) solid var(--error);border-radius:var(--px-6)">
                 <span style="font-size:var(--px-12);color:var(--error)">Drop login “{selectedLogin}”?</span>
