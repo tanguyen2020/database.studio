@@ -32,6 +32,7 @@
   import { chUserWizard } from '$lib/stores/chuser.svelte'
   import { oraUserWizard } from '$lib/stores/orauser.svelte'
   import { cassUserWizard } from '$lib/stores/cassuser.svelte'
+  import { mongoUserWizard } from '$lib/stores/mongouser.svelte'
   import { properties, type PropTarget } from '$lib/stores/properties.svelte'
   import { newDatabaseWizard } from '$lib/stores/newdatabase.svelte'
   import { genRenameRoutine } from '$lib/sql/routines'
@@ -205,6 +206,8 @@
         ]
       case 'cassandra':
         return [{ key: 'sec:ca:roles', label: 'Roles', source: 'cql:LIST ROLES', onNew: () => cassUserWizard.show(cid) }]
+      case 'mongodb':
+        return [{ key: 'sec:mo:users', label: 'Users', source: 'mongo:users', onNew: () => mongoUserWizard.show(cid, 'admin') }]
       default:
         return []
     }
@@ -216,7 +219,9 @@
     if (!cid) return
     try {
       let rows: Record<string, unknown>[]
-      if (f.source.startsWith('cql:')) {
+      if (f.source === 'mongo:users') {
+        rows = (await ipc.mongoUsers(cid)).rows
+      } else if (f.source.startsWith('cql:')) {
         const r = await ipc.cqlExec(cid, f.source.slice(4))
         rows = r.result?.rows ?? []
       } else {
@@ -228,6 +233,7 @@
     }
   }
   function secItemOf(f: SecFolder, x: Record<string, unknown>): SecItem {
+    if (f.source === 'mongo:users') return { name: `${x.user}@${x.db}` }
     if (f.source === 'cql:LIST ROLES') {
       const badges = [boolTrue(x.super) ? 'SUPER' : '', boolTrue(x.login) ? '' : 'group'].filter(Boolean)
       return { name: String(x.role), badge: badges[0] || undefined, group: !boolTrue(x.login) }
