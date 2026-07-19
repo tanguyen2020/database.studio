@@ -42,7 +42,7 @@
   let refreshing = $state(false)
   let error = $state<string | null>(null)
   let selected = $state<string>('')
-  let detailTab = $state<'general' | 'membership' | 'privileges' | 'default'>('general')
+  let detailTab = $state<'general' | 'membership' | 'privileges' | 'access' | 'default'>('general')
   let defaultAcl = $state<Row[]>([])
 
   // Pending mutation statements (built by the active tab), shown as a preview.
@@ -54,6 +54,14 @@
   // databases on the server (for multi-database grants); currentDb = connected one.
   let databases = $state<string[]>([])
   let currentDb = $state('')
+
+  // Access overview — what the selected role can access, per database → schema.
+  // Read from each database's own grant catalog via a sub-connection.
+  type TablePriv = { priv: string; n: number }
+  type SchemaAccess = { schema: string; schemaPrivs: string[]; tablePrivs: TablePriv[]; seqPrivs: string[]; inherited: boolean }
+  type DbAccess = { db: string; current: boolean; error: string | null; schemas: SchemaAccess[] }
+  let access = $state<DbAccess[]>([])
+  let accessLoading = $state(false)
 
   const cid = $derived(tab.connectionId)
 
@@ -330,6 +338,77 @@
   function discard() {
     pending = []
   }
+
+  // ---- Access overview (per database → schema → privileges) ------------------
+  // Auto-loads when the Access tab is shown for a role. Reads each database's
+  // own grant catalog (schema_grants + table_grants) via a sub-connection and
+  // includes grants inherited through the role's memberships.
+  $effect(() => {
+    if (detailTab !== 'access') return
+    void selected
+    void currentDb
+    untrack(() => void loadAccess())
+  })
+
+  async function loadAccess() {
+    if (!cid || !selected || !databases.length) {
+      access = []
+      return
+    }
+    accessLoading = true
+    const principals = new Set<string>([selected, ...rolesOf(selected)])
+    const out: DbAccess[] = []
+    try {
+      for (const db of databases) {
+        const current = db === currentDb
+        try {
+          const sub = await ipc.attachDatabase(cid, db)
+          const [sg, tg] = await Promise.all([
+            ipc.usersView(sub, 'schema_grants').catch(() => ({ rows: [] as Row[] })),
+            ipc.usersView(sub, 'table_grants').catch(() => ({ rows: [] as Row[] })),
+          ])
+          const bySchema = new Map<string, SchemaAccess>()
+          const ensure = (s: string) => {
+            let e = bySchema.get(s)
+            if (!e) { e = { schema: s, schemaPrivs: [], tablePrivs: [], seqPrivs: [], inherited: false }; bySchema.set(s, e) }
+            return e
+          }
+          for (const g of sg.rows) {
+            if (!principals.has(String(g.grantee))) continue
+            const e = ensure(String(g.schema))
+            const p = String(g.privilege_type)
+            if (!e.schemaPrivs.includes(p)) e.schemaPrivs.push(p)
+            if (String(g.grantee) !== selected) e.inherited = true
+          }
+          const tblCount = new Map<string, Map<string, number>>()
+          const seqSet = new Map<string, Set<string>>()
+          for (const g of tg.rows) {
+            if (!principals.has(String(g.grantee))) continue
+            const s = String(g.schema)
+            const p = String(g.privilege_type)
+            const e = ensure(s)
+            if (String(g.grantee) !== selected) e.inherited = true
+            if (String(g.kind) === 'S') {
+              if (!seqSet.has(s)) seqSet.set(s, new Set())
+              seqSet.get(s)!.add(p)
+            } else {
+              if (!tblCount.has(s)) tblCount.set(s, new Map())
+              const m = tblCount.get(s)!
+              m.set(p, (m.get(p) ?? 0) + 1)
+            }
+          }
+          for (const [s, m] of tblCount) ensure(s).tablePrivs = [...m].map(([priv, n]) => ({ priv, n }))
+          for (const [s, set] of seqSet) ensure(s).seqPrivs = [...set]
+          out.push({ db, current, error: null, schemas: [...bySchema.values()].sort((a, b) => a.schema.localeCompare(b.schema)) })
+        } catch (e) {
+          out.push({ db, current, error: String(e), schemas: [] })
+        }
+      }
+      access = out
+    } finally {
+      accessLoading = false
+    }
+  }
 </script>
 
 <div style="flex:1;display:flex;flex-direction:column;min-height:0">
@@ -366,7 +445,7 @@
     <div style="flex:1;display:flex;flex-direction:column;min-height:0">
       {#if selectedRole}
         <div style="flex:none;display:flex;gap:var(--px-2);padding:var(--px-8) var(--px-12) 0;border-bottom:var(--px-1) solid var(--border)">
-          {#each [['general', 'General'], ['membership', 'Membership'], ['privileges', 'Privileges'], ['default', 'Default privileges']] as [k, label] (k)}
+          {#each [['general', 'General'], ['membership', 'Membership'], ['privileges', 'Privileges'], ['access', 'Access'], ['default', 'Default privileges']] as [k, label] (k)}
             <span onclick={() => (detailTab = k as typeof detailTab)} onkeydown={(e) => e.key === 'Enter' && (detailTab = k as typeof detailTab)} role="tab" tabindex="0" aria-selected={detailTab === k} style="padding:var(--px-6) var(--px-12);font-size:var(--px-12);cursor:pointer;font-weight:600;border-bottom:var(--px-2) solid {detailTab === k ? 'var(--primary)' : 'transparent'};color:{detailTab === k ? 'var(--text)' : 'var(--muted)'}">{label}</span>
           {/each}
         </div>
@@ -444,6 +523,53 @@
               onPreset={(s, kind) => applyPreset(s, kind as PresetKind)}
               note="EXECUTE on functions defaults to PUBLIC in PostgreSQL."
             />
+            {/if}
+          {:else if detailTab === 'access'}
+            <!-- Access overview: what this role can access per database → schema -->
+            <div style="display:flex;align-items:center;gap:var(--px-10);margin-bottom:var(--px-10);flex-wrap:wrap">
+              <span style="font-size:var(--px-12);color:var(--text2)">What <span class="mono" style="color:var(--text);font-weight:600">{selected}</span> can access, per database → schema.</span>
+              <span onclick={loadAccess} onkeydown={(e) => e.key === 'Enter' && loadAccess()} role="button" tabindex="0" aria-busy={accessLoading} style="margin-left:auto;font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer;opacity:{accessLoading ? 0.6 : 1}">{accessLoading ? '⟳ Loading…' : '⟳ Refresh'}</span>
+            </div>
+            {#if boolY(selectedRole.rolsuper)}
+              <div style="font-size:var(--px-11_5);color:var(--warn2);margin-bottom:var(--px-8)">★ Superuser — full access to every database and schema (grants below are in addition).</div>
+            {/if}
+            {#if accessLoading && !access.length}
+              <div style="font-size:var(--px-11_5);color:var(--muted)">Reading each database…</div>
+            {:else if !access.length}
+              <div style="font-size:var(--px-11_5);color:var(--muted)">No databases found.</div>
+            {:else}
+              <div style="display:flex;flex-direction:column;gap:var(--px-10)">
+                {#each access as d (d.db)}
+                  <div style="border:var(--px-1) solid var(--border);border-radius:var(--px-7);overflow:hidden">
+                    <div style="display:flex;align-items:center;gap:var(--px-6);padding:var(--px-6) var(--px-10);background:var(--panel);border-bottom:var(--px-1) solid var(--border)">
+                      <span style="color:{d.current ? 'var(--primary)' : 'var(--muted)'};font-size:var(--px-11)">{d.current ? '●' : '○'}</span>
+                      <span class="mono" style="font-size:var(--px-12_5);font-weight:700;color:var(--text)">{d.db}</span>
+                      {#if d.current}<span style="font-size:var(--px-10);color:var(--muted)">current</span>{/if}
+                      <span style="margin-left:auto;font-size:var(--px-10_5);color:var(--muted)">{d.schemas.length ? `${d.schemas.length} schema(s)` : ''}</span>
+                    </div>
+                    <div style="padding:var(--px-6) var(--px-10)">
+                      {#if d.error}
+                        <div style="font-size:var(--px-11);color:var(--error)">Could not read: {d.error}</div>
+                      {:else if !d.schemas.length}
+                        <div style="font-size:var(--px-11);color:var(--muted)">— no explicit privileges in this database</div>
+                      {:else}
+                        {#each d.schemas as s (s.schema)}
+                          <div style="display:flex;align-items:flex-start;gap:var(--px-8);padding:var(--px-3) 0;flex-wrap:wrap">
+                            <span class="mono" style="font-size:var(--px-12);color:var(--text);min-width:var(--px-110)">{s.schema}</span>
+                            <div style="display:flex;gap:var(--px-4);flex-wrap:wrap;flex:1">
+                              {#each s.schemaPrivs as p (p)}<span style="font-size:var(--px-10);color:var(--syntax-keyword);background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-4);padding:0 var(--px-5)">{p}</span>{/each}
+                              {#each s.tablePrivs as tp (tp.priv)}<span style="font-size:var(--px-10);color:var(--syntax-number);background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-4);padding:0 var(--px-5)">{tp.priv} ×{tp.n}</span>{/each}
+                              {#each s.seqPrivs as sp (sp)}<span style="font-size:var(--px-10);color:var(--syntax-type);background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-4);padding:0 var(--px-5)">SEQ {sp}</span>{/each}
+                              {#if s.inherited}<span title="granted via a role this role is a member of" style="font-size:var(--px-10);color:var(--muted)">◐ inherited</span>{/if}
+                            </div>
+                          </div>
+                        {/each}
+                      {/if}
+                    </div>
+                  </div>
+                {/each}
+              </div>
+              <div style="font-size:var(--px-10_5);color:var(--muted);margin-top:var(--px-8)">Table privileges show a per-schema count (e.g. SELECT ×5 = on 5 tables). PostgreSQL grants CONNECT to PUBLIC by default, so a role can usually open every database; what it can actually read/write is the schema/table privileges above.</div>
             {/if}
           {:else}
             <!-- Default privileges (read-only, §2.3) — ALTER DEFAULT PRIVILEGES already granted -->

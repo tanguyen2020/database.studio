@@ -443,3 +443,26 @@ test('user manager: PG Grant access spans multiple databases', async ({ page }) 
 
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
+
+// The Access tab shows, for the selected role, every database → schema and the
+// concrete privileges it holds there (read from each database).
+test('user manager: PG Access tab lists per-database schema privileges', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(String(e)))
+  await blockRemoteFonts(page)
+  await openManager(page)
+
+  await page.getByRole('option', { name: /app_user/ }).first().click()
+  await page.waitForTimeout(150)
+  await page.getByRole('tab', { name: 'Access', exact: true }).click()
+  await page.waitForTimeout(500)
+
+  // every database on the server is listed…
+  await expect(page.getByText('app', { exact: true }).first()).toBeVisible()
+  await expect(page.getByText('analytics', { exact: true }).first()).toBeVisible()
+  // …with the schema and the concrete privilege the role holds there
+  await expect(page.getByText('public', { exact: true }).first()).toBeVisible()
+  await expect(page.getByText(/SELECT ×\d+/).first()).toBeVisible()
+
+  expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
+})
