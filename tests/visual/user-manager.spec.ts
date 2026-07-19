@@ -375,5 +375,34 @@ test('user manager: MySQL account list + preset + Add Account popup', async ({ p
   await page.waitForTimeout(150)
   await expect(page.getByText(/CREATE USER 'spec'@'%'/).first()).toBeVisible()
 
+  // pick a role in the create popup → separate GRANT statement in the preview
+  await page.getByRole('dialog').getByPlaceholder('pick roles to grant…').click()
+  await page.waitForTimeout(150)
+  await page.getByRole('dialog').getByRole('option', { name: 'read_only' }).click()
+  await page.waitForTimeout(150)
+  await expect(page.getByText(/GRANT 'read_only' TO 'spec'@'%'/).first()).toBeVisible()
+
+  expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
+})
+
+// Creating a user/role can assign role membership in the SAME popup (real-world
+// parity): PostgreSQL folds it into CREATE ROLE (IN ROLE …).
+test('user manager: PG create popup assigns role membership (IN ROLE)', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(String(e)))
+  await blockRemoteFonts(page)
+  await openManager(page)
+
+  await page.getByRole('button', { name: '+ New Role' }).click()
+  await page.waitForTimeout(300)
+  await page.getByRole('dialog').locator('input').first().fill('spec_user')
+  await page.waitForTimeout(150)
+  // pick an existing role in "Member of (roles)" → CREATE ROLE … IN ROLE "…"
+  await page.getByRole('dialog').getByPlaceholder('grant role membership…').click()
+  await page.waitForTimeout(150)
+  await page.getByRole('dialog').getByRole('option', { name: 'readonly_group' }).click()
+  await page.waitForTimeout(150)
+  await expect(page.getByText(/CREATE ROLE "spec_user".*IN ROLE "readonly_group"/).first()).toBeVisible()
+
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })

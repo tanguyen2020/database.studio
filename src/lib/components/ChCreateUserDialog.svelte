@@ -8,7 +8,8 @@
   import { tabs } from '$lib/stores/tabs.svelte'
   import { toasts } from '$lib/stores/toast.svelte'
   import * as ipc from '$lib/ipc'
-  import { createRole, createUser, type ChAuth } from '$lib/users/clickhouse'
+  import { createRole, createUser, grantRole, setDefaultRole, type ChAuth } from '$lib/users/clickhouse'
+  import MultiSelect from '$lib/components/MultiSelect.svelte'
 
   let dlgOpen = $state(false)
   $effect(() => {
@@ -20,6 +21,8 @@
   let auth = $state<ChAuth>('sha256_password')
   let password = $state('')
   let showPw = $state(false)
+  let memberOf = $state<string[]>([])
+  let allRoles = $state<string[]>([])
   let busy = $state(false)
   let err = $state<string | null>(null)
 
@@ -30,9 +33,23 @@
       auth = 'sha256_password'
       password = ''
       showPw = false
+      memberOf = []
       err = null
+      const cid = chUserWizard.connId
+      allRoles = []
+      if (cid) ipc.usersView(cid, 'roles').then((r) => (allRoles = r.rows.map((x) => String(x.name)))).catch(() => (allRoles = []))
     }
     wasOpen = dlgOpen
+  })
+
+  // Role grants run after CREATE USER (inline DEFAULT ROLE requires the role to
+  // already be granted), then all granted roles become default.
+  const roleStmts = $derived.by<string[]>(() => {
+    const n = name.trim()
+    if (mode !== 'user' || !memberOf.length || !n) return []
+    const out = memberOf.map((r) => grantRole(r, n))
+    out.push(setDefaultRole('ALL', n))
+    return out
   })
 
   const AUTHS: ChAuth[] = ['sha256_password', 'no_password', 'plaintext_password']
@@ -45,8 +62,9 @@
     return createUser({ name: n, auth, password: needsPassword ? password : null })
   })
   const previewSql = $derived.by(() => {
-    if (!sql || showPw || !password) return sql
-    return sql.replace(`BY '${password.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`, "BY '••••••'")
+    if (!sql) return sql
+    const base = showPw || !password ? sql : sql.replace(`BY '${password.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`, "BY '••••••'")
+    return roleStmts.length ? [base, ...roleStmts].join(';\n') : base
   })
 
   function generate() {
@@ -67,6 +85,13 @@
       if (!res.ok) {
         err = res.error?.message ?? 'error'
         return
+      }
+      for (const stmt of roleStmts) {
+        const r = await ipc.execStatement(cid, stmt, 0)
+        if (!r.ok) {
+          err = `user created, but role grant failed: ${r.error?.message ?? 'error'}`
+          break
+        }
       }
       toasts.success(`${mode === 'role' ? 'Role' : 'User'} ${name.trim()} created`, 'clickhouse')
       await explorer.refresh(cid, { kind: 'connection' }).catch(() => {})
@@ -107,6 +132,9 @@
               <span onclick={generate} onkeydown={(e) => e.key === 'Enter' && generate()} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-9);cursor:pointer">Generate</span>
             </div>
           {/if}
+          <label style="font-size:var(--px-12);color:var(--text2)">Grant roles
+            <div style="margin-top:var(--px-4)"><MultiSelect bind:values={memberOf} options={allRoles.filter((r) => r !== name.trim())} placeholder="pick roles to grant…" /></div>
+          </label>
         {/if}
         <div style="font-size:var(--px-11);color:var(--muted)">SQL preview</div>
         <pre class="selectable mono" style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-10);font-size:var(--px-11_5);margin:0;max-height:var(--px-120);overflow:auto;color:var(--text2);white-space:pre-wrap">{previewSql || '-- enter a name'}</pre>

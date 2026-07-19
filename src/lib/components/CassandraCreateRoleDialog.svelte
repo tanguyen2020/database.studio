@@ -7,7 +7,8 @@
   import { tabs } from '$lib/stores/tabs.svelte'
   import { toasts } from '$lib/stores/toast.svelte'
   import * as ipc from '$lib/ipc'
-  import { createRole } from '$lib/users/cassandra'
+  import { createRole, grantRole } from '$lib/users/cassandra'
+  import MultiSelect from '$lib/components/MultiSelect.svelte'
 
   let dlgOpen = $state(false)
   $effect(() => {
@@ -19,6 +20,8 @@
   let superuser = $state(false)
   let password = $state('')
   let showPw = $state(false)
+  let memberOf = $state<string[]>([])
+  let allRoles = $state<string[]>([])
   let busy = $state(false)
   let err = $state<string | null>(null)
 
@@ -30,7 +33,16 @@
       superuser = false
       password = ''
       showPw = false
+      memberOf = []
       err = null
+      const cid = cassUserWizard.connId
+      allRoles = []
+      if (cid) {
+        ipc
+          .cqlExec(cid, 'LIST ROLES')
+          .then((r) => (allRoles = (r.result?.rows ?? []).map((row) => String((row as Record<string, unknown>).role)).filter(Boolean)))
+          .catch(() => (allRoles = []))
+      }
     }
     wasOpen = dlgOpen
   })
@@ -40,9 +52,12 @@
       ? createRole({ name: name.trim(), password: canLogin && password ? password : null, login: canLogin, superuser })
       : '',
   )
+  // Role membership is granted after CREATE ROLE (Cassandra: GRANT parent TO x).
+  const roleStmts = $derived.by<string[]>(() => (name.trim() && memberOf.length ? memberOf.map((r) => grantRole(r, name.trim())) : []))
   const previewCql = $derived.by(() => {
-    if (!cql || showPw || !password) return cql
-    return cql.replace(`PASSWORD = '${password.replace(/'/g, "''")}'`, "PASSWORD = '••••••'")
+    if (!cql) return cql
+    const base = showPw || !password ? cql : cql.replace(`PASSWORD = '${password.replace(/'/g, "''")}'`, "PASSWORD = '••••••'")
+    return roleStmts.length ? [base, ...roleStmts].join(';\n') : base
   })
 
   function generate() {
@@ -63,6 +78,13 @@
       if (!res.ok) {
         err = res.error?.message ?? 'error'
         return
+      }
+      for (const stmt of roleStmts) {
+        const r = await ipc.cqlExec(cid, stmt)
+        if (!r.ok) {
+          err = `role created, but membership grant failed: ${r.error?.message ?? 'error'}`
+          break
+        }
       }
       toasts.success(`Role ${name.trim()} created`, 'cassandra')
       await explorer.refresh(cid, { kind: 'connection' }).catch(() => {})
@@ -99,6 +121,9 @@
             <span onclick={generate} onkeydown={(e) => e.key === 'Enter' && generate()} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-9);cursor:pointer">Generate</span>
           </div>
         {/if}
+        <label style="font-size:var(--px-12);color:var(--text2)">Member of (roles)
+          <div style="margin-top:var(--px-4)"><MultiSelect bind:values={memberOf} options={allRoles.filter((r) => r !== name.trim())} placeholder="grant role membership…" /></div>
+        </label>
         <div style="font-size:var(--px-11);color:var(--muted)">CQL preview</div>
         <pre class="selectable mono" style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-10);font-size:var(--px-11_5);margin:0;max-height:var(--px-120);overflow:auto;color:var(--text2);white-space:pre-wrap">{previewCql || '-- enter a role name'}</pre>
         {#if err}<div style="font-size:var(--px-12);color:var(--error)">✗ {err}</div>{/if}

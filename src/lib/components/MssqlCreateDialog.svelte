@@ -8,7 +8,17 @@
   import { tabs } from '$lib/stores/tabs.svelte'
   import { toasts } from '$lib/stores/toast.svelte'
   import * as ipc from '$lib/ipc'
-  import { createLogin, createUser, createDbRole, createWindowsLogin } from '$lib/users/mssql'
+  import {
+    createLogin,
+    createUser,
+    createDbRole,
+    createWindowsLogin,
+    setServerRoleMember,
+    setDbRoleMember,
+    FIXED_SERVER_ROLES,
+    FIXED_DB_ROLES,
+  } from '$lib/users/mssql'
+  import MultiSelect from '$lib/components/MultiSelect.svelte'
 
   let dlgOpen = $state(false)
   $effect(() => {
@@ -24,6 +34,8 @@
   let checkPolicy = $state(true)
   let loginForUser = $state('')
   let withoutLogin = $state(false)
+  let memberOf = $state<string[]>([])
+  let customRoles = $state<string[]>([])
   let busy = $state(false)
   let err = $state<string | null>(null)
 
@@ -37,9 +49,37 @@
       checkPolicy = true
       loginForUser = mssqlUserWizard.logins[0] ?? ''
       withoutLogin = false
+      memberOf = []
+      customRoles = []
       err = null
+      // load user-defined roles to offer alongside the fixed roles.
+      const cid = mssqlUserWizard.connId
+      if (cid && mode === 'login') {
+        ipc.usersView(cid, 'server_roles').then((r) => (customRoles = r.rows.map((x) => String(x.name)))).catch(() => {})
+      } else if (cid && mode === 'user') {
+        const db = mssqlUserWizard.database
+        ;(db ? ipc.attachDatabase(cid, db).catch(() => cid) : Promise.resolve(cid)).then((sub) =>
+          ipc.usersView(sub, 'db_roles').then((r) => (customRoles = r.rows.map((x) => String(x.name)))).catch(() => {}),
+        )
+      }
     }
     wasOpen = dlgOpen
+  })
+
+  // role options: fixed roles + user-defined; server-level for a Login, database
+  // level for a User; Roles themselves have no membership picker.
+  const roleOptions = $derived.by<string[]>(() => {
+    if (mode === 'login') return [...new Set([...FIXED_SERVER_ROLES, ...customRoles])]
+    if (mode === 'user') return [...new Set([...FIXED_DB_ROLES, ...customRoles])].filter((r) => r !== name.trim())
+    return []
+  })
+  // membership statements run after CREATE (ALTER [SERVER] ROLE … ADD MEMBER …).
+  const roleStmts = $derived.by<string[]>(() => {
+    const n = name.trim()
+    if (!n || !memberOf.length) return []
+    if (mode === 'login') return memberOf.map((r) => setServerRoleMember(r, n, true))
+    if (mode === 'user') return memberOf.map((r) => setDbRoleMember(r, n, true))
+    return []
   })
 
   const title = $derived(mode === 'login' ? 'New Login' : mode === 'user' ? 'New User' : 'New Role')
@@ -57,8 +97,9 @@
     return createDbRole(n)
   })
   const previewSql = $derived.by(() => {
-    if (!sql || showPw || !password) return sql
-    return sql.replace(`PASSWORD = N'${password.replace(/'/g, "''")}'`, "PASSWORD = N'••••••'")
+    if (!sql) return sql
+    const base = showPw || !password ? sql : sql.replace(`PASSWORD = N'${password.replace(/'/g, "''")}'`, "PASSWORD = N'••••••'")
+    return roleStmts.length ? [base, ...roleStmts].join(';\n') : base
   })
 
   function generate() {
@@ -84,6 +125,14 @@
       if (!res.ok) {
         err = res.error?.message ?? 'error'
         return
+      }
+      // add role memberships on the same target (server for a login, db for a user).
+      for (const stmt of roleStmts) {
+        const r = await ipc.execStatement(target, stmt, 0)
+        if (!r.ok) {
+          err = `${title.toLowerCase()} created, but role membership failed: ${r.error?.message ?? 'error'}`
+          break
+        }
       }
       toasts.success(`${title} ${name.trim()} created`, 'mssql')
       await explorer.refresh(cid, { kind: 'connection' }).catch(() => {})
@@ -137,6 +186,11 @@
               </select>
             </label>
           {/if}
+        {/if}
+        {#if mode === 'login' || mode === 'user'}
+          <label style="font-size:var(--px-12);color:var(--text2)">{mode === 'login' ? 'Server roles' : 'Database roles'}
+            <div style="margin-top:var(--px-4)"><MultiSelect bind:values={memberOf} options={roleOptions} placeholder="add role membership…" /></div>
+          </label>
         {/if}
         <div style="font-size:var(--px-11);color:var(--muted)">SQL preview</div>
         <pre class="selectable mono" style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-10);font-size:var(--px-11_5);margin:0;max-height:var(--px-120);overflow:auto;color:var(--text2);white-space:pre-wrap">{previewSql || '-- enter a name'}</pre>

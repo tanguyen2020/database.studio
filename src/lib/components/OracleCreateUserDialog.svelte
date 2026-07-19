@@ -7,7 +7,8 @@
   import { tabs } from '$lib/stores/tabs.svelte'
   import { toasts } from '$lib/stores/toast.svelte'
   import * as ipc from '$lib/ipc'
-  import { createUser } from '$lib/users/oracle'
+  import { createUser, grantRole } from '$lib/users/oracle'
+  import MultiSelect from '$lib/components/MultiSelect.svelte'
 
   let dlgOpen = $state(false)
   $effect(() => {
@@ -22,6 +23,8 @@
   let profile = $state('')
   let profiles = $state<string[]>([])
   let grantCreateSession = $state(true)
+  let memberOf = $state<string[]>([])
+  let allRoles = $state<string[]>([])
   let busy = $state(false)
   let err = $state<string | null>(null)
 
@@ -34,6 +37,7 @@
       defaultTablespace = ''
       profile = ''
       grantCreateSession = true
+      memberOf = []
       err = null
       void loadLookups()
     }
@@ -43,24 +47,28 @@
   async function loadLookups() {
     const cid = oraUserWizard.connId
     if (!cid) return
-    const [ts, pf] = await Promise.all([
+    const [ts, pf, rl] = await Promise.all([
       ipc.usersView(cid, 'tablespaces').catch(() => ({ rows: [] as Record<string, unknown>[] })),
       ipc.usersView(cid, 'profiles').catch(() => ({ rows: [] as Record<string, unknown>[] })),
+      ipc.usersView(cid, 'roles').catch(() => ({ rows: [] as Record<string, unknown>[] })),
     ])
     tablespaces = ts.rows.map((r) => String(r.name))
     profiles = pf.rows.map((r) => String(r.name))
+    allRoles = rl.rows.map((r) => String(r.name))
   }
 
   const stmts = $derived.by<string[]>(() => {
     if (!name.trim() || !password) return []
     try {
-      return createUser({
+      const base = createUser({
         name: name.trim(),
         password,
         defaultTablespace: defaultTablespace || null,
         profile: profile || null,
         grantCreateSession,
       })
+      // grant selected roles (separate GRANT statements).
+      return [...base, ...memberOf.map((r) => grantRole(r, name.trim()))]
     } catch {
       return []
     }
@@ -133,6 +141,9 @@
           </label>
         </div>
         <label style="font-size:var(--px-12_5);color:var(--text);display:flex;align-items:center;gap:var(--px-6)"><input type="checkbox" bind:checked={grantCreateSession} /> Grant CREATE SESSION (required to log in)</label>
+        <label style="font-size:var(--px-12);color:var(--text2)">Grant roles
+          <div style="margin-top:var(--px-4)"><MultiSelect bind:values={memberOf} options={allRoles.filter((r) => r !== name.trim().toUpperCase())} placeholder="pick roles to grant…" /></div>
+        </label>
         <div style="font-size:var(--px-11);color:var(--muted)">SQL preview</div>
         <pre class="selectable mono" style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-10);font-size:var(--px-11_5);margin:0;max-height:var(--px-120);overflow:auto;color:var(--text2);white-space:pre-wrap">{previewSql || '-- enter a name and password'}</pre>
         {#if err}<div style="font-size:var(--px-12);color:var(--error)">✗ {err}</div>{/if}

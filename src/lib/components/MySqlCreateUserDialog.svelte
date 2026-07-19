@@ -9,7 +9,8 @@
   import { tabs } from '$lib/stores/tabs.svelte'
   import { toasts } from '$lib/stores/toast.svelte'
   import * as ipc from '$lib/ipc'
-  import { createUser, ql } from '$lib/users/mysql'
+  import { createUser, grantRole, setDefaultRole, ql } from '$lib/users/mysql'
+  import MultiSelect from '$lib/components/MultiSelect.svelte'
 
   let dlgOpen = $state(false)
   $effect(() => {
@@ -22,6 +23,8 @@
   let password = $state('')
   let showPw = $state(false)
   let accountLocked = $state(false)
+  let memberOf = $state<string[]>([])
+  let allRoles = $state<string[]>([])
   let busy = $state(false)
   let err = $state<string | null>(null)
 
@@ -34,9 +37,34 @@
       password = ''
       showPw = false
       accountLocked = false
+      memberOf = []
       err = null
+      // load grantable roles: MariaDB flags roles (is_role); MySQL 8 has no such
+      // flag, so any existing account can act as a role — list distinct names.
+      const cid = myUserWizard.connId
+      allRoles = []
+      if (cid) {
+        ipc
+          .usersView(cid, 'users')
+          .then((r) => {
+            const rows = myUserWizard.system === 'mariadb' ? r.rows.filter((x) => x.is_role === 'Y' || x.is_role === true || x.is_role === 1) : r.rows
+            allRoles = [...new Set(rows.map((x) => String(x.user)))]
+          })
+          .catch(() => (allRoles = []))
+      }
     }
     wasOpen = dlgOpen
+  })
+
+  // Role grants run after CREATE USER (MySQL/MariaDB cannot grant roles inline).
+  // MySQL activates all granted roles by default (SET DEFAULT ROLE ALL);
+  // MariaDB has no ALL, so its first role is made the default.
+  const roleStmts = $derived.by<string[]>(() => {
+    if (!memberOf.length || !user.trim() || !host.trim()) return []
+    const u = user.trim(), h = host.trim()
+    const out = memberOf.map((r) => grantRole(r, u, h))
+    out.push(setDefaultRole(myUserWizard.system, myUserWizard.system === 'mariadb' ? memberOf[0] : 'ALL', u, h))
+    return out
   })
 
   const plugins = $derived(
@@ -58,8 +86,9 @@
       : '',
   )
   const previewSql = $derived.by(() => {
-    if (!sql || showPw || !password) return sql
-    return sql.replace(`BY ${ql(password)}`, "BY '••••••'")
+    if (!sql) return sql
+    const base = showPw || !password ? sql : sql.replace(`BY ${ql(password)}`, "BY '••••••'")
+    return roleStmts.length ? [base, ...roleStmts].join(';\n') : base
   })
 
   function generate() {
@@ -80,6 +109,14 @@
       if (!res.ok) {
         err = res.error?.message ?? 'error'
         return
+      }
+      // grant selected roles (separate statements — MySQL/MariaDB grammar).
+      for (const stmt of roleStmts) {
+        const r = await ipc.execStatement(cid, stmt, 0)
+        if (!r.ok) {
+          err = `account created, but role grant failed: ${r.error?.message ?? 'error'}`
+          break
+        }
       }
       toasts.success(`Account ${user.trim()}@${host.trim()} created`, myUserWizard.system)
       await explorer.refresh(cid, { kind: 'connection' }).catch(() => {})
@@ -126,6 +163,9 @@
           </div>
         {/if}
         <label style="font-size:var(--px-12_5);color:var(--text);display:flex;align-items:center;gap:var(--px-6)"><input type="checkbox" bind:checked={accountLocked} /> Account locked</label>
+        <label style="font-size:var(--px-12);color:var(--text2)">Grant roles
+          <div style="margin-top:var(--px-4)"><MultiSelect bind:values={memberOf} options={allRoles.filter((r) => r !== user.trim())} placeholder="pick roles to grant…" /></div>
+        </label>
         <div style="font-size:var(--px-11);color:var(--muted)">SQL preview</div>
         <pre class="selectable mono" style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-10);font-size:var(--px-11_5);margin:0;max-height:var(--px-120);overflow:auto;color:var(--text2);white-space:pre-wrap">{previewSql || '-- enter a user name and host'}</pre>
         {#if err}<div style="font-size:var(--px-12);color:var(--error)">✗ {err}</div>{/if}

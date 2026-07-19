@@ -908,6 +908,33 @@ async fn pg_user_manager_end_to_end() {
     admin.exec(r#"REVOKE USAGE, CREATE ON SCHEMA "public" FROM "u_spec""#).await.unwrap();
     assert!(user.exec("SELECT * FROM secret").await.is_err(), "must be denied again after revoke");
 
+    // create-with-role parity: a NEW role created with `IN ROLE <group>` (the
+    // exact inline output of createRole('u_inrole', {login, password, inRole})
+    // from the create popup) inherits the group's privileges immediately.
+    admin.exec(r#"CREATE ROLE "grp_spec" NOLOGIN"#).await.unwrap();
+    admin.exec(r#"GRANT USAGE ON SCHEMA "public" TO "grp_spec""#).await.unwrap();
+    admin.exec(r#"GRANT SELECT ON ALL TABLES IN SCHEMA "public" TO "grp_spec""#).await.unwrap();
+    admin.exec(r#"CREATE ROLE "u_inrole" LOGIN PASSWORD 'r''wd' IN ROLE "grp_spec""#).await.unwrap();
+    let inrole_params = PgConnParams {
+        host: "localhost".into(),
+        port,
+        database: "testdb".into(),
+        user: "u_inrole".into(),
+        password: "r'wd".into(),
+        ssl: false,
+        ssl_ca: String::new(),
+        ssl_cert: String::new(),
+        ssl_key: String::new(),
+    };
+    let mut inrole = retry("postgres", || PgDriver::connect(&inrole_params)).await;
+    let out = inrole.exec("SELECT count(*) AS n FROM secret").await.expect("member inherits group SELECT");
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    assert_eq!(result.rows[0]["n"], serde_json::json!(2), "IN ROLE membership grants inherited read at creation");
+    drop(inrole);
+    admin.exec(r#"DROP OWNED BY "grp_spec""#).await.unwrap();
+    admin.exec(r#"DROP ROLE "u_inrole""#).await.unwrap();
+    admin.exec(r#"DROP ROLE "grp_spec""#).await.unwrap();
+
     // DROP — clean up (DROP OWNED clears any residual grants first)
     admin.exec(r#"DROP OWNED BY "u_spec""#).await.unwrap();
     admin.exec(r#"DROP ROLE "u_spec""#).await.unwrap();
