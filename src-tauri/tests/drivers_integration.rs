@@ -935,6 +935,28 @@ async fn pg_user_manager_end_to_end() {
     admin.exec(r#"DROP ROLE "u_inrole""#).await.unwrap();
     admin.exec(r#"DROP ROLE "grp_spec""#).await.unwrap();
 
+    // multi-database grants: PG roles are cluster-level, but grants are per
+    // database. The wizard applies the SAME schema grants to each selected
+    // database via a connection to it (attach_database). Prove it works across
+    // a SECOND database: grant read-only there and confirm u_spec can read.
+    admin.exec("CREATE DATABASE testdb2").await.unwrap();
+    let admin2_params = PgConnParams { database: "testdb2".into(), user: "postgres".into(), password: PASS.into(), host: "localhost".into(), port, ssl: false, ssl_ca: String::new(), ssl_cert: String::new(), ssl_key: String::new() };
+    let mut admin2 = retry("postgres", || PgDriver::connect(&admin2_params)).await;
+    admin2.exec("CREATE TABLE only_db2 (id int PRIMARY KEY)").await.unwrap();
+    admin2.exec("INSERT INTO only_db2 VALUES (1),(2),(3)").await.unwrap();
+    // read-only preset run ON testdb2 (exact presetReadOnly output)
+    admin2.exec(r#"GRANT USAGE ON SCHEMA "public" TO "u_spec""#).await.unwrap();
+    admin2.exec(r#"GRANT SELECT ON ALL TABLES IN SCHEMA "public" TO "u_spec""#).await.unwrap();
+    let u2_params = PgConnParams { database: "testdb2".into(), user: "u_spec".into(), password: "p'wd".into(), host: "localhost".into(), port, ssl: false, ssl_ca: String::new(), ssl_cert: String::new(), ssl_key: String::new() };
+    let mut u2 = retry("postgres", || PgDriver::connect(&u2_params)).await;
+    let out = u2.exec("SELECT count(*) AS n FROM only_db2").await.expect("read granted in testdb2");
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    assert_eq!(result.rows[0]["n"], serde_json::json!(3), "u_spec reads its granted table in the second database");
+    drop(u2);
+    admin2.exec(r#"DROP OWNED BY "u_spec""#).await.unwrap(); // clear testdb2 grants so DROP ROLE succeeds
+    drop(admin2);
+    admin.exec("DROP DATABASE testdb2").await.unwrap();
+
     // DROP — clean up (DROP OWNED clears any residual grants first)
     admin.exec(r#"DROP OWNED BY "u_spec""#).await.unwrap();
     admin.exec(r#"DROP ROLE "u_spec""#).await.unwrap();

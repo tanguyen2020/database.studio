@@ -406,3 +406,40 @@ test('user manager: PG create popup assigns role membership (IN ROLE)', async ({
 
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
+
+// PG grant wizard can target MULTIPLE databases at once: the same schema grants
+// are queued per selected database (run on a sub-connection to each).
+test('user manager: PG Grant access spans multiple databases', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(String(e)))
+  await blockRemoteFonts(page)
+  await openManager(page)
+
+  await page.getByRole('option', { name: /app_user/ }).first().click()
+  await page.waitForTimeout(150)
+  await page.getByRole('tab', { name: 'Privileges', exact: true }).click()
+  await page.waitForTimeout(200)
+  await page.getByRole('button', { name: '＋ Grant access…' }).click()
+  await page.waitForTimeout(300)
+  const dialog = page.getByRole('dialog')
+
+  // the Databases step is present (current DB "app" pre-selected); also pick "analytics"
+  await expect(dialog.getByText('Databases', { exact: false }).first()).toBeVisible()
+  await dialog.getByText('analytics', { exact: true }).click()
+  // pick schema "public" + Read-only
+  await dialog.getByText('public', { exact: true }).click()
+  await page.getByText('Read-only', { exact: true }).first().click()
+  await page.waitForTimeout(200)
+
+  // preview groups the SQL per database
+  await expect(page.getByText(/-- database: analytics/).first()).toBeVisible()
+  await expect(page.getByText(/GRANT SELECT ON ALL TABLES IN SCHEMA "public" TO "app_user"/).first()).toBeVisible()
+
+  // Add to pending → the non-current DB is tagged in the pending preview
+  await page.getByRole('button', { name: 'Add to pending' }).click()
+  await page.waitForTimeout(200)
+  await expect(page.getByText(/Pending changes/).first()).toBeVisible()
+  await expect(page.getByText(/-- database: analytics/).first()).toBeVisible()
+
+  expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
+})

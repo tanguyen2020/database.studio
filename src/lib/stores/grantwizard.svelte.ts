@@ -19,6 +19,14 @@ export const STANDARD_LEVELS: GrantLevel[] = [
   { kind: 'revoke-all', label: 'Revoke all', desc: 'Remove all access on the scope', danger: true },
 ]
 
+/** A grouped apply: the same statements targeted at one outer scope (e.g. a
+ *  PostgreSQL database — schema-grant SQL has no database qualifier, so the
+ *  database is decided by which connection runs it). */
+export interface GrantGroup {
+  scope2: string
+  statements: string[]
+}
+
 class GrantWizardStore {
   open = $state(false)
   title = $state('Grant access')
@@ -28,6 +36,14 @@ class GrantWizardStore {
   levels = $state<GrantLevel[]>(STANDARD_LEVELS)
   build = $state<(kind: string, scope: string) => string[]>(() => [])
   onApply = $state<(statements: string[]) => void>(() => {})
+
+  // Optional outer scope dimension (PostgreSQL: databases). When set, the dialog
+  // shows a second multi-select and hands the manager grouped statements (one
+  // group per selected outer scope) via onApplyGrouped instead of onApply.
+  scope2Label = $state<string | null>(null)
+  scopes2 = $state<string[]>([])
+  scope2Default = $state<string[]>([])
+  onApplyGrouped = $state<((groups: GrantGroup[]) => void) | null>(null)
 
   // After a user/role is created, a manager picks this up (matching connId),
   // reloads, selects the new principal, and opens the wizard on it. `database`
@@ -47,6 +63,10 @@ class GrantWizardStore {
     levels?: GrantLevel[]
     build: (kind: string, scope: string) => string[]
     onApply: (statements: string[]) => void
+    scope2Label?: string
+    scopes2?: string[]
+    scope2Default?: string[]
+    onApplyGrouped?: (groups: GrantGroup[]) => void
   }) {
     this.title = opts.title
     this.role = opts.role
@@ -55,6 +75,10 @@ class GrantWizardStore {
     this.levels = opts.levels ?? STANDARD_LEVELS
     this.build = opts.build
     this.onApply = opts.onApply
+    this.scope2Label = opts.scope2Label ?? null
+    this.scopes2 = opts.scopes2 ?? []
+    this.scope2Default = opts.scope2Default ?? []
+    this.onApplyGrouped = opts.onApplyGrouped ?? null
     this.open = true
   }
 

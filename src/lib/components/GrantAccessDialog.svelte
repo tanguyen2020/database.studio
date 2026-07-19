@@ -16,6 +16,10 @@
   let selected = $state<Set<string>>(new Set())
   let level = $state('')
   let filter = $state('')
+  // Optional outer scope (PostgreSQL databases) — a second checkbox set.
+  let selected2 = $state<Set<string>>(new Set())
+
+  const hasScope2 = $derived(grantWizard.scope2Label != null && grantWizard.scopes2.length > 0)
 
   let wasOpen = false
   $effect(() => {
@@ -23,6 +27,7 @@
       selected = new Set()
       level = ''
       filter = ''
+      selected2 = new Set(grantWizard.scope2Default)
     }
     wasOpen = dlgOpen
   })
@@ -42,8 +47,13 @@
     else shownScopes.forEach((s) => next.add(s))
     selected = next
   }
+  function toggleScope2(s: string) {
+    const next = new Set(selected2)
+    next.has(s) ? next.delete(s) : next.add(s)
+    selected2 = next
+  }
 
-  // build one access level across EVERY selected scope.
+  // build one access level across EVERY selected inner scope (schema).
   const statements = $derived.by<string[]>(() => {
     if (!selected.size || !level) return []
     const out: string[] = []
@@ -59,6 +69,20 @@
     return out
   })
 
+  // when an outer scope (databases) is in play, the SAME statements run per
+  // selected database (schema-grant SQL carries no database qualifier).
+  const groups = $derived.by<{ db: string; statements: string[] }[]>(() =>
+    !hasScope2 || !statements.length
+      ? []
+      : grantWizard.scopes2.filter((d) => selected2.has(d)).map((db) => ({ db, statements })),
+  )
+  // can apply? (scope2 requires at least one database picked too)
+  const canApply = $derived(hasScope2 ? statements.length > 0 && selected2.size > 0 : statements.length > 0)
+  // preview text (grouped by database when scope2 is active)
+  const previewGrouped = $derived.by<string>(() =>
+    groups.map((g) => `-- database: ${g.db}\n${g.statements.map((s) => s + ';').join('\n')}`).join('\n\n'),
+  )
+
   // Warn on broad/destructive grants so a stray click can't over-privilege.
   const warning = $derived.by<string | null>(() => {
     if (!selected.size || !level) return null
@@ -70,8 +94,12 @@
   })
 
   function apply() {
-    if (!statements.length) return
-    grantWizard.onApply(statements)
+    if (!canApply) return
+    if (hasScope2 && grantWizard.onApplyGrouped) {
+      grantWizard.onApplyGrouped(groups.map((g) => ({ scope2: g.db, statements: g.statements })))
+    } else {
+      grantWizard.onApply(statements)
+    }
     grantWizard.close()
   }
 </script>
@@ -89,10 +117,27 @@
           <span style="font-size:var(--px-11);color:var(--muted);width:var(--px-70)">1 · Role</span>
           <span class="mono" style="font-size:var(--px-13);font-weight:600;color:var(--text);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-3) var(--px-10)">{grantWizard.role}</span>
         </div>
-        <!-- step 2: scope (multi-select) -->
+        {#if hasScope2}
+          <!-- outer scope (databases) — apply to each selected one -->
+          <div style="display:flex;flex-direction:column;gap:var(--px-6)">
+            <div style="display:flex;align-items:center;gap:var(--px-8)">
+              <span style="font-size:var(--px-11);color:var(--muted)">2 · {grantWizard.scope2Label}s</span>
+              <span style="font-size:var(--px-11);color:var(--text2)">— pick one or more ({selected2.size} selected)</span>
+            </div>
+            <div style="max-height:var(--px-120);overflow:auto;border:var(--px-1) solid var(--border);border-radius:var(--px-7);padding:var(--px-6) var(--px-8);display:flex;flex-direction:column;gap:var(--px-2)">
+              {#each grantWizard.scopes2 as d (d)}
+                <label style="font-size:var(--px-12_5);color:var(--text);display:flex;align-items:center;gap:var(--px-6);cursor:pointer">
+                  <input type="checkbox" checked={selected2.has(d)} onchange={() => toggleScope2(d)} /> <span class="mono">{d}</span>
+                </label>
+              {/each}
+            </div>
+            <span style="font-size:var(--px-10_5);color:var(--muted)">The same schema grants run in each selected {grantWizard.scope2Label?.toLowerCase()} (via a connection to it).</span>
+          </div>
+        {/if}
+        <!-- scope (multi-select) -->
         <div style="display:flex;flex-direction:column;gap:var(--px-6)">
           <div style="display:flex;align-items:center;gap:var(--px-8)">
-            <span style="font-size:var(--px-11);color:var(--muted)">2 · {grantWizard.scopeLabel}s</span>
+            <span style="font-size:var(--px-11);color:var(--muted)">{hasScope2 ? '3' : '2'} · {grantWizard.scopeLabel}s</span>
             <span style="font-size:var(--px-11);color:var(--text2)">— pick one or more ({selected.size} selected)</span>
             <span onclick={toggleAllShown} onkeydown={(e) => e.key === 'Enter' && toggleAllShown()} role="button" tabindex="0" style="margin-left:auto;font-size:var(--px-11);color:var(--primary);cursor:pointer">{allShownSelected ? 'Clear all' : 'Select all'}</span>
           </div>
@@ -109,9 +154,9 @@
             {/each}
           </div>
         </div>
-        <!-- step 3: access level cards -->
+        <!-- access level cards -->
         <div>
-          <div style="font-size:var(--px-11);color:var(--muted);margin-bottom:var(--px-6)">3 · Access level</div>
+          <div style="font-size:var(--px-11);color:var(--muted);margin-bottom:var(--px-6)">{hasScope2 ? '4' : '3'} · Access level</div>
           <div style="display:flex;flex-direction:column;gap:var(--px-6)">
             {#each grantWizard.levels as lv (lv.kind)}
               <label style="display:flex;align-items:flex-start;gap:var(--px-8);padding:var(--px-8) var(--px-10);border:var(--px-1) solid {level === lv.kind ? (lv.danger ? 'var(--error)' : 'var(--primary)') : 'var(--border)'};border-radius:var(--px-8);cursor:pointer;background:{level === lv.kind ? 'var(--panel)' : 'transparent'}">
@@ -127,7 +172,7 @@
         <!-- preview -->
         <div>
           <div style="font-size:var(--px-11);color:var(--muted);margin-bottom:var(--px-4)">SQL to run</div>
-          <pre class="selectable mono" style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-10);font-size:var(--px-11_5);margin:0;max-height:var(--px-150);overflow:auto;white-space:pre-wrap">{#if statements.length}{#each statements as s (s)}{#each highlightSql(s + ';\n') as tk (tk)}<span style="color:{sqlTokenColor(tk.kind)}">{tk.text}</span>{/each}{/each}{:else}<span style="color:var(--muted)">-- pick one or more {grantWizard.scopeLabel.toLowerCase()}s and an access level</span>{/if}</pre>
+          <pre class="selectable mono" style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-10);font-size:var(--px-11_5);margin:0;max-height:var(--px-150);overflow:auto;white-space:pre-wrap">{#if hasScope2}{#if canApply}{#each highlightSql(previewGrouped + '\n') as tk (tk)}<span style="color:{sqlTokenColor(tk.kind)}">{tk.text}</span>{/each}{:else}<span style="color:var(--muted)">-- pick {grantWizard.scope2Label?.toLowerCase()}(s), {grantWizard.scopeLabel.toLowerCase()}(s) and an access level</span>{/if}{:else if statements.length}{#each statements as s (s)}{#each highlightSql(s + ';\n') as tk (tk)}<span style="color:{sqlTokenColor(tk.kind)}">{tk.text}</span>{/each}{/each}{:else}<span style="color:var(--muted)">-- pick one or more {grantWizard.scopeLabel.toLowerCase()}s and an access level</span>{/if}</pre>
         </div>
       </div>
       {#if warning}
@@ -135,7 +180,7 @@
       {/if}
       <div style="flex:none;display:flex;gap:var(--px-9);padding:var(--px-13) var(--px-18);border-top:var(--px-1) solid var(--border);background:var(--panel)">
         <span onclick={() => grantWizard.close()} onkeydown={(e) => e.key === 'Enter' && grantWizard.close()} role="button" tabindex="0" style="font-size:var(--px-12_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-8);padding:var(--px-8) var(--px-16);cursor:pointer">Cancel</span>
-        <span onclick={apply} onkeydown={(e) => e.key === 'Enter' && apply()} role="button" tabindex="0" aria-disabled={!statements.length} style="margin-left:auto;font-size:var(--px-12_5);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-8);padding:var(--px-8) var(--px-18);cursor:{statements.length ? 'pointer' : 'not-allowed'};opacity:{statements.length ? 1 : 0.5};font-weight:600">Add to pending</span>
+        <span onclick={apply} onkeydown={(e) => e.key === 'Enter' && apply()} role="button" tabindex="0" aria-disabled={!canApply} style="margin-left:auto;font-size:var(--px-12_5);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-8);padding:var(--px-8) var(--px-18);cursor:{canApply ? 'pointer' : 'not-allowed'};opacity:{canApply ? 1 : 0.5};font-weight:600">Add to pending</span>
       </div>
     </div>
   </div>

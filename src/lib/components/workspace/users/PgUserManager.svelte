@@ -46,8 +46,14 @@
   let defaultAcl = $state<Row[]>([])
 
   // Pending mutation statements (built by the active tab), shown as a preview.
-  let pending = $state<string[]>([])
+  // `db` targets another database on the same server (undefined = current DB);
+  // execute() resolves a sub-connection per entry.
+  type PendingStmt = { sql: string; db?: string }
+  let pending = $state<PendingStmt[]>([])
   let executing = $state(false)
+  // databases on the server (for multi-database grants); currentDb = connected one.
+  let databases = $state<string[]>([])
+  let currentDb = $state('')
 
   const cid = $derived(tab.connectionId)
 
@@ -71,6 +77,16 @@
       schemaGrants = sg.rows
       schemaOwners = so.rows
       ipc.usersView(cid, 'default_acl').then((d) => (defaultAcl = d.rows)).catch(() => (defaultAcl = []))
+      ipc
+        .listDatabases(cid)
+        .then((dbs) => {
+          databases = dbs.map((d) => d.name)
+          currentDb = dbs.find((d) => d.current)?.name ?? databases[0] ?? ''
+        })
+        .catch(() => {
+          databases = []
+          currentDb = ''
+        })
       schemas = sc.map((s) => s.name)
       canManage = cm.rows[0]?.can_manage !== false
       // table counts per schema for ✓ (100%) vs ■ (partial) cell state
@@ -195,7 +211,7 @@
   }
   function onCell(schema: string, key: string, st: CellState) {
     if (!selected) return
-    pending = [...pending, st === 'none' || st === 'partial' ? grantColumn(schema, key, selected) : revokeColumn(schema, key, selected)]
+    pending = [...pending, { sql: st === 'none' || st === 'partial' ? grantColumn(schema, key, selected) : revokeColumn(schema, key, selected) }]
   }
   const gridScopes = $derived(schemas.map((s) => ({ value: s, label: s })))
   const gridPresets = [
@@ -224,7 +240,16 @@
           owner: ownerOf(schema),
           owners: kind === 'revoke-all' ? [...new Set([ownerOf(schema), 'postgres'].filter(Boolean) as string[])] : undefined,
         }),
-      onApply: (stmts) => (pending = [...pending, ...stmts]),
+      onApply: (stmts) => (pending = [...pending, ...stmts.map((sql) => ({ sql }))]),
+      // multi-database: apply the same schema grants to each selected database.
+      scope2Label: 'Database',
+      scopes2: databases,
+      scope2Default: currentDb ? [currentDb] : [],
+      onApplyGrouped: (groups) =>
+        (pending = [
+          ...pending,
+          ...groups.flatMap((g) => g.statements.map((sql) => ({ sql, db: g.scope2 === currentDb ? undefined : g.scope2 }))),
+        ]),
     })
   }
 
@@ -238,14 +263,14 @@
       ? [...new Set([ownerOf(schema), 'postgres'].filter(Boolean) as string[])]
       : undefined
     const stmts = schemaPreset(kind, schema, selected, { futureTables, owner: ownerOf(schema), owners })
-    pending = [...pending, ...stmts]
+    pending = [...pending, ...stmts.map((sql) => ({ sql }))]
   }
 
   // ---- General mutations ----------------------------------------------------
   let newPassword = $state('')
   function queuePassword() {
     if (!selected || !newPassword) return
-    pending = [...pending, alterPassword(selected, newPassword)]
+    pending = [...pending, { sql: alterPassword(selected, newPassword) }]
     newPassword = ''
   }
 
@@ -256,20 +281,20 @@
   const hasMembers = $derived(members.filter((m) => String(m.role) === selected))
   function queueGrantMembership() {
     if (!selected || !grantRoleName) return
-    pending = [...pending, grantMembership(grantRoleName, selected, grantAdmin)]
+    pending = [...pending, { sql: grantMembership(grantRoleName, selected, grantAdmin) }]
     grantRoleName = ''
     grantAdmin = false
   }
   function queueRevokeMembership(role: string) {
     if (!selected) return
-    pending = [...pending, revokeMembership(role, selected)]
+    pending = [...pending, { sql: revokeMembership(role, selected) }]
   }
 
   // ---- Drop (confirm) -------------------------------------------------------
   let confirmDrop = $state(false)
   function queueDrop() {
     if (!selected) return
-    pending = [...pending, dropRole(selected)]
+    pending = [...pending, { sql: dropRole(selected) }]
     confirmDrop = false
   }
 
@@ -278,10 +303,18 @@
     if (!cid || !pending.length || executing) return
     executing = true
     try {
-      for (const sql of pending) {
-        const res = await ipc.execStatement(cid, sql, 0)
+      // cache one sub-connection per target database (attachDatabase returns the
+      // base connId for the current DB, so no extra work in the common case).
+      const connFor = new Map<string, string>()
+      for (const { sql, db } of pending) {
+        let target = cid
+        if (db) {
+          if (!connFor.has(db)) connFor.set(db, await ipc.attachDatabase(cid, db).catch(() => cid))
+          target = connFor.get(db) ?? cid
+        }
+        const res = await ipc.execStatement(target, sql, 0)
         if (!res.ok) {
-          toasts.error(res.error?.message ?? 'error')
+          toasts.error(`${db ? `[${db}] ` : ''}${res.error?.message ?? 'error'}`)
           break
         }
       }
@@ -449,7 +482,7 @@
             <span onclick={execute} onkeydown={(e) => e.key === 'Enter' && execute()} role="button" tabindex="0" aria-disabled={executing} style="margin-left:auto;font-size:var(--px-11_5);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-6);padding:var(--px-4) var(--px-12);cursor:pointer;font-weight:600;opacity:{executing ? 0.6 : 1}">{executing ? 'Executing…' : 'Execute'}</span>
             <span onclick={discard} onkeydown={(e) => e.key === 'Enter' && discard()} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-12);cursor:pointer">Discard</span>
           </div>
-          <pre class="selectable mono" style="margin:0;font-size:var(--px-11);white-space:pre-wrap;color:var(--text2)">{#each pending as s (s)}{#each highlightSql(s + ';\n') as tk (tk)}<span style="color:{sqlTokenColor(tk.kind)}">{tk.text}</span>{/each}{/each}</pre>
+          <pre class="selectable mono" style="margin:0;font-size:var(--px-11);white-space:pre-wrap;color:var(--text2)">{#each pending as s (s)}{#each highlightSql((s.db ? `-- database: ${s.db}\n` : '') + s.sql + ';\n') as tk (tk)}<span style="color:{sqlTokenColor(tk.kind)}">{tk.text}</span>{/each}{/each}</pre>
         </div>
       {/if}
     </div>
