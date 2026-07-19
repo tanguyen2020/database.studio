@@ -3,6 +3,7 @@
   // Manager: shows the selected role, a scope picker, and access-level cards.
   // Picking a level builds the statements (engine callback) and shows a live SQL
   // preview; Apply hands them to the manager's Pending changes (then Execute).
+  import { untrack } from 'svelte'
   import { grantWizard } from '$lib/stores/grantwizard.svelte'
   import { highlightSql, sqlTokenColor } from '$lib/format/sql'
 
@@ -21,6 +22,12 @@
 
   const hasScope2 = $derived(grantWizard.scope2Label != null && grantWizard.scopes2.length > 0)
 
+  // Inner scopes (schemas). When the engine provides loadScopes, the list is
+  // loaded from the selected databases; otherwise it's the static scopes.
+  let dynamicScopes = $state<string[] | null>(null)
+  let loadingScopes = $state(false)
+  const effectiveScopes = $derived(dynamicScopes ?? grantWizard.scopes)
+
   let wasOpen = false
   $effect(() => {
     if (dlgOpen && !wasOpen) {
@@ -28,12 +35,29 @@
       level = ''
       filter = ''
       selected2 = new Set(grantWizard.scope2Default)
+      dynamicScopes = grantWizard.loadScopes ? [] : null
     }
     wasOpen = dlgOpen
   })
 
+  // Refresh the schema list when the database selection changes (per-database
+  // schemas). Prune any selected schema that no longer exists in the new list.
+  $effect(() => {
+    if (!dlgOpen || !grantWizard.loadScopes) return
+    const dbs = [...selected2]
+    const loader = grantWizard.loadScopes
+    loadingScopes = true
+    loader(dbs)
+      .then((s) => {
+        dynamicScopes = s
+        untrack(() => (selected = new Set([...selected].filter((x) => s.includes(x)))))
+      })
+      .catch(() => (dynamicScopes = []))
+      .finally(() => (loadingScopes = false))
+  })
+
   const shownScopes = $derived(
-    filter.trim() ? grantWizard.scopes.filter((s) => s.toLowerCase().includes(filter.trim().toLowerCase())) : grantWizard.scopes,
+    filter.trim() ? effectiveScopes.filter((s) => s.toLowerCase().includes(filter.trim().toLowerCase())) : effectiveScopes,
   )
   const allShownSelected = $derived(shownScopes.length > 0 && shownScopes.every((s) => selected.has(s)))
   function toggleScope(s: string) {
@@ -57,7 +81,7 @@
   const statements = $derived.by<string[]>(() => {
     if (!selected.size || !level) return []
     const out: string[] = []
-    for (const s of grantWizard.scopes) {
+    for (const s of effectiveScopes) {
       if (selected.has(s)) {
         try {
           out.push(...grantWizard.build(level, s))
@@ -141,7 +165,7 @@
             <span style="font-size:var(--px-11);color:var(--text2)">— pick one or more ({selected.size} selected)</span>
             <span onclick={toggleAllShown} onkeydown={(e) => e.key === 'Enter' && toggleAllShown()} role="button" tabindex="0" style="margin-left:auto;font-size:var(--px-11);color:var(--primary);cursor:pointer">{allShownSelected ? 'Clear all' : 'Select all'}</span>
           </div>
-          {#if grantWizard.scopes.length > 6}
+          {#if effectiveScopes.length > 6}
             <input bind:value={filter} placeholder="Filter {grantWizard.scopeLabel.toLowerCase()}s…" class="mono" style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-8);color:var(--text);font-size:var(--px-12)" />
           {/if}
           <div style="max-height:var(--px-180);overflow:auto;border:var(--px-1) solid var(--border);border-radius:var(--px-7);padding:var(--px-6) var(--px-8);display:flex;flex-direction:column;gap:var(--px-2)">
@@ -150,7 +174,7 @@
                 <input type="checkbox" checked={selected.has(s)} onchange={() => toggleScope(s)} /> <span class="mono">{s}</span>
               </label>
             {:else}
-              <span style="font-size:var(--px-11_5);color:var(--muted)">No {grantWizard.scopeLabel.toLowerCase()}s.</span>
+              <span style="font-size:var(--px-11_5);color:var(--muted)">{loadingScopes ? 'Loading schemas…' : hasScope2 && !selected2.size ? `Pick a ${grantWizard.scope2Label?.toLowerCase()} first.` : `No ${grantWizard.scopeLabel.toLowerCase()}s.`}</span>
             {/each}
           </div>
         </div>

@@ -460,6 +460,9 @@ test('user manager: PG Grant access spans multiple databases', async ({ page }) 
   // the Databases step is present (current DB "app" pre-selected); also pick "analytics"
   await expect(dialog.getByText('Databases', { exact: false }).first()).toBeVisible()
   await dialog.getByText('analytics', { exact: true }).click()
+  await page.waitForTimeout(300)
+  // schema list reflects the selected databases → analytics' own "reporting" schema appears
+  await expect(dialog.getByText('reporting', { exact: true }).first()).toBeVisible()
   // pick schema "public" + Read-only
   await dialog.getByText('public', { exact: true }).click()
   await page.getByText('Read-only', { exact: true }).first().click()

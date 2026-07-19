@@ -44,6 +44,10 @@ class GrantWizardStore {
   scopes2 = $state<string[]>([])
   scope2Default = $state<string[]>([])
   onApplyGrouped = $state<((groups: GrantGroup[]) => void) | null>(null)
+  // Optional: load the inner scopes (schemas) for the chosen outer scopes
+  // (databases). When set, the dialog refreshes the schema list as the database
+  // selection changes — schemas differ per database.
+  loadScopes = $state<((scope2: string[]) => Promise<string[]>) | null>(null)
 
   // After a user/role is created, a manager picks this up (matching connId),
   // reloads, selects the new principal, and opens the wizard on it. `database`
@@ -67,6 +71,7 @@ class GrantWizardStore {
     scopes2?: string[]
     scope2Default?: string[]
     onApplyGrouped?: (groups: GrantGroup[]) => void
+    loadScopes?: (scope2: string[]) => Promise<string[]>
   }) {
     this.title = opts.title
     this.role = opts.role
@@ -79,6 +84,7 @@ class GrantWizardStore {
     this.scopes2 = opts.scopes2 ?? []
     this.scope2Default = opts.scope2Default ?? []
     this.onApplyGrouped = opts.onApplyGrouped ?? null
+    this.loadScopes = opts.loadScopes ?? null
     this.open = true
   }
 

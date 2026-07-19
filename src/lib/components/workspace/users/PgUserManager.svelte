@@ -253,6 +253,19 @@
       scope2Label: 'Database',
       scopes2: databases,
       scope2Default: currentDb ? [currentDb] : [],
+      // schemas differ per database → load the union of the selected databases'
+      // schemas (each read via a sub-connection to that database).
+      loadScopes: async (dbs) => {
+        const c = cid
+        if (!c) return []
+        const set = new Set<string>()
+        for (const db of dbs) {
+          const sub = db === currentDb ? c : await ipc.attachDatabase(c, db).catch(() => c)
+          const scs = await ipc.listSchemas(sub).catch(() => [])
+          for (const s of scs) set.add(s.name)
+        }
+        return [...set].sort()
+      },
       onApplyGrouped: (groups) =>
         (pending = [
           ...pending,

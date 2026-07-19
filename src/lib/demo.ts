@@ -318,8 +318,14 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
     }
     case 'close_tab_connection':
       return ok(null)
-    case 'list_schemas':
+    case 'list_schemas': {
+      // Per-database schemas differ: a sub-connection to another database
+      // ({cid}::{db}) exposes that database's own schemas. Used by the PG Grant
+      // wizard to load schemas for the selected databases.
+      const schemaConn = String(args?.connId ?? '')
+      if (schemaConn.endsWith('::analytics')) return ok([{ name: 'public', is_default: true }, { name: 'reporting', is_default: false }])
       return ok([{ name: 'public', is_default: true }])
+    }
     case 'list_tables':
       return ok([
         { name: 'students', kind: 'table', row_estimate: 3842, locked: false, engine: 'MergeTree', data_length: 1114112 },
