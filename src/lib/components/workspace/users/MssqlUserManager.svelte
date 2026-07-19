@@ -144,6 +144,59 @@
     }
   }
 
+  // ---- Access across databases (login-centric, native two-tier model) --------
+  // For the selected login, read every database it maps to and show its db-role
+  // memberships + explicit permissions (GRANT/DENY — DENY wins over GRANT).
+  type DbAccess = {
+    db: string
+    user: string
+    roles: string[]
+    grants: { perm: string; securable: string }[]
+    denies: { perm: string; securable: string }[]
+  }
+  let loginAccess = $state<DbAccess[]>([])
+  let accessLoaded = $state(false)
+  let accessBusy = $state(false)
+  async function loadLoginAccess() {
+    if (!baseCid || !selectedLogin || accessBusy) return
+    accessBusy = true
+    const out: DbAccess[] = []
+    try {
+      for (const db of databases) {
+        const sub = await ipc.attachDatabase(baseCid, db).catch(() => baseCid!)
+        const [u, rm, pm] = await Promise.all([
+          ipc.usersView(sub, 'db_users').catch(() => ({ rows: [] as Row[] })),
+          ipc.usersView(sub, 'db_role_members').catch(() => ({ rows: [] as Row[] })),
+          ipc.usersView(sub, 'db_permissions').catch(() => ({ rows: [] as Row[] })),
+        ])
+        const urow = u.rows.find((r) => String(r.login_name) === selectedLogin)
+        if (!urow) continue // login has no user in this database
+        const userName = String(urow.name)
+        const roles = rm.rows.filter((r) => String(r.member) === userName).map((r) => String(r.role))
+        const perms = pm.rows.filter((r) => String(r.principal) === userName)
+        const grants = perms
+          .filter((p) => String(p.state_desc) === 'GRANT')
+          .map((p) => ({ perm: String(p.permission_name), securable: String(p.securable) }))
+        const denies = perms
+          .filter((p) => String(p.state_desc) === 'DENY')
+          .map((p) => ({ perm: String(p.permission_name), securable: String(p.securable) }))
+        out.push({ db, user: userName, roles, grants, denies })
+      }
+      loginAccess = out
+      accessLoaded = true
+    } finally {
+      accessBusy = false
+    }
+  }
+  // reset the access view when the selected login changes
+  $effect(() => {
+    void selectedLogin
+    untrack(() => {
+      accessLoaded = false
+      loginAccess = []
+    })
+  })
+
   // ---- User Mapping (login → databases) -------------------------------------
   let mappingLoaded = $state(false)
   let mappedDbs = $state<Set<string>>(new Set())
@@ -398,6 +451,46 @@
               </div>
             {:else}
               <div style="font-size:var(--px-11);color:var(--muted);margin-bottom:var(--px-12)">Load to see which databases {selectedLogin} maps to (creates/drops a database user per checkbox).</div>
+            {/if}
+            <!-- Access across databases (db roles + permissions, DENY wins) -->
+            <div style="display:flex;align-items:center;gap:var(--px-8);margin-bottom:var(--px-6)">
+              <span style="font-size:var(--px-12);color:var(--text2);font-weight:600">Access across databases</span>
+              <span onclick={loadLoginAccess} onkeydown={(e) => e.key === 'Enter' && loadLoginAccess()} role="button" tabindex="0" aria-busy={accessBusy} style="font-size:var(--px-11);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-3) var(--px-9);cursor:pointer;opacity:{accessBusy ? 0.6 : 1}">{accessBusy ? 'Loading…' : 'Load access'}</span>
+            </div>
+            {#if accessLoaded}
+              {#if loginAccess.length}
+                <div style="display:flex;flex-direction:column;gap:var(--px-8);margin-bottom:var(--px-12)">
+                  {#each loginAccess as a (a.db)}
+                    <div style="border:var(--px-1) solid var(--border);border-radius:var(--px-7);overflow:hidden">
+                      <div style="display:flex;align-items:center;gap:var(--px-6);padding:var(--px-5) var(--px-10);background:var(--panel);border-bottom:var(--px-1) solid var(--border)">
+                        <span class="mono" style="font-size:var(--px-12_5);font-weight:700;color:var(--text)">{a.db}</span>
+                        <span style="font-size:var(--px-10_5);color:var(--muted)">user <span class="mono">{a.user}</span></span>
+                      </div>
+                      <div style="padding:var(--px-6) var(--px-10);display:flex;flex-direction:column;gap:var(--px-4)">
+                        <div style="display:flex;gap:var(--px-4);flex-wrap:wrap;align-items:center">
+                          <span style="font-size:var(--px-10_5);color:var(--muted);min-width:var(--px-60)">db roles</span>
+                          {#if a.roles.length}{#each a.roles as r (r)}<span style="font-size:var(--px-10);color:var(--syntax-type);background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-4);padding:0 var(--px-5)">{r}</span>{/each}{:else}<span style="font-size:var(--px-10_5);color:var(--muted)">—</span>{/if}
+                        </div>
+                        <div style="display:flex;gap:var(--px-4);flex-wrap:wrap;align-items:center">
+                          <span style="font-size:var(--px-10_5);color:var(--muted);min-width:var(--px-60)">granted</span>
+                          {#if a.grants.length}{#each a.grants as g (`${g.perm}:${g.securable}`)}<span style="font-size:var(--px-10);color:var(--syntax-number);background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-4);padding:0 var(--px-5)">{g.perm} on {g.securable}</span>{/each}{:else}<span style="font-size:var(--px-10_5);color:var(--muted)">—</span>{/if}
+                        </div>
+                        {#if a.denies.length}
+                          <div style="display:flex;gap:var(--px-4);flex-wrap:wrap;align-items:center">
+                            <span style="font-size:var(--px-10_5);color:var(--error);min-width:var(--px-60)">denied</span>
+                            {#each a.denies as g (`${g.perm}:${g.securable}`)}<span style="font-size:var(--px-10);color:var(--error);background:var(--surface);border:var(--px-1) solid var(--error);border-radius:var(--px-4);padding:0 var(--px-5)">{g.perm} on {g.securable}</span>{/each}
+                          </div>
+                        {/if}
+                      </div>
+                    </div>
+                  {/each}
+                </div>
+                <div style="font-size:var(--px-10_5);color:var(--muted);margin-bottom:var(--px-12)">Only databases where the login has a user are shown. DENY overrides GRANT (and role membership) in SQL Server.</div>
+              {:else}
+                <div style="font-size:var(--px-11);color:var(--muted);margin-bottom:var(--px-12)">This login has no user in any database.</div>
+              {/if}
+            {:else}
+              <div style="font-size:var(--px-11);color:var(--muted);margin-bottom:var(--px-12)">Load to see, per database, the db roles and permissions (GRANT/DENY) this login has.</div>
             {/if}
             {#if confirmDropLogin}
               <div style="display:flex;gap:var(--px-8);align-items:center;padding:var(--px-8);background:var(--panel);border:var(--px-1) solid var(--error);border-radius:var(--px-6)">

@@ -170,6 +170,10 @@ test('user manager: Cassandra roles + keyspace permission preset', async ({ page
   await expect(page.getByRole('option', { name: /app_role/ }).first()).toBeVisible()
   await page.getByRole('option', { name: /app_role/ }).first().click()
   await page.waitForTimeout(150)
+  // Access tab: effective permissions grouped by resource (keyspace/table)
+  await page.getByRole('tab', { name: 'Access', exact: true }).click()
+  await page.waitForTimeout(200)
+  await expect(page.getByText(/keyspace app_keyspace/).first()).toBeVisible()
   await page.getByRole('tab', { name: 'Permissions' }).click()
   await page.waitForTimeout(200)
   // guided grant: pick a keyspace + Read-Write → GRANT MODIFY
@@ -203,6 +207,12 @@ test('user manager: Oracle users + system privs + object preset', async ({ page 
   await page.getByRole('option', { name: /APP_USER/ }).first().click()
   await page.waitForTimeout(150)
 
+  // Access tab: system privileges + roles + object privileges by schema
+  await page.getByRole('tab', { name: 'Access', exact: true }).click()
+  await page.waitForTimeout(200)
+  await expect(page.getByText('System privileges', { exact: true }).first()).toBeVisible()
+  await expect(page.getByText('CREATE SESSION', { exact: true }).first()).toBeVisible()
+
   // System Privileges tab → toggle a priv queues GRANT ... TO APP_USER
   await page.getByRole('tab', { name: 'System Privileges' }).click()
   await page.waitForTimeout(150)
@@ -231,6 +241,15 @@ test('user manager: MongoDB users + role toggle + Add User popup', async ({ page
 
   await expect(page.getByText('Users', { exact: true }).first()).toBeVisible()
   await expect(page.getByRole('option', { name: /app@appdb/ }).first()).toBeVisible()
+
+  // Access tab: roles per database (native Mongo RBAC), with plain-language capability
+  await page.getByRole('option', { name: /app@appdb/ }).first().click()
+  await page.waitForTimeout(150)
+  await page.getByRole('tab', { name: 'Access', exact: true }).click()
+  await page.waitForTimeout(200)
+  await expect(page.getByText('readWrite', { exact: true }).first()).toBeVisible()
+  await expect(page.getByText(/read \+ write all non-system collections/).first()).toBeVisible()
+  await page.getByRole('tab', { name: 'Roles per Database' }).click()
 
   // Add User → popup (not a tab)
   const tabsBefore = await page.getByRole('tab').count()
@@ -272,6 +291,10 @@ test('user manager: ClickHouse users + grant grid preset', async ({ page }) => {
   // select app → Grants tab → Read-only preset queues the exact GRANT
   await page.getByRole('option', { name: /^app/ }).first().click()
   await page.waitForTimeout(150)
+  // Access tab: per-database access types from system.grants
+  await page.getByRole('tab', { name: 'Access', exact: true }).click()
+  await page.waitForTimeout(200)
+  await expect(page.getByText('analytics', { exact: true }).first()).toBeVisible()
   await page.getByRole('tab', { name: 'Grants' }).click()
   await page.waitForTimeout(200)
   await page.getByRole('button', { name: '＋ Grant access…' }).click()
@@ -305,6 +328,13 @@ test('user manager: MSSQL server logins + database permission grid', async ({ pa
   await expect(page.getByRole('option', { name: /app_login/ }).first()).toBeVisible()
   // New Login button (server scope)
   await expect(page.getByRole('button', { name: '+ New Login' })).toBeVisible()
+
+  // Access across databases (server scope): db roles + permissions per database
+  await page.getByRole('option', { name: /app_login/ }).first().click()
+  await page.waitForTimeout(150)
+  await page.getByRole('button', { name: 'Load access' }).click()
+  await page.waitForTimeout(400)
+  await expect(page.getByText('db_datareader', { exact: true }).first()).toBeVisible()
 
   // switch to Database scope → users + permission grid with presets + Deny
   await page.getByRole('button', { name: 'Database', exact: true }).click()
@@ -353,6 +383,10 @@ test('user manager: MySQL account list + preset + Add Account popup', async ({ p
   // privileges grid: select app@% → apply Read-only on the public database
   await page.getByRole('option', { name: /app@%/ }).first().click()
   await page.waitForTimeout(150)
+  // Access tab: what the account can access, per database (server-wide grants)
+  await page.getByRole('tab', { name: 'Access', exact: true }).click()
+  await page.waitForTimeout(200)
+  await expect(page.getByText('library_db', { exact: true }).first()).toBeVisible()
   await page.getByRole('tab', { name: 'Schema Privileges' }).click()
   await page.waitForTimeout(200)
   await page.getByRole('button', { name: '＋ Grant access…' }).click()

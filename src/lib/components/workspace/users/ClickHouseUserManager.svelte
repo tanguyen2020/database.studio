@@ -43,7 +43,7 @@
   let error = $state<string | null>(null)
   let kind = $state<'users' | 'roles'>('users')
   let selected = $state<string>('')
-  let detailTab = $state<'general' | 'grants' | 'roles'>('general')
+  let detailTab = $state<'general' | 'grants' | 'access' | 'roles'>('general')
   let pending = $state<string[]>([])
   let executing = $state(false)
 
@@ -141,6 +141,33 @@
     }
     return access
   }
+
+  // ---- Access overview (native: SQL RBAC, system.grants) ---------------------
+  // ClickHouse keeps all grants in system.grants (one place). Group by database
+  // → access types, folding in privileges inherited through granted roles.
+  type ChDbAccess = { db: string; accesses: string[]; inherited: boolean; tableScoped: boolean }
+  const chAccess = $derived.by<ChDbAccess[]>(() => {
+    const inheritedRoles = kind === 'users' ? rolesOf() : []
+    const map = new Map<string, ChDbAccess>()
+    const ensure = (db: string) => {
+      let e = map.get(db)
+      if (!e) { e = { db, accesses: [], inherited: false, tableScoped: false }; map.set(db, e) }
+      return e
+    }
+    for (const g of grants) {
+      const directUser = kind === 'users' && String(g.user) === selected
+      const directRole = kind === 'roles' && String(g.role) === selected
+      const viaRole = kind === 'users' && String(g.role) !== '' && inheritedRoles.includes(String(g.role))
+      if (!directUser && !directRole && !viaRole) continue
+      const db = String(g.database) || '*'
+      const e = ensure(db)
+      const at = String(g.access_type)
+      if (!e.accesses.includes(at)) e.accesses.push(at)
+      if (String(g.table) !== '') e.tableScoped = true
+      if (viaRole && !directUser && !directRole) e.inherited = true
+    }
+    return [...map.values()].sort((a, b) => (a.db === '*' ? -1 : b.db === '*' ? 1 : a.db.localeCompare(b.db)))
+  })
   function onCell(db: string, access: string, st: CellState) {
     if (!selected) return
     pending = [...pending, st === 'none' || st === 'partial' ? grantColumn(db, access, selected) : revokeColumn(db, access, selected)]
@@ -264,7 +291,7 @@
           <div style="flex:none;padding:var(--px-8) var(--px-14);background:var(--panel);border-bottom:var(--px-1) solid var(--border);color:var(--muted);font-size:var(--px-11_5)">Read-only — “{selected}” is defined in {selectedRow.storage}, not SQL. Edit it in users.xml.</div>
         {/if}
         <div style="flex:none;display:flex;gap:var(--px-2);padding:var(--px-8) var(--px-12) 0;border-bottom:var(--px-1) solid var(--border)">
-          {#each (kind === 'users' ? [['general', 'General'], ['grants', 'Grants'], ['roles', 'Roles']] : [['general', 'General'], ['grants', 'Grants']]) as [k, label] (k)}
+          {#each (kind === 'users' ? [['general', 'General'], ['grants', 'Grants'], ['access', 'Access'], ['roles', 'Roles']] : [['general', 'General'], ['grants', 'Grants'], ['access', 'Access']]) as [k, label] (k)}
             <span onclick={() => (detailTab = k as typeof detailTab)} onkeydown={(e) => e.key === 'Enter' && (detailTab = k as typeof detailTab)} role="tab" tabindex="0" aria-selected={detailTab === k} style="padding:var(--px-6) var(--px-12);font-size:var(--px-12);cursor:pointer;font-weight:600;border-bottom:var(--px-2) solid {detailTab === k ? 'var(--primary)' : 'transparent'};color:{detailTab === k ? 'var(--text)' : 'var(--muted)'}">{label}</span>
           {/each}
         </div>
@@ -313,6 +340,27 @@
               onPreset={(db, kind) => applyPreset(db, kind as PresetKind)}
               note="UPDATE/DELETE map to the ALTER UPDATE / ALTER DELETE privileges (mutations)."
             />
+            {/if}
+          {:else if detailTab === 'access'}
+            <!-- Access overview: what this principal can access, per database -->
+            <div style="font-size:var(--px-12);color:var(--text2);margin-bottom:var(--px-10)">What <span class="mono" style="color:var(--text);font-weight:600">{selected}</span> can access, per database{kind === 'users' ? ' (granted roles folded in)' : ''}.</div>
+            {#if chAccess.length}
+              <div style="display:flex;flex-direction:column;gap:var(--px-8)">
+                {#each chAccess as d (d.db)}
+                  <div style="border:var(--px-1) solid var(--border);border-radius:var(--px-7);overflow:hidden">
+                    <div style="display:flex;align-items:center;gap:var(--px-6);padding:var(--px-5) var(--px-10);background:var(--panel);border-bottom:var(--px-1) solid var(--border)">
+                      <span class="mono" style="font-size:var(--px-12_5);font-weight:700;color:var(--text)">{d.db === '*' ? '*.* (all databases)' : d.db}</span>
+                      {#if d.tableScoped}<span style="font-size:var(--px-10);color:var(--muted)">table-scoped grants</span>{/if}
+                      {#if d.inherited}<span style="font-size:var(--px-10);color:var(--muted)">◐ inherited</span>{/if}
+                    </div>
+                    <div style="padding:var(--px-6) var(--px-10);display:flex;gap:var(--px-4);flex-wrap:wrap">
+                      {#each d.accesses as a (a)}<span style="font-size:var(--px-10);color:var(--syntax-keyword);background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-4);padding:0 var(--px-5)">{a}</span>{/each}
+                    </div>
+                  </div>
+                {/each}
+              </div>
+            {:else}
+              <div style="font-size:var(--px-11_5);color:var(--muted)">No grants — this {kind === 'users' ? 'user' : 'role'} cannot access any database yet.</div>
             {/if}
           {:else}
             <!-- Roles (users only) -->

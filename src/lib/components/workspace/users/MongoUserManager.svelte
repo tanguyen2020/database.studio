@@ -25,7 +25,22 @@
   let error = $state<string | null>(null)
   let selectedKey = $state<string>('')
   let gridDb = $state<string>('')
-  let detailTab = $state<'roles' | 'password'>('roles')
+  let detailTab = $state<'roles' | 'access' | 'password'>('roles')
+
+  // Plain-language capability of each built-in role (native Mongo RBAC model).
+  const ROLE_DESC: Record<string, string> = {
+    read: 'read all non-system collections',
+    readWrite: 'read + write all non-system collections',
+    dbAdmin: 'schema / index / stats admin (no data read by itself)',
+    dbOwner: 'full control of the database (readWrite + dbAdmin + userAdmin)',
+    userAdmin: 'create / modify users & roles on the database',
+    readAnyDatabase: 'read every database (cluster-wide)',
+    readWriteAnyDatabase: 'read + write every database (cluster-wide)',
+    dbAdminAnyDatabase: 'dbAdmin on every database (cluster-wide)',
+    userAdminAnyDatabase: 'manage users on every database (cluster-wide)',
+    clusterAdmin: 'full cluster administration',
+    root: 'superuser — full access to everything',
+  }
 
   const keyOf = (u: Row) => `${u.user}@${u.db}`
 
@@ -68,6 +83,16 @@
   const selName = $derived(selectedUser ? String(selectedUser.user) : '')
   const selDb = $derived(selectedUser ? String(selectedUser.db) : '')
   const selRoles = $derived.by<RoleRef[]>(() => (selectedUser ? parseRolesCsv(String(selectedUser.roles ?? '')) : []))
+
+  // Access overview: group the user's roles by the database they apply to.
+  const mongoAccess = $derived.by<{ db: string; roles: { role: string; desc: string }[] }[]>(() => {
+    const map = new Map<string, { role: string; desc: string }[]>()
+    for (const r of selRoles) {
+      if (!map.has(r.db)) map.set(r.db, [])
+      map.get(r.db)!.push({ role: r.role, desc: ROLE_DESC[r.role] ?? 'custom role' })
+    }
+    return [...map].map(([db, roles]) => ({ db, roles })).sort((a, b) => a.db.localeCompare(b.db))
+  })
 
   async function toggleRole(role: string, db: string, on: boolean) {
     if (!cid || !selectedUser || busy) return
@@ -142,7 +167,7 @@
     <div style="flex:1;display:flex;flex-direction:column;min-height:0">
       {#if selectedUser}
         <div style="flex:none;display:flex;gap:var(--px-2);padding:var(--px-8) var(--px-12) 0;border-bottom:var(--px-1) solid var(--border)">
-          {#each [['roles', 'Roles per Database'], ['password', 'Password']] as [k, label] (k)}
+          {#each [['roles', 'Roles per Database'], ['access', 'Access'], ['password', 'Password']] as [k, label] (k)}
             <span onclick={() => (detailTab = k as typeof detailTab)} onkeydown={(e) => e.key === 'Enter' && (detailTab = k as typeof detailTab)} role="tab" tabindex="0" aria-selected={detailTab === k} style="padding:var(--px-6) var(--px-12);font-size:var(--px-12);cursor:pointer;font-weight:600;border-bottom:var(--px-2) solid {detailTab === k ? 'var(--primary)' : 'transparent'};color:{detailTab === k ? 'var(--text)' : 'var(--muted)'}">{label}</span>
           {/each}
         </div>
@@ -181,6 +206,31 @@
                 <span onclick={() => (confirmDrop = true)} onkeydown={(e) => e.key === 'Enter' && (confirmDrop = true)} role="button" tabindex="0" style="font-size:var(--px-11_5);color:var(--error);border:var(--px-1) solid var(--error);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">Drop user…</span>
               {/if}
             </div>
+          {:else if detailTab === 'access'}
+            <!-- Access overview: what this user can access, per database (via roles) -->
+            <div style="font-size:var(--px-12);color:var(--text2);margin-bottom:var(--px-10)">What <span class="mono" style="color:var(--text);font-weight:600">{selName}@{selDb}</span> can access, per database (through its roles).</div>
+            {#if mongoAccess.length}
+              <div style="display:flex;flex-direction:column;gap:var(--px-8)">
+                {#each mongoAccess as d (d.db)}
+                  <div style="border:var(--px-1) solid var(--border);border-radius:var(--px-7);overflow:hidden">
+                    <div style="padding:var(--px-5) var(--px-10);background:var(--panel);border-bottom:var(--px-1) solid var(--border);font-size:var(--px-12_5);font-weight:700;color:var(--text)">
+                      <span class="mono">{d.db === 'admin' ? 'admin (cluster / any-database roles live here)' : d.db}</span>
+                    </div>
+                    <div style="padding:var(--px-6) var(--px-10);display:flex;flex-direction:column;gap:var(--px-3)">
+                      {#each d.roles as r (r.role)}
+                        <div style="display:flex;align-items:baseline;gap:var(--px-8)">
+                          <span style="font-size:var(--px-11);color:var(--syntax-type);background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-4);padding:0 var(--px-6);min-width:var(--px-110)">{r.role}</span>
+                          <span style="font-size:var(--px-11);color:var(--text2)">{r.desc}</span>
+                        </div>
+                      {/each}
+                    </div>
+                  </div>
+                {/each}
+              </div>
+            {:else}
+              <div style="font-size:var(--px-11_5);color:var(--muted)">No roles — this user cannot access any database yet.</div>
+            {/if}
+            <div style="font-size:var(--px-10_5);color:var(--muted);margin-top:var(--px-8)">MongoDB access is role-based per database; *AnyDatabase / root / clusterAdmin roles on the admin database apply cluster-wide.</div>
           {:else}
             <div style="display:flex;gap:var(--px-6);align-items:flex-end">
               <label style="font-size:var(--px-12);color:var(--text2)">New password

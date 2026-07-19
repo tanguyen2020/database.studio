@@ -36,11 +36,12 @@
   let roles = $state<Row[]>([])
   let rolePrivs = $state<Row[]>([])
   let sysPrivs = $state<Row[]>([])
+  let tabPrivs = $state<Row[]>([])
   let loading = $state(false)
   let refreshing = $state(false)
   let error = $state<string | null>(null)
   let selected = $state<string>('')
-  let detailTab = $state<'general' | 'sys' | 'roles' | 'objects' | 'quotas'>('general')
+  let detailTab = $state<'general' | 'sys' | 'roles' | 'objects' | 'access' | 'quotas'>('general')
   let quotas = $state<Row[]>([])
   let pending = $state<string[]>([])
   let executing = $state(false)
@@ -72,15 +73,39 @@
 
   async function loadPrivs() {
     if (!cid || !selected) return
-    const [rp, sp, qt] = await Promise.all([
+    const [rp, sp, qt, tp] = await Promise.all([
       ipc.usersView(cid, 'role_privs', selected).catch(() => ({ rows: [] as Row[] })),
       ipc.usersView(cid, 'sys_privs', selected).catch(() => ({ rows: [] as Row[] })),
       ipc.usersView(cid, 'quotas').catch(() => ({ rows: [] as Row[] })),
+      ipc.usersView(cid, 'tab_privs', selected).catch(() => ({ rows: [] as Row[] })),
     ])
     rolePrivs = rp.rows
     sysPrivs = sp.rows
     quotas = qt.rows
+    tabPrivs = tp.rows
   }
+
+  // Access overview: object privileges grouped by owner (schema) → object.
+  // (Oracle: a schema is a user's namespace; object privs are OWNER.OBJECT.)
+  const objectAccess = $derived.by<{ owner: string; objects: { object: string; privs: string[] }[] }[]>(() => {
+    const byOwner = new Map<string, Map<string, Set<string>>>()
+    for (const g of tabPrivs) {
+      const owner = String(g.owner ?? '')
+      const object = String(g.object ?? '')
+      const priv = String(g.privilege ?? '')
+      if (!owner || !object || !priv) continue
+      if (!byOwner.has(owner)) byOwner.set(owner, new Map())
+      const objs = byOwner.get(owner)!
+      if (!objs.has(object)) objs.set(object, new Set())
+      objs.get(object)!.add(priv)
+    }
+    return [...byOwner]
+      .map(([owner, objs]) => ({
+        owner,
+        objects: [...objs].map(([object, s]) => ({ object, privs: [...s].sort() })).sort((a, b) => a.object.localeCompare(b.object)),
+      }))
+      .sort((a, b) => a.owner.localeCompare(b.owner))
+  })
 
   async function refresh() {
     if (refreshing) return
@@ -207,7 +232,7 @@
     <div style="flex:1;display:flex;flex-direction:column;min-height:0">
       {#if selectedUser}
         <div style="flex:none;display:flex;gap:var(--px-2);padding:var(--px-8) var(--px-12) 0;border-bottom:var(--px-1) solid var(--border)">
-          {#each [['general', 'General'], ['sys', 'System Privileges'], ['roles', 'Granted Roles'], ['objects', 'Object Privileges'], ['quotas', 'Quotas']] as [k, label] (k)}
+          {#each [['general', 'General'], ['sys', 'System Privileges'], ['roles', 'Granted Roles'], ['objects', 'Object Privileges'], ['access', 'Access'], ['quotas', 'Quotas']] as [k, label] (k)}
             <span onclick={() => (detailTab = k as typeof detailTab)} onkeydown={(e) => e.key === 'Enter' && (detailTab = k as typeof detailTab)} role="tab" tabindex="0" aria-selected={detailTab === k} style="padding:var(--px-6) var(--px-12);font-size:var(--px-12);cursor:pointer;font-weight:600;border-bottom:var(--px-2) solid {detailTab === k ? 'var(--primary)' : 'transparent'};color:{detailTab === k ? 'var(--text)' : 'var(--muted)'}">{label}</span>
           {/each}
         </div>
@@ -287,7 +312,7 @@
                 <div style="font-size:var(--px-11_5);color:var(--muted)">No tablespace quotas.</div>
               {/if}
             {/each}
-          {:else}
+          {:else if detailTab === 'objects'}
             <!-- Object privileges — per owner, batched (Oracle has no GRANT ON SCHEMA) -->
             <div style="display:flex;align-items:center;gap:var(--px-8);margin-bottom:var(--px-8);flex-wrap:wrap">
               <span style="font-size:var(--px-12);color:var(--text2)">Grant on all objects owned by</span>
@@ -302,6 +327,47 @@
               {/each}
             </div>
             {#if objCount != null}<div style="font-size:var(--px-10_5);color:var(--muted);margin-top:var(--px-8)">Last preset built statements for {objCount} object(s). Oracle grants per-object — objects created later are not covered.</div>{/if}
+          {:else}
+            <!-- Access overview: system privs + roles + object privs by owner -->
+            <div style="font-size:var(--px-12);color:var(--text2);margin-bottom:var(--px-10)">What <span class="mono" style="color:var(--text);font-weight:600">{selected}</span> can access — system privileges, roles, and object privileges by schema.</div>
+            <!-- system privileges -->
+            <div style="border:var(--px-1) solid var(--border);border-radius:var(--px-7);overflow:hidden;margin-bottom:var(--px-8)">
+              <div style="padding:var(--px-5) var(--px-10);background:var(--panel);border-bottom:var(--px-1) solid var(--border);font-size:var(--px-12_5);font-weight:700;color:var(--text)">System privileges</div>
+              <div style="padding:var(--px-6) var(--px-10);display:flex;gap:var(--px-4);flex-wrap:wrap">
+                {#if grantedSys.size}{#each [...grantedSys] as p (p)}<span style="font-size:var(--px-10);color:var(--syntax-keyword);background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-4);padding:0 var(--px-5)">{p}</span>{/each}{:else}<span style="font-size:var(--px-11);color:var(--muted)">— none</span>{/if}
+              </div>
+            </div>
+            <!-- roles -->
+            <div style="border:var(--px-1) solid var(--border);border-radius:var(--px-7);overflow:hidden;margin-bottom:var(--px-8)">
+              <div style="padding:var(--px-5) var(--px-10);background:var(--panel);border-bottom:var(--px-1) solid var(--border);font-size:var(--px-12_5);font-weight:700;color:var(--text)">Roles</div>
+              <div style="padding:var(--px-6) var(--px-10);display:flex;gap:var(--px-4);flex-wrap:wrap">
+                {#if grantedRoles.length}{#each grantedRoles as r (r)}<span style="font-size:var(--px-10);color:var(--syntax-type);background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-4);padding:0 var(--px-5)">{r}</span>{/each}{:else}<span style="font-size:var(--px-11);color:var(--muted)">— none</span>{/if}
+              </div>
+            </div>
+            <!-- object privileges grouped by owner schema -->
+            <div style="font-size:var(--px-11_5);color:var(--text2);font-weight:600;margin-bottom:var(--px-6)">Object privileges (by schema)</div>
+            {#if objectAccess.length}
+              <div style="display:flex;flex-direction:column;gap:var(--px-8)">
+                {#each objectAccess as o (o.owner)}
+                  <div style="border:var(--px-1) solid var(--border);border-radius:var(--px-7);overflow:hidden">
+                    <div style="padding:var(--px-5) var(--px-10);background:var(--panel);border-bottom:var(--px-1) solid var(--border);font-size:var(--px-12_5);font-weight:700;color:var(--text)"><span class="mono">{o.owner}</span> <span style="font-size:var(--px-10);color:var(--muted)">schema</span></div>
+                    <div style="padding:var(--px-6) var(--px-10);display:flex;flex-direction:column;gap:var(--px-3)">
+                      {#each o.objects as ob (ob.object)}
+                        <div style="display:flex;align-items:baseline;gap:var(--px-8);flex-wrap:wrap">
+                          <span class="mono" style="font-size:var(--px-11);color:var(--text);min-width:var(--px-110)">{ob.object}</span>
+                          <div style="display:flex;gap:var(--px-4);flex-wrap:wrap">
+                            {#each ob.privs as p (p)}<span style="font-size:var(--px-10);color:var(--syntax-number);background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-4);padding:0 var(--px-5)">{p}</span>{/each}
+                          </div>
+                        </div>
+                      {/each}
+                    </div>
+                  </div>
+                {/each}
+              </div>
+            {:else}
+              <div style="font-size:var(--px-11_5);color:var(--muted)">No object privileges granted.</div>
+            {/if}
+            <div style="font-size:var(--px-10_5);color:var(--muted);margin-top:var(--px-8)">Oracle has no database concept like Postgres — a schema is a user's object namespace; object privileges are on OWNER.OBJECT. Role-inherited object privileges may not all appear (this lists directly-granted object privileges).</div>
           {/if}
         </div>
       {:else if !loading}

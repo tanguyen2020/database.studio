@@ -46,7 +46,7 @@
   let refreshing = $state(false)
   let error = $state<string | null>(null)
   let selectedKey = $state<string>('')
-  let detailTab = $state<'general' | 'admin' | 'privileges' | 'roles' | 'showgrants'>('general')
+  let detailTab = $state<'general' | 'admin' | 'privileges' | 'access' | 'roles' | 'showgrants'>('general')
   let showGrants = $state<string>('')
   // Global (administrative) privileges checklist — granted ON *.*.
   const GLOBAL_PRIVS = [
@@ -157,6 +157,55 @@
     }
     return priv
   }
+
+  // ---- Access overview (native: 'user'@'host' grants, server-wide) -----------
+  // MySQL/MariaDB store all grants centrally (mysql.*), so no per-database
+  // connection is needed: global (*.*) + per-database (db.*) + a table summary,
+  // including privileges inherited through granted roles.
+  const accessPrincipals = $derived([selLit, ...rolesOf()])
+  type MyDbAccess = { db: string; schemaPrivs: string[]; tablePrivs: { priv: string; n: number }[]; inherited: boolean }
+  const globalAccess = $derived.by<{ privs: string[]; inherited: boolean }>(() => {
+    const privs: string[] = []
+    let inherited = false
+    for (const g of globalPrivs) {
+      const grantee = String(g.grantee)
+      if (!accessPrincipals.includes(grantee)) continue
+      const p = String(g.privilege_type)
+      if (!privs.includes(p)) privs.push(p)
+      if (grantee !== selLit) inherited = true
+    }
+    return { privs, inherited }
+  })
+  const dbAccess = $derived.by<MyDbAccess[]>(() => {
+    const map = new Map<string, MyDbAccess>()
+    const ensure = (db: string) => {
+      let e = map.get(db)
+      if (!e) { e = { db, schemaPrivs: [], tablePrivs: [], inherited: false }; map.set(db, e) }
+      return e
+    }
+    for (const g of schemaPrivs) {
+      const grantee = String(g.grantee)
+      if (!accessPrincipals.includes(grantee)) continue
+      const e = ensure(String(g.table_schema))
+      const p = String(g.privilege_type)
+      if (!e.schemaPrivs.includes(p)) e.schemaPrivs.push(p)
+      if (grantee !== selLit) e.inherited = true
+    }
+    const tblCount = new Map<string, Map<string, number>>()
+    for (const g of tablePrivs) {
+      const grantee = String(g.grantee)
+      if (!accessPrincipals.includes(grantee)) continue
+      const db = String(g.table_schema)
+      const p = String(g.privilege_type)
+      ensure(db)
+      if (grantee !== selLit) ensure(db).inherited = true
+      if (!tblCount.has(db)) tblCount.set(db, new Map())
+      const m = tblCount.get(db)!
+      m.set(p, (m.get(p) ?? 0) + 1)
+    }
+    for (const [db, m] of tblCount) ensure(db).tablePrivs = [...m].map(([priv, n]) => ({ priv, n }))
+    return [...map.values()].sort((a, b) => a.db.localeCompare(b.db))
+  })
   function onCell(db: string | null, priv: string, st: CellState) {
     if (!selectedAcct) return
     pending = [...pending, st === 'none' || st === 'partial' ? grantColumn(db, priv, selUser, selHost) : revokeColumn(db, priv, selUser, selHost)]
@@ -295,7 +344,7 @@
     <div style="flex:1;display:flex;flex-direction:column;min-height:0">
       {#if selectedAcct}
         <div style="flex:none;display:flex;gap:var(--px-2);padding:var(--px-8) var(--px-12) 0;border-bottom:var(--px-1) solid var(--border)">
-          {#each [['general', 'General'], ['admin', 'Administrative'], ['privileges', 'Schema Privileges'], ['roles', 'Roles'], ['showgrants', 'SHOW GRANTS']] as [k, label] (k)}
+          {#each [['general', 'General'], ['admin', 'Administrative'], ['privileges', 'Schema Privileges'], ['access', 'Access'], ['roles', 'Roles'], ['showgrants', 'SHOW GRANTS']] as [k, label] (k)}
             <span onclick={() => (detailTab = k as typeof detailTab)} onkeydown={(e) => e.key === 'Enter' && (detailTab = k as typeof detailTab)} role="tab" tabindex="0" aria-selected={detailTab === k} style="padding:var(--px-6) var(--px-12);font-size:var(--px-12);cursor:pointer;font-weight:600;border-bottom:var(--px-2) solid {detailTab === k ? 'var(--primary)' : 'transparent'};color:{detailTab === k ? 'var(--text)' : 'var(--muted)'}">{label}</span>
           {/each}
         </div>
@@ -339,6 +388,42 @@
                 </label>
               {/each}
             </div>
+          {:else if detailTab === 'access'}
+            <!-- Access overview: what this account can access, server-wide -->
+            <div style="font-size:var(--px-12);color:var(--text2);margin-bottom:var(--px-10)">What <span class="mono" style="color:var(--text);font-weight:600">{selLit}</span> can access — global, then per database (with granted roles folded in).</div>
+            <!-- Global (*.*) -->
+            <div style="border:var(--px-1) solid var(--border);border-radius:var(--px-7);overflow:hidden;margin-bottom:var(--px-10)">
+              <div style="padding:var(--px-6) var(--px-10);background:var(--panel);border-bottom:var(--px-1) solid var(--border);font-size:var(--px-12_5);font-weight:700;color:var(--text)">Global — <span class="mono">*.*</span> (whole server)</div>
+              <div style="padding:var(--px-6) var(--px-10);display:flex;gap:var(--px-4);flex-wrap:wrap">
+                {#if globalAccess.privs.length}
+                  {#each globalAccess.privs as p (p)}<span style="font-size:var(--px-10);color:var(--syntax-keyword);background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-4);padding:0 var(--px-5)">{p}</span>{/each}
+                  {#if globalAccess.inherited}<span style="font-size:var(--px-10);color:var(--muted)">◐ inherited</span>{/if}
+                {:else}
+                  <span style="font-size:var(--px-11);color:var(--muted)">— no global privileges</span>
+                {/if}
+              </div>
+            </div>
+            <!-- Per database -->
+            {#if dbAccess.length}
+              <div style="display:flex;flex-direction:column;gap:var(--px-8)">
+                {#each dbAccess as d (d.db)}
+                  <div style="border:var(--px-1) solid var(--border);border-radius:var(--px-7);overflow:hidden">
+                    <div style="display:flex;align-items:center;gap:var(--px-6);padding:var(--px-6) var(--px-10);background:var(--panel);border-bottom:var(--px-1) solid var(--border)">
+                      <span class="mono" style="font-size:var(--px-12_5);font-weight:700;color:var(--text)">{d.db}</span>
+                      {#if d.inherited}<span style="font-size:var(--px-10);color:var(--muted)">◐ inherited</span>{/if}
+                    </div>
+                    <div style="padding:var(--px-6) var(--px-10);display:flex;gap:var(--px-4);flex-wrap:wrap">
+                      {#each d.schemaPrivs as p (p)}<span style="font-size:var(--px-10);color:var(--syntax-keyword);background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-4);padding:0 var(--px-5)">{p}</span>{/each}
+                      {#each d.tablePrivs as tp (tp.priv)}<span style="font-size:var(--px-10);color:var(--syntax-number);background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-4);padding:0 var(--px-5)">{tp.priv} ×{tp.n}</span>{/each}
+                      {#if !d.schemaPrivs.length && !d.tablePrivs.length}<span style="font-size:var(--px-11);color:var(--muted)">—</span>{/if}
+                    </div>
+                  </div>
+                {/each}
+              </div>
+            {:else}
+              <div style="font-size:var(--px-11_5);color:var(--muted)">No database-level privileges (see Global above, or SHOW GRANTS).</div>
+            {/if}
+            <div style="font-size:var(--px-10_5);color:var(--muted);margin-top:var(--px-8)">Database privileges are ON <span class="mono">db.*</span>; a table count (e.g. SELECT ×5) means the privilege is granted on 5 specific tables in that database.</div>
           {:else if detailTab === 'showgrants'}
             <div style="display:flex;align-items:center;gap:var(--px-8);margin-bottom:var(--px-8)">
               <span style="font-size:var(--px-11);color:var(--muted)">Raw output of SHOW GRANTS FOR {selLit} (source of truth).</span>

@@ -38,7 +38,7 @@
   let refreshing = $state(false)
   let error = $state<string | null>(null)
   let selected = $state<string>('')
-  let detailTab = $state<'general' | 'members' | 'perms'>('general')
+  let detailTab = $state<'general' | 'members' | 'perms' | 'access'>('general')
   let pending = $state<string[]>([])
   let executing = $state(false)
 
@@ -138,6 +138,24 @@
     if (!selected) return
     pending = [...pending, st === 'none' ? grantColumn(keyspace, perm, selected) : revokeColumn(keyspace, perm, selected)]
   }
+  // ---- Access overview (native: role-based, resource permissions) -----------
+  // LIST ALL PERMISSIONS OF already returns EFFECTIVE permissions (direct +
+  // inherited through granted roles), grouped here by resource (keyspace/table).
+  type CassResourceAccess = { resource: string; perms: string[] }
+  const cassAccess = $derived.by<CassResourceAccess[]>(() => {
+    const map = new Map<string, Set<string>>()
+    for (const p of perms) {
+      const res = String(p.resource ?? '').replace(/[<>]/g, '').trim()
+      const perm = String(p.permission ?? '')
+      if (!res || !perm) continue
+      if (!map.has(res)) map.set(res, new Set())
+      map.get(res)!.add(perm)
+    }
+    return [...map]
+      .map(([resource, s]) => ({ resource, perms: [...s].sort() }))
+      .sort((a, b) => a.resource.localeCompare(b.resource))
+  })
+
   const gridScopes = $derived(keyspaces.map((k) => ({ value: k, label: k })))
   const gridPresets = [
     { kind: 'read-only', label: 'R' },
@@ -251,7 +269,7 @@
     <div style="flex:1;display:flex;flex-direction:column;min-height:0">
       {#if selectedRole}
         <div style="flex:none;display:flex;gap:var(--px-2);padding:var(--px-8) var(--px-12) 0;border-bottom:var(--px-1) solid var(--border)">
-          {#each [['general', 'General'], ['members', 'Member of'], ['perms', 'Permissions']] as [k, label] (k)}
+          {#each [['general', 'General'], ['members', 'Member of'], ['perms', 'Permissions'], ['access', 'Access']] as [k, label] (k)}
             <span onclick={() => (detailTab = k as typeof detailTab)} onkeydown={(e) => e.key === 'Enter' && (detailTab = k as typeof detailTab)} role="tab" tabindex="0" aria-selected={detailTab === k} style="padding:var(--px-6) var(--px-12);font-size:var(--px-12);cursor:pointer;font-weight:600;border-bottom:var(--px-2) solid {detailTab === k ? 'var(--primary)' : 'transparent'};color:{detailTab === k ? 'var(--text)' : 'var(--muted)'}">{label}</span>
           {/each}
         </div>
@@ -292,7 +310,7 @@
               <span onclick={queueGrantRole} onkeydown={(e) => e.key === 'Enter' && queueGrantRole()} role="button" tabindex="0" aria-disabled={!grantRoleName} style="font-size:var(--px-11_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:{grantRoleName ? 'pointer' : 'not-allowed'};opacity:{grantRoleName ? 1 : 0.5}">Queue grant</span>
             </div>
             <div style="font-size:var(--px-10_5);color:var(--muted);margin-top:var(--px-8)">GRANT &lt;role&gt; TO {selected} — role membership (a role can inherit another role's permissions).</div>
-          {:else}
+          {:else if detailTab === 'perms'}
             <!-- Permissions -->
             <div style="display:flex;align-items:center;gap:var(--px-10);margin-bottom:var(--px-10);flex-wrap:wrap">
               <span onclick={openGrantWizard} onkeydown={(e) => e.key === 'Enter' && openGrantWizard()} role="button" tabindex="0" style="font-size:var(--px-12_5);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-7);padding:var(--px-6) var(--px-14);cursor:pointer;font-weight:600">＋ Grant access…</span>
@@ -310,6 +328,26 @@
               note="MODIFY = INSERT + UPDATE + DELETE + TRUNCATE. Shows effective permissions (incl. via ALL KEYSPACES / roles)."
             />
             {/if}
+          {:else}
+            <!-- Access overview: effective permissions grouped by resource -->
+            <div style="font-size:var(--px-12);color:var(--text2);margin-bottom:var(--px-10)">What <span class="mono" style="color:var(--text);font-weight:600">{selected}</span> can access — effective permissions per resource (direct + inherited via roles).</div>
+            {#if cassAccess.length}
+              <div style="display:flex;flex-direction:column;gap:var(--px-8)">
+                {#each cassAccess as r (r.resource)}
+                  <div style="border:var(--px-1) solid var(--border);border-radius:var(--px-7);overflow:hidden">
+                    <div style="padding:var(--px-5) var(--px-10);background:var(--panel);border-bottom:var(--px-1) solid var(--border);font-size:var(--px-12_5);font-weight:700;color:var(--text)">
+                      <span class="mono">{r.resource}</span>
+                    </div>
+                    <div style="padding:var(--px-6) var(--px-10);display:flex;gap:var(--px-4);flex-wrap:wrap">
+                      {#each r.perms as p (p)}<span style="font-size:var(--px-10);color:var(--syntax-keyword);background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-4);padding:0 var(--px-5)">{p}</span>{/each}
+                    </div>
+                  </div>
+                {/each}
+              </div>
+            {:else}
+              <div style="font-size:var(--px-11_5);color:var(--muted)">No permissions — this role cannot access any keyspace/table yet.</div>
+            {/if}
+            <div style="font-size:var(--px-10_5);color:var(--muted);margin-top:var(--px-8)">Resources are keyspaces / tables / all keyspaces. Permissions here are effective (LIST ALL PERMISSIONS OF), so role-inherited access is included.</div>
           {/if}
         </div>
       {:else if !loading}
