@@ -7,9 +7,10 @@
   import * as ipc from '$lib/ipc'
   import { toasts } from '$lib/stores/toast.svelte'
   import { chUserWizard } from '$lib/stores/chuser.svelte'
-  import { grantWizard, STANDARD_LEVELS } from '$lib/stores/grantwizard.svelte'
+  import { grantWizard } from '$lib/stores/grantwizard.svelte'
   import { highlightSql, sqlTokenColor } from '$lib/format/sql'
   import {
+    accessStatement,
     alterUserPassword,
     CH_GRID_COLUMNS,
     dbPreset,
@@ -182,14 +183,42 @@
 
   let showMatrix = $state(false)
   function openGrantWizard() {
-    if (!selected) return
+    if (!selected || !cid) return
+    const c = cid
+    const who = selected
     grantWizard.show({
       title: 'Grant access',
-      role: selected,
-      scopeLabel: 'Database',
-      scopes: databases,
-      levels: STANDARD_LEVELS,
-      build: (kind, db) => [dbPreset(kind as PresetKind, db, selected)],
+      role: who,
+      // Database → Table: pick a database (or *), then the whole database (db.*)
+      // or a specific table (db.table). ClickHouse has no DENY (Grant/Revoke).
+      scopeLabel: 'Database / table',
+      scopes: [],
+      scope2Label: 'Database',
+      scopes2: ['*', ...databases],
+      scope2Default: [],
+      loadScopes: async (dbs) => {
+        const out: string[] = []
+        for (const db of dbs) {
+          if (db === '*') {
+            out.push('*') // ON *.* (all databases)
+            continue
+          }
+          out.push(`${db}.*`) // whole database
+          const tbls = await ipc.listTables(c, db).catch(() => [])
+          for (const t of tbls) out.push(`${db}.${t.name}`)
+        }
+        return out
+      },
+      levels: [
+        { kind: 'read-only', label: 'Read-only', desc: 'SELECT' },
+        { kind: 'read-write', label: 'Read-Write', desc: 'SELECT + INSERT + ALTER UPDATE/DELETE (mutations)' },
+        { kind: 'full', label: 'Full', desc: 'ALL' },
+      ],
+      actions: [
+        { kind: 'grant', label: 'Grant' },
+        { kind: 'revoke', label: 'Revoke', danger: true },
+      ],
+      build: (kind, scope, extra) => [accessStatement(extra?.action === 'revoke' ? 'revoke' : 'grant', kind, scope, who)],
       onApply: (stmts) => (pending = [...pending, ...stmts]),
     })
   }

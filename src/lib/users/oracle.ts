@@ -122,6 +122,33 @@ export function revokeObjPrivs(privs: ObjPriv[] | 'ALL', owner: string, object: 
   return `REVOKE ${p} ON ${oid(owner)}.${oid(object)} FROM ${oid(grantee)}`
 }
 
+// ---- Grant wizard: access level × action (GRANT / REVOKE) on OWNER.OBJECT ----
+// Oracle has no GRANT ON SCHEMA, so the wizard grants per object; a scope string
+// is "owner.object".
+export const OBJ_LEVEL_PRIVS: Record<string, ObjPriv[]> = {
+  'read-only': ['SELECT'],
+  'read-write': ['SELECT', 'INSERT', 'UPDATE', 'DELETE'],
+  full: ['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'ALTER', 'INDEX', 'REFERENCES'],
+}
+/** Split a wizard scope string "owner.object" into its parts. */
+export function parseOwnerObject(scope: string): { owner: string; object: string } {
+  const i = scope.indexOf('.')
+  return i < 0 ? { owner: scope, object: '' } : { owner: scope.slice(0, i), object: scope.slice(i + 1) }
+}
+/** One GRANT/REVOKE statement for a level's object privileges on owner.object. */
+export function objectAccessStatement(
+  action: 'grant' | 'revoke',
+  level: string,
+  owner: string,
+  object: string,
+  grantee: string,
+): string {
+  const privs = OBJ_LEVEL_PRIVS[level] ?? ['SELECT']
+  return action === 'revoke'
+    ? revokeObjPrivs(privs, owner, object, grantee)
+    : grantObjPrivs(privs, owner, object, grantee)
+}
+
 // ---- §1.8.4 presets — per-object batches (Oracle has no GRANT ON SCHEMA) ----
 // `objects` = table/view names owned by `owner` (from introspection); `procs` =
 // procedure/function/package names (for EXECUTE). Preview shows every statement.

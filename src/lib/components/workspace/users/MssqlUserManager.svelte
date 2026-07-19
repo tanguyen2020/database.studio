@@ -8,9 +8,10 @@
   import * as ipc from '$lib/ipc'
   import { toasts } from '$lib/stores/toast.svelte'
   import { mssqlUserWizard } from '$lib/stores/mssqluser.svelte'
-  import { grantWizard, STANDARD_LEVELS } from '$lib/stores/grantwizard.svelte'
+  import { grantWizard } from '$lib/stores/grantwizard.svelte'
   import { highlightSql, sqlTokenColor } from '$lib/format/sql'
   import {
+    accessStatement,
     alterLoginPassword,
     createUser as createUserStmt,
     denyColumn,
@@ -18,6 +19,7 @@
     dropUser,
     grantColumn,
     MSSQL_GRID_COLUMNS,
+    parseSecurable,
     revokeColumn,
     schemaPreset,
     setDbRoleMember,
@@ -315,15 +317,37 @@
   ]
 
   let showMatrix = $state(false)
-  function openGrantWizard() {
+  async function openGrantWizard() {
     if (!selectedUser) return
+    // build the scope list: each schema (whole) + its objects (schema.object),
+    // so the user can grant on a whole schema OR a specific object.
+    const target = dbCid || baseCid
+    const list: string[] = []
+    for (const s of schemas) {
+      list.push(`${s}.*`)
+      if (target) {
+        const tbls = await ipc.listTables(target, s).catch(() => [])
+        for (const t of tbls) list.push(`${s}.${t.name}`)
+      }
+    }
     grantWizard.show({
       title: 'Grant access',
       role: selectedUser,
-      scopeLabel: 'Schema',
-      scopes: schemas,
-      levels: STANDARD_LEVELS,
-      build: (kind, schema) => [schemaPreset(kind as PresetKind, schema, selectedUser)],
+      scopeLabel: 'Schema / object',
+      scopes: list,
+      // no "Revoke all" level — the Action selector below handles Revoke.
+      levels: [
+        { kind: 'read-only', label: 'Read-only', desc: 'View data (SELECT)' },
+        { kind: 'read-write', label: 'Read-Write', desc: 'View + insert / update / delete' },
+        { kind: 'read-write-execute', label: 'Read-Write + Execute', desc: 'Read-Write + EXECUTE procedures' },
+        { kind: 'full', label: 'Full', desc: 'CONTROL (full control of the securable)' },
+      ],
+      actions: [
+        { kind: 'grant', label: 'Grant' },
+        { kind: 'deny', label: 'Deny', danger: true },
+        { kind: 'revoke', label: 'Revoke', danger: true },
+      ],
+      build: (kind, scope, extra) => [accessStatement(extra?.action ?? 'grant', kind, parseSecurable(scope), selectedUser)],
       onApply: (stmts) => (pending = [...pending, ...stmts]),
     })
   }

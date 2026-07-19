@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
+  parseResource,
+  resourceAccessStatement,
   alterRole,
   createRole,
   dropRole,
@@ -64,5 +66,15 @@ describe('cassandra role builders', () => {
     expect(keyspacePreset('read-write', 'ks', 'app')).toBe(`GRANT MODIFY ON KEYSPACE ks TO app`)
     expect(keyspacePreset('full', 'ks', 'app')).toBe(`GRANT ALL PERMISSIONS ON KEYSPACE ks TO app`)
     expect(keyspacePreset('revoke-all', 'ks', 'app')).toBe(`REVOKE ALL PERMISSIONS ON KEYSPACE ks FROM app`)
+  })
+
+  it('grant wizard — parseResource + resourceAccessStatement (Grant/Revoke, all/keyspace/table)', () => {
+    expect(parseResource('*')).toEqual({ kind: 'all-keyspaces' })
+    expect(parseResource('ks')).toEqual({ kind: 'keyspace', keyspace: 'ks' })
+    expect(parseResource('ks.tbl')).toEqual({ kind: 'table', keyspace: 'ks', table: 'tbl' })
+    expect(resourceAccessStatement('grant', 'read-only', 'ks', 'app')).toBe(`GRANT SELECT ON KEYSPACE ks TO app`)
+    expect(resourceAccessStatement('grant', 'read-write', 'ks.tbl', 'app')).toBe(`GRANT MODIFY ON TABLE ks.tbl TO app`)
+    expect(resourceAccessStatement('grant', 'full', '*', 'app')).toBe(`GRANT ALL PERMISSIONS ON ALL KEYSPACES TO app`)
+    expect(resourceAccessStatement('revoke', 'read-only', 'ks.tbl', 'app')).toBe(`REVOKE SELECT ON TABLE ks.tbl FROM app`)
   })
 })

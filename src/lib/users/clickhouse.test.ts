@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
+  accessStatement as chAccess,
+  parseScope,
   alterUserPassword,
   createRole,
   createUser,
@@ -67,5 +69,16 @@ describe('clickhouse user builders', () => {
     )
     expect(dbPreset('full', 'analytics', 'app')).toBe(`GRANT ALL ON \`analytics\`.* TO \`app\``)
     expect(dbPreset('revoke-all', 'analytics', 'app')).toBe(`REVOKE ALL ON \`analytics\`.* FROM \`app\``)
+  })
+
+  it('grant wizard — parseScope + accessStatement (Grant/Revoke, db/table, mutations)', () => {
+    expect(parseScope('*')).toEqual({ kind: 'global' })
+    expect(parseScope('analytics.*')).toEqual({ kind: 'db', db: 'analytics' }) // db.* = whole database
+    expect(parseScope('analytics.events')).toEqual({ kind: 'table', db: 'analytics', table: 'events' })
+    expect(chAccess('grant', 'read-only', 'analytics.*', 'app')).toBe('GRANT SELECT ON `analytics`.* TO `app`')
+    expect(chAccess('grant', 'read-write', 'analytics.events', 'app')).toBe(
+      'GRANT SELECT, INSERT, ALTER UPDATE, ALTER DELETE ON `analytics`.`events` TO `app`',
+    )
+    expect(chAccess('revoke', 'full', 'analytics.*', 'app')).toBe('REVOKE ALL ON `analytics`.* FROM `app`')
   })
 })

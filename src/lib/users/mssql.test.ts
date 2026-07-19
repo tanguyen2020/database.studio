@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  accessStatement,
   alterLoginPassword,
   createDbRole,
   createLogin,
@@ -7,6 +8,7 @@ import {
   createWindowsLogin,
   dropLogin,
   dropUser,
+  parseSecurable,
   permission,
   schemaPreset,
   setDbRoleMember,
@@ -84,5 +86,26 @@ describe('mssql user builders', () => {
     expect(schemaPreset('revoke-all', 'dbo', 'app')).toBe(
       `REVOKE SELECT, INSERT, UPDATE, DELETE, EXECUTE, ALTER, REFERENCES, VIEW DEFINITION, CONTROL ON SCHEMA::[dbo] FROM [app]`,
     )
+  })
+
+  it('grant wizard — parseSecurable + accessStatement (Grant/Deny/Revoke × level, schema/object)', () => {
+    // scope string → securable
+    expect(parseSecurable('dbo.*')).toEqual({ kind: 'schema', schema: 'dbo' })
+    expect(parseSecurable('dbo')).toEqual({ kind: 'schema', schema: 'dbo' })
+    expect(parseSecurable('dbo.Orders')).toEqual({ kind: 'object', schema: 'dbo', object: 'Orders' })
+    // Grant on a whole schema
+    expect(accessStatement('grant', 'read-only', parseSecurable('dbo.*'), 'app')).toBe(
+      `GRANT SELECT ON SCHEMA::[dbo] TO [app]`,
+    )
+    // Deny on a specific object (DENY wins)
+    expect(accessStatement('deny', 'read-only', parseSecurable('dbo.Orders'), 'app')).toBe(
+      `DENY SELECT ON [dbo].[Orders] TO [app]`,
+    )
+    // Revoke a read-write set on a schema (uses FROM)
+    expect(accessStatement('revoke', 'read-write', parseSecurable('sales.*'), 'app')).toBe(
+      `REVOKE SELECT, INSERT, UPDATE, DELETE ON SCHEMA::[sales] FROM [app]`,
+    )
+    // Full = CONTROL
+    expect(accessStatement('grant', 'full', parseSecurable('dbo.*'), 'app')).toBe(`GRANT CONTROL ON SCHEMA::[dbo] TO [app]`)
   })
 })

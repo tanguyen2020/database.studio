@@ -163,6 +163,36 @@ export function schemaPreset(kind: PresetKind, schema: string, principal: string
   }
 }
 
+// ---- Grant wizard: access level × action (GRANT / DENY / REVOKE) ------------
+// The wizard offers a privilege SET (level) and an ACTION; a schema OR object
+// securable. Scope strings are "schema.*" (whole schema) or "schema.object".
+export const LEVEL_PERMS: Record<string, string[]> = {
+  'read-only': ['SELECT'],
+  'read-write': ['SELECT', 'INSERT', 'UPDATE', 'DELETE'],
+  'read-write-execute': ['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'EXECUTE'],
+  full: ['CONTROL'],
+}
+
+/** Parse a wizard scope string into a securable: "schema.*" → whole schema,
+ *  "schema.object" → a specific object, bare "schema" → whole schema. */
+export function parseSecurable(scope: string): Securable {
+  if (scope.endsWith('.*')) return { kind: 'schema', schema: scope.slice(0, -2) }
+  const i = scope.indexOf('.')
+  if (i < 0) return { kind: 'schema', schema: scope }
+  return { kind: 'object', schema: scope.slice(0, i), object: scope.slice(i + 1) }
+}
+
+/** One GRANT/DENY/REVOKE statement for a level's privilege set on a securable. */
+export function accessStatement(
+  action: 'grant' | 'deny' | 'revoke',
+  level: string,
+  securable: Securable,
+  principal: string,
+): string {
+  const perms = LEVEL_PERMS[level] ?? ['SELECT']
+  return permission(action.toUpperCase() as PermState, perms, securable, principal)
+}
+
 /** Fixed server / database role name lists (for membership checkboxes). */
 export const FIXED_SERVER_ROLES = [
   'sysadmin', 'serveradmin', 'securityadmin', 'processadmin', 'setupadmin', 'bulkadmin', 'diskadmin', 'dbcreator',

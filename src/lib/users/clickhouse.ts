@@ -125,6 +125,27 @@ export function revokeColumn(db: string, priv: string, grantee: string): string 
 
 export type PresetKind = 'read-only' | 'read-write' | 'full' | 'revoke-all'
 
+// ---- Grant wizard: access level × action (GRANT / REVOKE), db or table -------
+// A scope string is "*" (all databases), "db" (a database) or "db.table".
+// UPDATE/DELETE map to the ALTER UPDATE / ALTER DELETE mutation privileges.
+export const CH_LEVEL_PRIVS: Record<string, string[] | 'ALL'> = {
+  'read-only': ['SELECT'],
+  'read-write': ['SELECT', 'INSERT', 'ALTER UPDATE', 'ALTER DELETE'],
+  full: 'ALL',
+}
+export function parseScope(scope: string): Scope {
+  if (scope === '*') return { kind: 'global' }
+  if (scope.endsWith('.*')) return { kind: 'db', db: scope.slice(0, -2) } // db.* = whole database
+  const i = scope.indexOf('.')
+  if (i < 0) return { kind: 'db', db: scope }
+  return { kind: 'table', db: scope.slice(0, i), table: scope.slice(i + 1) }
+}
+export function accessStatement(action: 'grant' | 'revoke', level: string, scope: string, grantee: string): string {
+  const privs = CH_LEVEL_PRIVS[level] ?? ['SELECT']
+  const s = parseScope(scope)
+  return action === 'revoke' ? revoke(privs, s, grantee) : grant(privs, s, grantee)
+}
+
 export function dbPreset(kind: PresetKind, db: string | null, grantee: string): string {
   const scope: Scope = db == null ? { kind: 'global' } : { kind: 'db', db }
   switch (kind) {

@@ -8,6 +8,7 @@
   import * as ipc from '$lib/ipc'
   import { toasts } from '$lib/stores/toast.svelte'
   import { oraUserWizard } from '$lib/stores/orauser.svelte'
+  import { grantWizard } from '$lib/stores/grantwizard.svelte'
   import { highlightSql, sqlTokenColor } from '$lib/format/sql'
   import {
     alterPassword,
@@ -18,6 +19,8 @@
     grantRole,
     grantSysPrivs,
     lockAccount,
+    objectAccessStatement,
+    parseOwnerObject,
     revokeRole,
     revokeSysPrivs,
     schemaPreset,
@@ -173,6 +176,45 @@
   // ---- Object privileges grid (per owner) -----------------------------------
   const owners = $derived(users.map((u) => String(u.name)))
   let gridOwner = $state('')
+
+  // Unified Grant access wizard: pick Schema (owner) → object(s) + level +
+  // Grant/Revoke. Objects load per owner (Oracle grants per object).
+  function openGrantWizard() {
+    if (!selected || !cid) return
+    const c = cid
+    const grantee = selected
+    grantWizard.show({
+      title: 'Grant access',
+      role: grantee,
+      scopeLabel: 'Object',
+      scopes: [],
+      scope2Label: 'Schema (owner)',
+      scopes2: owners,
+      scope2Default: [],
+      loadScopes: async (ows) => {
+        const set = new Set<string>()
+        for (const ow of ows) {
+          const tbls = await ipc.listTables(c, ow).catch(() => [])
+          for (const t of tbls) if (t.kind === 'table' || t.kind === 'view') set.add(`${ow}.${t.name}`)
+        }
+        return [...set].sort()
+      },
+      levels: [
+        { kind: 'read-only', label: 'Read-only', desc: 'SELECT' },
+        { kind: 'read-write', label: 'Read-Write', desc: 'SELECT + INSERT / UPDATE / DELETE' },
+        { kind: 'full', label: 'Full', desc: 'SELECT/INSERT/UPDATE/DELETE/ALTER/INDEX/REFERENCES' },
+      ],
+      actions: [
+        { kind: 'grant', label: 'Grant' },
+        { kind: 'revoke', label: 'Revoke', danger: true },
+      ],
+      build: (kind, scope, extra) => {
+        const { owner, object } = parseOwnerObject(scope)
+        return object ? [objectAccessStatement(extra?.action === 'revoke' ? 'revoke' : 'grant', kind, owner, object, grantee)] : []
+      },
+      onApply: (stmts) => (pending = [...pending, ...stmts]),
+    })
+  }
   let objCount = $state<number | null>(null)
   async function applyObjPreset(kind: PresetKind) {
     if (!cid || !selected || !gridOwner) return
@@ -313,9 +355,14 @@
               {/if}
             {/each}
           {:else if detailTab === 'objects'}
+            <!-- Guided grant (primary): Schema(owner) → object(s) + level + Grant/Revoke -->
+            <div style="display:flex;align-items:center;gap:var(--px-10);margin-bottom:var(--px-10);flex-wrap:wrap">
+              <span onclick={openGrantWizard} onkeydown={(e) => e.key === 'Enter' && openGrantWizard()} role="button" tabindex="0" style="font-size:var(--px-12_5);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-7);padding:var(--px-6) var(--px-14);cursor:pointer;font-weight:600">＋ Grant access…</span>
+              <span style="font-size:var(--px-11);color:var(--muted)">Pick a schema (owner) → object(s) → level (Grant/Revoke).</span>
+            </div>
             <!-- Object privileges — per owner, batched (Oracle has no GRANT ON SCHEMA) -->
             <div style="display:flex;align-items:center;gap:var(--px-8);margin-bottom:var(--px-8);flex-wrap:wrap">
-              <span style="font-size:var(--px-12);color:var(--text2)">Grant on all objects owned by</span>
+              <span style="font-size:var(--px-12);color:var(--text2)">Or grant on all objects owned by</span>
               <select bind:value={gridOwner} class="mono" style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-3) var(--px-6);color:var(--text);font-size:var(--px-12)">
                 <option value="">— schema —</option>
                 {#each owners as o (o)}<option value={o}>{o}</option>{/each}

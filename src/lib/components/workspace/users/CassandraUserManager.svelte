@@ -7,7 +7,7 @@
   import * as ipc from '$lib/ipc'
   import { toasts } from '$lib/stores/toast.svelte'
   import { cassUserWizard } from '$lib/stores/cassuser.svelte'
-  import { grantWizard, STANDARD_LEVELS } from '$lib/stores/grantwizard.svelte'
+  import { grantWizard } from '$lib/stores/grantwizard.svelte'
   import { highlightSql, sqlTokenColor } from '$lib/format/sql'
   import {
     alterRole,
@@ -16,6 +16,7 @@
     grantColumn,
     grantRole,
     keyspacePreset,
+    resourceAccessStatement,
     revokeColumn,
     revokeRole,
     type PresetKind,
@@ -166,14 +167,42 @@
 
   let showMatrix = $state(false)
   function openGrantWizard() {
-    if (!selected) return
+    if (!selected || !cid) return
+    const c = cid
+    const role = selected
     grantWizard.show({
       title: 'Grant access',
-      role: selected,
-      scopeLabel: 'Keyspace',
-      scopes: keyspaces,
-      levels: STANDARD_LEVELS,
-      build: (kind, ks) => [keyspacePreset(kind as PresetKind, ks, selected)],
+      role,
+      // resource type is chosen by the scope you pick: a keyspace (whole) or a
+      // table (ks.table); loaded per selected keyspace. "*" = all keyspaces.
+      scopeLabel: 'Resource',
+      scopes: [],
+      scope2Label: 'Keyspace',
+      scopes2: ['*', ...keyspaces],
+      scope2Default: [],
+      loadScopes: async (kss) => {
+        const out: string[] = []
+        for (const ks of kss) {
+          if (ks === '*') {
+            out.push('*') // ALL KEYSPACES
+            continue
+          }
+          out.push(ks) // the whole keyspace
+          const tree = await ipc.cassandraTree(c, ks).catch(() => null)
+          for (const t of tree?.tables ?? []) out.push(`${ks}.${t.name}`)
+        }
+        return out
+      },
+      levels: [
+        { kind: 'read-only', label: 'Read-only', desc: 'SELECT' },
+        { kind: 'read-write', label: 'Read-Write', desc: 'MODIFY (INSERT/UPDATE/DELETE/TRUNCATE)' },
+        { kind: 'full', label: 'Full', desc: 'ALL PERMISSIONS' },
+      ],
+      actions: [
+        { kind: 'grant', label: 'Grant' },
+        { kind: 'revoke', label: 'Revoke', danger: true },
+      ],
+      build: (kind, scope, extra) => [resourceAccessStatement(extra?.action === 'revoke' ? 'revoke' : 'grant', kind, scope, role)],
       onApply: (stmts) => (pending = [...pending, ...stmts]),
     })
   }

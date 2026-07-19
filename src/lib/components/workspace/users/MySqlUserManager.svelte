@@ -9,9 +9,10 @@
   import * as ipc from '$lib/ipc'
   import { toasts } from '$lib/stores/toast.svelte'
   import { myUserWizard } from '$lib/stores/myuser.svelte'
-  import { grantWizard, STANDARD_LEVELS } from '$lib/stores/grantwizard.svelte'
+  import { grantWizard } from '$lib/stores/grantwizard.svelte'
   import { highlightSql, sqlTokenColor } from '$lib/format/sql'
   import {
+    accessStatement,
     acct,
     alterPassword,
     dbPreset,
@@ -227,14 +228,44 @@
 
   let showMatrix = $state(false)
   function openGrantWizard() {
-    if (!selectedAcct) return
+    if (!selectedAcct || !cid) return
+    const c = cid
+    const u = selUser
+    const h = selHost
     grantWizard.show({
       title: 'Grant access',
-      role: `${selUser}@${selHost}`,
-      scopeLabel: 'Database',
-      scopes: ['* (all databases)', ...databases],
-      levels: STANDARD_LEVELS,
-      build: (kind, db) => [dbPreset(kind as PresetKind, db.startsWith('* ') ? null : db, selUser, selHost)],
+      role: `${u}@${h}`,
+      // Database → Table: pick a database (or *), then the whole database (db.*)
+      // or a specific table (db.table). MySQL/MariaDB have no DENY (Grant/Revoke).
+      scopeLabel: 'Database / table',
+      scopes: [],
+      scope2Label: 'Database',
+      scopes2: ['*', ...databases],
+      scope2Default: [],
+      loadScopes: async (dbs) => {
+        const out: string[] = []
+        for (const db of dbs) {
+          if (db === '*') {
+            out.push('*') // ON *.* (all databases)
+            continue
+          }
+          out.push(`${db}.*`) // whole database (db.*)
+          const tbls = await ipc.listTables(c, db).catch(() => [])
+          for (const t of tbls) out.push(`${db}.${t.name}`)
+        }
+        return out
+      },
+      levels: [
+        { kind: 'read-only', label: 'Read-only', desc: 'SELECT' },
+        { kind: 'read-write', label: 'Read-Write', desc: 'SELECT + INSERT / UPDATE / DELETE' },
+        { kind: 'read-write-execute', label: 'Read-Write + Execute', desc: 'Read-Write + EXECUTE' },
+        { kind: 'full', label: 'Full', desc: 'ALL PRIVILEGES' },
+      ],
+      actions: [
+        { kind: 'grant', label: 'Grant' },
+        { kind: 'revoke', label: 'Revoke', danger: true },
+      ],
+      build: (kind, scope, extra) => [accessStatement(extra?.action === 'revoke' ? 'revoke' : 'grant', kind, scope, u, h)],
       onApply: (stmts) => (pending = [...pending, ...stmts]),
     })
   }

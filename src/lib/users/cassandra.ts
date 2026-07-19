@@ -124,3 +124,25 @@ export function keyspacePreset(kind: PresetKind, keyspace: string, role: string)
       return revokePermission('ALL PERMISSIONS', r, role)
   }
 }
+
+// ---- Grant wizard: access level × action on a typed resource ----------------
+// MODIFY = INSERT + UPDATE + DELETE + TRUNCATE. A scope string is "*" (all
+// keyspaces), "ks" (a keyspace), or "ks.table" (a table).
+export const CASS_LEVEL_PERM: Record<string, Permission> = {
+  'read-only': 'SELECT',
+  'read-write': 'MODIFY',
+  full: 'ALL PERMISSIONS',
+}
+/** Parse a wizard scope string into a typed resource. */
+export function parseResource(scope: string): Resource {
+  if (scope === '*') return { kind: 'all-keyspaces' }
+  const i = scope.indexOf('.')
+  if (i < 0) return { kind: 'keyspace', keyspace: scope }
+  return { kind: 'table', keyspace: scope.slice(0, i), table: scope.slice(i + 1) }
+}
+/** One GRANT/REVOKE CQL for a level's permission on a resource. */
+export function resourceAccessStatement(action: 'grant' | 'revoke', level: string, scope: string, role: string): string {
+  const perm = CASS_LEVEL_PERM[level] ?? 'SELECT'
+  const r = parseResource(scope)
+  return action === 'revoke' ? revokePermission(perm, r, role) : grantPermission(perm, r, role)
+}

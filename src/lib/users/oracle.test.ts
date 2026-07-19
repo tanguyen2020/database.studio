@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
+  objectAccessStatement,
+  parseOwnerObject,
   alterPassword,
   createRole,
   createUser,
@@ -72,5 +74,18 @@ describe('oracle user builders', () => {
       `REVOKE ALL ON HR.EMP FROM APP`,
       `REVOKE EXECUTE ON HR.CALC FROM APP`,
     ])
+  })
+
+  it('grant wizard — parseOwnerObject + objectAccessStatement (Grant/Revoke × level)', () => {
+    expect(parseOwnerObject('HR.EMP')).toEqual({ owner: 'HR', object: 'EMP' })
+    expect(parseOwnerObject('HR')).toEqual({ owner: 'HR', object: '' })
+    expect(objectAccessStatement('grant', 'read-only', 'hr', 'emp', 'app')).toBe(`GRANT SELECT ON HR.EMP TO APP`)
+    expect(objectAccessStatement('grant', 'read-write', 'hr', 'emp', 'app')).toBe(
+      `GRANT SELECT, INSERT, UPDATE, DELETE ON HR.EMP TO APP`,
+    )
+    expect(objectAccessStatement('grant', 'full', 'hr', 'emp', 'app')).toBe(
+      `GRANT SELECT, INSERT, UPDATE, DELETE, ALTER, INDEX, REFERENCES ON HR.EMP TO APP`,
+    )
+    expect(objectAccessStatement('revoke', 'read-only', 'hr', 'emp', 'app')).toBe(`REVOKE SELECT ON HR.EMP FROM APP`)
   })
 })

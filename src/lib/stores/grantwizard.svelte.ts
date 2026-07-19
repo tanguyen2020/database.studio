@@ -27,6 +27,19 @@ export interface GrantGroup {
   statements: string[]
 }
 
+/** GRANT / DENY / REVOKE — engines that support DENY (MSSQL) offer all three;
+ *  most offer grant + revoke. */
+export type GrantActionKind = 'grant' | 'deny' | 'revoke'
+export interface GrantAction {
+  kind: GrantActionKind
+  label: string
+  danger?: boolean
+}
+/** Extra context passed to build(): the chosen action (Grant/Deny/Revoke). */
+export interface BuildExtra {
+  action?: GrantActionKind
+}
+
 class GrantWizardStore {
   open = $state(false)
   title = $state('Grant access')
@@ -34,8 +47,12 @@ class GrantWizardStore {
   scopeLabel = $state('Scope')
   scopes = $state<string[]>([])
   levels = $state<GrantLevel[]>(STANDARD_LEVELS)
-  build = $state<(kind: string, scope: string) => string[]>(() => [])
+  build = $state<(kind: string, scope: string, extra?: BuildExtra) => string[]>(() => [])
   onApply = $state<(statements: string[]) => void>(() => {})
+
+  // Optional GRANT/DENY/REVOKE selector. When set (>1), the dialog shows a
+  // segmented control and passes the chosen action to build() via extra.action.
+  actions = $state<GrantAction[]>([])
 
   // Optional outer scope dimension (PostgreSQL: databases). When set, the dialog
   // shows a second multi-select and hands the manager grouped statements (one
@@ -65,8 +82,9 @@ class GrantWizardStore {
     scopeLabel: string
     scopes: string[]
     levels?: GrantLevel[]
-    build: (kind: string, scope: string) => string[]
+    build: (kind: string, scope: string, extra?: BuildExtra) => string[]
     onApply: (statements: string[]) => void
+    actions?: GrantAction[]
     scope2Label?: string
     scopes2?: string[]
     scope2Default?: string[]
@@ -80,6 +98,7 @@ class GrantWizardStore {
     this.levels = opts.levels ?? STANDARD_LEVELS
     this.build = opts.build
     this.onApply = opts.onApply
+    this.actions = opts.actions ?? []
     this.scope2Label = opts.scope2Label ?? null
     this.scopes2 = opts.scopes2 ?? []
     this.scope2Default = opts.scope2Default ?? []

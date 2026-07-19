@@ -176,13 +176,16 @@ test('user manager: Cassandra roles + keyspace permission preset', async ({ page
   await expect(page.getByText(/keyspace app_keyspace/).first()).toBeVisible()
   await page.getByRole('tab', { name: 'Permissions' }).click()
   await page.waitForTimeout(200)
-  // guided grant: pick a keyspace + Read-Write → GRANT MODIFY
+  // guided grant: pick keyspace (resource type) → a TABLE resource + Read-Write
   await page.getByRole('button', { name: '＋ Grant access…' }).click()
   await page.waitForTimeout(300)
-  await page.getByRole('dialog').getByText('public', { exact: true }).click()
-  await page.getByText('Read-Write', { exact: true }).first().click()
+  const cDlg = page.getByRole('dialog')
+  await cDlg.locator('label').filter({ hasText: 'public' }).first().click() // keyspace → loads its tables
+  await page.waitForTimeout(400)
+  await cDlg.getByText('public.students_by_id', { exact: true }).click() // TABLE resource
+  await cDlg.getByText('Read-Write', { exact: true }).first().click()
   await page.waitForTimeout(200)
-  await expect(page.getByText(/GRANT MODIFY ON KEYSPACE .* TO app_role/).first()).toBeVisible()
+  await expect(page.getByText(/GRANT MODIFY ON TABLE public\.students_by_id TO app_role/).first()).toBeVisible()
 
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
@@ -220,6 +223,19 @@ test('user manager: Oracle users + system privs + object preset', async ({ page 
   await page.waitForTimeout(200)
   await expect(page.getByText(/GRANT CREATE TABLE TO APP_USER/).first()).toBeVisible()
 
+  // Object Privileges: unified Grant access wizard (Schema owner → object → level)
+  await page.getByRole('tab', { name: 'Object Privileges' }).click()
+  await page.waitForTimeout(150)
+  await page.getByRole('button', { name: '＋ Grant access…' }).click()
+  await page.waitForTimeout(300)
+  const oraDlg = page.getByRole('dialog')
+  await oraDlg.locator('label').filter({ hasText: 'APP_USER' }).first().click() // pick owner schema
+  await page.waitForTimeout(400) // objects load
+  await oraDlg.getByText('APP_USER.students', { exact: true }).click()
+  await oraDlg.getByText('Read-only', { exact: true }).first().click()
+  await page.waitForTimeout(200)
+  await expect(page.getByText(/GRANT SELECT ON APP_USER\.STUDENTS TO APP_USER/).first()).toBeVisible()
+
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
 
@@ -250,6 +266,12 @@ test('user manager: MongoDB users + role toggle + Add User popup', async ({ page
   await expect(page.getByText('readWrite', { exact: true }).first()).toBeVisible()
   await expect(page.getByText(/read \+ write all non-system collections/).first()).toBeVisible()
   await page.getByRole('tab', { name: 'Roles per Database' }).click()
+  await page.waitForTimeout(150)
+  // Quick grant: friendly access level → built-in role, applied to many databases
+  await expect(page.getByText('＋ Grant access', { exact: true }).first()).toBeVisible()
+  await page.getByRole('button', { name: 'Read-Write', exact: true }).click()
+  await page.waitForTimeout(100)
+  await expect(page.getByText(/Grant readWrite on/).first()).toBeVisible()
 
   // Add User → popup (not a tab)
   const tabsBefore = await page.getByRole('tab').count()
@@ -299,8 +321,12 @@ test('user manager: ClickHouse users + grant grid preset', async ({ page }) => {
   await page.waitForTimeout(200)
   await page.getByRole('button', { name: '＋ Grant access…' }).click()
   await page.waitForTimeout(300)
-  await page.getByRole('dialog').getByText('public', { exact: true }).click()
-  await page.getByText('Read-only', { exact: true }).first().click()
+  // Database → Table: pick database "public", then whole database (public.*), Read-only
+  const chGrant = page.getByRole('dialog')
+  await chGrant.locator('label').filter({ hasText: 'public' }).first().click()
+  await page.waitForTimeout(400)
+  await chGrant.getByText('public.*', { exact: true }).click()
+  await chGrant.getByText('Read-only', { exact: true }).first().click()
   await page.waitForTimeout(200)
   await expect(page.getByText(/GRANT SELECT ON `public`\.\* TO `app`/).first()).toBeVisible()
 
@@ -342,21 +368,24 @@ test('user manager: MSSQL server logins + database permission grid', async ({ pa
   await expect(page.getByRole('option', { name: /app_user/ }).first()).toBeVisible()
   await page.getByRole('option', { name: /app_user/ }).first().click()
   await page.waitForTimeout(150)
-  // guided grant: pick a schema + Read-only
+  // guided grant: Grant action + whole schema (public.*) + Read-only
   await page.getByRole('button', { name: '＋ Grant access…' }).click()
-  await page.waitForTimeout(300)
-  await page.getByRole('dialog').getByText('public', { exact: true }).click()
+  await page.waitForTimeout(500) // objects load per schema
+  await page.getByRole('dialog').getByText('public.*', { exact: true }).click()
   await page.getByText('Read-only', { exact: true }).first().click()
   await page.waitForTimeout(200)
   await expect(page.getByText(/GRANT SELECT ON SCHEMA::\[public\] TO \[app_user\]/).first()).toBeVisible()
+  // DENY is now a first-class action (no longer hidden in a right-click)
+  await page.getByRole('dialog').getByRole('button', { name: 'Deny', exact: true }).click()
+  await page.waitForTimeout(200)
+  await expect(page.getByText(/DENY SELECT ON SCHEMA::\[public\] TO \[app_user\]/).first()).toBeVisible()
+  // object-level: pick a specific object → grant on OBJECT, not schema
+  await page.getByRole('dialog').getByRole('button', { name: 'Grant', exact: true }).click()
+  await page.getByRole('dialog').getByText('public.students', { exact: true }).click()
+  await page.waitForTimeout(200)
+  await expect(page.getByText(/GRANT SELECT ON \[public\]\.\[students\] TO \[app_user\]/).first()).toBeVisible()
   await page.getByRole('button', { name: 'Add to pending' }).click()
   await page.waitForTimeout(150)
-  // DENY (overrides GRANT) — right-click a cell in the Advanced matrix
-  await page.getByText(/Advanced — permission matrix/).first().click()
-  await page.waitForTimeout(200)
-  await page.getByTitle(/ALTER — click: grant/).first().click({ button: 'right' })
-  await page.waitForTimeout(200)
-  await expect(page.getByText(/DENY ALTER ON SCHEMA::\[public\] TO \[app_user\]/).first()).toBeVisible()
 
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
@@ -391,11 +420,18 @@ test('user manager: MySQL account list + preset + Add Account popup', async ({ p
   await page.waitForTimeout(200)
   await page.getByRole('button', { name: '＋ Grant access…' }).click()
   await page.waitForTimeout(300)
-  // pick database "public" in the scope dropdown, then Read-only
-  await page.getByRole('dialog').getByText('public', { exact: true }).click()
-  await page.getByText('Read-only', { exact: true }).first().click()
+  // Database → Table: pick database "public", then whole database (public.*), Read-only
+  const myGrant = page.getByRole('dialog')
+  await myGrant.locator('label').filter({ hasText: 'public' }).first().click()
+  await page.waitForTimeout(400)
+  await myGrant.getByText('public.*', { exact: true }).click()
+  await myGrant.getByText('Read-only', { exact: true }).first().click()
   await page.waitForTimeout(200)
   await expect(page.getByText(/GRANT SELECT ON `public`\.\* TO 'app'@'%'/).first()).toBeVisible()
+  // table-level: a specific table → ON `public`.`students`
+  await myGrant.getByText('public.students', { exact: true }).click()
+  await page.waitForTimeout(150)
+  await expect(page.getByText(/GRANT SELECT ON `public`\.`students` TO 'app'@'%'/).first()).toBeVisible()
   await page.getByRole('button', { name: 'Add to pending' }).click() // close wizard
   await page.waitForTimeout(200)
 

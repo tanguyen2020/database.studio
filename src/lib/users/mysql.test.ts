@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
+  accessStatement,
+  parseGrantLevel,
   acct,
   alterPassword,
   createRole,
@@ -103,5 +105,18 @@ describe('mysql/mariadb user builders', () => {
     // MariaDB uses FOR and has no ALL form (falls back to NONE)
     expect(setDefaultRole('mariadb', 'reader', 'app', '%')).toBe(`SET DEFAULT ROLE 'reader' FOR 'app'@'%'`)
     expect(setDefaultRole('mariadb', 'ALL', 'app', '%')).toBe(`SET DEFAULT ROLE NONE FOR 'app'@'%'`)
+  })
+
+  it('grant wizard — parseGrantLevel + accessStatement (Grant/Revoke, global/db/table)', () => {
+    expect(parseGrantLevel('*')).toEqual({ kind: 'global' })
+    expect(parseGrantLevel('app')).toEqual({ kind: 'schema', db: 'app' })
+    expect(parseGrantLevel('app.*')).toEqual({ kind: 'schema', db: 'app' }) // db.* = whole database
+    expect(parseGrantLevel('app.orders')).toEqual({ kind: 'table', db: 'app', table: 'orders' })
+    expect(accessStatement('grant', 'read-only', 'app.*', 'u', '%')).toBe("GRANT SELECT ON `app`.* TO 'u'@'%'")
+    expect(accessStatement('grant', 'read-only', 'app.orders', 'u', '%')).toBe("GRANT SELECT ON `app`.`orders` TO 'u'@'%'")
+    expect(accessStatement('grant', 'full', '*', 'u', '%')).toBe("GRANT ALL PRIVILEGES ON *.* TO 'u'@'%'")
+    expect(accessStatement('revoke', 'read-write', 'app.*', 'u', '%')).toBe(
+      "REVOKE SELECT, INSERT, UPDATE, DELETE ON `app`.* FROM 'u'@'%'",
+    )
   })
 })

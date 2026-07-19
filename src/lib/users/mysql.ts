@@ -150,6 +150,27 @@ export type PresetKind = 'read-only' | 'read-write' | 'read-write-execute' | 'fu
 
 /** Preset for a database scope (or global when db is null). Returns one GRANT/
  *  REVOKE statement — MySQL grants the whole scope in a single statement. */
+// ---- Grant wizard: access level × action (GRANT / REVOKE), db or table -------
+// A scope string is "*" (all databases), "db" (a database) or "db.table".
+export const MY_LEVEL_PRIVS: Record<string, string[] | 'ALL'> = {
+  'read-only': ['SELECT'],
+  'read-write': ['SELECT', 'INSERT', 'UPDATE', 'DELETE'],
+  'read-write-execute': ['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'EXECUTE'],
+  full: 'ALL',
+}
+export function parseGrantLevel(scope: string): GrantLevel {
+  if (scope === '*') return { kind: 'global' }
+  if (scope.endsWith('.*')) return { kind: 'schema', db: scope.slice(0, -2) } // db.* = whole database
+  const i = scope.indexOf('.')
+  if (i < 0) return { kind: 'schema', db: scope }
+  return { kind: 'table', db: scope.slice(0, i), table: scope.slice(i + 1) }
+}
+export function accessStatement(action: 'grant' | 'revoke', level: string, scope: string, user: string, host: string): string {
+  const privs = MY_LEVEL_PRIVS[level] ?? ['SELECT']
+  const l = parseGrantLevel(scope)
+  return action === 'revoke' ? revoke(privs, l, user, host) : grant(privs, l, user, host)
+}
+
 export function dbPreset(kind: PresetKind, db: string | null, user: string, host: string): string {
   const level: GrantLevel = db == null ? { kind: 'global' } : { kind: 'schema', db }
   switch (kind) {

@@ -94,6 +94,36 @@
     return [...map].map(([db, roles]) => ({ db, roles })).sort((a, b) => a.db.localeCompare(b.db))
   })
 
+  // ---- Quick grant (friendly access levels → built-in roles, many databases) --
+  // MongoDB grants ROLES (not privileges); map a familiar access level to the
+  // matching built-in role and apply it across the selected databases at once.
+  const QG_LEVELS = [
+    { kind: 'read', label: 'Read-only', desc: 'read' },
+    { kind: 'readWrite', label: 'Read-Write', desc: 'readWrite' },
+    { kind: 'dbOwner', label: 'Admin', desc: 'dbOwner (full control of the database)' },
+  ]
+  let qgLevel = $state('read')
+  let qgDbs = $state<Set<string>>(new Set())
+  function toggleQgDb(db: string) {
+    const next = new Set(qgDbs)
+    next.has(db) ? next.delete(db) : next.add(db)
+    qgDbs = next
+  }
+  async function quickGrant() {
+    if (!cid || !selectedUser || busy || !qgDbs.size) return
+    busy = true
+    try {
+      for (const db of qgDbs) await ipc.mongoGrantRoles(cid, selDb, selName, [{ role: qgLevel, db }])
+      toasts.success(`Granted ${qgLevel} on ${qgDbs.size} database(s)`, 'mongodb')
+      qgDbs = new Set()
+      await load()
+    } catch (e) {
+      toasts.error(String(e))
+    } finally {
+      busy = false
+    }
+  }
+
   async function toggleRole(role: string, db: string, on: boolean) {
     if (!cid || !selectedUser || busy) return
     busy = true
@@ -173,6 +203,32 @@
         </div>
         <div style="flex:1;overflow:auto;min-height:0;padding:var(--px-14)">
           {#if detailTab === 'roles'}
+            <!-- Quick grant: friendly access level → built-in role, many databases -->
+            <div style="border:var(--px-1) solid var(--border2);border-radius:var(--px-8);padding:var(--px-10);margin-bottom:var(--px-12)">
+              <div style="font-size:var(--px-12);color:var(--text);font-weight:700;margin-bottom:var(--px-6)">＋ Grant access</div>
+              <div style="display:flex;flex-direction:column;gap:var(--px-6)">
+                <div style="display:flex;gap:var(--px-6);flex-wrap:wrap;align-items:center">
+                  <span style="font-size:var(--px-11);color:var(--muted);width:var(--px-70)">Access level</span>
+                  <div style="display:inline-flex;border:var(--px-1) solid var(--border2);border-radius:var(--px-7);overflow:hidden">
+                    {#each QG_LEVELS as lv (lv.kind)}
+                      <span onclick={() => (qgLevel = lv.kind)} onkeydown={(e) => e.key === 'Enter' && (qgLevel = lv.kind)} role="button" tabindex="0" title={lv.desc} style="font-size:var(--px-12);padding:var(--px-4) var(--px-12);cursor:pointer;font-weight:600;background:{qgLevel === lv.kind ? 'var(--primary)' : 'transparent'};color:{qgLevel === lv.kind ? 'var(--hex-fff)' : 'var(--text2)'}">{lv.label}</span>
+                    {/each}
+                  </div>
+                  <span style="font-size:var(--px-10_5);color:var(--muted)">→ role <span class="mono">{qgLevel}</span></span>
+                </div>
+                <div style="display:flex;gap:var(--px-6);flex-wrap:wrap;align-items:flex-start">
+                  <span style="font-size:var(--px-11);color:var(--muted);width:var(--px-70);margin-top:var(--px-3)">Databases</span>
+                  <div style="display:flex;gap:var(--px-4) var(--px-12);flex-wrap:wrap;flex:1">
+                    {#each databases as d (d)}
+                      <label style="font-size:var(--px-12);color:var(--text);display:flex;align-items:center;gap:var(--px-4);cursor:pointer"><input type="checkbox" checked={qgDbs.has(d)} onchange={() => toggleQgDb(d)} /> {d}</label>
+                    {/each}
+                  </div>
+                </div>
+                <div style="display:flex;justify-content:flex-end">
+                  <span onclick={quickGrant} onkeydown={(e) => e.key === 'Enter' && quickGrant()} role="button" tabindex="0" aria-disabled={!qgDbs.size || busy} style="font-size:var(--px-12);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-7);padding:var(--px-5) var(--px-14);cursor:{qgDbs.size && !busy ? 'pointer' : 'not-allowed'};opacity:{qgDbs.size && !busy ? 1 : 0.5};font-weight:600">Grant {qgLevel} on {qgDbs.size} db</span>
+                </div>
+              </div>
+            </div>
             <div style="font-size:var(--px-12);color:var(--text2);font-weight:600;margin-bottom:var(--px-6)">Current roles</div>
             {#if selRoles.length}
               <div style="display:flex;flex-wrap:wrap;gap:var(--px-6);margin-bottom:var(--px-12)">

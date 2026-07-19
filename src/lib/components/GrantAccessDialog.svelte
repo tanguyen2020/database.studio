@@ -19,8 +19,11 @@
   let filter = $state('')
   // Optional outer scope (PostgreSQL databases) — a second checkbox set.
   let selected2 = $state<Set<string>>(new Set())
+  // Optional GRANT/DENY/REVOKE action (MSSQL).
+  let action = $state<'grant' | 'deny' | 'revoke'>('grant')
 
   const hasScope2 = $derived(grantWizard.scope2Label != null && grantWizard.scopes2.length > 0)
+  const hasActions = $derived(grantWizard.actions.length > 1)
 
   // Inner scopes (schemas). When the engine provides loadScopes, the list is
   // loaded from the selected databases; otherwise it's the static scopes.
@@ -36,6 +39,7 @@
       filter = ''
       selected2 = new Set(grantWizard.scope2Default)
       dynamicScopes = grantWizard.loadScopes ? [] : null
+      action = (grantWizard.actions[0]?.kind as typeof action) ?? 'grant'
     }
     wasOpen = dlgOpen
   })
@@ -84,7 +88,7 @@
     for (const s of effectiveScopes) {
       if (selected.has(s)) {
         try {
-          out.push(...grantWizard.build(level, s))
+          out.push(...grantWizard.build(level, s, { action }))
         } catch {
           /* skip a scope that fails to build */
         }
@@ -141,6 +145,18 @@
           <span style="font-size:var(--px-11);color:var(--muted);width:var(--px-70)">1 · Role</span>
           <span class="mono" style="font-size:var(--px-13);font-weight:600;color:var(--text);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-3) var(--px-10)">{grantWizard.role}</span>
         </div>
+        {#if hasActions}
+          <!-- GRANT / DENY / REVOKE action (MSSQL) -->
+          <div style="display:flex;align-items:center;gap:var(--px-8)">
+            <span style="font-size:var(--px-11);color:var(--muted);width:var(--px-70)">Action</span>
+            <div style="display:inline-flex;border:var(--px-1) solid var(--border2);border-radius:var(--px-7);overflow:hidden">
+              {#each grantWizard.actions as a (a.kind)}
+                <span onclick={() => (action = a.kind)} onkeydown={(e) => e.key === 'Enter' && (action = a.kind)} role="button" tabindex="0" style="font-size:var(--px-12);padding:var(--px-4) var(--px-14);cursor:pointer;font-weight:600;background:{action === a.kind ? (a.danger ? 'var(--error)' : 'var(--primary)') : 'transparent'};color:{action === a.kind ? 'var(--hex-fff)' : a.danger ? 'var(--error)' : 'var(--text2)'}">{a.label}</span>
+              {/each}
+            </div>
+            {#if action === 'deny'}<span style="font-size:var(--px-10_5);color:var(--warn2)">DENY overrides GRANT (and role membership).</span>{/if}
+          </div>
+        {/if}
         {#if hasScope2}
           <!-- outer scope (databases) — apply to each selected one -->
           <div style="display:flex;flex-direction:column;gap:var(--px-6)">
