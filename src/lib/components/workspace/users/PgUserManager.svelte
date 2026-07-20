@@ -12,6 +12,7 @@
   import { highlightSql, sqlTokenColor } from '$lib/format/sql'
   import {
     alterPassword,
+    alterRoleOptions,
     dropRole,
     grantColumn,
     grantMembership,
@@ -20,6 +21,7 @@
     revokeMembership,
     schemaPreset,
     type PresetKind,
+    type RoleOptions,
   } from '$lib/users/postgres'
   import PrivilegeGrid from './PrivilegeGrid.svelte'
   import type { TabState } from '$lib/types'
@@ -59,7 +61,7 @@
   // Read from each database's own grant catalog via a sub-connection.
   type TablePriv = { priv: string; n: number }
   type SchemaAccess = { schema: string; schemaPrivs: string[]; tablePrivs: TablePriv[]; seqPrivs: string[]; inherited: boolean }
-  type DbAccess = { db: string; current: boolean; error: string | null; schemas: SchemaAccess[] }
+  type DbAccess = { db: string; current: boolean; error: string | null; schemas: SchemaAccess[]; loading?: boolean }
   let access = $state<DbAccess[]>([])
   let accessLoading = $state(false)
 
@@ -303,6 +305,34 @@
     newPassword = ''
   }
 
+  // Editable role attributes: toggling one queues an ALTER ROLE. Optimistically
+  // reflect the new value on the selected row so the checkbox flips immediately.
+  const ATTRS: { field: keyof RoleOptions; col: string; label: string }[] = [
+    { field: 'login', col: 'rolcanlogin', label: 'Can login' },
+    { field: 'superuser', col: 'rolsuper', label: 'Superuser' },
+    { field: 'createrole', col: 'rolcreaterole', label: 'Create roles' },
+    { field: 'createdb', col: 'rolcreatedb', label: 'Create databases' },
+    { field: 'inherit', col: 'rolinherit', label: 'Inherit' },
+    { field: 'replication', col: 'rolreplication', label: 'Replication' },
+    { field: 'bypassrls', col: 'rolbypassrls', label: 'Bypass RLS' },
+  ]
+  function queueAttr(field: keyof RoleOptions, col: string, next: boolean) {
+    if (!selected) return
+    const sql = alterRoleOptions(selected, { [field]: next } as RoleOptions)
+    if (!sql) return
+    pending = [...pending, { sql }]
+    // optimistic: reflect on the row so the toggle stays in sync until reload
+    const r = roles.find((x) => String(x.name) === selected)
+    if (r) r[col] = next
+  }
+  let newConnLimit = $state<number | null>(null)
+  function queueConnLimit() {
+    if (!selected || newConnLimit == null) return
+    const sql = alterRoleOptions(selected, { connectionLimit: newConnLimit })
+    if (sql) pending = [...pending, { sql }]
+    newConnLimit = null
+  }
+
   // ---- Membership -----------------------------------------------------------
   let grantRoleName = $state('')
   let grantAdmin = $state(false)
@@ -371,6 +401,55 @@
     untrack(() => void loadAccess())
   })
 
+  // Read one database's grants for the selected principal (+ inherited roles).
+  async function loadAccessOne(db: string, principals: Set<string>): Promise<DbAccess> {
+    const current = db === currentDb
+    try {
+      const sub = await ipc.attachDatabase(cid!, db)
+      const [sg, tg] = await Promise.all([
+        ipc.usersView(sub, 'schema_grants').catch(() => ({ rows: [] as Row[] })),
+        ipc.usersView(sub, 'table_grants').catch(() => ({ rows: [] as Row[] })),
+      ])
+      const bySchema = new Map<string, SchemaAccess>()
+      const ensure = (s: string) => {
+        let e = bySchema.get(s)
+        if (!e) { e = { schema: s, schemaPrivs: [], tablePrivs: [], seqPrivs: [], inherited: false }; bySchema.set(s, e) }
+        return e
+      }
+      for (const g of sg.rows) {
+        if (!principals.has(String(g.grantee))) continue
+        const e = ensure(String(g.schema))
+        const p = String(g.privilege_type)
+        if (!e.schemaPrivs.includes(p)) e.schemaPrivs.push(p)
+        if (String(g.grantee) !== selected) e.inherited = true
+      }
+      const tblCount = new Map<string, Map<string, number>>()
+      const seqSet = new Map<string, Set<string>>()
+      for (const g of tg.rows) {
+        if (!principals.has(String(g.grantee))) continue
+        const s = String(g.schema)
+        const p = String(g.privilege_type)
+        const e = ensure(s)
+        if (String(g.grantee) !== selected) e.inherited = true
+        if (String(g.kind) === 'S') {
+          if (!seqSet.has(s)) seqSet.set(s, new Set())
+          seqSet.get(s)!.add(p)
+        } else {
+          if (!tblCount.has(s)) tblCount.set(s, new Map())
+          const m = tblCount.get(s)!
+          m.set(p, (m.get(p) ?? 0) + 1)
+        }
+      }
+      for (const [s, m] of tblCount) ensure(s).tablePrivs = [...m].map(([priv, n]) => ({ priv, n }))
+      for (const [s, set] of seqSet) ensure(s).seqPrivs = [...set]
+      return { db, current, error: null, schemas: [...bySchema.values()].sort((a, b) => a.schema.localeCompare(b.schema)) }
+    } catch (e) {
+      return { db, current, error: String(e), schemas: [] }
+    }
+  }
+
+  // Load across databases with bounded concurrency + progressive rendering, so
+  // a server with many databases fills in fast instead of one-at-a-time.
   async function loadAccess() {
     if (!cid || !selected || !databases.length) {
       access = []
@@ -378,54 +457,21 @@
     }
     accessLoading = true
     const principals = new Set<string>([selected, ...rolesOf(selected)])
-    const out: DbAccess[] = []
-    try {
-      for (const db of databases) {
-        const current = db === currentDb
-        try {
-          const sub = await ipc.attachDatabase(cid, db)
-          const [sg, tg] = await Promise.all([
-            ipc.usersView(sub, 'schema_grants').catch(() => ({ rows: [] as Row[] })),
-            ipc.usersView(sub, 'table_grants').catch(() => ({ rows: [] as Row[] })),
-          ])
-          const bySchema = new Map<string, SchemaAccess>()
-          const ensure = (s: string) => {
-            let e = bySchema.get(s)
-            if (!e) { e = { schema: s, schemaPrivs: [], tablePrivs: [], seqPrivs: [], inherited: false }; bySchema.set(s, e) }
-            return e
-          }
-          for (const g of sg.rows) {
-            if (!principals.has(String(g.grantee))) continue
-            const e = ensure(String(g.schema))
-            const p = String(g.privilege_type)
-            if (!e.schemaPrivs.includes(p)) e.schemaPrivs.push(p)
-            if (String(g.grantee) !== selected) e.inherited = true
-          }
-          const tblCount = new Map<string, Map<string, number>>()
-          const seqSet = new Map<string, Set<string>>()
-          for (const g of tg.rows) {
-            if (!principals.has(String(g.grantee))) continue
-            const s = String(g.schema)
-            const p = String(g.privilege_type)
-            const e = ensure(s)
-            if (String(g.grantee) !== selected) e.inherited = true
-            if (String(g.kind) === 'S') {
-              if (!seqSet.has(s)) seqSet.set(s, new Set())
-              seqSet.get(s)!.add(p)
-            } else {
-              if (!tblCount.has(s)) tblCount.set(s, new Map())
-              const m = tblCount.get(s)!
-              m.set(p, (m.get(p) ?? 0) + 1)
-            }
-          }
-          for (const [s, m] of tblCount) ensure(s).tablePrivs = [...m].map(([priv, n]) => ({ priv, n }))
-          for (const [s, set] of seqSet) ensure(s).seqPrivs = [...set]
-          out.push({ db, current, error: null, schemas: [...bySchema.values()].sort((a, b) => a.schema.localeCompare(b.schema)) })
-        } catch (e) {
-          out.push({ db, current, error: String(e), schemas: [] })
-        }
+    // current database first, then the rest alphabetically
+    const order = [...databases].sort((a, b) => (a === currentDb ? -1 : b === currentDb ? 1 : a.localeCompare(b)))
+    // seed placeholders (each shows "loading" until its result arrives)
+    access = order.map((db) => ({ db, current: db === currentDb, error: null, schemas: [], loading: true }))
+    let next = 0
+    const CONCURRENCY = 6
+    const worker = async () => {
+      while (next < order.length) {
+        const idx = next++
+        const res = await loadAccessOne(order[idx], principals)
+        access = access.map((a, j) => (j === idx ? res : a)) // progressive update
       }
-      access = out
+    }
+    try {
+      await Promise.all(Array.from({ length: Math.min(CONCURRENCY, order.length) }, worker))
     } finally {
       accessLoading = false
     }
@@ -472,16 +518,22 @@
         </div>
         <div style="flex:1;overflow:auto;min-height:0;padding:var(--px-14)">
           {#if detailTab === 'general'}
-            <table class="mono" style="border-collapse:collapse;font-size:var(--px-12);margin-bottom:var(--px-14)">
-              <tbody>
-                {#each [['Can login', boolY(selectedRole.rolcanlogin)], ['Superuser', boolY(selectedRole.rolsuper)], ['Create roles', boolY(selectedRole.rolcreaterole)], ['Create databases', boolY(selectedRole.rolcreatedb)], ['Inherit', boolY(selectedRole.rolinherit)], ['Replication', boolY(selectedRole.rolreplication)], ['Bypass RLS', boolY(selectedRole.rolbypassrls)], ['Connection limit', selectedRole.rolconnlimit], ['Valid until', selectedRole.valid_until || '—']] as [label, val] (label)}
-                  <tr>
-                    <td style="padding:var(--px-3) var(--px-14) var(--px-3) 0;color:var(--text2);white-space:nowrap">{label}</td>
-                    <td style="padding:var(--px-3) 0;color:var(--text)">{typeof val === 'boolean' ? (val ? '✓' : '—') : val}</td>
-                  </tr>
-                {/each}
-              </tbody>
-            </table>
+            <!-- editable attributes: toggling queues ALTER ROLE (§ pgAdmin-style) -->
+            <div style="font-size:var(--px-11);color:var(--muted);margin-bottom:var(--px-6)">Role attributes — toggle to queue ALTER ROLE.</div>
+            <div style="display:flex;flex-direction:column;gap:var(--px-4);margin-bottom:var(--px-12)">
+              {#each ATTRS as a (a.field)}
+                <label style="font-size:var(--px-12_5);color:var(--text);display:flex;align-items:center;gap:var(--px-7);cursor:pointer">
+                  <input type="checkbox" disabled={!canManage} checked={boolY(selectedRole[a.col])} onchange={(e) => queueAttr(a.field, a.col, (e.currentTarget as HTMLInputElement).checked)} /> {a.label}
+                </label>
+              {/each}
+            </div>
+            <div style="display:flex;gap:var(--px-8);align-items:flex-end;margin-bottom:var(--px-12);flex-wrap:wrap">
+              <label style="font-size:var(--px-12);color:var(--text2)">Connection limit
+                <input type="number" bind:value={newConnLimit} placeholder={String(selectedRole.rolconnlimit ?? -1)} class="mono" style="display:block;margin-top:var(--px-4);width:var(--px-110);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-8);color:var(--text)" />
+              </label>
+              <span onclick={queueConnLimit} onkeydown={(e) => e.key === 'Enter' && queueConnLimit()} role="button" tabindex="0" aria-disabled={newConnLimit == null} style="font-size:var(--px-11_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-10);cursor:{newConnLimit == null ? 'not-allowed' : 'pointer'};opacity:{newConnLimit == null ? 0.5 : 1}">Queue limit</span>
+              <span style="font-size:var(--px-11);color:var(--muted)">Valid until: {selectedRole.valid_until || '—'}</span>
+            </div>
             <div style="display:flex;gap:var(--px-6);align-items:flex-end;margin-bottom:var(--px-12)">
               <label style="font-size:var(--px-12);color:var(--text2)">Change password
                 <input type="password" bind:value={newPassword} class="mono" style="display:block;margin-top:var(--px-4);width:var(--px-220);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-8);color:var(--text)" />
@@ -524,9 +576,14 @@
             {/if}
           {:else if detailTab === 'privileges'}
             <!-- Guided grant (primary path) -->
-            <div style="display:flex;align-items:center;gap:var(--px-10);margin-bottom:var(--px-10);flex-wrap:wrap">
+            <div style="display:flex;align-items:center;gap:var(--px-10);margin-bottom:var(--px-8);flex-wrap:wrap">
               <span onclick={openGrantWizard} onkeydown={(e) => e.key === 'Enter' && openGrantWizard()} role="button" tabindex="0" style="font-size:var(--px-12_5);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-7);padding:var(--px-6) var(--px-14);cursor:pointer;font-weight:600">＋ Grant access…</span>
-              <span style="font-size:var(--px-11);color:var(--muted)">Pick a schema and an access level (Read-only / Read-Write / Full).</span>
+              <span style="font-size:var(--px-11);color:var(--muted)">Pick database(s) → schema(s) → access level.</span>
+            </div>
+            <!-- #3: where the role already has grants, across databases → Access tab -->
+            <div style="font-size:var(--px-11);color:var(--muted);margin-bottom:var(--px-10)">To see which databases / schemas <span class="mono" style="color:var(--text2)">{selected}</span> is already granted on, open
+              <span onclick={() => (detailTab = 'access')} onkeydown={(e) => e.key === 'Enter' && (detailTab = 'access')} role="button" tabindex="0" style="color:var(--primary);cursor:pointer;font-weight:600">the Access tab →</span>
+              The matrix below covers the current database only.
             </div>
             <!-- Advanced: full permission matrix (collapsed) -->
             <div onclick={() => (showMatrix = !showMatrix)} onkeydown={(e) => e.key === 'Enter' && (showMatrix = !showMatrix)} role="button" tabindex="0" style="font-size:var(--px-11_5);color:var(--text2);cursor:pointer;margin-bottom:var(--px-8);user-select:none">{showMatrix ? '▾' : '▸'} Advanced — permission matrix</div>
@@ -566,10 +623,12 @@
                       <span style="color:{d.current ? 'var(--primary)' : 'var(--muted)'};font-size:var(--px-11)">{d.current ? '●' : '○'}</span>
                       <span class="mono" style="font-size:var(--px-12_5);font-weight:700;color:var(--text)">{d.db}</span>
                       {#if d.current}<span style="font-size:var(--px-10);color:var(--muted)">current</span>{/if}
-                      <span style="margin-left:auto;font-size:var(--px-10_5);color:var(--muted)">{d.schemas.length ? `${d.schemas.length} schema(s)` : ''}</span>
+                      <span style="margin-left:auto;font-size:var(--px-10_5);color:var(--muted)">{d.loading ? '…' : d.schemas.length ? `${d.schemas.length} schema(s)` : ''}</span>
                     </div>
                     <div style="padding:var(--px-6) var(--px-10)">
-                      {#if d.error}
+                      {#if d.loading}
+                        <div style="font-size:var(--px-11);color:var(--muted)">Reading…</div>
+                      {:else if d.error}
                         <div style="font-size:var(--px-11);color:var(--error)">Could not read: {d.error}</div>
                       {:else if !d.schemas.length}
                         <div style="font-size:var(--px-11);color:var(--muted)">— no explicit privileges in this database</div>

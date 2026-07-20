@@ -121,7 +121,14 @@
   // Scripts buttons stay disabled until a schema/database is picked in the new tree.
   $effect(() => {
     void selected?.id
-    untrack(() => (treeSel = null))
+    untrack(() => {
+      treeSel = null
+      // Security node cache is keyed by folder (not connection) → drop it and
+      // collapse security folders so the new connection loads fresh roles
+      // (otherwise the tree shows the previous connection's principals).
+      secRows = {}
+      for (const k of [...expanded]) if (k.startsWith('sec:')) expanded.delete(k)
+    })
   })
   // The schema/database node the toolbar's View-ER / Generate-Scripts act on, derived
   // from the current tree selection. Only schema nodes (public/dbo/a database) qualify;
