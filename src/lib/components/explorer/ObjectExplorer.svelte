@@ -1386,6 +1386,36 @@
 
   <!-- tree — dòng 143-152 -->
   <div style="flex:1;overflow:auto;padding:0 var(--px-6) var(--px-10)">
+    <!-- Security (Users & Privileges · §1.2b/§1.2c) — connection-level nodes
+         at the TOP of the tree; native terminology per engine. -->
+    {#if secFolders.length}
+      {#each secFolders as f (f.key)}
+        {#snippet secFolderMenu()}
+          <ContextMenu.Content>
+            {#if f.onNew}<ContextMenu.Item onclick={() => f.onNew?.()}>New…</ContextMenu.Item>{/if}
+            <ContextMenu.Item onclick={() => void loadSec(f)}>Refresh</ContextMenu.Item>
+          </ContextMenu.Content>
+        {/snippet}
+        {@render row({ key: f.key, depth: 0, glyph: '🔐', color: C.folder, name: f.label, meta: secRows[f.key] ? String(secRows[f.key].length) : '', head: true, expandable: true, onClick: () => toggleSec(f) }, secFolderMenu)}
+        {#if expanded.has(f.key)}
+          {#if !secRows[f.key]}
+            {@render row({ key: `${f.key}:loading`, depth: 1, glyph: '', color: C.col, name: 'Loading…' })}
+          {:else if secRows[f.key].length === 0}
+            {@render row({ key: `${f.key}:empty`, depth: 1, glyph: '', color: C.col, name: '(none)' })}
+          {:else}
+            {#each secRows[f.key] as it (it.name)}
+              {#snippet secItemMenu()}
+                <ContextMenu.Content>
+                  <ContextMenu.Item onclick={() => openPrincipal(it.name)}>Properties…</ContextMenu.Item>
+                  <ContextMenu.Item onclick={() => openPrincipal(it.name)}>Change Password / Drop…</ContextMenu.Item>
+                </ContextMenu.Content>
+              {/snippet}
+              {@render row({ key: `${f.key}:${it.name}`, depth: 1, glyph: it.group ? '👥' : '👤', color: C.col, name: it.name, meta: it.badge ?? '', onClick: () => openPrincipal(it.name) }, secItemMenu)}
+            {/each}
+          {/if}
+        {/if}
+      {/each}
+    {/if}
     {#if !selected}
       <div style="padding:var(--px-16) var(--px-12);text-align:center;font-size:var(--px-12);color:var(--muted)">
         Select a connection to view its structure
@@ -2616,37 +2646,6 @@
           {/if}
         {/each}
       {/if}
-    {/if}
-
-    <!-- Security (Users & Privileges · §1.2b/§1.2c) — connection-level nodes
-         appended below the tree; native terminology per engine. -->
-    {#if secFolders.length}
-      {#each secFolders as f (f.key)}
-        {#snippet secFolderMenu()}
-          <ContextMenu.Content>
-            {#if f.onNew}<ContextMenu.Item onclick={() => f.onNew?.()}>New…</ContextMenu.Item>{/if}
-            <ContextMenu.Item onclick={() => void loadSec(f)}>Refresh</ContextMenu.Item>
-          </ContextMenu.Content>
-        {/snippet}
-        {@render row({ key: f.key, depth: 0, glyph: '🔐', color: C.folder, name: f.label, meta: secRows[f.key] ? String(secRows[f.key].length) : '', head: true, expandable: true, onClick: () => toggleSec(f) }, secFolderMenu)}
-        {#if expanded.has(f.key)}
-          {#if !secRows[f.key]}
-            {@render row({ key: `${f.key}:loading`, depth: 1, glyph: '', color: C.col, name: 'Loading…' })}
-          {:else if secRows[f.key].length === 0}
-            {@render row({ key: `${f.key}:empty`, depth: 1, glyph: '', color: C.col, name: '(none)' })}
-          {:else}
-            {#each secRows[f.key] as it (it.name)}
-              {#snippet secItemMenu()}
-                <ContextMenu.Content>
-                  <ContextMenu.Item onclick={() => openPrincipal(it.name)}>Properties…</ContextMenu.Item>
-                  <ContextMenu.Item onclick={() => openPrincipal(it.name)}>Change Password / Drop…</ContextMenu.Item>
-                </ContextMenu.Content>
-              {/snippet}
-              {@render row({ key: `${f.key}:${it.name}`, depth: 1, glyph: it.group ? '👥' : '👤', color: C.col, name: it.name, meta: it.badge ?? '', onClick: () => openPrincipal(it.name) }, secItemMenu)}
-            {/each}
-          {/if}
-        {/if}
-      {/each}
     {/if}
   </div>
 
