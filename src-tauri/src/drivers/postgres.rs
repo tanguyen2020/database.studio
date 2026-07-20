@@ -632,7 +632,15 @@ async fn fetch_all(
     conn: &mut PgConnection,
     sql: &str,
 ) -> Result<Vec<sqlx::postgres::PgRow>, sqlx::Error> {
-    sqlx::query(sql).fetch_all(conn).await
+    // Pass the bare &str through Executor (no bound args) → sqlx uses the SIMPLE
+    // query protocol (text result format). The extended/prepared protocol
+    // (`sqlx::query(sql)`) requests BINARY results, which fails for types with no
+    // binary output function ("no binary output function available for type
+    // aclitem", e.g. pg_namespace.nspacl). Text format supports every type —
+    // this is what psql/GUI clients do. (raw_sql() can't be used here: it trips
+    // the "Executor is not general enough" HRTB bug in our boxed-async dispatch.)
+    use sqlx::Executor;
+    conn.fetch_all(sql).await
 }
 
 /// Streaming export target format (T24).

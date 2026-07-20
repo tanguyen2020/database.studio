@@ -5690,3 +5690,37 @@ async fn mssql_reserved_identifier_quoting_roundtrip() {
     assert_eq!(result.rows[0]["select"], serde_json::json!(7));
     eprintln!("CHK mssql_reserved_identifier_quoting_roundtrip OK");
 }
+
+/// A `SELECT` returning a type with no binary output function (`aclitem` /
+/// `aclitem[]`, e.g. `pg_namespace.nspacl`) must still run: the driver falls
+/// back to the simple/text query protocol instead of erroring with
+/// "no binary output function available for type aclitem".
+#[tokio::test]
+async fn pg_aclitem_query_uses_text_protocol() {
+    let (_c, port) = start_pg().await;
+    let params = PgConnParams {
+        host: "localhost".into(),
+        port,
+        database: "testdb".into(),
+        user: "postgres".into(),
+        password: PASS.into(),
+        ssl: false,
+        ssl_ca: String::new(),
+        ssl_cert: String::new(),
+        ssl_key: String::new(),
+    };
+    let mut d = retry("postgres", || PgDriver::connect(&params)).await;
+    // aclitem[] column
+    let out = d
+        .exec("SELECT nspname, nspacl FROM pg_namespace WHERE nspname = 'public'")
+        .await
+        .expect("aclitem[] query must execute via text protocol");
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    assert_eq!(result.rows.len(), 1, "one public schema row");
+    assert_eq!(result.rows[0]["nspname"], serde_json::json!("public"));
+    // scalar aclitem too (default ACL of a fresh object may be null; just must not error)
+    d.exec("SELECT (aclexplode(nspacl)).grantee FROM pg_namespace WHERE nspname='public'")
+        .await
+        .expect("aclitem-derived query must execute");
+    eprintln!("CHK pg_aclitem_query_uses_text_protocol OK");
+}
