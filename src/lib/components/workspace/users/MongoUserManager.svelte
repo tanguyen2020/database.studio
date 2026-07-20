@@ -5,6 +5,8 @@
   // Grant/revoke apply immediately (there is no SQL to preview); drop confirms.
   import { untrack } from 'svelte'
   import * as ipc from '$lib/ipc'
+  import * as ContextMenu from '$lib/components/ui/context-menu'
+  import DropConfirm from './DropConfirm.svelte'
   import { toasts } from '$lib/stores/toast.svelte'
   import { mongoUserWizard } from '$lib/stores/mongouser.svelte'
   import { DB_BUILTIN_ROLES, hasRole, parseRolesCsv, type RoleRef } from '$lib/users/mongodb'
@@ -171,6 +173,24 @@
       busy = false
     }
   }
+
+  // Quick drop from the list (context menu / row button).
+  let dropTarget = $state<{ user: string; db: string } | null>(null)
+  let dropping = $state(false)
+  async function doDrop() {
+    if (!cid || !dropTarget || dropping) return
+    dropping = true
+    try {
+      await ipc.mongoDropUser(cid, dropTarget.db, dropTarget.user)
+      toasts.success(`User ${dropTarget.user} dropped`, 'mongodb')
+      dropTarget = null
+      await load()
+    } catch (e) {
+      toasts.error(String(e))
+    } finally {
+      dropping = false
+    }
+  }
 </script>
 
 <div style="flex:1;display:flex;flex-direction:column;min-height:0">
@@ -187,9 +207,20 @@
       {:else if loading}<div style="padding:var(--px-14);color:var(--muted);font-size:var(--px-12)">Loading…</div>
       {:else}
         {#each usersRows as u (keyOf(u))}
-          <div onclick={() => (selectedKey = keyOf(u))} onkeydown={(e) => e.key === 'Enter' && (selectedKey = keyOf(u))} role="option" tabindex="0" aria-selected={selectedKey === keyOf(u)} style="display:flex;align-items:center;gap:var(--px-6);padding:var(--px-5) var(--px-12);font-size:var(--px-12_5);cursor:pointer;border-bottom:var(--px-1) solid var(--border);background:{selectedKey === keyOf(u) ? 'var(--grid-select)' : 'transparent'};color:{selectedKey === keyOf(u) ? 'var(--hex-fff)' : 'var(--text)'}">
-            <span style="flex:1;overflow:hidden;text-overflow:ellipsis"><span style="font-weight:600">{u.user}</span><span style="opacity:0.65">@{u.db}</span></span>
-          </div>
+          {@const k = keyOf(u)}
+          {@const sel = selectedKey === k}
+          <ContextMenu.Root>
+            <ContextMenu.Trigger>
+              <div onclick={() => (selectedKey = k)} onkeydown={(e) => e.key === 'Enter' && (selectedKey = k)} role="option" tabindex="0" aria-selected={sel} style="display:flex;align-items:center;gap:var(--px-6);padding:var(--px-5) var(--px-12);font-size:var(--px-12_5);cursor:pointer;border-bottom:var(--px-1) solid var(--border);background:{sel ? 'var(--grid-select)' : 'transparent'};color:{sel ? 'var(--hex-fff)' : 'var(--text)'}">
+                <span style="flex:1;overflow:hidden;text-overflow:ellipsis"><span style="font-weight:600">{u.user}</span><span style="opacity:0.65">@{u.db}</span></span>
+                <span onclick={(e) => { e.stopPropagation(); dropTarget = { user: String(u.user), db: String(u.db) } }} onkeydown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); dropTarget = { user: String(u.user), db: String(u.db) } } }} role="button" tabindex="0" title="Drop user" style="opacity:0.75;color:{sel ? 'var(--hex-fff)' : 'var(--error)'};font-size:var(--px-13);line-height:1;cursor:pointer">🗑</span>
+              </div>
+            </ContextMenu.Trigger>
+            <ContextMenu.Content>
+              <ContextMenu.Item onclick={() => (selectedKey = k)}>Select</ContextMenu.Item>
+              <ContextMenu.Item onclick={() => (dropTarget = { user: String(u.user), db: String(u.db) })}>Drop user…</ContextMenu.Item>
+            </ContextMenu.Content>
+          </ContextMenu.Root>
         {/each}
       {/if}
     </div>
@@ -302,3 +333,7 @@
     </div>
   </div>
 </div>
+
+{#if dropTarget}
+  <DropConfirm name={`${dropTarget.user}@${dropTarget.db}`} kind="user" busy={dropping} oncancel={() => (dropTarget = null)} onconfirm={doDrop} />
+{/if}

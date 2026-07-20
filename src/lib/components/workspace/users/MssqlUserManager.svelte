@@ -6,6 +6,8 @@
   // (is_raw_batch covers CREATE/ALTER/DROP + GRANT/DENY/REVOKE).
   import { untrack } from 'svelte'
   import * as ipc from '$lib/ipc'
+  import * as ContextMenu from '$lib/components/ui/context-menu'
+  import DropConfirm from './DropConfirm.svelte'
   import { toasts } from '$lib/stores/toast.svelte'
   import { mssqlUserWizard } from '$lib/stores/mssqluser.svelte'
   import { grantWizard } from '$lib/stores/grantwizard.svelte'
@@ -260,6 +262,33 @@
     confirmDropLogin = false
   }
 
+  // Quick drop from either list (context menu / row button): a server login runs
+  // on the base connection; a database user on that database's sub-connection.
+  let dropTarget = $state<{ name: string; kind: 'login' | 'user' } | null>(null)
+  let dropping = $state(false)
+  async function doDrop() {
+    if (!dropTarget || dropping) return
+    const isLogin = dropTarget.kind === 'login'
+    const target = isLogin ? baseCid : dbCid || baseCid
+    if (!target) return
+    dropping = true
+    try {
+      const res = await ipc.execStatement(target, isLogin ? dropLogin(dropTarget.name) : dropUser(dropTarget.name), 0)
+      if (!res.ok) {
+        toasts.error(res.error?.message ?? 'error')
+        return
+      }
+      toasts.success(`Dropped ${dropTarget.name}`, 'mssql')
+      dropTarget = null
+      if (isLogin) await loadServer()
+      else await loadDatabase()
+    } catch (e) {
+      toasts.error(String(e))
+    } finally {
+      dropping = false
+    }
+  }
+
   // ---- Database: permission grid (full columns, clickable, DENY, inherited) -
   type CellState = 'none' | 'direct' | 'partial' | 'inherited' | 'deny'
   const rolesOfUser = $derived(dbRoleMembers.filter((m) => String(m.member) === selectedUser).map((m) => String(m.role)))
@@ -428,10 +457,21 @@
         {:else if loading}<div style="padding:var(--px-14);color:var(--muted);font-size:var(--px-12)">Loading…</div>
         {:else}
           {#each logins as l (l.name)}
-            <div onclick={() => (selectedLogin = String(l.name))} onkeydown={(e) => e.key === 'Enter' && (selectedLogin = String(l.name))} role="option" tabindex="0" aria-selected={selectedLogin === String(l.name)} style="display:flex;align-items:center;gap:var(--px-6);padding:var(--px-5) var(--px-12);font-size:var(--px-12_5);cursor:pointer;border-bottom:var(--px-1) solid var(--border);background:{selectedLogin === String(l.name) ? 'var(--grid-select)' : 'transparent'};color:{selectedLogin === String(l.name) ? 'var(--hex-fff)' : 'var(--text)'}">
-              <span style="flex:1;overflow:hidden;text-overflow:ellipsis">{l.name}</span>
-              {#if boolY(l.is_disabled)}<span style="font-size:var(--px-9);color:{selectedLogin === String(l.name) ? 'var(--hex-fff)' : 'var(--muted)'}">disabled</span>{/if}
-            </div>
+            {@const ln = String(l.name)}
+            {@const sel = selectedLogin === ln}
+            <ContextMenu.Root>
+              <ContextMenu.Trigger>
+                <div onclick={() => (selectedLogin = ln)} onkeydown={(e) => e.key === 'Enter' && (selectedLogin = ln)} role="option" tabindex="0" aria-selected={sel} style="display:flex;align-items:center;gap:var(--px-6);padding:var(--px-5) var(--px-12);font-size:var(--px-12_5);cursor:pointer;border-bottom:var(--px-1) solid var(--border);background:{sel ? 'var(--grid-select)' : 'transparent'};color:{sel ? 'var(--hex-fff)' : 'var(--text)'}">
+                  <span style="flex:1;overflow:hidden;text-overflow:ellipsis">{l.name}</span>
+                  {#if boolY(l.is_disabled)}<span style="font-size:var(--px-9);color:{sel ? 'var(--hex-fff)' : 'var(--muted)'}">disabled</span>{/if}
+                  <span onclick={(e) => { e.stopPropagation(); dropTarget = { name: ln, kind: 'login' } }} onkeydown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); dropTarget = { name: ln, kind: 'login' } } }} role="button" tabindex="0" title="Drop login" style="opacity:0.75;color:{sel ? 'var(--hex-fff)' : 'var(--error)'};font-size:var(--px-13);line-height:1;cursor:pointer">🗑</span>
+                </div>
+              </ContextMenu.Trigger>
+              <ContextMenu.Content>
+                <ContextMenu.Item onclick={() => (selectedLogin = ln)}>Select</ContextMenu.Item>
+                <ContextMenu.Item onclick={() => (dropTarget = { name: ln, kind: 'login' })}>Drop login…</ContextMenu.Item>
+              </ContextMenu.Content>
+            </ContextMenu.Root>
           {/each}
         {/if}
       </div>
@@ -542,10 +582,21 @@
         {:else if loading}<div style="padding:var(--px-14);color:var(--muted);font-size:var(--px-12)">Loading…</div>
         {:else}
           {#each dbUsers as u (u.name)}
-            <div onclick={() => (selectedUser = String(u.name))} onkeydown={(e) => e.key === 'Enter' && (selectedUser = String(u.name))} role="option" tabindex="0" aria-selected={selectedUser === String(u.name)} style="display:flex;align-items:center;gap:var(--px-6);padding:var(--px-5) var(--px-12);font-size:var(--px-12_5);cursor:pointer;border-bottom:var(--px-1) solid var(--border);background:{selectedUser === String(u.name) ? 'var(--grid-select)' : 'transparent'};color:{selectedUser === String(u.name) ? 'var(--hex-fff)' : 'var(--text)'}">
-              <span style="flex:1;overflow:hidden;text-overflow:ellipsis">{u.name}</span>
-              {#if boolY(u.orphaned)}<span style="font-size:var(--px-9);color:{selectedUser === String(u.name) ? 'var(--hex-fff)' : 'var(--warn2)'}">orphaned</span>{/if}
-            </div>
+            {@const un = String(u.name)}
+            {@const sel = selectedUser === un}
+            <ContextMenu.Root>
+              <ContextMenu.Trigger>
+                <div onclick={() => (selectedUser = un)} onkeydown={(e) => e.key === 'Enter' && (selectedUser = un)} role="option" tabindex="0" aria-selected={sel} style="display:flex;align-items:center;gap:var(--px-6);padding:var(--px-5) var(--px-12);font-size:var(--px-12_5);cursor:pointer;border-bottom:var(--px-1) solid var(--border);background:{sel ? 'var(--grid-select)' : 'transparent'};color:{sel ? 'var(--hex-fff)' : 'var(--text)'}">
+                  <span style="flex:1;overflow:hidden;text-overflow:ellipsis">{u.name}</span>
+                  {#if boolY(u.orphaned)}<span style="font-size:var(--px-9);color:{sel ? 'var(--hex-fff)' : 'var(--warn2)'}">orphaned</span>{/if}
+                  <span onclick={(e) => { e.stopPropagation(); dropTarget = { name: un, kind: 'user' } }} onkeydown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); dropTarget = { name: un, kind: 'user' } } }} role="button" tabindex="0" title="Drop user" style="opacity:0.75;color:{sel ? 'var(--hex-fff)' : 'var(--error)'};font-size:var(--px-13);line-height:1;cursor:pointer">🗑</span>
+                </div>
+              </ContextMenu.Trigger>
+              <ContextMenu.Content>
+                <ContextMenu.Item onclick={() => (selectedUser = un)}>Select</ContextMenu.Item>
+                <ContextMenu.Item onclick={() => (dropTarget = { name: un, kind: 'user' })}>Drop user…</ContextMenu.Item>
+              </ContextMenu.Content>
+            </ContextMenu.Root>
           {/each}
         {/if}
       </div>
@@ -608,3 +659,7 @@
     </div>
   {/if}
 </div>
+
+{#if dropTarget}
+  <DropConfirm name={dropTarget.name} kind={dropTarget.kind} busy={dropping} oncancel={() => (dropTarget = null)} onconfirm={doDrop} />
+{/if}

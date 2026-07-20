@@ -5,6 +5,8 @@
   // on the connection (banner otherwise). Mutations run via exec_statement (HTTP).
   import { untrack } from 'svelte'
   import * as ipc from '$lib/ipc'
+  import * as ContextMenu from '$lib/components/ui/context-menu'
+  import DropConfirm from './DropConfirm.svelte'
   import { toasts } from '$lib/stores/toast.svelte'
   import { chUserWizard } from '$lib/stores/chuser.svelte'
   import { grantWizard } from '$lib/stores/grantwizard.svelte'
@@ -242,6 +244,28 @@
     confirmDrop = false
   }
 
+  // Quick drop from the list (context menu / row button).
+  let dropTarget = $state<string | null>(null)
+  let dropping = $state(false)
+  async function doDrop() {
+    if (!cid || !dropTarget || dropping) return
+    dropping = true
+    try {
+      const res = await ipc.execStatement(cid, kind === 'users' ? dropUser(dropTarget) : dropRole(dropTarget), 0)
+      if (!res.ok) {
+        toasts.error(res.error?.message ?? 'error')
+        return
+      }
+      toasts.success(`Dropped ${dropTarget}`, 'clickhouse')
+      dropTarget = null
+      await load()
+    } catch (e) {
+      toasts.error(String(e))
+    } finally {
+      dropping = false
+    }
+  }
+
   // ---- Roles (for users) ----------------------------------------------------
   let grantRoleName = $state('')
   const grantedRoles = $derived(
@@ -306,10 +330,22 @@
       {:else if loading}<div style="padding:var(--px-14);color:var(--muted);font-size:var(--px-12)">Loading…</div>
       {:else}
         {#each list as r (r.name)}
-          <div onclick={() => (selected = String(r.name))} onkeydown={(e) => e.key === 'Enter' && (selected = String(r.name))} role="option" tabindex="0" aria-selected={selected === String(r.name)} style="display:flex;align-items:center;gap:var(--px-6);padding:var(--px-5) var(--px-12);font-size:var(--px-12_5);cursor:pointer;border-bottom:var(--px-1) solid var(--border);background:{selected === String(r.name) ? 'var(--grid-select)' : 'transparent'};color:{selected === String(r.name) ? 'var(--hex-fff)' : 'var(--text)'}">
-            <span style="flex:1;overflow:hidden;text-overflow:ellipsis">{r.name}</span>
-            {#if isReadOnly(r)}<span title="defined in {r.storage}" style="font-size:var(--px-9);color:{selected === String(r.name) ? 'var(--hex-fff)' : 'var(--muted)'}">{r.storage}</span>{/if}
-          </div>
+          {@const rn = String(r.name)}
+          {@const sel = selected === rn}
+          {@const ro = isReadOnly(r)}
+          <ContextMenu.Root>
+            <ContextMenu.Trigger>
+              <div onclick={() => (selected = rn)} onkeydown={(e) => e.key === 'Enter' && (selected = rn)} role="option" tabindex="0" aria-selected={sel} style="display:flex;align-items:center;gap:var(--px-6);padding:var(--px-5) var(--px-12);font-size:var(--px-12_5);cursor:pointer;border-bottom:var(--px-1) solid var(--border);background:{sel ? 'var(--grid-select)' : 'transparent'};color:{sel ? 'var(--hex-fff)' : 'var(--text)'}">
+                <span style="flex:1;overflow:hidden;text-overflow:ellipsis">{r.name}</span>
+                {#if ro}<span title="defined in {r.storage}" style="font-size:var(--px-9);color:{sel ? 'var(--hex-fff)' : 'var(--muted)'}">{r.storage}</span>
+                {:else}<span onclick={(e) => { e.stopPropagation(); dropTarget = rn }} onkeydown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); dropTarget = rn } }} role="button" tabindex="0" title="Drop {kind === 'users' ? 'user' : 'role'}" style="opacity:0.75;color:{sel ? 'var(--hex-fff)' : 'var(--error)'};font-size:var(--px-13);line-height:1;cursor:pointer">🗑</span>{/if}
+              </div>
+            </ContextMenu.Trigger>
+            <ContextMenu.Content>
+              <ContextMenu.Item onclick={() => (selected = rn)}>Select</ContextMenu.Item>
+              {#if !ro}<ContextMenu.Item onclick={() => (dropTarget = rn)}>Drop {kind === 'users' ? 'user' : 'role'}…</ContextMenu.Item>{/if}
+            </ContextMenu.Content>
+          </ContextMenu.Root>
         {/each}
       {/if}
     </div>
@@ -431,3 +467,7 @@
     </div>
   </div>
 </div>
+
+{#if dropTarget}
+  <DropConfirm name={dropTarget} kind={kind === 'users' ? 'user' : 'role'} busy={dropping} oncancel={() => (dropTarget = null)} onconfirm={doDrop} />
+{/if}

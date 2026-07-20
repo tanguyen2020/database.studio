@@ -6,6 +6,8 @@
   // Mutations queue → Execute (Oracle DDL autocommits; runs sequentially).
   import { untrack } from 'svelte'
   import * as ipc from '$lib/ipc'
+  import * as ContextMenu from '$lib/components/ui/context-menu'
+  import DropConfirm from './DropConfirm.svelte'
   import { toasts } from '$lib/stores/toast.svelte'
   import { oraUserWizard } from '$lib/stores/orauser.svelte'
   import { grantWizard } from '$lib/stores/grantwizard.svelte'
@@ -153,6 +155,28 @@
     confirmDrop = false
   }
 
+  // Quick drop from the list (context menu / row button) — DROP USER … CASCADE.
+  let dropTarget = $state<string | null>(null)
+  let dropping = $state(false)
+  async function doDrop() {
+    if (!cid || !dropTarget || dropping) return
+    dropping = true
+    try {
+      const res = await ipc.execStatement(cid, dropUser(dropTarget, true), 0)
+      if (!res.ok) {
+        toasts.error(res.error?.message ?? 'error')
+        return
+      }
+      toasts.success(`Dropped ${dropTarget}`, 'oracle')
+      dropTarget = null
+      await load()
+    } catch (e) {
+      toasts.error(String(e))
+    } finally {
+      dropping = false
+    }
+  }
+
   // ---- System privileges ----------------------------------------------------
   function toggleSys(priv: string, on: boolean) {
     if (!selected) return
@@ -263,10 +287,21 @@
       {:else if loading}<div style="padding:var(--px-14);color:var(--muted);font-size:var(--px-12)">Loading…</div>
       {:else}
         {#each users as u (u.name)}
-          <div onclick={() => (selected = String(u.name))} onkeydown={(e) => e.key === 'Enter' && (selected = String(u.name))} role="option" tabindex="0" aria-selected={selected === String(u.name)} style="display:flex;align-items:center;gap:var(--px-6);padding:var(--px-5) var(--px-12);font-size:var(--px-12_5);cursor:pointer;border-bottom:var(--px-1) solid var(--border);background:{selected === String(u.name) ? 'var(--grid-select)' : 'transparent'};color:{selected === String(u.name) ? 'var(--hex-fff)' : 'var(--text)'}">
-            <span style="flex:1;overflow:hidden;text-overflow:ellipsis">{u.name}</span>
-            {#if String(u.status) !== 'OPEN'}<span style="font-size:var(--px-9);color:{selected === String(u.name) ? 'var(--hex-fff)' : 'var(--warn2)'}">{u.status}</span>{/if}
-          </div>
+          {@const un = String(u.name)}
+          {@const sel = selected === un}
+          <ContextMenu.Root>
+            <ContextMenu.Trigger>
+              <div onclick={() => (selected = un)} onkeydown={(e) => e.key === 'Enter' && (selected = un)} role="option" tabindex="0" aria-selected={sel} style="display:flex;align-items:center;gap:var(--px-6);padding:var(--px-5) var(--px-12);font-size:var(--px-12_5);cursor:pointer;border-bottom:var(--px-1) solid var(--border);background:{sel ? 'var(--grid-select)' : 'transparent'};color:{sel ? 'var(--hex-fff)' : 'var(--text)'}">
+                <span style="flex:1;overflow:hidden;text-overflow:ellipsis">{u.name}</span>
+                {#if String(u.status) !== 'OPEN'}<span style="font-size:var(--px-9);color:{sel ? 'var(--hex-fff)' : 'var(--warn2)'}">{u.status}</span>{/if}
+                <span onclick={(e) => { e.stopPropagation(); dropTarget = un }} onkeydown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); dropTarget = un } }} role="button" tabindex="0" title="Drop user" style="opacity:0.75;color:{sel ? 'var(--hex-fff)' : 'var(--error)'};font-size:var(--px-13);line-height:1;cursor:pointer">🗑</span>
+              </div>
+            </ContextMenu.Trigger>
+            <ContextMenu.Content>
+              <ContextMenu.Item onclick={() => (selected = un)}>Select</ContextMenu.Item>
+              <ContextMenu.Item onclick={() => (dropTarget = un)}>Drop user (CASCADE)…</ContextMenu.Item>
+            </ContextMenu.Content>
+          </ContextMenu.Root>
         {/each}
       {/if}
     </div>
@@ -434,3 +469,7 @@
     </div>
   </div>
 </div>
+
+{#if dropTarget}
+  <DropConfirm name={dropTarget} kind="user" busy={dropping} note="Uses DROP USER … CASCADE (drops the schema's objects too)." oncancel={() => (dropTarget = null)} onconfirm={doDrop} />
+{/if}

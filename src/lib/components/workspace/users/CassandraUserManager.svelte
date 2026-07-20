@@ -5,6 +5,8 @@
   // CassandraAuthorizer (banner otherwise). Tabs: General, Member of, Permissions.
   import { untrack } from 'svelte'
   import * as ipc from '$lib/ipc'
+  import * as ContextMenu from '$lib/components/ui/context-menu'
+  import DropConfirm from './DropConfirm.svelte'
   import { toasts } from '$lib/stores/toast.svelte'
   import { cassUserWizard } from '$lib/stores/cassuser.svelte'
   import { grantWizard } from '$lib/stores/grantwizard.svelte'
@@ -236,6 +238,28 @@
     confirmDrop = false
   }
 
+  // Quick drop from the list (context menu / row button) — runs via cql_exec.
+  let dropTarget = $state<string | null>(null)
+  let dropping = $state(false)
+  async function doDrop() {
+    if (!cid || !dropTarget || dropping) return
+    dropping = true
+    try {
+      const r = await ipc.cqlExec(cid, dropRole(dropTarget))
+      if (!r.ok) {
+        toasts.error(r.error?.message ?? 'error')
+        return
+      }
+      toasts.success(`Dropped ${dropTarget}`, 'cassandra')
+      dropTarget = null
+      await load()
+    } catch (e) {
+      toasts.error(String(e))
+    } finally {
+      dropping = false
+    }
+  }
+
   // ---- Member of ------------------------------------------------------------
   let grantRoleName = $state('')
   function queueGrantRole() {
@@ -286,11 +310,22 @@
       {:else if loading}<div style="padding:var(--px-14);color:var(--muted);font-size:var(--px-12)">Loading…</div>
       {:else}
         {#each roles as r (r.role)}
-          <div onclick={() => (selected = String(r.role))} onkeydown={(e) => e.key === 'Enter' && (selected = String(r.role))} role="option" tabindex="0" aria-selected={selected === String(r.role)} style="display:flex;align-items:center;gap:var(--px-6);padding:var(--px-5) var(--px-12);font-size:var(--px-12_5);cursor:pointer;border-bottom:var(--px-1) solid var(--border);background:{selected === String(r.role) ? 'var(--grid-select)' : 'transparent'};color:{selected === String(r.role) ? 'var(--hex-fff)' : 'var(--text)'}">
-            <span>{boolY(r.login) ? '👤' : '👥'}</span>
-            <span style="flex:1;overflow:hidden;text-overflow:ellipsis">{r.role}</span>
-            {#if boolY(r.super)}<span style="font-size:var(--px-9);color:{selected === String(r.role) ? 'var(--hex-fff)' : 'var(--warn2)'}">SUPER</span>{/if}
-          </div>
+          {@const rn = String(r.role)}
+          {@const sel = selected === rn}
+          <ContextMenu.Root>
+            <ContextMenu.Trigger>
+              <div onclick={() => (selected = rn)} onkeydown={(e) => e.key === 'Enter' && (selected = rn)} role="option" tabindex="0" aria-selected={sel} style="display:flex;align-items:center;gap:var(--px-6);padding:var(--px-5) var(--px-12);font-size:var(--px-12_5);cursor:pointer;border-bottom:var(--px-1) solid var(--border);background:{sel ? 'var(--grid-select)' : 'transparent'};color:{sel ? 'var(--hex-fff)' : 'var(--text)'}">
+                <span>{boolY(r.login) ? '👤' : '👥'}</span>
+                <span style="flex:1;overflow:hidden;text-overflow:ellipsis">{r.role}</span>
+                {#if boolY(r.super)}<span style="font-size:var(--px-9);color:{sel ? 'var(--hex-fff)' : 'var(--warn2)'}">SUPER</span>{/if}
+                <span onclick={(e) => { e.stopPropagation(); dropTarget = rn }} onkeydown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); dropTarget = rn } }} role="button" tabindex="0" title="Drop role" style="opacity:0.75;color:{sel ? 'var(--hex-fff)' : 'var(--error)'};font-size:var(--px-13);line-height:1;cursor:pointer">🗑</span>
+              </div>
+            </ContextMenu.Trigger>
+            <ContextMenu.Content>
+              <ContextMenu.Item onclick={() => (selected = rn)}>Select</ContextMenu.Item>
+              <ContextMenu.Item onclick={() => (dropTarget = rn)}>Drop role…</ContextMenu.Item>
+            </ContextMenu.Content>
+          </ContextMenu.Root>
         {/each}
       {/if}
     </div>
@@ -396,3 +431,7 @@
     </div>
   </div>
 </div>
+
+{#if dropTarget}
+  <DropConfirm name={dropTarget} kind="role" busy={dropping} oncancel={() => (dropTarget = null)} onconfirm={doDrop} />
+{/if}

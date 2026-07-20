@@ -7,6 +7,8 @@
   // never exec_params, which would hit MySQL error 1295 on CREATE USER/GRANT).
   import { untrack } from 'svelte'
   import * as ipc from '$lib/ipc'
+  import * as ContextMenu from '$lib/components/ui/context-menu'
+  import DropConfirm from './DropConfirm.svelte'
   import { toasts } from '$lib/stores/toast.svelte'
   import { myUserWizard } from '$lib/stores/myuser.svelte'
   import { grantWizard } from '$lib/stores/grantwizard.svelte'
@@ -288,6 +290,29 @@
     confirmDrop = false
   }
 
+  // Quick drop from the account list (context menu / row button) — confirm then
+  // DROP USER immediately and reload.
+  let dropTarget = $state<{ user: string; host: string } | null>(null)
+  let dropping = $state(false)
+  async function doDrop() {
+    if (!cid || !dropTarget || dropping) return
+    dropping = true
+    try {
+      const res = await ipc.execStatement(cid, dropUser(dropTarget.user, dropTarget.host), 0)
+      if (!res.ok) {
+        toasts.error(res.error?.message ?? 'error')
+        return
+      }
+      toasts.success(`Dropped ${dropTarget.user}@${dropTarget.host}`, system)
+      dropTarget = null
+      await load()
+    } catch (e) {
+      toasts.error(String(e))
+    } finally {
+      dropping = false
+    }
+  }
+
   async function loadShowGrants() {
     if (!cid || !selectedAcct) return
     const r = await ipc.usersView(cid, 'grants_for', selLit).catch(() => ({ rows: [] as Row[] }))
@@ -362,11 +387,22 @@
         <div style="padding:var(--px-14);color:var(--muted);font-size:var(--px-12)">Loading…</div>
       {:else}
         {#each accounts as a (keyOf(a))}
-          <div onclick={() => (selectedKey = keyOf(a))} onkeydown={(e) => e.key === 'Enter' && (selectedKey = keyOf(a))} role="option" tabindex="0" aria-selected={selectedKey === keyOf(a)} style="display:flex;align-items:center;gap:var(--px-6);padding:var(--px-5) var(--px-12);font-size:var(--px-12_5);cursor:pointer;border-bottom:var(--px-1) solid var(--border);background:{selectedKey === keyOf(a) ? 'var(--grid-select)' : 'transparent'};color:{selectedKey === keyOf(a) ? 'var(--hex-fff)' : 'var(--text)'}">
-            <span>{isRole(a) ? '👥' : '👤'}</span>
-            <span style="flex:1;overflow:hidden;text-overflow:ellipsis"><span style="font-weight:600">{a.user}</span><span style="opacity:0.65">@{a.host}</span></span>
-            {#if boolY(a.account_locked)}<span style="font-size:var(--px-9);color:{selectedKey === keyOf(a) ? 'var(--hex-fff)' : 'var(--warn2)'}">LOCK</span>{/if}
-          </div>
+          {@const k = keyOf(a)}
+          {@const sel = selectedKey === k}
+          <ContextMenu.Root>
+            <ContextMenu.Trigger>
+              <div onclick={() => (selectedKey = k)} onkeydown={(e) => e.key === 'Enter' && (selectedKey = k)} role="option" tabindex="0" aria-selected={sel} style="display:flex;align-items:center;gap:var(--px-6);padding:var(--px-5) var(--px-12);font-size:var(--px-12_5);cursor:pointer;border-bottom:var(--px-1) solid var(--border);background:{sel ? 'var(--grid-select)' : 'transparent'};color:{sel ? 'var(--hex-fff)' : 'var(--text)'}">
+                <span>{isRole(a) ? '👥' : '👤'}</span>
+                <span style="flex:1;overflow:hidden;text-overflow:ellipsis"><span style="font-weight:600">{a.user}</span><span style="opacity:0.65">@{a.host}</span></span>
+                {#if boolY(a.account_locked)}<span style="font-size:var(--px-9);color:{sel ? 'var(--hex-fff)' : 'var(--warn2)'}">LOCK</span>{/if}
+                <span onclick={(e) => { e.stopPropagation(); dropTarget = { user: String(a.user), host: String(a.host) } }} onkeydown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); dropTarget = { user: String(a.user), host: String(a.host) } } }} role="button" tabindex="0" title="Drop account" style="opacity:0.75;color:{sel ? 'var(--hex-fff)' : 'var(--error)'};font-size:var(--px-13);line-height:1;cursor:pointer">🗑</span>
+              </div>
+            </ContextMenu.Trigger>
+            <ContextMenu.Content>
+              <ContextMenu.Item onclick={() => (selectedKey = k)}>Select</ContextMenu.Item>
+              <ContextMenu.Item onclick={() => (dropTarget = { user: String(a.user), host: String(a.host) })}>Drop account…</ContextMenu.Item>
+            </ContextMenu.Content>
+          </ContextMenu.Root>
         {/each}
       {/if}
     </div>
@@ -524,3 +560,7 @@
     </div>
   </div>
 </div>
+
+{#if dropTarget}
+  <DropConfirm name={`${dropTarget.user}@${dropTarget.host}`} kind="account" busy={dropping} oncancel={() => (dropTarget = null)} onconfirm={doDrop} />
+{/if}
