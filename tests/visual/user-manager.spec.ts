@@ -496,17 +496,18 @@ test('user manager: PG Grant access spans multiple databases', async ({ page }) 
   // the Databases step is present (current DB "app" pre-selected); also pick "analytics"
   await expect(dialog.getByText('Databases', { exact: false }).first()).toBeVisible()
   await dialog.getByText('analytics', { exact: true }).click()
-  await page.waitForTimeout(300)
-  // schema list reflects the selected databases → analytics' own "reporting" schema appears
+  await page.waitForTimeout(400)
+  // schemas are grouped PER database → analytics' OWN "reporting" schema appears
+  // in the analytics group (structure, not a flat union)
   await expect(dialog.getByText('reporting', { exact: true }).first()).toBeVisible()
-  // pick schema "public" + Read-only
-  await dialog.getByText('public', { exact: true }).click()
+  // pick analytics' "reporting" schema (unique to that database) + Read-only
+  await dialog.getByText('reporting', { exact: true }).click()
   await page.getByText('Read-only', { exact: true }).first().click()
   await page.waitForTimeout(200)
 
-  // preview groups the SQL per database
+  // preview groups the SQL per database, with reporting under analytics
   await expect(page.getByText(/-- database: analytics/).first()).toBeVisible()
-  await expect(page.getByText(/GRANT SELECT ON ALL TABLES IN SCHEMA "public" TO "app_user"/).first()).toBeVisible()
+  await expect(page.getByText(/GRANT SELECT ON ALL TABLES IN SCHEMA "reporting" TO "app_user"/).first()).toBeVisible()
 
   // Add to pending → the non-current DB is tagged in the pending preview
   await page.getByRole('button', { name: 'Add to pending' }).click()

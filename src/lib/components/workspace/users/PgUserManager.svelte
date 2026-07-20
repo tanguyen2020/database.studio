@@ -232,40 +232,48 @@
 
   let futureTables = $state(true)
   let showMatrix = $state(false)
+  // schema owner per (database, schema) — for ALTER DEFAULT PRIVILEGES on the
+  // right owner in each database (future-tables). Filled by loadScopesFor.
+  let ownersByDbSchema = $state<Record<string, string>>({})
+  const OKEY = (db: string, schema: string) => `${db} ${schema}`
 
-  // Guided grant wizard — Read-only / Read-Write / Full / Revoke on a schema.
+  // Guided grant wizard — grouped by database: each selected database shows its
+  // OWN schemas; grants build per (database, schema) and run on that database.
   function openGrantWizard() {
-    if (!selected) return
+    if (!selected || !cid) return
+    const c = cid
+    const role = selected
     grantWizard.show({
       title: 'Grant access',
-      role: selected,
+      role,
       scopeLabel: 'Schema',
-      scopes: schemas,
+      scopes: [],
       levels: STANDARD_LEVELS,
-      build: (kind, schema) =>
-        schemaPreset(kind as PresetKind, schema, selected, {
-          futureTables,
-          owner: ownerOf(schema),
-          owners: kind === 'revoke-all' ? [...new Set([ownerOf(schema), 'postgres'].filter(Boolean) as string[])] : undefined,
-        }),
-      onApply: (stmts) => (pending = [...pending, ...stmts.map((sql) => ({ sql }))]),
-      // multi-database: apply the same schema grants to each selected database.
       scope2Label: 'Database',
       scopes2: databases,
       scope2Default: currentDb ? [currentDb] : [],
-      // schemas differ per database → load the union of the selected databases'
-      // schemas (each read via a sub-connection to that database).
-      loadScopes: async (dbs) => {
-        const c = cid
-        if (!c) return []
-        const set = new Set<string>()
-        for (const db of dbs) {
-          const sub = db === currentDb ? c : await ipc.attachDatabase(c, db).catch(() => c)
-          const scs = await ipc.listSchemas(sub).catch(() => [])
-          for (const s of scs) set.add(s.name)
-        }
-        return [...set].sort()
+      // load THIS database's own schemas (+ their owners) via a sub-connection.
+      loadScopesFor: async (db) => {
+        const sub = db === currentDb ? c : await ipc.attachDatabase(c, db).catch(() => c)
+        const [scs, so] = await Promise.all([
+          ipc.listSchemas(sub).catch(() => []),
+          ipc.usersView(sub, 'schema_owners').catch(() => ({ rows: [] as Row[] })),
+        ])
+        const owners: Record<string, string> = {}
+        for (const r of so.rows) owners[OKEY(db, String(r.schema))] = String(r.owner)
+        ownersByDbSchema = { ...ownersByDbSchema, ...owners }
+        return scs.map((s) => s.name).sort()
       },
+      build: (kind, schema, extra) => {
+        const db = extra?.scope2 ?? currentDb
+        const owner = ownersByDbSchema[OKEY(db, schema)]
+        return schemaPreset(kind as PresetKind, schema, role, {
+          futureTables,
+          owner,
+          owners: kind === 'revoke-all' ? [...new Set([owner, 'postgres'].filter(Boolean) as string[])] : undefined,
+        })
+      },
+      // run each database's statements on a connection to that database.
       onApplyGrouped: (groups) =>
         (pending = [
           ...pending,

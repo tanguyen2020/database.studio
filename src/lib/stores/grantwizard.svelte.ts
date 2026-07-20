@@ -35,9 +35,11 @@ export interface GrantAction {
   label: string
   danger?: boolean
 }
-/** Extra context passed to build(): the chosen action (Grant/Deny/Revoke). */
+/** Extra context passed to build(): the chosen action (Grant/Deny/Revoke) and,
+ *  in grouped mode, the outer scope (database) the inner scope belongs to. */
 export interface BuildExtra {
   action?: GrantActionKind
+  scope2?: string
 }
 
 class GrantWizardStore {
@@ -65,6 +67,11 @@ class GrantWizardStore {
   // (databases). When set, the dialog refreshes the schema list as the database
   // selection changes — schemas differ per database.
   loadScopes = $state<((scope2: string[]) => Promise<string[]>) | null>(null)
+  // Grouped mode: load the inner scopes for ONE outer scope. When set, the
+  // dialog shows a section per selected outer (database → its own schemas), so
+  // selection is per (database, schema) — the correct structure for engines that
+  // nest schemas inside databases (PostgreSQL).
+  loadScopesFor = $state<((scope2: string) => Promise<string[]>) | null>(null)
 
   // After a user/role is created, a manager picks this up (matching connId),
   // reloads, selects the new principal, and opens the wizard on it. `database`
@@ -83,13 +90,14 @@ class GrantWizardStore {
     scopes: string[]
     levels?: GrantLevel[]
     build: (kind: string, scope: string, extra?: BuildExtra) => string[]
-    onApply: (statements: string[]) => void
+    onApply?: (statements: string[]) => void
     actions?: GrantAction[]
     scope2Label?: string
     scopes2?: string[]
     scope2Default?: string[]
     onApplyGrouped?: (groups: GrantGroup[]) => void
     loadScopes?: (scope2: string[]) => Promise<string[]>
+    loadScopesFor?: (scope2: string) => Promise<string[]>
   }) {
     this.title = opts.title
     this.role = opts.role
@@ -97,13 +105,14 @@ class GrantWizardStore {
     this.scopes = opts.scopes
     this.levels = opts.levels ?? STANDARD_LEVELS
     this.build = opts.build
-    this.onApply = opts.onApply
+    this.onApply = opts.onApply ?? (() => {})
     this.actions = opts.actions ?? []
     this.scope2Label = opts.scope2Label ?? null
     this.scopes2 = opts.scopes2 ?? []
     this.scope2Default = opts.scope2Default ?? []
     this.onApplyGrouped = opts.onApplyGrouped ?? null
     this.loadScopes = opts.loadScopes ?? null
+    this.loadScopesFor = opts.loadScopesFor ?? null
     this.open = true
   }
 
