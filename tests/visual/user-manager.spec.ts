@@ -36,6 +36,15 @@ test('explorer: PG Security node lists roles + opens the manager', async ({ page
   await page.waitForTimeout(400)
   await expect(page.getByText('app_user', { exact: true }).first()).toBeVisible()
 
+  // right-click a principal → Drop role… → in-app confirm
+  await page.getByText('app_user', { exact: true }).first().click({ button: 'right' })
+  await page.waitForTimeout(200)
+  await page.getByRole('menuitem', { name: /Drop (role|user)…/ }).first().click()
+  await page.waitForTimeout(200)
+  await expect(page.getByText(/Drop "app_user"\?/).first()).toBeVisible()
+  await page.getByRole('button', { name: 'Cancel' }).click() // don't actually drop the demo role
+  await page.waitForTimeout(150)
+
   // double-click a principal → opens the User Manager tab
   await page.getByText('app_user', { exact: true }).first().dblclick()
   await page.waitForTimeout(500)

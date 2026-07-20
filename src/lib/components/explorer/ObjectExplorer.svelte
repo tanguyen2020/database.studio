@@ -37,6 +37,13 @@
   import { newDatabaseWizard } from '$lib/stores/newdatabase.svelte'
   import { genRenameRoutine } from '$lib/sql/routines'
   import { scriptsWizard } from '$lib/stores/scripts.svelte'
+  // Drop principal builders (per engine) for the Security tree context menu.
+  import { dropRole as pgDropRole } from '$lib/users/postgres'
+  import { dropUser as myDropUser } from '$lib/users/mysql'
+  import { dropLogin as msDropLogin } from '$lib/users/mssql'
+  import { dropUser as chDropUser, dropRole as chDropRole } from '$lib/users/clickhouse'
+  import { dropUser as oraDropUser } from '$lib/users/oracle'
+  import { dropRole as cassDropRole } from '$lib/users/cassandra'
   import { collationWizard } from '$lib/stores/collation.svelte'
   import { backupWizard } from '$lib/stores/backup.svelte'
   import * as chops from '$lib/sql/chops'
@@ -284,6 +291,41 @@
   function openPrincipal(name: string) {
     const cid = selected?.id
     if (cid) tabs.openUserManager(cid, name)
+  }
+
+  /** Right-click a principal → Drop (with confirm), using the engine's builder.
+   *  `it.name` already carries host (MySQL: user@host) / db (Mongo: user@db). */
+  function dropPrincipal(f: SecFolder, it: SecItem) {
+    const cid = selected?.id
+    const sys = selected?.system
+    if (!cid || !sys) return
+    askConfirm(`Drop ${it.group ? 'role' : 'user'}`, `Drop "${it.name}"? This cannot be undone.`, async () => {
+      try {
+        if (sys === 'mongodb') {
+          const at = it.name.lastIndexOf('@')
+          await ipc.mongoDropUser(cid, it.name.slice(at + 1), it.name.slice(0, at))
+        } else if (sys === 'cassandra') {
+          const r = await ipc.cqlExec(cid, cassDropRole(it.name))
+          if (!r.ok) throw new Error(r.error?.message ?? 'error')
+        } else {
+          let sql: string
+          if (sys === 'postgres') sql = pgDropRole(it.name)
+          else if (sys === 'mysql' || sys === 'mariadb') {
+            const at = it.name.lastIndexOf('@')
+            sql = at >= 0 ? myDropUser(it.name.slice(0, at), it.name.slice(at + 1)) : myDropUser(it.name, '%')
+          } else if (sys === 'mssql') sql = msDropLogin(it.name)
+          else if (sys === 'clickhouse') sql = f.key.endsWith(':roles') ? chDropRole(it.name) : chDropUser(it.name)
+          else if (sys === 'oracle') sql = oraDropUser(it.name, true)
+          else return
+          const res = await ipc.execStatement(cid, sql, 0)
+          if (!res.ok) throw new Error(res.error?.message ?? 'error')
+        }
+        toasts.success(`Dropped ${it.name}`, sys)
+        void loadSec(f)
+      } catch (e) {
+        toasts.error(String(e instanceof Error ? e.message : e))
+      }
+    })
   }
 
   // "database.schema" of the current toolbar target (for the button tooltips);
@@ -1428,8 +1470,8 @@
             {#each secRows[f.key] as it (it.name)}
               {#snippet secItemMenu()}
                 <ContextMenu.Content>
-                  <ContextMenu.Item onclick={() => openPrincipal(it.name)}>Properties…</ContextMenu.Item>
-                  <ContextMenu.Item onclick={() => openPrincipal(it.name)}>Change Password / Drop…</ContextMenu.Item>
+                  <ContextMenu.Item onclick={() => openPrincipal(it.name)}>Properties / Change Password…</ContextMenu.Item>
+                  <ContextMenu.Item onclick={() => dropPrincipal(f, it)}>Drop {it.group ? 'role' : 'user'}…</ContextMenu.Item>
                 </ContextMenu.Content>
               {/snippet}
               {@render row({ key: `${f.key}:${it.name}`, depth: 1, glyph: it.group ? '👥' : '👤', color: C.col, name: it.name, meta: it.badge ?? '', onClick: () => openPrincipal(it.name) }, secItemMenu)}
