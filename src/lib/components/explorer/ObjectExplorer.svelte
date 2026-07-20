@@ -123,11 +123,11 @@
     void selected?.id
     untrack(() => {
       treeSel = null
-      // Security node cache is keyed by folder (not connection) → drop it and
-      // collapse security folders so the new connection loads fresh roles
-      // (otherwise the tree shows the previous connection's principals).
+      // Security node cache is keyed by folder (not connection) → drop it on
+      // connection change so it reloads fresh (otherwise the tree would show
+      // the previous connection's principals). Expanded folders auto-reload
+      // via the effect below.
       secRows = {}
-      for (const k of [...expanded]) if (k.startsWith('sec:')) expanded.delete(k)
     })
   })
   // The schema/database node the toolbar's View-ER / Generate-Scripts act on, derived
@@ -220,10 +220,12 @@
     }
   })
   let secRows = $state<Record<string, SecItem[]>>({})
+  let secLoading = $state<Set<string>>(new Set())
   const boolTrue = (v: unknown) => v === true || v === 1 || v === '1' || v === 'Y' || v === 't' || v === 'true'
   async function loadSec(f: SecFolder) {
     const cid = selected?.id
-    if (!cid) return
+    if (!cid || secLoading.has(f.key)) return
+    secLoading = new Set(secLoading).add(f.key)
     try {
       let rows: Record<string, unknown>[]
       if (f.source === 'mongo:users') {
@@ -237,8 +239,21 @@
       secRows = { ...secRows, [f.key]: rows.map((x) => secItemOf(f, x)) }
     } catch {
       secRows = { ...secRows, [f.key]: [] }
+    } finally {
+      secLoading = new Set([...secLoading].filter((k) => k !== f.key))
     }
   }
+  // Self-heal: any expanded security folder without cached rows (e.g. after a
+  // connection switch cleared the cache) reloads for the current connection, so
+  // it never gets stuck on "Loading…".
+  $effect(() => {
+    void selected?.id
+    for (const f of secFolders) {
+      if (expanded.has(f.key) && secRows[f.key] === undefined && !secLoading.has(f.key)) {
+        untrack(() => void loadSec(f))
+      }
+    }
+  })
   function secItemOf(f: SecFolder, x: Record<string, unknown>): SecItem {
     if (f.source === 'mongo:users') return { name: `${x.user}@${x.db}` }
     if (f.source === 'cql:LIST ROLES') {
