@@ -18,7 +18,6 @@
     FIXED_SERVER_ROLES,
     FIXED_DB_ROLES,
   } from '$lib/users/mssql'
-  import MultiSelect from '$lib/components/MultiSelect.svelte'
 
   let dlgOpen = $state(false)
   $effect(() => {
@@ -188,9 +187,16 @@
           {/if}
         {/if}
         {#if mode === 'login' || mode === 'user'}
-          <label style="font-size:var(--px-12);color:var(--text2)">{mode === 'login' ? 'Server roles' : 'Database roles'}
-            <div style="margin-top:var(--px-4)"><MultiSelect bind:values={memberOf} options={roleOptions} placeholder="add role membership…" /></div>
-          </label>
+          <div style="font-size:var(--px-12);color:var(--text2)">{mode === 'login' ? 'Server roles' : 'Database roles'} <span style="color:var(--muted)">({memberOf.length} selected)</span></div>
+          <div style="margin-top:var(--px-4);max-height:var(--px-180);overflow:auto;border:var(--px-1) solid var(--border);border-radius:var(--px-7);padding:var(--px-6) var(--px-10);display:flex;flex-direction:column;gap:var(--px-3)">
+            {#each roleOptions as r (r)}
+              <label style="font-size:var(--px-12_5);color:var(--text);display:flex;align-items:center;gap:var(--px-7);cursor:pointer">
+                <input type="checkbox" checked={memberOf.includes(r)} onchange={(e) => (memberOf = (e.currentTarget as HTMLInputElement).checked ? [...memberOf, r] : memberOf.filter((x) => x !== r))} /> <span class="mono">{r}</span>
+              </label>
+            {:else}
+              <span style="font-size:var(--px-11_5);color:var(--muted)">No roles.</span>
+            {/each}
+          </div>
         {/if}
         <div style="font-size:var(--px-11);color:var(--muted)">SQL preview</div>
         <pre class="selectable mono" style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-10);font-size:var(--px-11_5);margin:0;max-height:var(--px-120);overflow:auto;color:var(--text2);white-space:pre-wrap">{previewSql || '-- enter a name'}</pre>
