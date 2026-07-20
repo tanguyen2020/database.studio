@@ -368,20 +368,22 @@ test('user manager: MSSQL server logins + database permission grid', async ({ pa
   await expect(page.getByRole('option', { name: /app_user/ }).first()).toBeVisible()
   await page.getByRole('option', { name: /app_user/ }).first().click()
   await page.waitForTimeout(150)
-  // guided grant: Grant action + whole schema (public.*) + Read-only
+  // guided grant: grouped by SCHEMA — the "public" schema section lists its
+  // objects (+ "*" whole schema). Grant action + whole schema + Read-only.
   await page.getByRole('button', { name: '＋ Grant access…' }).click()
   await page.waitForTimeout(500) // objects load per schema
-  await page.getByRole('dialog').getByText('public.*', { exact: true }).click()
-  await page.getByText('Read-only', { exact: true }).first().click()
+  const msDlg = page.getByRole('dialog')
+  await msDlg.getByText('*', { exact: true }).first().click() // "*" = whole public schema
+  await msDlg.getByText('Read-only', { exact: true }).first().click()
   await page.waitForTimeout(200)
   await expect(page.getByText(/GRANT SELECT ON SCHEMA::\[public\] TO \[app_user\]/).first()).toBeVisible()
   // DENY is now a first-class action (no longer hidden in a right-click)
-  await page.getByRole('dialog').getByRole('button', { name: 'Deny', exact: true }).click()
+  await msDlg.getByRole('button', { name: 'Deny', exact: true }).click()
   await page.waitForTimeout(200)
   await expect(page.getByText(/DENY SELECT ON SCHEMA::\[public\] TO \[app_user\]/).first()).toBeVisible()
-  // object-level: pick a specific object → grant on OBJECT, not schema
-  await page.getByRole('dialog').getByRole('button', { name: 'Grant', exact: true }).click()
-  await page.getByRole('dialog').getByText('public.students', { exact: true }).click()
+  // object-level: pick a specific object in the schema group → grant on OBJECT
+  await msDlg.getByRole('button', { name: 'Grant', exact: true }).click()
+  await msDlg.getByText('students', { exact: true }).click()
   await page.waitForTimeout(200)
   await expect(page.getByText(/GRANT SELECT ON \[public\]\.\[students\] TO \[app_user\]/).first()).toBeVisible()
   await page.getByRole('button', { name: 'Add to pending' }).click()

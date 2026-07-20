@@ -317,25 +317,25 @@
   ]
 
   let showMatrix = $state(false)
-  async function openGrantWizard() {
+  function openGrantWizard() {
     if (!selectedUser) return
-    // build the scope list: each schema (whole) + its objects (schema.object),
-    // so the user can grant on a whole schema OR a specific object.
     const target = dbCid || baseCid
-    const list: string[] = []
-    for (const s of schemas) {
-      list.push(`${s}.*`)
-      if (target) {
-        const tbls = await ipc.listTables(target, s).catch(() => [])
-        for (const t of tbls) list.push(`${s}.${t.name}`)
-      }
-    }
+    const user = selectedUser
+    // Grouped by SCHEMA: each schema is a section listing its objects (+ a
+    // "*" = whole schema entry). All run on the same database connection.
     grantWizard.show({
       title: 'Grant access',
-      role: selectedUser,
-      scopeLabel: 'Schema / object',
-      scopes: list,
-      // no "Revoke all" level — the Action selector below handles Revoke.
+      role: user,
+      scopeLabel: 'Object',
+      scopes: [],
+      scope2Label: 'Schema',
+      scopes2: schemas,
+      scope2Default: schemas,
+      loadScopesFor: async (schema) => {
+        const tbls = target ? await ipc.listTables(target, schema).catch(() => []) : []
+        return ['*', ...tbls.map((t) => t.name)] // "*" = whole schema
+      },
+      // no "Revoke all" level — the Action selector handles Revoke.
       levels: [
         { kind: 'read-only', label: 'Read-only', desc: 'View data (SELECT)' },
         { kind: 'read-write', label: 'Read-Write', desc: 'View + insert / update / delete' },
@@ -347,8 +347,13 @@
         { kind: 'deny', label: 'Deny', danger: true },
         { kind: 'revoke', label: 'Revoke', danger: true },
       ],
-      build: (kind, scope, extra) => [accessStatement(extra?.action ?? 'grant', kind, parseSecurable(scope), selectedUser)],
-      onApply: (stmts) => (pending = [...pending, ...stmts]),
+      build: (kind, inner, extra) => {
+        const schema = extra?.scope2 ?? 'dbo'
+        const scope = inner === '*' ? `${schema}.*` : `${schema}.${inner}`
+        return [accessStatement(extra?.action ?? 'grant', kind, parseSecurable(scope), user)]
+      },
+      // MSSQL grants run on the one selected database → flatten all groups.
+      onApplyGrouped: (groups) => (pending = [...pending, ...groups.flatMap((g) => g.statements)]),
     })
   }
 
