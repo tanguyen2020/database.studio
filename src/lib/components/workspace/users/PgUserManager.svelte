@@ -6,6 +6,7 @@
   // from introspection — never trust optimistic state).
   import { untrack } from 'svelte'
   import * as ipc from '$lib/ipc'
+  import * as ContextMenu from '$lib/components/ui/context-menu'
   import { toasts } from '$lib/stores/toast.svelte'
   import { pgRoleWizard } from '$lib/stores/pgrole.svelte'
   import { grantWizard, STANDARD_LEVELS } from '$lib/stores/grantwizard.svelte'
@@ -357,6 +358,31 @@
     confirmDrop = false
   }
 
+  // Quick drop from the role list (context menu / button) — confirm then run
+  // DROP ROLE immediately and reload (distinct from the General-tab queue path).
+  let dropConfirm = $state<string | null>(null)
+  let dropping = $state(false)
+  async function doDropRole() {
+    const name = dropConfirm
+    if (!cid || !name || dropping) return
+    dropping = true
+    try {
+      const res = await ipc.execStatement(cid, dropRole(name), 0)
+      if (!res.ok) {
+        toasts.error(res.error?.message ?? 'error')
+        return
+      }
+      toasts.success(`Dropped ${name}`, 'postgres')
+      if (selected === name) selected = ''
+      dropConfirm = null
+      await load()
+    } catch (e) {
+      toasts.error(String(e))
+    } finally {
+      dropping = false
+    }
+  }
+
   // ---- Execute pending ------------------------------------------------------
   async function execute() {
     if (!cid || !pending.length || executing) return
@@ -499,11 +525,29 @@
         <div style="padding:var(--px-14);color:var(--muted);font-size:var(--px-12)">Loading…</div>
       {:else}
         {#each roles as r (r.name)}
-          <div onclick={() => (selected = String(r.name))} onkeydown={(e) => e.key === 'Enter' && (selected = String(r.name))} role="option" tabindex="0" aria-selected={selected === String(r.name)} style="display:flex;align-items:center;gap:var(--px-6);padding:var(--px-6) var(--px-12);font-size:var(--px-12_5);cursor:pointer;border-bottom:var(--px-1) solid var(--border);background:{selected === String(r.name) ? 'var(--grid-select)' : 'transparent'};color:{selected === String(r.name) ? 'var(--hex-fff)' : 'var(--text)'}">
-            <span title={isGroup(r) ? 'Group role' : 'Login role'}>{isGroup(r) ? '👥' : '👤'}</span>
-            <span style="flex:1;overflow:hidden;text-overflow:ellipsis">{r.name}</span>
-            {#if boolY(r.rolsuper)}<span style="font-size:var(--px-9);font-weight:700;color:{selected === String(r.name) ? 'var(--hex-fff)' : 'var(--warn2)'}">SUPER</span>{/if}
-          </div>
+          {@const rn = String(r.name)}
+          {@const sel = selected === rn}
+          <ContextMenu.Root>
+            <ContextMenu.Trigger>
+              <div onclick={() => (selected = rn)} onkeydown={(e) => e.key === 'Enter' && (selected = rn)} role="option" tabindex="0" aria-selected={sel} style="display:flex;align-items:center;gap:var(--px-6);padding:var(--px-6) var(--px-12);font-size:var(--px-12_5);cursor:pointer;border-bottom:var(--px-1) solid var(--border);background:{sel ? 'var(--grid-select)' : 'transparent'};color:{sel ? 'var(--hex-fff)' : 'var(--text)'}">
+                <span title={isGroup(r) ? 'Group role' : 'Login role'}>{isGroup(r) ? '👥' : '👤'}</span>
+                <span style="flex:1;overflow:hidden;text-overflow:ellipsis">{r.name}</span>
+                {#if boolY(r.rolsuper)}<span style="font-size:var(--px-9);font-weight:700;color:{sel ? 'var(--hex-fff)' : 'var(--warn2)'}">SUPER</span>{/if}
+                <span
+                  onclick={(e) => { e.stopPropagation(); dropConfirm = rn }}
+                  onkeydown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); dropConfirm = rn } }}
+                  role="button"
+                  tabindex="0"
+                  title="Drop role"
+                  style="opacity:0.75;color:{sel ? 'var(--hex-fff)' : 'var(--error)'};font-size:var(--px-13);line-height:1;cursor:pointer"
+                >🗑</span>
+              </div>
+            </ContextMenu.Trigger>
+            <ContextMenu.Content>
+              <ContextMenu.Item onclick={() => (selected = rn)}>Select</ContextMenu.Item>
+              <ContextMenu.Item onclick={() => (dropConfirm = rn)}>Drop role…</ContextMenu.Item>
+            </ContextMenu.Content>
+          </ContextMenu.Root>
         {/each}
       {/if}
     </div>
@@ -694,3 +738,16 @@
     </div>
   </div>
 </div>
+
+{#if dropConfirm}
+  <div onkeydown={(e) => { if (e.key === 'Escape') dropConfirm = null; if (e.key === 'Enter') void doDropRole() }} role="presentation" style="position:fixed;inset:0;background:var(--rgba-0-0-0-_5);display:flex;align-items:center;justify-content:center;z-index:58">
+    <div onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()} role="dialog" aria-modal="true" tabindex="-1" style="width:var(--px-420);max-width:92vw;background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-12);box-shadow:0 var(--px-30) var(--px-70) var(--rgba-0-0-0-_55);padding:var(--px-18)">
+      <div style="font-size:var(--px-14);font-weight:600;color:var(--text);margin-bottom:var(--px-8)">Drop role</div>
+      <div style="font-size:var(--px-12_5);color:var(--text2);line-height:1.45;margin-bottom:var(--px-16)">Drop role <span class="mono" style="color:var(--text);font-weight:600">{dropConfirm}</span>? This cannot be undone. (If it owns objects or holds grants, PostgreSQL will error — reassign / drop those first.)</div>
+      <div style="display:flex;gap:var(--px-9);justify-content:flex-end">
+        <span onclick={() => (dropConfirm = null)} onkeydown={(e) => e.key === 'Enter' && (dropConfirm = null)} role="button" tabindex="0" style="font-size:var(--px-12_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-8);padding:var(--px-8) var(--px-16);cursor:pointer">Cancel</span>
+        <span onclick={doDropRole} onkeydown={(e) => e.key === 'Enter' && doDropRole()} role="button" tabindex="0" aria-disabled={dropping} style="font-size:var(--px-12_5);background:var(--error);color:var(--hex-fff);border-radius:var(--px-8);padding:var(--px-8) var(--px-18);cursor:{dropping ? 'not-allowed' : 'pointer'};opacity:{dropping ? 0.6 : 1};font-weight:600">{dropping ? 'Dropping…' : 'Drop role'}</span>
+      </div>
+    </div>
+  </div>
+{/if}

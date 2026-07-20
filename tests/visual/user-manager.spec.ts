@@ -69,6 +69,18 @@ test('user manager: PG shell lists roles and shows attributes', async ({ page })
   await page.waitForTimeout(150)
   await expect(page.getByText('Can login', { exact: true }).first()).toBeVisible()
   await expect(page.getByText('Superuser', { exact: true }).first()).toBeVisible()
+  // attributes are editable (toggling queues an ALTER ROLE)
+  await page.getByRole('checkbox').first().click()
+  await page.waitForTimeout(150)
+  await expect(page.getByText(/ALTER ROLE "app_user"/).first()).toBeVisible()
+
+  // drop from the list: right-click a role → Drop role… → in-app confirm
+  await page.getByRole('option', { name: /app_user/ }).first().click({ button: 'right' })
+  await page.waitForTimeout(200)
+  await page.getByRole('menuitem', { name: /Drop role…/ }).first().click()
+  await page.waitForTimeout(200)
+  await expect(page.getByText(/Drop role .*app_user.* This cannot be undone/).first()).toBeVisible()
+  await page.getByRole('button', { name: 'Cancel' }).click()
 
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
