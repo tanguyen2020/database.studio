@@ -25,6 +25,8 @@
     type RoleOptions,
   } from '$lib/users/postgres'
   import PrivilegeGrid from './PrivilegeGrid.svelte'
+  import PrincipalHeader from './PrincipalHeader.svelte'
+  import { CARD, CARD_TITLE, EXPLAINER } from './ui'
   import type { TabState } from '$lib/types'
 
   interface Props {
@@ -350,16 +352,8 @@
     pending = [...pending, { sql: revokeMembership(role, selected) }]
   }
 
-  // ---- Drop (confirm) -------------------------------------------------------
-  let confirmDrop = $state(false)
-  function queueDrop() {
-    if (!selected) return
-    pending = [...pending, { sql: dropRole(selected) }]
-    confirmDrop = false
-  }
-
-  // Quick drop from the role list (context menu / button) — confirm then run
-  // DROP ROLE immediately and reload (distinct from the General-tab queue path).
+  // Drop from the role list / General tab (context menu / button) — confirm
+  // then run DROP ROLE immediately and reload.
   let dropConfirm = $state<string | null>(null)
   let dropping = $state(false)
   async function doDropRole() {
@@ -504,7 +498,7 @@
   }
 </script>
 
-<div style="flex:1;display:flex;flex-direction:column;min-height:0">
+<div class="mono" style="flex:1;display:flex;flex-direction:column;min-height:0">
   <div style="flex:none;display:flex;align-items:center;gap:var(--px-8);padding:var(--px-9) var(--px-14);border-bottom:var(--px-1) solid var(--border);background:var(--surface);flex-wrap:wrap">
     <span style="font-size:var(--px-12);font-weight:700">Login/Group Roles</span>
     <span style="font-size:var(--px-11);color:var(--muted)">{roles.length} roles</span>
@@ -512,6 +506,10 @@
     <span onclick={refresh} onkeydown={(e) => e.key === 'Enter' && refresh()} role="button" tabindex="0" aria-busy={refreshing} style="margin-left:auto;font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer;opacity:{refreshing ? 0.6 : 1}">{refreshing ? '⟳ Refreshing…' : '⟳ Refresh'}</span>
   </div>
 
+  <!-- Model explainer — PostgreSQL merges "user" and "group" into one concept. -->
+  <div style={EXPLAINER}>
+    In PostgreSQL a <b style="color:var(--text2)">role</b> is both a user and a group. A role with <b style="color:var(--text2)">LOGIN</b> (👤) can sign in; a role without it (👥) is a group used to bundle privileges. Grant a role <b style="color:var(--text2)">membership</b> in a group to let it inherit that group's access.
+  </div>
   {#if !canManage}
     <div style="flex:none;padding:var(--px-8) var(--px-14);background:var(--panel);border-bottom:var(--px-1) solid var(--border);color:var(--warn2);font-size:var(--px-11_5)">Current role lacks CREATEROLE/SUPERUSER — management statements may fail.</div>
   {/if}
@@ -555,6 +553,15 @@
     <!-- Detail -->
     <div style="flex:1;display:flex;flex-direction:column;min-height:0">
       {#if selectedRole}
+        <div style="flex:none;padding:var(--px-12) var(--px-14) 0">
+          <PrincipalHeader
+            name={selected}
+            icon={isGroup(selectedRole) ? '👥' : '👤'}
+            subtitle={isGroup(selectedRole) ? 'Group role — bundles privileges (no login)' : 'Login role — can sign in'}
+            badge={boolY(selectedRole.rolsuper) ? 'SUPERUSER' : ''}
+            badgeDanger
+          />
+        </div>
         <div style="flex:none;display:flex;gap:var(--px-2);padding:var(--px-8) var(--px-12) 0;border-bottom:var(--px-1) solid var(--border)">
           {#each [['general', 'General'], ['membership', 'Membership'], ['privileges', 'Privileges'], ['access', 'Access'], ['default', 'Default privileges']] as [k, label] (k)}
             <span onclick={() => (detailTab = k as typeof detailTab)} onkeydown={(e) => e.key === 'Enter' && (detailTab = k as typeof detailTab)} role="tab" tabindex="0" aria-selected={detailTab === k} style="padding:var(--px-6) var(--px-12);font-size:var(--px-12);cursor:pointer;font-weight:600;border-bottom:var(--px-2) solid {detailTab === k ? 'var(--primary)' : 'transparent'};color:{detailTab === k ? 'var(--text)' : 'var(--muted)'}">{label}</span>
@@ -562,37 +569,35 @@
         </div>
         <div style="flex:1;overflow:auto;min-height:0;padding:var(--px-14)">
           {#if detailTab === 'general'}
-            <!-- editable attributes: toggling queues ALTER ROLE (§ pgAdmin-style) -->
-            <div style="font-size:var(--px-11);color:var(--muted);margin-bottom:var(--px-6)">Role attributes — toggle to queue ALTER ROLE.</div>
-            <div style="display:flex;flex-direction:column;gap:var(--px-4);margin-bottom:var(--px-12)">
-              {#each ATTRS as a (a.field)}
-                <label style="font-size:var(--px-12_5);color:var(--text);display:flex;align-items:center;gap:var(--px-7);cursor:pointer">
-                  <input type="checkbox" disabled={!canManage} checked={boolY(selectedRole[a.col])} onchange={(e) => queueAttr(a.field, a.col, (e.currentTarget as HTMLInputElement).checked)} /> {a.label}
-                </label>
-              {/each}
-            </div>
-            <div style="display:flex;gap:var(--px-8);align-items:flex-end;margin-bottom:var(--px-12);flex-wrap:wrap">
-              <label style="font-size:var(--px-12);color:var(--text2)">Connection limit
-                <input type="number" bind:value={newConnLimit} placeholder={String(selectedRole.rolconnlimit ?? -1)} class="mono" style="display:block;margin-top:var(--px-4);width:var(--px-110);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-8);color:var(--text)" />
-              </label>
-              <span onclick={queueConnLimit} onkeydown={(e) => e.key === 'Enter' && queueConnLimit()} role="button" tabindex="0" aria-disabled={newConnLimit == null} style="font-size:var(--px-11_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-10);cursor:{newConnLimit == null ? 'not-allowed' : 'pointer'};opacity:{newConnLimit == null ? 0.5 : 1}">Queue limit</span>
-              <span style="font-size:var(--px-11);color:var(--muted)">Valid until: {selectedRole.valid_until || '—'}</span>
-            </div>
-            <div style="display:flex;gap:var(--px-6);align-items:flex-end;margin-bottom:var(--px-12)">
-              <label style="font-size:var(--px-12);color:var(--text2)">Change password
-                <input type="password" bind:value={newPassword} class="mono" style="display:block;margin-top:var(--px-4);width:var(--px-220);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-8);color:var(--text)" />
-              </label>
-              <span onclick={queuePassword} onkeydown={(e) => e.key === 'Enter' && queuePassword()} role="button" tabindex="0" aria-disabled={!newPassword} style="font-size:var(--px-11_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-10);cursor:{newPassword ? 'pointer' : 'not-allowed'};opacity:{newPassword ? 1 : 0.5}">Queue change</span>
-            </div>
-            {#if confirmDrop}
-              <div style="display:flex;gap:var(--px-8);align-items:center;padding:var(--px-8);background:var(--panel);border:var(--px-1) solid var(--error);border-radius:var(--px-6)">
-                <span style="font-size:var(--px-12);color:var(--error)">Drop role “{selected}”?</span>
-                <span onclick={queueDrop} onkeydown={(e) => e.key === 'Enter' && queueDrop()} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--error);color:var(--hex-fff);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">Queue drop</span>
-                <span onclick={() => (confirmDrop = false)} onkeydown={(e) => e.key === 'Enter' && (confirmDrop = false)} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">Cancel</span>
+            <!-- Attributes card: toggling queues ALTER ROLE (pgAdmin-style) -->
+            <div style={CARD}>
+              <div style={CARD_TITLE}>Attributes <span style="font-weight:400;color:var(--muted);font-size:var(--px-10_5)">— toggle to queue ALTER ROLE</span></div>
+              <div style="display:flex;flex-direction:column;gap:var(--px-4)">
+                {#each ATTRS as a (a.field)}
+                  <label style="font-size:var(--px-12_5);color:var(--text);display:flex;align-items:center;gap:var(--px-7);cursor:pointer">
+                    <input type="checkbox" disabled={!canManage} checked={boolY(selectedRole[a.col])} onchange={(e) => queueAttr(a.field, a.col, (e.currentTarget as HTMLInputElement).checked)} /> {a.label}
+                  </label>
+                {/each}
               </div>
-            {:else}
-              <span onclick={() => (confirmDrop = true)} onkeydown={(e) => e.key === 'Enter' && (confirmDrop = true)} role="button" tabindex="0" style="font-size:var(--px-11_5);color:var(--error);border:var(--px-1) solid var(--error);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">Drop role…</span>
-            {/if}
+            </div>
+            <!-- Limits & password card -->
+            <div style={CARD}>
+              <div style={CARD_TITLE}>Limits &amp; password</div>
+              <div style="display:flex;gap:var(--px-8);align-items:flex-end;margin-bottom:var(--px-10);flex-wrap:wrap">
+                <label style="font-size:var(--px-11_5);color:var(--text2)">Connection limit
+                  <input type="number" bind:value={newConnLimit} placeholder={String(selectedRole.rolconnlimit ?? -1)} class="mono" style="display:block;margin-top:var(--px-4);width:var(--px-110);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-8);color:var(--text)" />
+                </label>
+                <span onclick={queueConnLimit} onkeydown={(e) => e.key === 'Enter' && queueConnLimit()} role="button" tabindex="0" aria-disabled={newConnLimit == null} style="font-size:var(--px-11_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-10);cursor:{newConnLimit == null ? 'not-allowed' : 'pointer'};opacity:{newConnLimit == null ? 0.5 : 1}">Queue limit</span>
+                <span style="font-size:var(--px-11);color:var(--muted)">Valid until: {selectedRole.valid_until || '—'}</span>
+              </div>
+              <div style="display:flex;gap:var(--px-6);align-items:flex-end;flex-wrap:wrap">
+                <label style="font-size:var(--px-11_5);color:var(--text2)">Change password
+                  <input type="password" bind:value={newPassword} class="mono" style="display:block;margin-top:var(--px-4);width:var(--px-220);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-8);color:var(--text)" />
+                </label>
+                <span onclick={queuePassword} onkeydown={(e) => e.key === 'Enter' && queuePassword()} role="button" tabindex="0" aria-disabled={!newPassword} style="font-size:var(--px-11_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-10);cursor:{newPassword ? 'pointer' : 'not-allowed'};opacity:{newPassword ? 1 : 0.5}">Queue change</span>
+              </div>
+            </div>
+            <span onclick={() => (dropConfirm = selected)} onkeydown={(e) => e.key === 'Enter' && (dropConfirm = selected)} role="button" tabindex="0" style="font-size:var(--px-11_5);color:var(--error);border:var(--px-1) solid var(--error);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">Drop role…</span>
           {:else if detailTab === 'membership'}
             <div style="font-size:var(--px-12);color:var(--text2);font-weight:600;margin-bottom:var(--px-6)">Member of</div>
             {#if memberOf.length}

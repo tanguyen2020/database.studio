@@ -24,6 +24,8 @@
     type PresetKind,
   } from '$lib/users/cassandra'
   import PrivilegeGrid from './PrivilegeGrid.svelte'
+  import PrincipalHeader from './PrincipalHeader.svelte'
+  import { CARD, CARD_TITLE, EXPLAINER } from './ui'
   import type { TabState } from '$lib/types'
 
   interface Props {
@@ -232,11 +234,6 @@
     const s = alterRole(selected, { superuser })
     if (s) pending = [...pending, s]
   }
-  let confirmDrop = $state(false)
-  function queueDrop() {
-    if (selected) pending = [...pending, dropRole(selected)]
-    confirmDrop = false
-  }
 
   // Quick drop from the list (context menu / row button) — runs via cql_exec.
   let dropTarget = $state<string | null>(null)
@@ -292,13 +289,16 @@
   const discard = () => (pending = [])
 </script>
 
-<div style="flex:1;display:flex;flex-direction:column;min-height:0">
+<div class="mono" style="flex:1;display:flex;flex-direction:column;min-height:0">
   <div style="flex:none;display:flex;align-items:center;gap:var(--px-8);padding:var(--px-9) var(--px-14);border-bottom:var(--px-1) solid var(--border);background:var(--surface);flex-wrap:wrap">
     <span style="font-size:var(--px-12);font-weight:700">Roles</span>
     <span style="font-size:var(--px-11);color:var(--muted)">{roles.length} roles</span>
     <span onclick={() => cid && cassUserWizard.show(cid)} onkeydown={(e) => e.key === 'Enter' && cid && cassUserWizard.show(cid)} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer;font-weight:600">+ Create Role</span>
     <span onclick={refresh} onkeydown={(e) => e.key === 'Enter' && refresh()} role="button" tabindex="0" aria-busy={refreshing} style="margin-left:auto;font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer;opacity:{refreshing ? 0.6 : 1}">{refreshing ? '⟳ Refreshing…' : '⟳ Refresh'}</span>
   </div>
+
+  <!-- Model explainer — Cassandra: a role may log in / be superuser; roles nest. -->
+  <div style={EXPLAINER}>In Cassandra a <b style="color:var(--text2)">role</b> can optionally <b style="color:var(--text2)">log in</b> (LOGIN) and can be a <b style="color:var(--text2)">superuser</b>. Roles are granted to other roles to inherit their permissions; permissions are set per <b style="color:var(--text2)">keyspace</b> or <b style="color:var(--text2)">table</b>. Requires PasswordAuthenticator + CassandraAuthorizer on the server.</div>
 
   {#if !gateOk}
     <div style="flex:none;padding:var(--px-8) var(--px-14);background:var(--panel);border-bottom:var(--px-1) solid var(--border);color:var(--warn2);font-size:var(--px-11_5)">Role management needs PasswordAuthenticator + CassandraAuthorizer in cassandra.yaml (default AllowAll disables it).</div>
@@ -338,42 +338,53 @@
           {/each}
         </div>
         <div style="flex:1;overflow:auto;min-height:0;padding:var(--px-14)">
+          <PrincipalHeader
+            name={selected}
+            icon={boolY(selectedRole.login) ? '👤' : '👥'}
+            subtitle={boolY(selectedRole.login) ? 'Role · can log in' : 'Role'}
+            badge={boolY(selectedRole.super) ? 'SUPERUSER' : ''}
+            badgeDanger
+          />
           {#if detailTab === 'general'}
-            <table class="mono" style="border-collapse:collapse;font-size:var(--px-12);margin-bottom:var(--px-14)">
-              <tbody>
-                {#each [['Role', selectedRole.role], ['Login', boolY(selectedRole.login) ? 'yes' : 'no'], ['Superuser', boolY(selectedRole.super) ? 'yes' : 'no']] as [k, v] (k)}
-                  <tr><td style="padding:var(--px-3) var(--px-14) var(--px-3) 0;color:var(--text2);white-space:nowrap">{k}</td><td style="padding:var(--px-3) 0;color:var(--text)">{v}</td></tr>
-                {/each}
-              </tbody>
-            </table>
-            <div style="display:flex;gap:var(--px-6);align-items:flex-end;margin-bottom:var(--px-10)">
-              <label style="font-size:var(--px-12);color:var(--text2)">Change password
-                <input type="password" bind:value={newPassword} class="mono" style="display:block;margin-top:var(--px-4);width:var(--px-220);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-8);color:var(--text)" />
-              </label>
-              <span onclick={queuePassword} onkeydown={(e) => e.key === 'Enter' && queuePassword()} role="button" tabindex="0" aria-disabled={!newPassword} style="font-size:var(--px-11_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-10);cursor:{newPassword ? 'pointer' : 'not-allowed'};opacity:{newPassword ? 1 : 0.5}">Queue change</span>
-            </div>
-            <div style="display:flex;gap:var(--px-8);margin-bottom:var(--px-12);flex-wrap:wrap">
-              <span onclick={() => queueLogin(!boolY(selectedRole.login))} onkeydown={(e) => e.key === 'Enter' && queueLogin(!boolY(selectedRole.login))} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">{boolY(selectedRole.login) ? 'Queue NOLOGIN' : 'Queue LOGIN'}</span>
-              <span onclick={() => queueSuper(!boolY(selectedRole.super))} onkeydown={(e) => e.key === 'Enter' && queueSuper(!boolY(selectedRole.super))} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">{boolY(selectedRole.super) ? 'Queue NOSUPERUSER' : 'Queue SUPERUSER'}</span>
-            </div>
-            {#if confirmDrop}
-              <div style="display:flex;gap:var(--px-8);align-items:center;padding:var(--px-8);background:var(--panel);border:var(--px-1) solid var(--error);border-radius:var(--px-6)">
-                <span style="font-size:var(--px-12);color:var(--error)">Drop role “{selected}”?</span>
-                <span onclick={queueDrop} onkeydown={(e) => e.key === 'Enter' && queueDrop()} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--error);color:var(--hex-fff);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">Queue drop</span>
-                <span onclick={() => (confirmDrop = false)} onkeydown={(e) => e.key === 'Enter' && (confirmDrop = false)} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">Cancel</span>
+            <div style={CARD}>
+              <div style={CARD_TITLE}>Attributes</div>
+              <table class="mono" style="border-collapse:collapse;font-size:var(--px-12);margin-bottom:var(--px-12)">
+                <tbody>
+                  {#each [['Role', selectedRole.role], ['Login', boolY(selectedRole.login) ? 'yes' : 'no'], ['Superuser', boolY(selectedRole.super) ? 'yes' : 'no']] as [k, v] (k)}
+                    <tr><td style="padding:var(--px-3) var(--px-14) var(--px-3) 0;color:var(--text2);white-space:nowrap">{k}</td><td style="padding:var(--px-3) 0;color:var(--text)">{v}</td></tr>
+                  {/each}
+                </tbody>
+              </table>
+              <div style="display:flex;gap:var(--px-8);flex-wrap:wrap">
+                <span onclick={() => queueLogin(!boolY(selectedRole.login))} onkeydown={(e) => e.key === 'Enter' && queueLogin(!boolY(selectedRole.login))} role="button" tabindex="0" title="LOGIN lets this role authenticate and connect (i.e. act as a user)." style="font-size:var(--px-11_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">{boolY(selectedRole.login) ? 'Queue NOLOGIN' : 'Queue LOGIN'}</span>
+                <span onclick={() => queueSuper(!boolY(selectedRole.super))} onkeydown={(e) => e.key === 'Enter' && queueSuper(!boolY(selectedRole.super))} role="button" tabindex="0" title="SUPERUSER bypasses all permission checks — grant sparingly." style="font-size:var(--px-11_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">{boolY(selectedRole.super) ? 'Queue NOSUPERUSER' : 'Queue SUPERUSER'}</span>
               </div>
-            {:else}
-              <span onclick={() => (confirmDrop = true)} onkeydown={(e) => e.key === 'Enter' && (confirmDrop = true)} role="button" tabindex="0" style="font-size:var(--px-11_5);color:var(--error);border:var(--px-1) solid var(--error);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">Drop role…</span>
-            {/if}
-          {:else if detailTab === 'members'}
-            <div style="display:flex;gap:var(--px-6);align-items:center;flex-wrap:wrap">
-              <select bind:value={grantRoleName} class="mono" style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4);color:var(--text);font-size:var(--px-12)">
-                <option value="">— grant role to {selected} —</option>
-                {#each roles.filter((r) => String(r.role) !== selected) as r (r.role)}<option value={String(r.role)}>{r.role}</option>{/each}
-              </select>
-              <span onclick={queueGrantRole} onkeydown={(e) => e.key === 'Enter' && queueGrantRole()} role="button" tabindex="0" aria-disabled={!grantRoleName} style="font-size:var(--px-11_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:{grantRoleName ? 'pointer' : 'not-allowed'};opacity:{grantRoleName ? 1 : 0.5}">Queue grant</span>
             </div>
-            <div style="font-size:var(--px-10_5);color:var(--muted);margin-top:var(--px-8)">GRANT &lt;role&gt; TO {selected} — role membership (a role can inherit another role's permissions).</div>
+            <div style={CARD}>
+              <div style={CARD_TITLE}>Password</div>
+              <div style="display:flex;gap:var(--px-6);align-items:flex-end">
+                <label style="font-size:var(--px-12);color:var(--text2)">Change password
+                  <input type="password" bind:value={newPassword} class="mono" style="display:block;margin-top:var(--px-4);width:var(--px-220);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-8);color:var(--text)" />
+                </label>
+                <span onclick={queuePassword} onkeydown={(e) => e.key === 'Enter' && queuePassword()} role="button" tabindex="0" aria-disabled={!newPassword} style="font-size:var(--px-11_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-10);cursor:{newPassword ? 'pointer' : 'not-allowed'};opacity:{newPassword ? 1 : 0.5}">Queue change</span>
+              </div>
+            </div>
+            <div style={CARD}>
+              <div style={CARD_TITLE}>Delete role</div>
+              <span onclick={() => (dropTarget = selected)} onkeydown={(e) => e.key === 'Enter' && (dropTarget = selected)} role="button" tabindex="0" title="DROP ROLE — removes the role permanently." style="font-size:var(--px-11_5);color:var(--error);border:var(--px-1) solid var(--error);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">Drop role…</span>
+            </div>
+          {:else if detailTab === 'members'}
+            <div style={CARD}>
+              <div style={CARD_TITLE}>Role membership</div>
+              <div style="display:flex;gap:var(--px-6);align-items:center;flex-wrap:wrap">
+                <select bind:value={grantRoleName} class="mono" style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4);color:var(--text);font-size:var(--px-12)">
+                  <option value="">— grant role to {selected} —</option>
+                  {#each roles.filter((r) => String(r.role) !== selected) as r (r.role)}<option value={String(r.role)}>{r.role}</option>{/each}
+                </select>
+                <span onclick={queueGrantRole} onkeydown={(e) => e.key === 'Enter' && queueGrantRole()} role="button" tabindex="0" aria-disabled={!grantRoleName} style="font-size:var(--px-11_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:{grantRoleName ? 'pointer' : 'not-allowed'};opacity:{grantRoleName ? 1 : 0.5}">Queue grant</span>
+              </div>
+              <div style="font-size:var(--px-10_5);color:var(--muted);margin-top:var(--px-8)">GRANT &lt;role&gt; TO {selected} — role membership (a role can inherit another role's permissions).</div>
+            </div>
           {:else if detailTab === 'perms'}
             <!-- Permissions -->
             <div style="display:flex;align-items:center;gap:var(--px-10);margin-bottom:var(--px-10);flex-wrap:wrap">

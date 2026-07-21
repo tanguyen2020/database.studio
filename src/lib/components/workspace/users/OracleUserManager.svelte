@@ -28,6 +28,8 @@
     schemaPreset,
     type PresetKind,
   } from '$lib/users/oracle'
+  import PrincipalHeader from './PrincipalHeader.svelte'
+  import { CARD, CARD_TITLE, CARD_HINT, EXPLAINER } from './ui'
   import type { TabState } from '$lib/types'
 
   interface Props {
@@ -148,12 +150,6 @@
   function queueExpire() {
     if (selected) pending = [...pending, expirePassword(selected)]
   }
-  let dropCascade = $state(true)
-  let confirmDrop = $state(false)
-  function queueDrop() {
-    if (selected) pending = [...pending, dropUser(selected, dropCascade)]
-    confirmDrop = false
-  }
 
   // Quick drop from the list (context menu / row button) — DROP USER … CASCADE.
   let dropTarget = $state<string | null>(null)
@@ -273,13 +269,16 @@
   const discard = () => (pending = [])
 </script>
 
-<div style="flex:1;display:flex;flex-direction:column;min-height:0">
+<div class="mono" style="flex:1;display:flex;flex-direction:column;min-height:0">
   <div style="flex:none;display:flex;align-items:center;gap:var(--px-8);padding:var(--px-9) var(--px-14);border-bottom:var(--px-1) solid var(--border);background:var(--surface);flex-wrap:wrap">
     <span style="font-size:var(--px-12);font-weight:700">Users</span>
     <span style="font-size:var(--px-11);color:var(--muted)">{users.length} users</span>
-    <span onclick={() => cid && oraUserWizard.show(cid)} onkeydown={(e) => e.key === 'Enter' && cid && oraUserWizard.show(cid)} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer;font-weight:600">+ Create User</span>
-    <span onclick={refresh} onkeydown={(e) => e.key === 'Enter' && refresh()} role="button" tabindex="0" aria-busy={refreshing} style="margin-left:auto;font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer;opacity:{refreshing ? 0.6 : 1}">{refreshing ? '⟳ Refreshing…' : '⟳ Refresh'}</span>
+    <span onclick={() => cid && oraUserWizard.show(cid)} onkeydown={(e) => e.key === 'Enter' && cid && oraUserWizard.show(cid)} role="button" tabindex="0" title="Create a new Oracle user (which is also a schema)" style="font-size:var(--px-11_5);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer;font-weight:600">+ Create User</span>
+    <span onclick={refresh} onkeydown={(e) => e.key === 'Enter' && refresh()} role="button" tabindex="0" aria-busy={refreshing} title="Reload users and privileges from the database" style="margin-left:auto;font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer;opacity:{refreshing ? 0.6 : 1}">{refreshing ? '⟳ Refreshing…' : '⟳ Refresh'}</span>
   </div>
+
+  <!-- Oracle's model in one line — a user is a schema; access = system privs + roles + object privs. -->
+  <div style={EXPLAINER}>In Oracle a <b style="color:var(--text2)">user is also a schema</b>. Access is made of <b style="color:var(--text2)">system privileges</b> (e.g. <span class="mono" style="color:var(--text)">CREATE SESSION</span> to log in), <b style="color:var(--text2)">roles</b> (privilege bundles), and <b style="color:var(--text2)">object privileges</b> on other schemas' objects.</div>
 
   <div style="flex:1;display:flex;min-height:0">
     <div role="listbox" tabindex="-1" aria-label="Users" style="flex:none;width:var(--px-240);border-right:var(--px-1) solid var(--border);overflow:auto;min-height:0">
@@ -314,101 +313,118 @@
           {/each}
         </div>
         <div style="flex:1;overflow:auto;min-height:0;padding:var(--px-14)">
+          <PrincipalHeader
+            name={selected.toUpperCase()}
+            subtitle="User / schema"
+            badge={String(selectedUser.status).includes('LOCKED') ? 'LOCKED' : ''}
+            badgeDanger
+          />
           {#if detailTab === 'general'}
-            <table class="mono" style="border-collapse:collapse;font-size:var(--px-12);margin-bottom:var(--px-14)">
-              <tbody>
-                {#each [['Name', selectedUser.name], ['Status', selectedUser.status], ['Tablespace', selectedUser.tablespace], ['Profile', selectedUser.profile], ['Created', selectedUser.created], ['Expires', selectedUser.expires]] as [k, v] (k)}
-                  <tr><td style="padding:var(--px-3) var(--px-14) var(--px-3) 0;color:var(--text2);white-space:nowrap">{k}</td><td style="padding:var(--px-3) 0;color:var(--text)">{v}</td></tr>
-                {/each}
-              </tbody>
-            </table>
-            <div style="display:flex;gap:var(--px-6);align-items:flex-end;margin-bottom:var(--px-10)">
-              <label style="font-size:var(--px-12);color:var(--text2)">Change password
-                <input type="password" bind:value={newPassword} class="mono" style="display:block;margin-top:var(--px-4);width:var(--px-220);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-8);color:var(--text)" />
-              </label>
-              <span onclick={queuePassword} onkeydown={(e) => e.key === 'Enter' && queuePassword()} role="button" tabindex="0" aria-disabled={!newPassword} style="font-size:var(--px-11_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-10);cursor:{newPassword ? 'pointer' : 'not-allowed'};opacity:{newPassword ? 1 : 0.5}">Queue change</span>
+            <div style={CARD}>
+              <div style={CARD_TITLE}>Details</div>
+              <table class="mono" style="border-collapse:collapse;font-size:var(--px-12)">
+                <tbody>
+                  {#each [['Name', selectedUser.name], ['Status', selectedUser.status], ['Tablespace', selectedUser.tablespace], ['Profile', selectedUser.profile], ['Created', selectedUser.created], ['Expires', selectedUser.expires]] as [k, v] (k)}
+                    <tr><td style="padding:var(--px-3) var(--px-14) var(--px-3) 0;color:var(--text2);white-space:nowrap">{k}</td><td style="padding:var(--px-3) 0;color:var(--text)">{v}</td></tr>
+                  {/each}
+                </tbody>
+              </table>
             </div>
-            <div style="display:flex;gap:var(--px-8);margin-bottom:var(--px-12);flex-wrap:wrap">
-              <span onclick={() => queueLock(true)} onkeydown={(e) => e.key === 'Enter' && queueLock(true)} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">Queue lock</span>
-              <span onclick={() => queueLock(false)} onkeydown={(e) => e.key === 'Enter' && queueLock(false)} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">Queue unlock</span>
-              <span onclick={queueExpire} onkeydown={(e) => e.key === 'Enter' && queueExpire()} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">Queue expire password</span>
-            </div>
-            {#if confirmDrop}
-              <div style="display:flex;gap:var(--px-8);align-items:center;padding:var(--px-8);background:var(--panel);border:var(--px-1) solid var(--error);border-radius:var(--px-6);flex-wrap:wrap">
-                <span style="font-size:var(--px-12);color:var(--error)">Drop user “{selected}”?</span>
-                <label style="font-size:var(--px-11_5);color:var(--error);display:flex;align-items:center;gap:var(--px-4)"><input type="checkbox" bind:checked={dropCascade} /> CASCADE (drops all schema objects)</label>
-                <span onclick={queueDrop} onkeydown={(e) => e.key === 'Enter' && queueDrop()} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--error);color:var(--hex-fff);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">Queue drop</span>
-                <span onclick={() => (confirmDrop = false)} onkeydown={(e) => e.key === 'Enter' && (confirmDrop = false)} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">Cancel</span>
-              </div>
-            {:else}
-              <span onclick={() => (confirmDrop = true)} onkeydown={(e) => e.key === 'Enter' && (confirmDrop = true)} role="button" tabindex="0" style="font-size:var(--px-11_5);color:var(--error);border:var(--px-1) solid var(--error);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">Drop user…</span>
-            {/if}
-          {:else if detailTab === 'sys'}
-            <div style="display:flex;flex-wrap:wrap;gap:var(--px-10)">
-              {#each SYS_PRIVS as p (p)}
-                <label style="font-size:var(--px-11_5);color:var(--text);display:flex;align-items:center;gap:var(--px-4)">
-                  <input type="checkbox" checked={grantedSys.has(p)} onchange={(e) => toggleSys(p, (e.currentTarget as HTMLInputElement).checked)} /> {p}
+            <div style={CARD}>
+              <div style={CARD_TITLE}>Password</div>
+              <div style="display:flex;gap:var(--px-6);align-items:flex-end">
+                <label style="font-size:var(--px-12);color:var(--text2)">Change password
+                  <input type="password" bind:value={newPassword} class="mono" style="display:block;margin-top:var(--px-4);width:var(--px-220);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-8);color:var(--text)" />
                 </label>
-              {/each}
+                <span onclick={queuePassword} onkeydown={(e) => e.key === 'Enter' && queuePassword()} role="button" tabindex="0" aria-disabled={!newPassword} title="Queue an ALTER USER … IDENTIFIED BY change" style="font-size:var(--px-11_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-10);cursor:{newPassword ? 'pointer' : 'not-allowed'};opacity:{newPassword ? 1 : 0.5}">Queue change</span>
+              </div>
+            </div>
+            <div style={CARD}>
+              <div style={CARD_TITLE}>Account state <span style={CARD_HINT}>— lock, unlock or force a password reset on next login</span></div>
+              <div style="display:flex;gap:var(--px-8);flex-wrap:wrap">
+                <span onclick={() => queueLock(true)} onkeydown={(e) => e.key === 'Enter' && queueLock(true)} role="button" tabindex="0" title="Prevent this user from logging in (ACCOUNT LOCK)" style="font-size:var(--px-11_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">Queue lock</span>
+                <span onclick={() => queueLock(false)} onkeydown={(e) => e.key === 'Enter' && queueLock(false)} role="button" tabindex="0" title="Allow this user to log in again (ACCOUNT UNLOCK)" style="font-size:var(--px-11_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">Queue unlock</span>
+                <span onclick={queueExpire} onkeydown={(e) => e.key === 'Enter' && queueExpire()} role="button" tabindex="0" title="Force a password change on next login (PASSWORD EXPIRE)" style="font-size:var(--px-11_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">Queue expire password</span>
+              </div>
+            </div>
+            <span onclick={() => (dropTarget = selected)} onkeydown={(e) => e.key === 'Enter' && (dropTarget = selected)} role="button" tabindex="0" title="Drop the user and its schema objects (DROP USER … CASCADE)" style="font-size:var(--px-11_5);color:var(--error);border:var(--px-1) solid var(--error);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">Drop user…</span>
+          {:else if detailTab === 'sys'}
+            <div style={CARD}>
+              <div style={CARD_TITLE}>System privileges <span style={CARD_HINT}>— instance-wide capabilities (e.g. CREATE SESSION to log in)</span></div>
+              <div style="display:flex;flex-wrap:wrap;gap:var(--px-10)">
+                {#each SYS_PRIVS as p (p)}
+                  <label style="font-size:var(--px-11_5);color:var(--text);display:flex;align-items:center;gap:var(--px-4)">
+                    <input type="checkbox" checked={grantedSys.has(p)} onchange={(e) => toggleSys(p, (e.currentTarget as HTMLInputElement).checked)} /> {p}
+                  </label>
+                {/each}
+              </div>
             </div>
           {:else if detailTab === 'roles'}
-            <div style="font-size:var(--px-12);color:var(--text2);font-weight:600;margin-bottom:var(--px-6)">Granted roles</div>
-            {#if grantedRoles.length}
-              {#each rolePrivs as r (r.role)}
-                <div style="display:flex;align-items:center;gap:var(--px-8);font-size:var(--px-12);padding:var(--px-2) 0">
-                  <span class="mono">{r.role}</span>
-                  {#if String(r.admin_option) === 'YES'}<span style="font-size:var(--px-9);color:var(--muted)">ADMIN</span>{/if}
-                  {#if String(r.default_role) === 'YES'}<span style="font-size:var(--px-9);color:var(--muted)">DEFAULT</span>{/if}
-                  <span onclick={() => queueRevokeRole(String(r.role))} onkeydown={(e) => e.key === 'Enter' && queueRevokeRole(String(r.role))} role="button" tabindex="0" style="font-size:var(--px-10_5);color:var(--error);cursor:pointer">revoke</span>
-                </div>
-              {/each}
-            {:else}
-              <div style="font-size:var(--px-11_5);color:var(--muted)">No roles granted.</div>
-            {/if}
-            <div style="display:flex;gap:var(--px-6);align-items:center;margin-top:var(--px-10);flex-wrap:wrap">
-              <select bind:value={grantRoleName} class="mono" style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4);color:var(--text);font-size:var(--px-12)">
-                <option value="">— grant role —</option>
-                {#each roles.filter((r) => !grantedRoles.includes(String(r.name))) as r (r.name)}<option value={String(r.name)}>{r.name}</option>{/each}
-              </select>
-              <span onclick={queueGrantRole} onkeydown={(e) => e.key === 'Enter' && queueGrantRole()} role="button" tabindex="0" aria-disabled={!grantRoleName} style="font-size:var(--px-11_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:{grantRoleName ? 'pointer' : 'not-allowed'};opacity:{grantRoleName ? 1 : 0.5}">Queue grant</span>
-              <span onclick={queueDefaultRoleAll} onkeydown={(e) => e.key === 'Enter' && queueDefaultRoleAll()} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">Default role ALL</span>
+            <div style={CARD}>
+              <div style={CARD_TITLE}>Granted roles <span style={CARD_HINT}>— bundles of privileges granted to this user</span></div>
+              {#if grantedRoles.length}
+                {#each rolePrivs as r (r.role)}
+                  <div style="display:flex;align-items:center;gap:var(--px-8);font-size:var(--px-12);padding:var(--px-2) 0">
+                    <span class="mono">{r.role}</span>
+                    {#if String(r.admin_option) === 'YES'}<span style="font-size:var(--px-9);color:var(--muted)">ADMIN</span>{/if}
+                    {#if String(r.default_role) === 'YES'}<span style="font-size:var(--px-9);color:var(--muted)">DEFAULT</span>{/if}
+                    <span onclick={() => queueRevokeRole(String(r.role))} onkeydown={(e) => e.key === 'Enter' && queueRevokeRole(String(r.role))} role="button" tabindex="0" title="Queue REVOKE {r.role} FROM {selected}" style="font-size:var(--px-10_5);color:var(--error);cursor:pointer">revoke</span>
+                  </div>
+                {/each}
+              {:else}
+                <div style="font-size:var(--px-11_5);color:var(--muted)">No roles granted.</div>
+              {/if}
+              <div style="display:flex;gap:var(--px-6);align-items:center;margin-top:var(--px-10);flex-wrap:wrap">
+                <select bind:value={grantRoleName} class="mono" style="background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4);color:var(--text);font-size:var(--px-12)">
+                  <option value="">— grant role —</option>
+                  {#each roles.filter((r) => !grantedRoles.includes(String(r.name))) as r (r.name)}<option value={String(r.name)}>{r.name}</option>{/each}
+                </select>
+                <span onclick={queueGrantRole} onkeydown={(e) => e.key === 'Enter' && queueGrantRole()} role="button" tabindex="0" aria-disabled={!grantRoleName} title="Queue GRANT of the selected role to this user" style="font-size:var(--px-11_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:{grantRoleName ? 'pointer' : 'not-allowed'};opacity:{grantRoleName ? 1 : 0.5}">Queue grant</span>
+                <span onclick={queueDefaultRoleAll} onkeydown={(e) => e.key === 'Enter' && queueDefaultRoleAll()} role="button" tabindex="0" title="Make all granted roles active by default (DEFAULT ROLE ALL)" style="font-size:var(--px-11_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">Default role ALL</span>
+              </div>
             </div>
           {:else if detailTab === 'quotas'}
-            <div style="font-size:var(--px-11);color:var(--muted);margin-bottom:var(--px-8)">Tablespace quotas for {selected} (set new quotas in the Create/General flow).</div>
-            {#each [quotas.filter((q) => String(q.name) === selected)] as list (0)}
-              {#if list.length}
-                <table class="mono" style="border-collapse:collapse;font-size:var(--px-12)">
-                  <thead><tr><th style="text-align:left;padding:var(--px-4) var(--px-14) var(--px-4) 0;color:var(--text2);border-bottom:var(--px-1) solid var(--border2)">Tablespace</th><th style="text-align:left;padding:var(--px-4) 0;color:var(--text2);border-bottom:var(--px-1) solid var(--border2)">Quota</th></tr></thead>
-                  <tbody>
-                    {#each list as q (q.tablespace)}
-                      <tr><td style="padding:var(--px-3) var(--px-14) var(--px-3) 0;color:var(--text)">{q.tablespace}</td><td style="padding:var(--px-3) 0;color:var(--text)">{q.quota}</td></tr>
-                    {/each}
-                  </tbody>
-                </table>
-              {:else}
-                <div style="font-size:var(--px-11_5);color:var(--muted)">No tablespace quotas.</div>
-              {/if}
-            {/each}
-          {:else if detailTab === 'objects'}
-            <!-- Guided grant (primary): Schema(owner) → object(s) + level + Grant/Revoke -->
-            <div style="display:flex;align-items:center;gap:var(--px-10);margin-bottom:var(--px-10);flex-wrap:wrap">
-              <span onclick={openGrantWizard} onkeydown={(e) => e.key === 'Enter' && openGrantWizard()} role="button" tabindex="0" style="font-size:var(--px-12_5);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-7);padding:var(--px-6) var(--px-14);cursor:pointer;font-weight:600">＋ Grant access…</span>
-              <span style="font-size:var(--px-11);color:var(--muted)">Pick a schema (owner) → object(s) → level (Grant/Revoke).</span>
-            </div>
-            <!-- Object privileges — per owner, batched (Oracle has no GRANT ON SCHEMA) -->
-            <div style="display:flex;align-items:center;gap:var(--px-8);margin-bottom:var(--px-8);flex-wrap:wrap">
-              <span style="font-size:var(--px-12);color:var(--text2)">Or grant on all objects owned by</span>
-              <select bind:value={gridOwner} class="mono" style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-3) var(--px-6);color:var(--text);font-size:var(--px-12)">
-                <option value="">— schema —</option>
-                {#each owners as o (o)}<option value={o}>{o}</option>{/each}
-              </select>
-            </div>
-            <div style="display:flex;gap:var(--px-6);flex-wrap:wrap">
-              {#each [['read-only', 'Read-only'], ['read-write', 'Read-write'], ['read-write-execute', 'Read-write + Execute'], ['revoke-all', 'Revoke all']] as [kind, label] (kind)}
-                <span onclick={() => applyObjPreset(kind as PresetKind)} onkeydown={(e) => e.key === 'Enter' && applyObjPreset(kind as PresetKind)} role="button" tabindex="0" aria-disabled={!gridOwner} style="font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:{gridOwner ? 'pointer' : 'not-allowed'};opacity:{gridOwner ? 1 : 0.5};color:{kind === 'revoke-all' ? 'var(--error)' : 'var(--text2)'}">{label}</span>
+            <div style={CARD}>
+              <div style={CARD_TITLE}>Tablespace quotas</div>
+              <div style="font-size:var(--px-11);color:var(--muted);margin-bottom:var(--px-8)">Tablespace quotas for {selected} (set new quotas in the Create/General flow).</div>
+              {#each [quotas.filter((q) => String(q.name) === selected)] as list (0)}
+                {#if list.length}
+                  <table class="mono" style="border-collapse:collapse;font-size:var(--px-12)">
+                    <thead><tr><th style="text-align:left;padding:var(--px-4) var(--px-14) var(--px-4) 0;color:var(--text2);border-bottom:var(--px-1) solid var(--border2)">Tablespace</th><th style="text-align:left;padding:var(--px-4) 0;color:var(--text2);border-bottom:var(--px-1) solid var(--border2)">Quota</th></tr></thead>
+                    <tbody>
+                      {#each list as q (q.tablespace)}
+                        <tr><td style="padding:var(--px-3) var(--px-14) var(--px-3) 0;color:var(--text)">{q.tablespace}</td><td style="padding:var(--px-3) 0;color:var(--text)">{q.quota}</td></tr>
+                      {/each}
+                    </tbody>
+                  </table>
+                {:else}
+                  <div style="font-size:var(--px-11_5);color:var(--muted)">No tablespace quotas.</div>
+                {/if}
               {/each}
             </div>
-            {#if objCount != null}<div style="font-size:var(--px-10_5);color:var(--muted);margin-top:var(--px-8)">Last preset built statements for {objCount} object(s). Oracle grants per-object — objects created later are not covered.</div>{/if}
+          {:else if detailTab === 'objects'}
+            <div style={CARD}>
+              <div style={CARD_TITLE}>Object privileges <span style={CARD_HINT}>— grants on another schema's tables/views (Oracle has no GRANT ON SCHEMA)</span></div>
+              <!-- Guided grant (primary): Schema(owner) → object(s) + level + Grant/Revoke -->
+              <div style="display:flex;align-items:center;gap:var(--px-10);margin-bottom:var(--px-10);flex-wrap:wrap">
+                <span onclick={openGrantWizard} onkeydown={(e) => e.key === 'Enter' && openGrantWizard()} role="button" tabindex="0" title="Guided: pick a schema owner, its object(s), then an access level" style="font-size:var(--px-12_5);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-7);padding:var(--px-6) var(--px-14);cursor:pointer;font-weight:600">＋ Grant access…</span>
+                <span style="font-size:var(--px-11);color:var(--muted)">Pick a schema (owner) → object(s) → level (Grant/Revoke).</span>
+              </div>
+              <!-- Object privileges — per owner, batched (Oracle has no GRANT ON SCHEMA) -->
+              <div style="display:flex;align-items:center;gap:var(--px-8);margin-bottom:var(--px-8);flex-wrap:wrap">
+                <span style="font-size:var(--px-12);color:var(--text2)">Or grant on all objects owned by</span>
+                <select bind:value={gridOwner} class="mono" style="background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-3) var(--px-6);color:var(--text);font-size:var(--px-12)">
+                  <option value="">— schema —</option>
+                  {#each owners as o (o)}<option value={o}>{o}</option>{/each}
+                </select>
+              </div>
+              <div style="display:flex;gap:var(--px-6);flex-wrap:wrap">
+                {#each [['read-only', 'Read-only'], ['read-write', 'Read-write'], ['read-write-execute', 'Read-write + Execute'], ['revoke-all', 'Revoke all']] as [kind, label] (kind)}
+                  <span onclick={() => applyObjPreset(kind as PresetKind)} onkeydown={(e) => e.key === 'Enter' && applyObjPreset(kind as PresetKind)} role="button" tabindex="0" aria-disabled={!gridOwner} style="font-size:var(--px-11_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:{gridOwner ? 'pointer' : 'not-allowed'};opacity:{gridOwner ? 1 : 0.5};color:{kind === 'revoke-all' ? 'var(--error)' : 'var(--text2)'}">{label}</span>
+                {/each}
+              </div>
+              {#if objCount != null}<div style="font-size:var(--px-10_5);color:var(--muted);margin-top:var(--px-8)">Last preset built statements for {objCount} object(s). Oracle grants per-object — objects created later are not covered.</div>{/if}
+            </div>
           {:else}
             <!-- Access overview: system privs + roles + object privs by owner -->
             <div style="font-size:var(--px-12);color:var(--text2);margin-bottom:var(--px-10)">What <span class="mono" style="color:var(--text);font-weight:600">{selected}</span> can access — system privileges, roles, and object privileges by schema.</div>

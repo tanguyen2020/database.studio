@@ -383,8 +383,9 @@ test('user manager: MSSQL server logins + database permission grid', async ({ pa
   await page.waitForTimeout(400)
   await expect(page.getByText('db_datareader', { exact: true }).first()).toBeVisible()
 
-  // switch to Database scope → users + permission grid with presets + Deny
-  await page.getByRole('button', { name: 'Database', exact: true }).click()
+  // switch to the database level (SSMS: Database → Security → Users). The tab
+  // toggle is the first match (a "Database users tab →" link also exists).
+  await page.getByRole('button', { name: /Database users/ }).first().click()
   await page.waitForTimeout(400)
   await expect(page.getByRole('option', { name: /app_user/ }).first()).toBeVisible()
   await page.getByRole('option', { name: /app_user/ }).first().click()

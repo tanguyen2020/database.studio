@@ -26,6 +26,8 @@
     type PresetKind,
   } from '$lib/users/clickhouse'
   import PrivilegeGrid from './PrivilegeGrid.svelte'
+  import PrincipalHeader from './PrincipalHeader.svelte'
+  import { CARD, CARD_TITLE, EXPLAINER } from './ui'
   import type { TabState } from '$lib/types'
 
   interface Props {
@@ -237,12 +239,6 @@
     pending = [...pending, alterUserPassword(selected, 'sha256_password', newPassword)]
     newPassword = ''
   }
-  let confirmDrop = $state(false)
-  function queueDrop() {
-    if (!selected) return
-    pending = [...pending, kind === 'users' ? dropUser(selected) : dropRole(selected)]
-    confirmDrop = false
-  }
 
   // Quick drop from the list (context menu / row button).
   let dropTarget = $state<string | null>(null)
@@ -309,7 +305,7 @@
   const discard = () => (pending = [])
 </script>
 
-<div style="flex:1;display:flex;flex-direction:column;min-height:0">
+<div class="mono" style="flex:1;display:flex;flex-direction:column;min-height:0">
   <div style="flex:none;display:flex;align-items:center;gap:var(--px-8);padding:var(--px-9) var(--px-14);border-bottom:var(--px-1) solid var(--border);background:var(--surface);flex-wrap:wrap">
     <div style="display:flex;background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-7);overflow:hidden">
       {#each [['users', 'Users'], ['roles', 'Roles']] as [k, label] (k)}
@@ -319,6 +315,9 @@
     <span onclick={() => cid && chUserWizard.show(cid, kind === 'users' ? 'user' : 'role')} onkeydown={(e) => e.key === 'Enter' && cid && chUserWizard.show(cid, kind === 'users' ? 'user' : 'role')} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer;font-weight:600">+ New {kind === 'users' ? 'User' : 'Role'}</span>
     <span onclick={refresh} onkeydown={(e) => e.key === 'Enter' && refresh()} role="button" tabindex="0" aria-busy={refreshing} style="margin-left:auto;font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer;opacity:{refreshing ? 0.6 : 1}">{refreshing ? '⟳ Refreshing…' : '⟳ Refresh'}</span>
   </div>
+
+  <!-- Model explainer — ClickHouse SQL RBAC vs read-only users.xml principals. -->
+  <div style={EXPLAINER}>ClickHouse users come from <b style="color:var(--text2)">SQL</b> (created here, editable) or the server's <b style="color:var(--text2)">users.xml</b> (read-only). <b style="color:var(--text2)">Roles</b> bundle grants — grant a role to a user and set it as the default role to apply it. Access management must be enabled on the server.</div>
 
   {#if !canManage}
     <div style="flex:none;padding:var(--px-8) var(--px-14);background:var(--panel);border-bottom:var(--px-1) solid var(--border);color:var(--warn2);font-size:var(--px-11_5)">This connection lacks ACCESS MANAGEMENT — enable it (CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1 or access_management in users.xml).</div>
@@ -352,6 +351,15 @@
 
     <div style="flex:1;display:flex;flex-direction:column;min-height:0">
       {#if selectedRow}
+        <div style="flex:none;padding:var(--px-12) var(--px-14) 0">
+          <PrincipalHeader
+            name={selected}
+            icon={kind === 'users' ? '👤' : '👥'}
+            subtitle={kind === 'users' ? `User · ${selectedRow.storage}` : 'Role'}
+            badge={isReadOnly(selectedRow) ? String(selectedRow.storage) : ''}
+            badgeDanger
+          />
+        </div>
         {#if isReadOnly(selectedRow)}
           <div style="flex:none;padding:var(--px-8) var(--px-14);background:var(--panel);border-bottom:var(--px-1) solid var(--border);color:var(--muted);font-size:var(--px-11_5)">Read-only — “{selected}” is defined in {selectedRow.storage}, not SQL. Edit it in users.xml.</div>
         {/if}
@@ -362,50 +370,51 @@
         </div>
         <div style="flex:1;overflow:auto;min-height:0;padding:var(--px-14)">
           {#if detailTab === 'general'}
-            <table class="mono" style="border-collapse:collapse;font-size:var(--px-12);margin-bottom:var(--px-14)">
-              <tbody>
-                {#each (kind === 'users' ? [['Name', selectedRow.name], ['Storage', selectedRow.storage], ['Auth type', selectedRow.auth_type], ['Default database', selectedRow.default_database], ['Default roles', selectedRow.default_roles]] : [['Name', selectedRow.name], ['Storage', selectedRow.storage]]) as [k, v] (k)}
-                  <tr><td style="padding:var(--px-3) var(--px-14) var(--px-3) 0;color:var(--text2);white-space:nowrap">{k}</td><td style="padding:var(--px-3) 0;color:var(--text)">{v}</td></tr>
-                {/each}
-              </tbody>
-            </table>
+            <div style={CARD}>
+              <div style={CARD_TITLE}>Details</div>
+              <table class="mono" style="border-collapse:collapse;font-size:var(--px-12)">
+                <tbody>
+                  {#each (kind === 'users' ? [['Name', selectedRow.name], ['Storage', selectedRow.storage], ['Auth type', selectedRow.auth_type], ['Default database', selectedRow.default_database], ['Default roles', selectedRow.default_roles]] : [['Name', selectedRow.name], ['Storage', selectedRow.storage]]) as [k, v] (k)}
+                    <tr><td style="padding:var(--px-3) var(--px-14) var(--px-3) 0;color:var(--text2);white-space:nowrap">{k}</td><td style="padding:var(--px-3) 0;color:var(--text)">{v}</td></tr>
+                  {/each}
+                </tbody>
+              </table>
+            </div>
             {#if kind === 'users' && !isReadOnly(selectedRow)}
-              <div style="display:flex;gap:var(--px-6);align-items:flex-end;margin-bottom:var(--px-10)">
-                <label style="font-size:var(--px-12);color:var(--text2)">Change password
-                  <input type="password" bind:value={newPassword} class="mono" style="display:block;margin-top:var(--px-4);width:var(--px-220);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-8);color:var(--text)" />
-                </label>
-                <span onclick={queuePassword} onkeydown={(e) => e.key === 'Enter' && queuePassword()} role="button" tabindex="0" aria-disabled={!newPassword} style="font-size:var(--px-11_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-10);cursor:{newPassword ? 'pointer' : 'not-allowed'};opacity:{newPassword ? 1 : 0.5}">Queue change</span>
+              <div style={CARD}>
+                <div style={CARD_TITLE}>Change password</div>
+                <div style="display:flex;gap:var(--px-6);align-items:flex-end">
+                  <label style="font-size:var(--px-12);color:var(--text2)" title="Sets a new SHA-256 password for this user">Change password
+                    <input type="password" bind:value={newPassword} class="mono" style="display:block;margin-top:var(--px-4);width:var(--px-220);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-8);color:var(--text)" />
+                  </label>
+                  <span onclick={queuePassword} onkeydown={(e) => e.key === 'Enter' && queuePassword()} role="button" tabindex="0" aria-disabled={!newPassword} style="font-size:var(--px-11_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-10);cursor:{newPassword ? 'pointer' : 'not-allowed'};opacity:{newPassword ? 1 : 0.5}">Queue change</span>
+                </div>
               </div>
             {/if}
             {#if !isReadOnly(selectedRow)}
-              {#if confirmDrop}
-                <div style="display:flex;gap:var(--px-8);align-items:center;padding:var(--px-8);background:var(--panel);border:var(--px-1) solid var(--error);border-radius:var(--px-6)">
-                  <span style="font-size:var(--px-12);color:var(--error)">Drop {kind === 'users' ? 'user' : 'role'} “{selected}”?</span>
-                  <span onclick={queueDrop} onkeydown={(e) => e.key === 'Enter' && queueDrop()} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--error);color:var(--hex-fff);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">Queue drop</span>
-                  <span onclick={() => (confirmDrop = false)} onkeydown={(e) => e.key === 'Enter' && (confirmDrop = false)} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">Cancel</span>
-                </div>
-              {:else}
-                <span onclick={() => (confirmDrop = true)} onkeydown={(e) => e.key === 'Enter' && (confirmDrop = true)} role="button" tabindex="0" style="font-size:var(--px-11_5);color:var(--error);border:var(--px-1) solid var(--error);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">Drop {kind === 'users' ? 'user' : 'role'}…</span>
-              {/if}
+              <span onclick={() => (dropTarget = selected)} onkeydown={(e) => e.key === 'Enter' && (dropTarget = selected)} role="button" tabindex="0" style="font-size:var(--px-11_5);color:var(--error);border:var(--px-1) solid var(--error);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">Drop {kind === 'users' ? 'user' : 'role'}…</span>
             {/if}
           {:else if detailTab === 'grants'}
-            <div style="display:flex;align-items:center;gap:var(--px-10);margin-bottom:var(--px-10);flex-wrap:wrap">
-              <span onclick={openGrantWizard} onkeydown={(e) => e.key === 'Enter' && openGrantWizard()} role="button" tabindex="0" style="font-size:var(--px-12_5);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-7);padding:var(--px-6) var(--px-14);cursor:pointer;font-weight:600">＋ Grant access…</span>
-              <span style="font-size:var(--px-11);color:var(--muted)">Pick a database and an access level (Read-only / Read-Write / Full).</span>
+            <div style={CARD}>
+              <div style={CARD_TITLE}>Grants</div>
+              <div style="display:flex;align-items:center;gap:var(--px-10);margin-bottom:var(--px-10);flex-wrap:wrap">
+                <span onclick={openGrantWizard} onkeydown={(e) => e.key === 'Enter' && openGrantWizard()} role="button" tabindex="0" title="Grant access to a database or table at a chosen level" style="font-size:var(--px-12_5);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-7);padding:var(--px-6) var(--px-14);cursor:pointer;font-weight:600">＋ Grant access…</span>
+                <span style="font-size:var(--px-11);color:var(--muted)">Pick a database and an access level (Read-only / Read-Write / Full).</span>
+              </div>
+              <div onclick={() => (showMatrix = !showMatrix)} onkeydown={(e) => e.key === 'Enter' && (showMatrix = !showMatrix)} role="button" tabindex="0" title="Show the full per-database × privilege matrix" style="font-size:var(--px-11_5);color:var(--text2);cursor:pointer;margin-bottom:var(--px-8);user-select:none">{showMatrix ? '▾' : '▸'} Advanced — grant matrix</div>
+              {#if showMatrix}
+              <PrivilegeGrid
+                columns={CH_GRID_COLUMNS}
+                scopes={gridScopes}
+                {cellState}
+                {cellTip}
+                {onCell}
+                presets={gridPresets}
+                onPreset={(db, kind) => applyPreset(db, kind as PresetKind)}
+                note="UPDATE/DELETE map to the ALTER UPDATE / ALTER DELETE privileges (mutations)."
+              />
+              {/if}
             </div>
-            <div onclick={() => (showMatrix = !showMatrix)} onkeydown={(e) => e.key === 'Enter' && (showMatrix = !showMatrix)} role="button" tabindex="0" style="font-size:var(--px-11_5);color:var(--text2);cursor:pointer;margin-bottom:var(--px-8);user-select:none">{showMatrix ? '▾' : '▸'} Advanced — grant matrix</div>
-            {#if showMatrix}
-            <PrivilegeGrid
-              columns={CH_GRID_COLUMNS}
-              scopes={gridScopes}
-              {cellState}
-              {cellTip}
-              {onCell}
-              presets={gridPresets}
-              onPreset={(db, kind) => applyPreset(db, kind as PresetKind)}
-              note="UPDATE/DELETE map to the ALTER UPDATE / ALTER DELETE privileges (mutations)."
-            />
-            {/if}
           {:else if detailTab === 'access'}
             <!-- Access overview: what this principal can access, per database -->
             <div style="font-size:var(--px-12);color:var(--text2);margin-bottom:var(--px-10)">What <span class="mono" style="color:var(--text);font-weight:600">{selected}</span> can access, per database{kind === 'users' ? ' (granted roles folded in)' : ''}.</div>
@@ -429,24 +438,26 @@
             {/if}
           {:else}
             <!-- Roles (users only) -->
-            <div style="font-size:var(--px-12);color:var(--text2);font-weight:600;margin-bottom:var(--px-6)">Granted roles</div>
-            {#if grantedRoles.length}
-              {#each grantedRoles as r (r)}
-                <div style="display:flex;align-items:center;gap:var(--px-8);font-size:var(--px-12);padding:var(--px-2) 0">
-                  <span class="mono">{r}</span>
-                  <span onclick={() => queueRevokeRole(r)} onkeydown={(e) => e.key === 'Enter' && queueRevokeRole(r)} role="button" tabindex="0" style="font-size:var(--px-10_5);color:var(--error);cursor:pointer">revoke</span>
-                  <span onclick={() => queueDefaultRole(r)} onkeydown={(e) => e.key === 'Enter' && queueDefaultRole(r)} role="button" tabindex="0" style="font-size:var(--px-10_5);color:var(--text2);cursor:pointer">set default</span>
-                </div>
-              {/each}
-            {:else}
-              <div style="font-size:var(--px-11_5);color:var(--muted)">No roles granted.</div>
-            {/if}
-            <div style="display:flex;gap:var(--px-6);align-items:center;margin-top:var(--px-10)">
-              <select bind:value={grantRoleName} class="mono" style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4);color:var(--text);font-size:var(--px-12)">
-                <option value="">— grant role —</option>
-                {#each roles.filter((r) => !grantedRoles.includes(String(r.name))) as r (r.name)}<option value={String(r.name)}>{r.name}</option>{/each}
-              </select>
-              <span onclick={queueGrantRole} onkeydown={(e) => e.key === 'Enter' && queueGrantRole()} role="button" tabindex="0" aria-disabled={!grantRoleName} style="font-size:var(--px-11_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:{grantRoleName ? 'pointer' : 'not-allowed'};opacity:{grantRoleName ? 1 : 0.5}">Queue grant</span>
+            <div style={CARD}>
+              <div style={CARD_TITLE}>Granted roles <span style="font-weight:400;color:var(--muted);font-size:var(--px-10_5)">— set one as default to apply it on login</span></div>
+              {#if grantedRoles.length}
+                {#each grantedRoles as r (r)}
+                  <div style="display:flex;align-items:center;gap:var(--px-8);font-size:var(--px-12);padding:var(--px-2) 0">
+                    <span class="mono">{r}</span>
+                    <span onclick={() => queueRevokeRole(r)} onkeydown={(e) => e.key === 'Enter' && queueRevokeRole(r)} role="button" tabindex="0" title="Revoke this role from the user" style="font-size:var(--px-10_5);color:var(--error);cursor:pointer">revoke</span>
+                    <span onclick={() => queueDefaultRole(r)} onkeydown={(e) => e.key === 'Enter' && queueDefaultRole(r)} role="button" tabindex="0" title="Make this the user's default role" style="font-size:var(--px-10_5);color:var(--text2);cursor:pointer">set default</span>
+                  </div>
+                {/each}
+              {:else}
+                <div style="font-size:var(--px-11_5);color:var(--muted)">No roles granted.</div>
+              {/if}
+              <div style="display:flex;gap:var(--px-6);align-items:center;margin-top:var(--px-10)">
+                <select bind:value={grantRoleName} class="mono" style="background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4);color:var(--text);font-size:var(--px-12)">
+                  <option value="">— grant role —</option>
+                  {#each roles.filter((r) => !grantedRoles.includes(String(r.name))) as r (r.name)}<option value={String(r.name)}>{r.name}</option>{/each}
+                </select>
+                <span onclick={queueGrantRole} onkeydown={(e) => e.key === 'Enter' && queueGrantRole()} role="button" tabindex="0" aria-disabled={!grantRoleName} style="font-size:var(--px-11_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:{grantRoleName ? 'pointer' : 'not-allowed'};opacity:{grantRoleName ? 1 : 0.5}">Queue grant</span>
+              </div>
             </div>
           {/if}
         </div>

@@ -42,6 +42,27 @@ async fn run_statement(
     d.exec(&sql).await
 }
 
+/// True when an error message indicates the underlying socket was closed by the
+/// server (idle timeout, restart, NAT/firewall drop, dropped SSH tunnel) rather
+/// than a legitimate SQL error. Such a connection is dead and must be
+/// reconnected before the statement can succeed. Matches the sqlx/tiberius/etc.
+/// wire-level messages ("expected to read N bytes, got 0 bytes at EOF",
+/// "connection reset", Windows WSAECONNRESET 10054, …).
+fn is_connection_lost(msg: &str) -> bool {
+    let m = msg.to_ascii_lowercase();
+    m.contains("bytes at eof")
+        || m.contains("expected to read")
+        || m.contains("connection reset")
+        || m.contains("broken pipe")
+        || m.contains("connection closed")
+        || m.contains("connection was closed")
+        || m.contains("connection is closed")
+        || m.contains("server closed the connection")
+        || m.contains("unexpected end of file")
+        || m.contains("10054") // WSAECONNRESET
+        || m.contains("10053") // WSAECONNABORTED
+}
+
 impl Registry {
     pub fn is_connected(&self, id: &str) -> bool {
         self.entries.lock().unwrap().contains_key(id)
@@ -167,15 +188,10 @@ impl Registry {
             .ok_or_else(|| AppError::NotConnected(id.to_string()))
     }
 
-    /// Reconnects the driver in place when a previous cancel poisoned it.
-    async fn heal_if_poisoned(&self, id: &str) -> AppResult<()> {
-        let needs = {
-            let map = self.entries.lock().unwrap();
-            map.get(id).map(|e| e.poisoned).unwrap_or(false)
-        };
-        if !needs {
-            return Ok(());
-        }
+    /// Reconnects the driver in place (same profile/endpoint/password) and
+    /// clears the poisoned flag. Used to heal a connection that a cancel left
+    /// mid-protocol, or that the server closed underneath us.
+    async fn reconnect(&self, id: &str) -> AppResult<()> {
         let (driver_arc, profile, endpoint, password) = {
             let map = self.entries.lock().unwrap();
             let e = map.get(id).ok_or_else(|| AppError::NotConnected(id.to_string()))?;
@@ -191,13 +207,60 @@ impl Registry {
         Ok(())
     }
 
+    /// Reconnects the driver in place when a previous cancel poisoned it.
+    async fn heal_if_poisoned(&self, id: &str) -> AppResult<()> {
+        let needs = {
+            let map = self.entries.lock().unwrap();
+            map.get(id).map(|e| e.poisoned).unwrap_or(false)
+        };
+        if !needs {
+            return Ok(());
+        }
+        self.reconnect(id).await
+    }
+
+    /// Marks a connection for reconnect on its next use.
+    fn poison(&self, id: &str) {
+        if let Some(e) = self.entries.lock().unwrap().get_mut(id) {
+            e.poisoned = true;
+        }
+    }
+
     /// Executes one statement with cancellation support.
+    ///
+    /// If the statement fails because the server closed the connection (idle
+    /// timeout / restart / dropped tunnel — see `is_connection_lost`), the dead
+    /// connection is transparently reconnected and the statement retried once.
+    /// An idle connection the server dropped never received the statement, so
+    /// the single retry cannot double-apply a write.
     pub async fn exec_statement(
         &self,
         id: &str,
         sql: String,
     ) -> AppResult<Result<crate::drivers::types::StatementOutcome, QueryError>> {
         self.heal_if_poisoned(id).await?;
+        let first = self.run_tracked(id, sql.clone()).await?;
+        if let Err(qe) = &first {
+            // Do not retry a user cancellation (poisoned + handled above).
+            if qe.code.as_deref() != Some("CANCELLED") && is_connection_lost(&qe.message) {
+                if self.reconnect(id).await.is_ok() {
+                    return self.run_tracked(id, sql).await;
+                }
+                // Reconnect failed — leave it poisoned so the next use retries.
+                self.poison(id);
+            }
+        }
+        Ok(first)
+    }
+
+    /// Runs one statement on the live connection with cancellation tracking.
+    /// A cancel aborts the task, poisons the connection (mid-protocol) and
+    /// returns a CANCELLED QueryError.
+    async fn run_tracked(
+        &self,
+        id: &str,
+        sql: String,
+    ) -> AppResult<Result<crate::drivers::types::StatementOutcome, QueryError>> {
         let driver = self.driver_handle(id)?;
         let system = {
             let map = self.entries.lock().unwrap();
@@ -225,9 +288,7 @@ impl Registry {
             Ok(res) => Ok(res),
             Err(join_err) if join_err.is_cancelled() => {
                 // The connection may be mid-protocol — mark for reconnect.
-                if let Some(e) = self.entries.lock().unwrap().get_mut(id) {
-                    e.poisoned = true;
-                }
+                self.poison(id);
                 let mut qe = QueryError::new(system, "Query was cancelled", "cancelled by user");
                 qe.code = Some("CANCELLED".into());
                 Ok(Err(qe))
@@ -256,7 +317,16 @@ impl Registry {
     {
         self.heal_if_poisoned(id).await?;
         let driver = self.driver_handle(id)?;
-        Ok(f(driver).await)
+        let res = f(driver).await;
+        // The closure is FnOnce (can't retry in place), but if the socket died
+        // we poison the connection so the next call reconnects first — a Refresh
+        // then succeeds instead of failing forever on a dead connection.
+        if let Err(qe) = &res {
+            if is_connection_lost(&qe.message) {
+                self.poison(id);
+            }
+        }
+        Ok(res)
     }
 
     /// Params để mở connection Redis phụ (pub/sub) — lấy endpoint/password/db/ssl
@@ -317,5 +387,30 @@ impl Registry {
         };
         let mut d = driver.lock().await;
         d.ping().await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_connection_lost;
+
+    #[test]
+    fn detects_server_dropped_connection() {
+        // The exact message from the reported bug (PostgreSQL 5-byte header).
+        assert!(is_connection_lost(
+            "error communicating with database: expected to read 5 bytes, got 0 bytes at EOF"
+        ));
+        assert!(is_connection_lost("Connection reset by peer"));
+        assert!(is_connection_lost("broken pipe"));
+        assert!(is_connection_lost("server closed the connection unexpectedly"));
+        assert!(is_connection_lost("Os { code: 10054, kind: ConnectionReset }".into()));
+    }
+
+    #[test]
+    fn ignores_real_sql_errors() {
+        assert!(!is_connection_lost("relation \"foo\" does not exist"));
+        assert!(!is_connection_lost("syntax error at or near \"slect\""));
+        assert!(!is_connection_lost("permission denied for table students"));
+        assert!(!is_connection_lost("duplicate key value violates unique constraint"));
     }
 }

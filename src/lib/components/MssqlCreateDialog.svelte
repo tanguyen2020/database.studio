@@ -38,6 +38,40 @@
   let busy = $state(false)
   let err = $state<string | null>(null)
 
+  // User mapping (mode='login', SSMS "User Mapping" page): tick databases to
+  // give the login a user there, and optionally db roles per database.
+  const MAP_ROLES = ['db_owner', 'db_datareader', 'db_datawriter']
+  let databases = $state<string[]>([])
+  let mapDbs = $state<Set<string>>(new Set())
+  let mapRoles = $state<Record<string, string[]>>({})
+  function toggleMapDb(db: string, on: boolean) {
+    const next = new Set(mapDbs)
+    if (on) {
+      next.add(db)
+    } else {
+      next.delete(db)
+      const r = { ...mapRoles }
+      delete r[db]
+      mapRoles = r
+    }
+    mapDbs = next
+  }
+  function toggleMapRole(db: string, role: string, on: boolean) {
+    const cur = new Set(mapRoles[db] ?? [])
+    if (on) cur.add(role)
+    else cur.delete(role)
+    mapRoles = { ...mapRoles, [db]: [...cur] }
+  }
+  // Per-database mapping statements: CREATE USER … FOR LOGIN + role memberships.
+  const mappingGroups = $derived.by<{ db: string; stmts: string[] }[]>(() => {
+    const n = name.trim()
+    if (mode !== 'login' || !n) return []
+    return [...mapDbs].map((db) => ({
+      db,
+      stmts: [createUser(n, n), ...(mapRoles[db] ?? []).map((r) => setDbRoleMember(r, n, true))],
+    }))
+  })
+
   let wasOpen = false
   $effect(() => {
     if (dlgOpen && !wasOpen) {
@@ -50,11 +84,16 @@
       withoutLogin = false
       memberOf = []
       customRoles = []
+      databases = []
+      mapDbs = new Set()
+      mapRoles = {}
       err = null
       // load user-defined roles to offer alongside the fixed roles.
       const cid = mssqlUserWizard.connId
       if (cid && mode === 'login') {
         ipc.usersView(cid, 'server_roles').then((r) => (customRoles = r.rows.map((x) => String(x.name)))).catch(() => {})
+        // databases this login can be mapped to (User Mapping page)
+        ipc.listDatabases(cid).then((d) => (databases = d.map((x) => x.name))).catch(() => {})
       } else if (cid && mode === 'user') {
         const db = mssqlUserWizard.database
         ;(db ? ipc.attachDatabase(cid, db).catch(() => cid) : Promise.resolve(cid)).then((sub) =>
@@ -98,7 +137,9 @@
   const previewSql = $derived.by(() => {
     if (!sql) return sql
     const base = showPw || !password ? sql : sql.replace(`PASSWORD = N'${password.replace(/'/g, "''")}'`, "PASSWORD = N'••••••'")
-    return roleStmts.length ? [base, ...roleStmts].join(';\n') : base
+    const server = [base, ...roleStmts].join(';\n')
+    const groups = mappingGroups.map((g) => `-- in ${g.db}:\n${g.stmts.join(';\n')};`)
+    return [server, ...groups].join(';\n\n')
   })
 
   function generate() {
@@ -133,6 +174,22 @@
           break
         }
       }
+      // User Mapping (mode='login'): create the login's user + db roles in each
+      // ticked database, on that database's sub-connection.
+      if (!err && mode === 'login') {
+        for (const g of mappingGroups) {
+          const sub = await ipc.attachDatabase(cid, g.db).catch(() => cid)
+          for (const st of g.stmts) {
+            const r = await ipc.execStatement(sub, st, 0)
+            if (!r.ok) {
+              err = `login created, but mapping to ${g.db} failed: ${r.error?.message ?? 'error'}`
+              break
+            }
+          }
+          if (err) break
+        }
+      }
+      if (err) return
       toasts.success(`${title} ${name.trim()} created`, 'mssql')
       await explorer.refresh(cid, { kind: 'connection' }).catch(() => {})
       tabs.openUserManager(cid, name.trim())
@@ -197,6 +254,30 @@
               <span style="font-size:var(--px-11_5);color:var(--muted)">No roles.</span>
             {/each}
           </div>
+        {/if}
+        {#if mode === 'login'}
+          <div style="font-size:var(--px-12);color:var(--text2)">User mapping <span style="color:var(--muted)">— databases this login can use ({mapDbs.size} mapped)</span></div>
+          <div style="margin-top:var(--px-4);max-height:var(--px-180);overflow:auto;border:var(--px-1) solid var(--border);border-radius:var(--px-7);padding:var(--px-6) var(--px-10);display:flex;flex-direction:column;gap:var(--px-5)">
+            {#each databases as db (db)}
+              <div style="display:flex;flex-direction:column;gap:var(--px-2)">
+                <label style="font-size:var(--px-12_5);color:var(--text);display:flex;align-items:center;gap:var(--px-7);cursor:pointer">
+                  <input type="checkbox" checked={mapDbs.has(db)} onchange={(e) => toggleMapDb(db, (e.currentTarget as HTMLInputElement).checked)} /> <span class="mono">{db}</span>
+                </label>
+                {#if mapDbs.has(db)}
+                  <div style="display:flex;gap:var(--px-12);padding-left:var(--px-22);flex-wrap:wrap">
+                    {#each MAP_ROLES as r (r)}
+                      <label style="font-size:var(--px-11);color:var(--text2);display:flex;align-items:center;gap:var(--px-4);cursor:pointer">
+                        <input type="checkbox" checked={(mapRoles[db] ?? []).includes(r)} onchange={(e) => toggleMapRole(db, r, (e.currentTarget as HTMLInputElement).checked)} /> <span class="mono">{r}</span>
+                      </label>
+                    {/each}
+                  </div>
+                {/if}
+              </div>
+            {:else}
+              <span style="font-size:var(--px-11_5);color:var(--muted)">No databases.</span>
+            {/each}
+          </div>
+          <div style="font-size:var(--px-10_5);color:var(--muted)">Each ticked database gets a user for this login (default schema <span class="mono">dbo</span>). Tick db roles to grant there — or leave empty and grant later.</div>
         {/if}
         <div style="font-size:var(--px-11);color:var(--muted)">SQL preview</div>
         <pre class="selectable mono" style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-10);font-size:var(--px-11_5);margin:0;max-height:var(--px-120);overflow:auto;color:var(--text2);white-space:pre-wrap">{previewSql || '-- enter a name'}</pre>

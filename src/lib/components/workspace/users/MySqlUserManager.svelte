@@ -29,6 +29,8 @@
     type PresetKind,
   } from '$lib/users/mysql'
   import PrivilegeGrid from './PrivilegeGrid.svelte'
+  import PrincipalHeader from './PrincipalHeader.svelte'
+  import { CARD, CARD_TITLE, EXPLAINER } from './ui'
   import type { TabState } from '$lib/types'
 
   interface Props {
@@ -283,12 +285,6 @@
     if (!selectedAcct) return
     pending = [...pending, lockAccount(selUser, selHost, locked)]
   }
-  let confirmDrop = $state(false)
-  function queueDrop() {
-    if (!selectedAcct) return
-    pending = [...pending, dropUser(selUser, selHost)]
-    confirmDrop = false
-  }
 
   // Quick drop from the account list (context menu / row button) — confirm then
   // DROP USER immediately and reload.
@@ -370,13 +366,16 @@
   const discard = () => (pending = [])
 </script>
 
-<div style="flex:1;display:flex;flex-direction:column;min-height:0">
+<div class="mono" style="flex:1;display:flex;flex-direction:column;min-height:0">
   <div style="flex:none;display:flex;align-items:center;gap:var(--px-8);padding:var(--px-9) var(--px-14);border-bottom:var(--px-1) solid var(--border);background:var(--surface);flex-wrap:wrap">
     <span style="font-size:var(--px-12);font-weight:700">Users and Privileges</span>
     <span style="font-size:var(--px-11);color:var(--muted)">{accounts.length} accounts</span>
     <span onclick={() => cid && myUserWizard.show(cid, system)} onkeydown={(e) => e.key === 'Enter' && cid && myUserWizard.show(cid, system)} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer;font-weight:600">+ Add Account</span>
     <span onclick={refresh} onkeydown={(e) => e.key === 'Enter' && refresh()} role="button" tabindex="0" aria-busy={refreshing} style="margin-left:auto;font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer;opacity:{refreshing ? 0.6 : 1}">{refreshing ? '⟳ Refreshing…' : '⟳ Refresh'}</span>
   </div>
+
+  <!-- Model explainer — MySQL/MariaDB identify an account by name + host. -->
+  <div style={EXPLAINER}>In MySQL/MariaDB a user is identified by <b style="color:var(--text2)">name + host</b> (e.g. <span class="mono" style="color:var(--text)">'app'@'%'</span>) — the host limits where it can connect from. Privileges can be <b style="color:var(--text2)">global</b> (*.*), <b style="color:var(--text2)">per-database</b>, or <b style="color:var(--text2)">per-table</b>. Roles bundle privileges (MySQL 8+/MariaDB).</div>
 
   <div style="flex:1;display:flex;min-height:0">
     <!-- Account list -->
@@ -410,6 +409,15 @@
     <!-- Detail -->
     <div style="flex:1;display:flex;flex-direction:column;min-height:0">
       {#if selectedAcct}
+        <div style="flex:none;padding:var(--px-12) var(--px-14) 0">
+          <PrincipalHeader
+            name={`${selUser}@${selHost}`}
+            icon={isRole(selectedAcct) ? '👥' : '👤'}
+            subtitle={'Database account' + (isRole(selectedAcct) ? ' · role' : '')}
+            badge={boolY(selectedAcct.account_locked) ? 'locked' : isRole(selectedAcct) ? 'role' : ''}
+            badgeDanger={boolY(selectedAcct.account_locked)}
+          />
+        </div>
         <div style="flex:none;display:flex;gap:var(--px-2);padding:var(--px-8) var(--px-12) 0;border-bottom:var(--px-1) solid var(--border)">
           {#each [['general', 'General'], ['admin', 'Administrative'], ['privileges', 'Schema Privileges'], ['access', 'Access'], ['roles', 'Roles'], ['showgrants', 'SHOW GRANTS']] as [k, label] (k)}
             <span onclick={() => (detailTab = k as typeof detailTab)} onkeydown={(e) => e.key === 'Enter' && (detailTab = k as typeof detailTab)} role="tab" tabindex="0" aria-selected={detailTab === k} style="padding:var(--px-6) var(--px-12);font-size:var(--px-12);cursor:pointer;font-weight:600;border-bottom:var(--px-2) solid {detailTab === k ? 'var(--primary)' : 'transparent'};color:{detailTab === k ? 'var(--text)' : 'var(--muted)'}">{label}</span>
@@ -417,35 +425,35 @@
         </div>
         <div style="flex:1;overflow:auto;min-height:0;padding:var(--px-14)">
           {#if detailTab === 'general'}
-            <table class="mono" style="border-collapse:collapse;font-size:var(--px-12);margin-bottom:var(--px-14)">
-              <tbody>
-                {#each [['User', selUser], ['Host', selHost], ['Plugin', selectedAcct.plugin], ['Locked', boolY(selectedAcct.account_locked) ? 'yes' : 'no'], ['Password expired', boolY(selectedAcct.password_expired) ? 'yes' : 'no']] as [label, val] (label)}
-                  <tr><td style="padding:var(--px-3) var(--px-14) var(--px-3) 0;color:var(--text2);white-space:nowrap">{label}</td><td style="padding:var(--px-3) 0;color:var(--text)">{val}</td></tr>
-                {/each}
-              </tbody>
-            </table>
-            <div style="display:flex;gap:var(--px-6);align-items:flex-end;margin-bottom:var(--px-10)">
-              <label style="font-size:var(--px-12);color:var(--text2)">Change password
-                <input type="password" bind:value={newPassword} class="mono" style="display:block;margin-top:var(--px-4);width:var(--px-220);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-8);color:var(--text)" />
-              </label>
-              <span onclick={queuePassword} onkeydown={(e) => e.key === 'Enter' && queuePassword()} role="button" tabindex="0" aria-disabled={!newPassword} style="font-size:var(--px-11_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-10);cursor:{newPassword ? 'pointer' : 'not-allowed'};opacity:{newPassword ? 1 : 0.5}">Queue change</span>
+            <!-- Account details card -->
+            <div style={CARD}>
+              <div style={CARD_TITLE}>Account</div>
+              <table class="mono" style="border-collapse:collapse;font-size:var(--px-12)">
+                <tbody>
+                  {#each [['User', selUser], ['Host', selHost], ['Plugin', selectedAcct.plugin], ['Locked', boolY(selectedAcct.account_locked) ? 'yes' : 'no'], ['Password expired', boolY(selectedAcct.password_expired) ? 'yes' : 'no']] as [label, val] (label)}
+                    <tr><td style="padding:var(--px-3) var(--px-14) var(--px-3) 0;color:var(--text2);white-space:nowrap">{label}</td><td style="padding:var(--px-3) 0;color:var(--text)">{val}</td></tr>
+                  {/each}
+                </tbody>
+              </table>
             </div>
-            <div style="display:flex;gap:var(--px-8);margin-bottom:var(--px-12)">
-              {#if boolY(selectedAcct.account_locked)}
-                <span onclick={() => queueLock(false)} onkeydown={(e) => e.key === 'Enter' && queueLock(false)} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">Queue unlock</span>
-              {:else}
-                <span onclick={() => queueLock(true)} onkeydown={(e) => e.key === 'Enter' && queueLock(true)} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">Queue lock</span>
-              {/if}
-            </div>
-            {#if confirmDrop}
-              <div style="display:flex;gap:var(--px-8);align-items:center;padding:var(--px-8);background:var(--panel);border:var(--px-1) solid var(--error);border-radius:var(--px-6)">
-                <span style="font-size:var(--px-12);color:var(--error)">Drop account “{selLit}”?</span>
-                <span onclick={queueDrop} onkeydown={(e) => e.key === 'Enter' && queueDrop()} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--error);color:var(--hex-fff);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">Queue drop</span>
-                <span onclick={() => (confirmDrop = false)} onkeydown={(e) => e.key === 'Enter' && (confirmDrop = false)} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">Cancel</span>
+            <!-- Password & lock card -->
+            <div style={CARD}>
+              <div style={CARD_TITLE}>Password &amp; lock</div>
+              <div style="display:flex;gap:var(--px-6);align-items:flex-end;margin-bottom:var(--px-10)">
+                <label style="font-size:var(--px-12);color:var(--text2)" title="Set a new password for this account (ALTER USER … IDENTIFIED BY …).">Change password
+                  <input type="password" bind:value={newPassword} class="mono" style="display:block;margin-top:var(--px-4);width:var(--px-220);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-8);color:var(--text)" />
+                </label>
+                <span onclick={queuePassword} onkeydown={(e) => e.key === 'Enter' && queuePassword()} role="button" tabindex="0" aria-disabled={!newPassword} style="font-size:var(--px-11_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-10);cursor:{newPassword ? 'pointer' : 'not-allowed'};opacity:{newPassword ? 1 : 0.5}">Queue change</span>
               </div>
-            {:else}
-              <span onclick={() => (confirmDrop = true)} onkeydown={(e) => e.key === 'Enter' && (confirmDrop = true)} role="button" tabindex="0" style="font-size:var(--px-11_5);color:var(--error);border:var(--px-1) solid var(--error);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">Drop account…</span>
-            {/if}
+              <div style="display:flex;gap:var(--px-8)">
+                {#if boolY(selectedAcct.account_locked)}
+                  <span onclick={() => queueLock(false)} onkeydown={(e) => e.key === 'Enter' && queueLock(false)} role="button" tabindex="0" title="Allow this account to sign in again (ALTER USER … ACCOUNT UNLOCK)." style="font-size:var(--px-11_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">Queue unlock</span>
+                {:else}
+                  <span onclick={() => queueLock(true)} onkeydown={(e) => e.key === 'Enter' && queueLock(true)} role="button" tabindex="0" title="Prevent this account from signing in (ALTER USER … ACCOUNT LOCK)." style="font-size:var(--px-11_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">Queue lock</span>
+                {/if}
+              </div>
+            </div>
+            <span onclick={() => (dropTarget = { user: selUser, host: selHost })} onkeydown={(e) => e.key === 'Enter' && (dropTarget = { user: selUser, host: selHost })} role="button" tabindex="0" style="font-size:var(--px-11_5);color:var(--error);border:var(--px-1) solid var(--error);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">Drop account…</span>
           {:else if detailTab === 'admin'}
             <div style="font-size:var(--px-11);color:var(--muted);margin-bottom:var(--px-8)">Global (administrative) privileges — granted ON *.* (whole server). Click to grant/revoke.</div>
             <div style="display:flex;flex-wrap:wrap;gap:var(--px-8) var(--px-14)">
@@ -516,6 +524,8 @@
             {/if}
           {:else}
             <!-- Roles -->
+            <div style={CARD}>
+            <div style={CARD_TITLE}>Roles</div>
             <div style="font-size:var(--px-12);color:var(--text2);font-weight:600;margin-bottom:var(--px-6)">Granted roles</div>
             {#if grantedRoles.length}
               {#each grantedRoles as r (r)}
@@ -541,6 +551,7 @@
                 {#each grantedRoles as r (r)}<span onclick={() => queueDefaultRole(r)} onkeydown={(e) => e.key === 'Enter' && queueDefaultRole(r)} role="button" tabindex="0" style="font-size:var(--px-10_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-5);padding:var(--px-2) var(--px-8);cursor:pointer">{r}</span>{/each}
               </div>
             {/if}
+            </div>
           {/if}
         </div>
       {:else if !loading}

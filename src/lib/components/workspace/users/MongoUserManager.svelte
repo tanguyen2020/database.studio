@@ -10,6 +10,8 @@
   import { toasts } from '$lib/stores/toast.svelte'
   import { mongoUserWizard } from '$lib/stores/mongouser.svelte'
   import { DB_BUILTIN_ROLES, hasRole, parseRolesCsv, type RoleRef } from '$lib/users/mongodb'
+  import PrincipalHeader from './PrincipalHeader.svelte'
+  import { CARD, CARD_TITLE, EXPLAINER } from './ui'
   import type { TabState } from '$lib/types'
 
   interface Props {
@@ -157,22 +159,6 @@
     }
   }
 
-  // ---- drop (confirm) -------------------------------------------------------
-  let confirmDrop = $state(false)
-  async function dropUser() {
-    if (!cid || !selectedUser || busy) return
-    busy = true
-    try {
-      await ipc.mongoDropUser(cid, selDb, selName)
-      toasts.success(`User ${selName} dropped`, 'mongodb')
-      confirmDrop = false
-      await load()
-    } catch (e) {
-      toasts.error(String(e))
-    } finally {
-      busy = false
-    }
-  }
 
   // Quick drop from the list (context menu / row button).
   let dropTarget = $state<{ user: string; db: string } | null>(null)
@@ -193,13 +179,16 @@
   }
 </script>
 
-<div style="flex:1;display:flex;flex-direction:column;min-height:0">
+<div class="mono" style="flex:1;display:flex;flex-direction:column;min-height:0">
   <div style="flex:none;display:flex;align-items:center;gap:var(--px-8);padding:var(--px-9) var(--px-14);border-bottom:var(--px-1) solid var(--border);background:var(--surface);flex-wrap:wrap">
     <span style="font-size:var(--px-12);font-weight:700">Users</span>
     <span style="font-size:var(--px-11);color:var(--muted)">{usersRows.length} users</span>
     <span onclick={() => cid && mongoUserWizard.show(cid, gridDb || 'admin')} onkeydown={(e) => e.key === 'Enter' && cid && mongoUserWizard.show(cid, gridDb || 'admin')} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer;font-weight:600">+ Add User</span>
     <span onclick={refresh} onkeydown={(e) => e.key === 'Enter' && refresh()} role="button" tabindex="0" aria-busy={refreshing} style="margin-left:auto;font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer;opacity:{refreshing ? 0.6 : 1}">{refreshing ? '⟳ Refreshing…' : '⟳ Refresh'}</span>
   </div>
+
+  <!-- Engine model explainer — MongoDB's auth-database + roles-per-database RBAC. -->
+  <div style={EXPLAINER}>A MongoDB user belongs to an <b style="color:var(--text2)">authentication database</b> and is granted <b style="color:var(--text2)">roles per database</b> — built-in ones like <span class="mono" style="color:var(--text)">read</span>, <span class="mono" style="color:var(--text)">readWrite</span>, <span class="mono" style="color:var(--text)">dbOwner</span>, or custom roles. Roles on the <span class="mono" style="color:var(--text)">admin</span> database (e.g. root) apply cluster-wide.</div>
 
   <div style="flex:1;display:flex;min-height:0">
     <div role="listbox" tabindex="-1" aria-label="Users" style="flex:none;width:var(--px-240);border-right:var(--px-1) solid var(--border);overflow:auto;min-height:0">
@@ -233,10 +222,11 @@
           {/each}
         </div>
         <div style="flex:1;overflow:auto;min-height:0;padding:var(--px-14)">
+          <PrincipalHeader name={`${selName}@${selDb}`} subtitle="Database user" />
           {#if detailTab === 'roles'}
             <!-- Quick grant: friendly access level → built-in role, many databases -->
-            <div style="border:var(--px-1) solid var(--border2);border-radius:var(--px-8);padding:var(--px-10);margin-bottom:var(--px-12)">
-              <div style="font-size:var(--px-12);color:var(--text);font-weight:700;margin-bottom:var(--px-6)">＋ Grant access</div>
+            <div style={CARD}>
+              <div style={CARD_TITLE}>＋ Grant access</div>
               <div style="display:flex;flex-direction:column;gap:var(--px-6)">
                 <div style="display:flex;gap:var(--px-6);flex-wrap:wrap;align-items:center">
                   <span style="font-size:var(--px-11);color:var(--muted);width:var(--px-70)">Access level</span>
@@ -260,6 +250,8 @@
                 </div>
               </div>
             </div>
+            <div style={CARD}>
+            <div style={CARD_TITLE}>Built-in roles</div>
             <div style="font-size:var(--px-12);color:var(--text2);font-weight:600;margin-bottom:var(--px-6)">Current roles</div>
             {#if selRoles.length}
               <div style="display:flex;flex-wrap:wrap;gap:var(--px-6);margin-bottom:var(--px-12)">
@@ -276,25 +268,20 @@
             </div>
             <div style="display:flex;flex-wrap:wrap;gap:var(--px-12)">
               {#each DB_BUILTIN_ROLES as role (role)}
-                <label style="font-size:var(--px-12);color:var(--text);display:flex;align-items:center;gap:var(--px-4)">
+                <label title={ROLE_DESC[role] ?? 'custom role'} style="font-size:var(--px-12);color:var(--text);display:flex;align-items:center;gap:var(--px-4);cursor:help">
                   <input type="checkbox" disabled={busy} checked={hasRole(selRoles, role, gridDb)} onchange={(e) => toggleRole(role, gridDb, (e.currentTarget as HTMLInputElement).checked)} /> {role}
                 </label>
               {/each}
             </div>
             <div style="font-size:var(--px-10_5);color:var(--muted);margin-top:var(--px-8)">Toggling a role runs grantRolesToUser / revokeRolesFromUser immediately.</div>
+            </div>
             <div style="margin-top:var(--px-16)">
-              {#if confirmDrop}
-                <div style="display:flex;gap:var(--px-8);align-items:center;padding:var(--px-8);background:var(--panel);border:var(--px-1) solid var(--error);border-radius:var(--px-6)">
-                  <span style="font-size:var(--px-12);color:var(--error)">Drop user “{selName}@{selDb}”?</span>
-                  <span onclick={dropUser} onkeydown={(e) => e.key === 'Enter' && dropUser()} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--error);color:var(--hex-fff);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">Drop</span>
-                  <span onclick={() => (confirmDrop = false)} onkeydown={(e) => e.key === 'Enter' && (confirmDrop = false)} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">Cancel</span>
-                </div>
-              {:else}
-                <span onclick={() => (confirmDrop = true)} onkeydown={(e) => e.key === 'Enter' && (confirmDrop = true)} role="button" tabindex="0" style="font-size:var(--px-11_5);color:var(--error);border:var(--px-1) solid var(--error);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">Drop user…</span>
-              {/if}
+              <span onclick={() => (dropTarget = { user: selName, db: selDb })} onkeydown={(e) => e.key === 'Enter' && (dropTarget = { user: selName, db: selDb })} role="button" tabindex="0" style="font-size:var(--px-11_5);color:var(--error);border:var(--px-1) solid var(--error);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">Drop user…</span>
             </div>
           {:else if detailTab === 'access'}
             <!-- Access overview: what this user can access, per database (via roles) -->
+            <div style={CARD}>
+            <div style={CARD_TITLE}>Access by database</div>
             <div style="font-size:var(--px-12);color:var(--text2);margin-bottom:var(--px-10)">What <span class="mono" style="color:var(--text);font-weight:600">{selName}@{selDb}</span> can access, per database (through its roles).</div>
             {#if mongoAccess.length}
               <div style="display:flex;flex-direction:column;gap:var(--px-8)">
@@ -318,12 +305,16 @@
               <div style="font-size:var(--px-11_5);color:var(--muted)">No roles — this user cannot access any database yet.</div>
             {/if}
             <div style="font-size:var(--px-10_5);color:var(--muted);margin-top:var(--px-8)">MongoDB access is role-based per database; *AnyDatabase / root / clusterAdmin roles on the admin database apply cluster-wide.</div>
+            </div>
           {:else}
+            <div style={CARD}>
+            <div style={CARD_TITLE}>Password</div>
             <div style="display:flex;gap:var(--px-6);align-items:flex-end">
               <label style="font-size:var(--px-12);color:var(--text2)">New password
                 <input type="password" bind:value={newPassword} class="mono" style="display:block;margin-top:var(--px-4);width:var(--px-220);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-8);color:var(--text)" />
               </label>
               <span onclick={changePassword} onkeydown={(e) => e.key === 'Enter' && changePassword()} role="button" tabindex="0" aria-disabled={!newPassword || busy} style="font-size:var(--px-11_5);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-6);padding:var(--px-5) var(--px-12);cursor:{newPassword && !busy ? 'pointer' : 'not-allowed'};opacity:{newPassword && !busy ? 1 : 0.5};font-weight:600">Change</span>
+            </div>
             </div>
           {/if}
         </div>
