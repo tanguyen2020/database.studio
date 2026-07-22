@@ -103,7 +103,7 @@
             dragIdx = null
             dropIdx = null
           }}
-          style="display:flex;align-items:center;gap:var(--px-8);padding:0 var(--px-11);cursor:pointer;border-right:var(--px-1) solid var(--border);border-bottom:var(--px-2) solid {isActive ? meta.accent : 'transparent'};background:{isActive ? 'var(--surface)' : 'transparent'};opacity:{isActive ? 1 : 0.62};min-width:0;max-width:var(--px-220);{dropIdx === idx && dragIdx !== null && dragIdx !== idx ? 'outline:var(--px-1) solid var(--primary);' : ''}"
+          style="display:flex;align-items:center;gap:var(--px-8);padding:0 var(--px-11);margin:var(--px-4) var(--px-3) 0;cursor:pointer;border-top-left-radius:var(--px-8);border-top-right-radius:var(--px-8);border-bottom:var(--px-2) solid {isActive ? meta.accent : 'transparent'};background:{isActive ? 'var(--surface)' : 'transparent'};opacity:{isActive ? 1 : 0.62};min-width:0;max-width:var(--px-220);{dropIdx === idx && dragIdx !== null && dragIdx !== idx ? 'outline:var(--px-1) solid var(--primary);' : ''}"
         >
           <span style="flex:none;display:flex;align-items:center"><SystemIcon system={tab.systemType} size={15} /></span>
           {#if renamingId === tab.id}
@@ -145,7 +145,8 @@
               role="button"
               tabindex="0"
               title="Close (Ctrl+W)"
-              style="flex:none;color:var(--muted);font-size:var(--px-14);width:var(--px-16);height:var(--px-16);display:flex;align-items:center;justify-content:center;border-radius:var(--px-4)"
+              class="tab-close"
+              style="flex:none;font-size:var(--px-16);line-height:1;width:var(--px-18);height:var(--px-18);display:flex;align-items:center;justify-content:center;border-radius:var(--px-4)"
             >×</span>
           {/if}
         </div>
@@ -226,5 +227,13 @@
 <style>
   .scrollbar-none::-webkit-scrollbar {
     display: none;
+  }
+  .tab-close {
+    color: var(--text2);
+    transition: background 0.12s, color 0.12s;
+  }
+  .tab-close:hover {
+    background: var(--error);
+    color: var(--hex-fff);
   }
 </style>
