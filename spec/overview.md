@@ -1,13 +1,43 @@
 # Database Studio — Product Spec
 
+> ## 0. ĐỐI CHIẾU CODE (cập nhật 2026-07-22 — đọc trước tiên)
+>
+> `overview.md` là spec sản phẩm **lịch sử**; nhiều phần đã bị vượt qua bởi code hiện tại. Khi mâu thuẫn,
+> **code + các spec tính năng riêng đúng**, không phải file này. Các drift hệ thống:
+>
+> - **12 hệ, KHÔNG phải 10.** Enum `LiveConnection` (`src-tauri/src/drivers/mod.rs:46-58`) có 11 variant
+>   (MariaDB dùng chung `MySql`); `SystemType` (`src/lib/types.ts:5-17`) có 12 giá trị — thêm **MongoDB** và
+>   **Oracle**. → Mục 6 "Out of scope: MongoDB support" **KHÔNG còn đúng** (xem note tại §6). Oracle không
+>   được overview.md nhắc; xem `SPEC-ORACLE-FEATURE.md`. MongoDB: `SPEC-MONGODB-FEATURE.md`.
+> - **Cấu trúc thư mục frontend đã dời** hết về `src/lib/` (mục 7 vẽ `src/components/`, `src/stores/` ở
+>   top-level là sai). Thực tế `src/lib/` chứa ~19 thư mục con: `sql/ users/ mongo/ redis/ stream/ grid/
+>   export/ import/ compare/ copy/ er/ testdata/ keys/ format/ actions/ explorer/ connections/ components/ stores/`.
+> - **Tab content-type mới sau spec**: `index-manager`, `admin`, `objects`, `user-manager`, `mongo-collection`,
+>   `cassandra-table`, `redis-key`, `nats-subject` (`src/lib/types.ts:214-239`).
+> - **Mảng tính năng lớn không có trong overview**: Users & Privileges 8 engine (`SPEC-USERS-PRIVILEGES.md`),
+>   Generate Test Data, Copy Table to…, Partitioning, và toàn bộ pure-logic `src/lib/sql/*.ts`.
+> - **ClickHouse driver = `reqwest` HTTP tự viết**, KHÔNG phải crate `clickhouse` (mục "tech stack" dòng ~138
+>   sai; `Cargo.toml:66` reqwest, không có crate clickhouse).
+> - **Split view chỉ 1 lần chia đôi** (trái/phải hoặc trên/dưới), KHÔNG phải lưới "2×2 panes"
+>   (`stores/tabs.svelte.ts:22` `splitDir: null|'v'|'h'`).
+> - **Redis CLI console = tính năng ma**: `RedisWorkspace.svelte` còn trong code nhưng không còn đường UI mở
+>   (AUDIT-13 thay bằng RedisExplorer key-browser trong cây). Mục 3.9 mô tả CLI console là lỗi thời.
+> - **Result contract** có thêm field `affected` ngoài `{ok, result, error, duration_ms}` (`drivers/types.rs:83`).
+>
+> Các mô tả kiến trúc lõi CÒN đúng: dual-mode IPC (`ipc.ts:8-9`), driver-per-module, storage rusqlite
+> (connections/tabs/history/Snippet), SSH tunnel `russh`, dependency sqlx/tiberius/rusqlite/scylla/redis/
+> rdkafka/async-nats (khớp `Cargo.toml`).
+
 ## 1. Tổng quan
 
 **Database Studio** là một desktop app cá nhân để quản lý và làm việc với cơ sở dữ liệu và message broker. Mục tiêu: nhẹ, nhanh, đủ tính năng cho developer/DBA cá nhân, không cần server.
 
-### Connections hỗ trợ — 10 hệ thống
+### Connections hỗ trợ — ~~10~~ **12 hệ thống** (xem §0)
 
 > Danh sách chuẩn theo `DATABASE_STUDIO_SPEC_v2.md` mục 2 (spec gốc chỉ nêu 6 hệ; đã mở rộng
 > thành 10: thêm **MariaDB, SQLite, ClickHouse, Cassandra**).
+> **Cập nhật (2026-07-22):** nay là **12 hệ** — bảng dưới thiếu **MongoDB** và **Oracle** (đã có driver đầy
+> đủ trong code, xem §0 + `SPEC-MONGODB-FEATURE.md` / `SPEC-ORACLE-FEATURE.md`).
 
 | Hệ thống | Nhóm | Port | Quoting định danh | Workspace |
 |---|---|---|---|---|
@@ -894,7 +924,7 @@ với struct chuẩn, dùng chung 1 component cho mọi hệ. Luôn giữ kèm r
 - Multi-user / team sharing
 - Cloud sync
 - Data migration wizard
-- MongoDB support
+- ~~MongoDB support~~ → **KHÔNG còn out-of-scope: MongoDB đã được thêm làm engine đầy đủ** (xem §0).
 - Query scheduler
 - Kafka MirrorMaker / replication tools
 - NATS clustering management

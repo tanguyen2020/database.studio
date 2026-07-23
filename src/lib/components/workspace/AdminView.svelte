@@ -73,11 +73,14 @@
   let rows = $state<Record<string, unknown>[]>([])
   let loading = $state(false)
   let error = $state<string | null>(null)
+  // Row selection (click) — hover + selected highlight to match the other grids.
+  let selectedRow = $state<number | null>(null)
 
   async function load() {
     if (!tab.connectionId) return
     loading = true
     error = null
+    selectedRow = null
     try {
       const res = await ipc.adminView(tab.connectionId, view)
       cols = res.cols
@@ -156,13 +159,13 @@
         </tr></thead>
         <tbody>
           {#each rows as r, ri (ri)}
-            <tr>
+            <tr class="adm-row" class:sel={selectedRow === ri} onclick={() => (selectedRow = ri)}>
               {#each cols as c (c[0])}
                 <td style="padding:var(--px-4) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:var(--text2);white-space:nowrap;max-width:var(--px-320);overflow:hidden;text-overflow:ellipsis">{fmt(r[c[0]])}</td>
               {/each}
               {#if view === 'sessions' && canKill}
                 <td style="padding:var(--px-4) var(--px-10);border-bottom:var(--px-1) solid var(--border)">
-                  <span onclick={() => kill(r['pid'])} onkeydown={(e) => e.key === 'Enter' && kill(r['pid'])} role="button" tabindex="0" style="font-size:var(--px-10);font-weight:700;color:var(--hex-fff);background:var(--error);border-radius:var(--px-4);padding:var(--px-1) var(--px-8);cursor:pointer">Kill</span>
+                  <span onclick={(e) => { e.stopPropagation(); kill(r['pid']) }} onkeydown={(e) => e.key === 'Enter' && kill(r['pid'])} role="button" tabindex="0" style="font-size:var(--px-10);font-weight:700;color:var(--hex-fff);background:var(--error);border-radius:var(--px-4);padding:var(--px-1) var(--px-8);cursor:pointer">Kill</span>
                 </td>
               {/if}
             </tr>
@@ -172,3 +175,23 @@
     {/if}
   </div>
 </div>
+
+<style>
+  /* Row hover + selected — same convention as the Result Grid / Objects tab. */
+  .adm-row {
+    cursor: default;
+  }
+  /* Rows sit on the page background, where --hover equals --bg in light mode
+     (invisible). A primary tint reads clearly in BOTH themes (primary is
+     theme-aware) — same approach as the Result Grid / Schema Compare hovers. */
+  .adm-row:hover:not(.sel) {
+    background: color-mix(in srgb, var(--primary) 14%, transparent);
+  }
+  .adm-row.sel {
+    background: var(--grid-select);
+  }
+  /* selected row: white text wins over the per-cell inline --text2 color */
+  .adm-row.sel td {
+    color: var(--hex-fff) !important;
+  }
+</style>

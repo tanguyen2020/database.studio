@@ -1,5 +1,8 @@
 # Phase 2 — Relational Core
 
+> ⚠️ **Deprecated — checklist kế hoạch lịch sử.** Trạng thái `[ ]`/`[x]` không phản ánh hiện trạng. Nguồn
+> sự thật: **code** + `SPEC-INDEX.md` + spec tính năng + `CLAUDE.md`. Giữ để tham chiếu.
+
 **Mục tiêu:** Nâng cấp trải nghiệm SQL editor và data viewer — autocomplete, lint lúc gõ theo dialect (tầng 1), ClickHouse basics, SQLite PRAGMA panel, sửa dữ liệu trực tiếp, lịch sử query, DDL tools.
 **Thời gian ước tính:** ~~3–4 tuần~~ → **1–2 tuần** (vibe coding)
 **Yêu cầu:** Phase 1 hoàn thành

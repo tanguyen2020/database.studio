@@ -60,7 +60,7 @@
   {/if}
   <span class="mono">{statusObject}</span>
   <span class="mono" style="margin-left:auto">
-    {#if exec?.running}Đang chạy…{:else}{latency}{/if}
+    {#if exec?.running}Processing…{:else}{latency}{/if}
   </span>
   <span class="mono">{statusRows}</span>
 </div>

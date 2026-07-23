@@ -74,6 +74,56 @@ async fn o0_connect_exec_decode() {
     println!("O0 LIVE OK — connect + DDL + DML + dynamic decode + FETCH FIRST verified");
 }
 
+/// Backup & Restore (native Oracle Data Pump) — CREATE OR REPLACE DIRECTORY +
+/// expdp export → mutate → impdp import (TABLE_EXISTS_ACTION=REPLACE). Password
+/// on STDIN (never argv). #[ignore]: needs a live Oracle + Instant Client Tools
+/// (expdp/impdp) on PATH; the dump lands in the server-side DIRECTORY path.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs a live Oracle container + Instant Client Tools (expdp/impdp) on PATH"]
+async fn o_datapump_backup_restore_roundtrip() {
+    use database_studio_lib::drivers::backup::{oracle_dir_sql, oracle_expdp_cmd, oracle_impdp_cmd, BackupTarget};
+    use tokio::io::AsyncWriteExt;
+
+    let mut d = OracleDriver::connect(&params()).await.expect("connect");
+    let _ = d.exec("BEGIN EXECUTE IMMEDIATE 'DROP TABLE dp_t'; EXCEPTION WHEN OTHERS THEN NULL; END;").await;
+    d.exec("CREATE TABLE dp_t (id NUMBER PRIMARY KEY)").await.expect("create");
+    d.exec("INSERT INTO dp_t VALUES (1)").await.expect("i1");
+    d.exec("INSERT INTO dp_t VALUES (2)").await.expect("i2");
+
+    // DIRECTORY object → server-side /tmp (chính xác builder sinh)
+    d.exec(&oracle_dir_sql("DBSTUDIO_DUMP", "/tmp")).await.expect("create directory");
+
+    let t = BackupTarget { host: "127.0.0.1".into(), port: 1521, database: "FREEPDB1".into(), user: "system".into() };
+    async fn run(cmd: (String, Vec<String>)) -> std::process::Output {
+        let (prog, args) = cmd;
+        let mut child = tokio::process::Command::new(&prog)
+            .args(&args)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn data pump tool");
+        if let Some(mut s) = child.stdin.take() {
+            let _ = s.write_all(b"Oracle123\n").await;
+        }
+        child.wait_with_output().await.expect("wait data pump")
+    }
+
+    let out = run(oracle_expdp_cmd(&t, "DBSTUDIO_DUMP", "dp.dmp", "dp.log")).await;
+    assert!(out.status.success(), "expdp: {}", String::from_utf8_lossy(&out.stderr));
+
+    // đổi dữ liệu rồi import lại (REPLACE) → về đúng 2 dòng
+    d.exec("INSERT INTO dp_t VALUES (3)").await.expect("i3");
+    let out = run(oracle_impdp_cmd(&t, "DBSTUDIO_DUMP", "dp.dmp", "dp.log")).await;
+    assert!(out.status.success(), "impdp: {}", String::from_utf8_lossy(&out.stderr));
+
+    let res = d.exec("SELECT count(*) AS N FROM dp_t").await.expect("count");
+    let StatementOutcome::Rows { result } = res else { panic!("rows") };
+    assert!(result.rows[0]["N"].to_string().contains('2'), "restore về 2 dòng: {}", result.rows[0]["N"]);
+    let _ = d.exec("DROP TABLE dp_t").await;
+    println!("Oracle Data Pump backup/restore round-trip OK");
+}
+
 /// O1: real introspection (ALL_* catalog views) against a seeded schema.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "needs a live Oracle container (gvenzl/oracle-free) — run with --ignored"]
@@ -311,4 +361,56 @@ async fn u6_user_manager_end_to_end() {
     assert_eq!(result.rows[0]["N"].to_string(), "0", "user gone");
     let _ = admin.exec("DROP TABLE system.um_secret").await;
     println!("U6 OK — Oracle create/login/deny/grant/deny-write/revoke/drop verified");
+}
+
+/// PERF BENCH — Oracle SELECT of 1,000,000 rows: real exec() time (buffered) vs a
+/// FETCH FIRST 1000 cap. Needs the gvenzl/oracle-free container + Oracle Instant
+/// Client on PATH (ODPI-C). Run:
+///   cargo test --test oracle_o0 bench_oracle_select_million -- --ignored --nocapture --test-threads=1
+#[tokio::test(flavor = "multi_thread")]
+#[ignore]
+async fn bench_oracle_select_million() {
+    let mut d = OracleDriver::connect(&params()).await.expect("connect");
+    let _ = d.exec("BEGIN EXECUTE IMMEDIATE 'DROP TABLE big'; EXCEPTION WHEN OTHERS THEN NULL; END;").await;
+    // 1000 x 1000 cross join of CONNECT BY → 1M rows without deep recursion.
+    d.exec("CREATE TABLE big AS SELECT ROWNUM AS id, 'row-' || ROWNUM AS label FROM (SELECT 1 FROM dual CONNECT BY LEVEL <= 1000) a, (SELECT 1 FROM dual CONNECT BY LEVEL <= 1000) b")
+        .await.expect("seed 1M");
+
+    let t = std::time::Instant::now();
+    let full = d.exec("SELECT * FROM big").await.unwrap();
+    let full_ms = t.elapsed().as_millis();
+    let full_rows = match &full { StatementOutcome::Rows { result } => result.total, _ => 0 };
+    let t = std::time::Instant::now();
+    let capped = d.exec("SELECT * FROM big FETCH FIRST 1000 ROWS ONLY").await.unwrap();
+    let capped_ms = t.elapsed().as_millis();
+    let _capped_rows = match &capped { StatementOutcome::Rows { result } => result.total, _ => 0 };
+
+    // Open Data path: first page (FETCH FIRST 100) + footer COUNT(*).
+    let t = std::time::Instant::now();
+    let _page = d.exec("SELECT * FROM big FETCH FIRST 100 ROWS ONLY").await.unwrap();
+    let page_ms = t.elapsed().as_millis();
+    let t = std::time::Instant::now();
+    let _cnt = d.exec("SELECT COUNT(*) AS c FROM big").await.unwrap();
+    let count_ms = t.elapsed().as_millis();
+
+    eprintln!(
+        "BENCH oracle     full SELECT*={full_ms} ms | cap1000={capped_ms} ms || OpenData: page100={page_ms} ms + count(*)={count_ms} ms  (rows={full_rows})"
+    );
+    assert_eq!(full_rows, 1_000_000);
+}
+
+/// Wide-table (35 cols, 100k rows, mostly-NULL) bench — mirrors the other engines.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore]
+async fn bench_oracle_wide_100k() {
+    let mut d = OracleDriver::connect(&params()).await.expect("connect");
+    let _ = d.exec("BEGIN EXECUTE IMMEDIATE 'DROP TABLE wide'; EXCEPTION WHEN OTHERS THEN NULL; END;").await;
+    let vcols: String = (1..=30).map(|i| format!("s{i} VARCHAR2(32)")).collect::<Vec<_>>().join(", ");
+    d.exec(&format!("CREATE TABLE wide (key_id NUMBER, customer_id NUMBER, class_id NUMBER, class_term NUMBER, {vcols}, created_at DATE)")).await.expect("create");
+    d.exec("INSERT INTO wide (key_id, customer_id, class_id, class_term, created_at) SELECT ROWNUM, 42260+ROWNUM, 1359, 11, SYSDATE FROM (SELECT 1 FROM dual CONNECT BY LEVEL <= 1000) a, (SELECT 1 FROM dual CONNECT BY LEVEL <= 100) b").await.expect("seed");
+    let t = std::time::Instant::now();
+    let out = d.exec("SELECT * FROM wide FETCH FIRST 100000 ROWS ONLY").await.unwrap();
+    let ms = t.elapsed().as_millis();
+    let (rows, ncols) = match &out { StatementOutcome::Rows { result } => (result.total, result.cols.len()), _ => (0, 0) };
+    eprintln!("BENCH wide oracle    = {ms} ms  ({rows} rows x {ncols} cols)");
 }

@@ -538,3 +538,86 @@ Spec đầy đủ 8 engine (PG/MySQL/MariaDB/MSSQL/ClickHouse/Cassandra/MongoDB/
   - **MySQL/MariaDB & ClickHouse**: wizard 2 tầng **Database → Table** ("*"=all | "db.*"=cả database | "db.table"=table, nạp table qua `listTables`) + Grant/Revoke (2 hệ không có DENY). Pure `accessStatement`+`parseGrantLevel`(MySQL)/`parseScope`(CH); "db.*" map đúng về database-level (không nhầm table `*`). CH giữ mutation `ALTER UPDATE/DELETE`.
   - **BẪY sửa**: `parseGrantLevel`/`parseScope` phải bắt `.*` → database-level TRƯỚC khi split '.', nếu không "db.*" thành table tên `*`.
   - Tests: unit builders 6 hệ (mssql/oracle/cassandra/mysql/clickhouse mỗi hệ +1 → vitest 650); e2e user-manager 14/14 cập nhật flow mới (MSSQL Deny action + object-level `[public].[students]`; MySQL/CH table-level `` `public`.`students` ``; Cassandra `TABLE public.students_by_id`; Oracle `APP_USER.STUDENTS`; Mongo Quick-grant readWrite). Object/table-level SQL tái dùng builder gốc (permission/grant/grantPermission/grantObjPrivs) đã container-verified ở mức schema/db/keyspace. Gates: check 0/0, vitest 650, tokens 190 (0 mới).
+
+## FIX — Query Editor: DB picker rỗng khi connection chỉ có MỘT database (MySQL/MariaDB)
+User: connection chỉ có một database → Query Editor mở được nhưng **dropdown Database rỗng** (gõ search không ra gì). Root cause: dropdown nạp danh sách qua `loadDbList`→`ipc.listSchemas` ghi vào biến `dbList` **riêng biệt** với `explorer.cache` mà cây Explorer dùng (cùng lệnh backend nhưng khác đích). `loadDbList` chỉ chạy 1 lần trong `$effect` lúc mount, **KHÔNG retry** → nếu lần gọi đó đua thời điểm/transient fail thì `dbList=[]` vĩnh viễn, trong khi cây vẫn hiện DB (nạp lúc user expand connection) → "cây thấy mà dropdown rỗng".
+- **Fix** (`SqlWorkspace.svelte`): `dbOptions` chuyển từ `dbList.map` sang `$derived.by` **hợp nhất 3 nguồn** (dedup theo tên): (1) `dbList` (eager load cũ, giữ nguyên), (2) `explorer.cache[profile.id]` — CÙNG nguồn với cây (schemas cho mysql/mariadb/clickhouse; databases cho pg/mssql/mongo) nên picker khớp cây kể cả khi eager load fail, (3) `currentDb` + `profile.database` — database đang kết nối LUÔN chọn được. → dropdown không bao giờ rỗng khi connection có ≥1 database.
+- e2e `new-query-database.spec.ts` +1 (`single-database connection still fills the Database picker`: mở MySQL console qua ctx "New Query Console" @ localhost:3306 → dropdown Database visible → search 'pub' → option 'public' hiện). Gates: check 0/0, e2e new-query-database 2/2 + editor-autocomplete/query-editor-schema/statusbar-database 16/16 (no regression).
+
+## PERF — Result panel: chuyển Grid/JSON/Single Row/Chart chậm khi query 1000 dòng
+User: tab qua lại 4 view (Grid/JSON/Single Row/Chart) **rất chậm** khi result 1000 dòng. Root cause = **ResultJsonView** render MỘT `<span>` cho MỖI token JSON của TOÀN BỘ payload (1000 dòng × ~30 cột → hàng chục nghìn DOM node). Vì `{#if viewMode===…}` **destroy/recreate** view mỗi lần đổi tab, khối span khổng lồ đó vừa bị **dựng khi vào JSON** vừa bị **phá khi rời JSON** → mọi lần chuyển tab dính JSON đều đơ 2 chiều. (Grid đã virtualized+paged 200/trang; Single Row 1 dòng; Chart aggregate ~ms → nhẹ.)
+- **Fix** (`ResultJsonView.svelte`): ngưỡng `HIGHLIGHT_LIMIT = 60_000` ký tự. Payload nhỏ → giữ nguyên tô màu per-token + ô Search in-view (jv-hit). Payload lớn → render JSON dạng **1 text node phẳng** (`{text}`) → tức thì (1 node thay vì hàng chục nghìn span); thay ô Search bằng ghi chú "Highlighting off (large result)" (dùng Ctrl+F của webview để tìm). `parts` trả `[]` khi không colorize (không tốn regex + không dựng mảng token khổng lồ).
+- e2e `result-toggle.spec.ts` +1 (`cycle Grid/JSON/Single Row/Chart renders each cleanly`: chạy query → JSON pre visible → Single Row "Row" → Chart → về Grid "Rows 1–3 of 3", 0 page error). Gates: check 0/0, e2e result-toggle 2/2 + result-copy/export/number-color/pager 5/5 (no regression).
+- **Follow-up (chưa làm, low prio):** keep-alive 4 view (toggle display thay vì destroy) để đổi tab giữ scroll/selection + khỏi re-mount grid; hiện chưa cần vì freeze chính (JSON) đã hết.
+
+## PERF (đo thật) — Result views với 1.000.000 dòng: đo long-task main-thread, sửa tới khi < ngưỡng
+User yêu cầu perf test THẬT với 1 triệu dòng ("không được test mơ hồ"). Đã dựng harness đo được bằng số: demo hook `SELECT * FROM perf_rows_<N>` sinh N dòng thật (schema rộng ~14 cột mostly-NULL như export điểm) chảy qua ĐÚNG đường render; test `result-perf-1m.spec.ts` gắn `PerformanceObserver('longtask')` đo **thời gian block main-thread (freeze thật)** + wall-clock mỗi lần chuyển view.
+- **Root cause phát hiện qua đo**: `results.byTab` là `$state` → `result.rows` bị **deep-proxy**. Chart aggregate quét TOÀN BỘ 1M dòng qua proxy trap → freeze **3546ms**. (Grid virtualized 200/trang + Single 1 dòng → không đụng; JSON đã cap 2000.)
+- **Fix 1 — freeze rows (bỏ proxy)** `results.svelte.ts`: `Object.freeze(response.result.rows)` khi seed subResult (+ freeze mảng nối ở fetchMoreCql). Rows là snapshot bất biến (grid edit dùng Map riêng, query mới thay cả object) → frozen = escape hatch của Svelte, `data.rows[i]` là object raw. Chart 3546→**1401ms**.
+- **Fix 2 — cap JSON** `ResultJsonView.svelte`: serialize tối đa 2000 dòng đầu + badge "Showing first 2,000 of N rows" (stringify 1M = string hàng trăm MB, bất khả). Kèm ngưỡng `HIGHLIGHT_LIMIT=60k` (payload lớn → 1 text node phẳng thay hàng chục nghìn span).
+- **Fix 3 — sample Chart** `ResultChart.svelte`: aggregate tối đa `CHART_ROW_CAP=50_000` dòng đầu (chart chỉ hiện ≤12 nhóm) + badge "Sampled first 50,000 of N rows"; `GROUP_CAP=2000` chặn map nổ khi X là cột unique. Chart 1401→**65ms**.
+- **Kết quả đo cuối (1M dòng, dev machine)**: load wall=166/maxTask=94ms · json 358/178 · single 48/0 · chart 113/65 · gridBack 87/0. Assertion: mọi chuyển view maxTask < 800ms (bắt được lớp freeze giây; observed ≤178ms), load < 6000ms.
+- Gates: check 0/0, e2e `result-perf-1m` 1/1 + result-toggle/copy/export/number-color/pager/group-by (9/9 tổng). **Follow-up:** Group By over 1M (buildGroups quét full) là user-action, chưa cap — cân nhắc nếu cần.
+
+## PERF BENCH (container thật) — SELECT 1.000.000 dòng: thời gian exec per-engine + hướng tối ưu
+User hỏi câu SELECT 1M dòng thực thi bao lâu + tối ưu được không cho mỗi engine. Đo THẬT bằng integration bench `bench_*_select_million` (7 engine, seed 1M dòng 2 cột id+label, đo `Instant` quanh `drv.exec`; relational SQL trong drivers_integration.rs, Oracle trong oracle_o0.rs — đều `#[ignore]`). Chạy: `cargo test --test drivers_integration bench_ -- --ignored --nocapture --test-threads=1` (+ `--test oracle_o0 bench_oracle_select_million` với Instant Client trên PATH).
+- **Kết quả ĐẦY ĐỦ 7 engine (1M dòng, `exec` = engine execute + fetch_all buffer + decode ô → serde_json object/row):**
+  | Engine | full `SELECT *` (1M) | cap 1000 |
+  |---|---|---|
+  | SQLite | **6777 ms** | 6 ms |
+  | ClickHouse | **8211 ms** | 11 ms |
+  | MariaDB | **9042 ms** | 10 ms |
+  | Oracle | **15223 ms** | 20 ms (FETCH FIRST) |
+  | MSSQL | **15854 ms** | 22 ms (TOP) |
+  | PostgreSQL | **17854 ms** | 25 ms |
+  | MySQL | **22533 ms** | 24 ms |
+  - MSSQL đo được sau khi pull image `mssql/server:2022-latest`; Oracle đo được sau khi cài **Oracle Instant Client Basic-Light** (`C:\oracle\instantclient_23_0`, oci.dll trên PATH lúc chạy) + container `gvenzl/oracle-free:23-slim-faststart`. ODPI-C chỉ cần Instant Client lúc RUNTIME (build không cần).
+- **Chẩn đoán**: đường query editor (`exec`) dùng **`fetch_all` buffer TOÀN BỘ** rồi decode mỗi ô thành object-per-row (1M×N alloc + clone tên cột) rồi serialize qua Tauri IPC → 7–22s. `LIMIT 1000` = 6–25ms ⇒ chênh **~300–900×**. Engine execute gần như tức thì; chi phí nằm ở **materialize + IPC 1M dòng**. Streaming (`.fetch()`) hiện chỉ có ở export (T24), KHÔNG dùng cho editor. **Chưa có cap dòng nào trên raw SELECT.**
+- **Hướng tối ưu (chung mọi engine, giống DataGrip/DBeaver "fetched first 500 rows")**: cap kết quả mặc định cho grid tương tác — hoặc (a) streaming `.fetch()` + dừng sau N dòng (an toàn, không rewrite SQL, engine-agnostic; PG/MySQL/MSSQL qua sqlx, CH qua LIMIT/max_result_rows), hoặc (b) rewrite thêm `LIMIT/TOP/FETCH FIRST` per-dialect. Kèm badge "first N rows" + "load more"/Export cho phần còn lại. **QUYẾT ĐỊNH của user: KHÔNG cap** — giữ nguyên hành vi fetch đủ mọi dòng ở query editor (chỉ cần số liệu, không implement auto-cap). Bench `bench_*_select_million` giữ lại (`#[ignore]`) để đo lại khi cần. Positional-rows KHÔNG làm (đã chốt trước).
+
+## PERF BENCH — "Open Data" (Table Viewer) trên bảng 1.000.000 dòng
+User: benchmark luôn đường Open Data. Table Viewer KHÁC query editor — phân trang server-side (`exec_filtered`→`build_select` LIMIT/OFFSET, page mặc định 100) + 1 câu `SELECT COUNT(*)` cho footer total. Đã thêm đo `page100` (LIMIT/TOP/FETCH FIRST 100) + `count(*)` vào chính các bench `bench_*_select_million` (in cùng dòng BENCH).
+- **Kết quả Open Data (bảng 1M dòng) — page fetch + footer count:**
+  | Engine | page 100 | COUNT(*) | ~Open Data | (full SELECT* để so) |
+  |---|---|---|---|---|
+  | SQLite | 0 ms | 17 ms | ~17 ms | 3.1 s |
+  | MySQL | 2 ms | 22 ms | ~24 ms | 11.5 s |
+  | Oracle | 10 ms | 18 ms | ~28 ms | 12.0 s |
+  | ClickHouse | 3 ms | 28 ms | ~31 ms | 6.6 s |
+  | PostgreSQL | 3 ms | 42 ms | ~45 ms | 8.6 s |
+  | MariaDB | 3 ms | 123 ms | ~126 ms | 9.9 s |
+  | MSSQL | 8 ms | 271 ms | ~279 ms | 16.8 s |
+  (full SELECT* dao động theo tải máy giữa các lần chạy — số tương đối, không tuyệt đối.)
+- **Kết luận**: Open Data ĐÃ tối ưu sẵn (paginated LIMIT 100) → mở bảng 1M dòng chỉ **~17–280 ms**, KHÔNG dính vấn đề fetch-hết của query editor. Page fetch tí hon (0–10 ms); chi phí gần như toàn bộ là `COUNT(*)` chính xác cho footer (MSSQL 271 ms / MariaDB 123 ms chậm nhất; còn lại <50 ms). **Không cần sửa gì.** Micro-opt (tuỳ chọn, chưa làm): footer dùng row-count xấp xỉ (PG `reltuples` / MySQL `TABLE_ROWS` / MSSQL `sys.dm_db_partition_stats`) để bỏ COUNT chính xác trên bảng cực lớn (100M+); ở mức 1M chưa cần.
+
+## UI-FIX — Env badge theme-aware + Zoom icon + App icon (3 mục user)
+1. **Env badge (PROD/STG/DEV/LOCAL) hợp Light+Dark**: `ENV_GEN` (systems.gen.ts) chỉ có màu DARK (bg gần đen + fg neon) → trên sidebar Light đọc không nổi. Thêm CSS var theme-aware `--env-{prod,stg,dev,local}-{bg,fg}` trong app.css (token-exempt, đúng pattern `--sacc-*`/`--grid-select`): Light = tint nhạt + chữ đậm bão hòa (prod #fde3e1/#b42318, stg #fbeecb/#8a6410, dev #dcf3e6/#157f3c, local #ece9fb/#6d3fc4); `.dark` = **giữ nguyên hex ENV_GEN** (pixel-diff dark baseline không đổi). ConnectionList: `envKey(env)`→suffix, badge dùng `var(--env-{k}-bg/fg)`, `envMeta().label` giữ nguyên. Verify screenshot cả 2 theme.
+2. **Zoom icon**: đổi từ gear/cog (settings) → kính lúp zoom-in (magnifier + dấu +) trong TitleBar cho khớp nhãn "Zoom" (điều khiển font scale).
+3. **App icon hợp màn hình xanh/tối**: icon cũ (`src-tauri/icons/*`) = cylinder viền xanh trên nền TRONG SUỐT → chìm trên taskbar tối/xanh. Tạo source mới `appicon.svg` (rounded-square gradient xanh #6d8bff→#3a4fd8 + cylinder TRẮNG) → render 1024px qua Playwright (`@playwright/test` chromium screenshot) → `npx @tauri-apps/cli icon` regenerate toàn bộ (png/ico/icns/Square*/android/ios). Nổi bật trên mọi nền. (favicon.svg = bolt tím, riêng biệt, không đụng.)
+- Gates: check 0/0, tokens 0 mới (app.css exempt). phase2-regions vẫn LỆCH (tab-bar/status-bar/sidebar) nhưng **PRE-EXISTING** — chứng minh bằng stash 3 file UI → sidebar y hệt 5.69%/4210px (đóng góp của thay đổi = 0; title-bar còn nhỉnh hơn chút). Không regress.
+
+## UI-FIX — AdminView (Sessions/Locks/Users/Extensions…) thêm hover + selected
+User: màn hình Sessions chưa có hover/selected → làm giống các grid khác. `AdminView.svelte` table rows trước đây trơ (không tương tác). Thêm: `selectedRow` state + `<tr class="adm-row" class:sel onclick>` + `<style>` theo đúng convention Result Grid/Objects tab — hover `var(--hover)`, selected `var(--grid-select)` (xanh #5b7cff) + chữ trắng (`--hex-fff !important` để thắng inline `--text2` của td). Kill button `stopPropagation` (bấm Kill không đổi selection). `selectedRow=null` khi reload/đổi view. Áp cho MỌI admin view (sessions/locks/users/extensions/redis memory/mssql query store…). e2e `admin-views.spec.ts` +assert click row → class `sel`. Gates: check 0/0, admin-views 2/2.
+
+## UI-FIX (tiếp) — hover hợp Light/Dark + Zoom hover
+User: hover (AdminView vừa thêm) không hợp Light mode; nút/menu Zoom chưa có hover. **Root cause**: token `--hover` (tokens.css) ở LIGHT = `#eef1f7` **trùng `--bg` #eef1f7** → mọi element nằm trên nền trang, hover vô hình ở light (dark thì #1f2533 vẫn thấy). Không sửa tokens.css (generated). Fix: đổi hover ở các chỗ này sang **`color-mix(in srgb, var(--primary) 14%, transparent)`** — tint xanh theo primary (theme-aware: light #3858e9 / dark #5b7cff), nổi rõ trên CẢ light lẫn dark (đúng precedent hover SchemaCompare/ResultGrid): (a) `AdminView .adm-row:hover:not(.sel)`, (b) `TitleBar .tb-btn:hover` (nút Sessions/theme/Zoom) + `.fs-item:hover` (menu Scale size). Selected vẫn `--grid-select` (đậm hơn hover). Verify screenshot light: row hover + Zoom "Large" hover đều thấy tint xanh; active item giữ ✓. tokens 0 mới (color-mix + var). Gates: check 0/0, admin-views + result-toggle 4/4.
+
+## PERF BENCH + FIX — MySQL bảng RỘNG (course_test_ism): SELECT 100k dòng ~17s
+User: `SELECT * FROM course_test_ism LIMIT 100000` (MySQL) chạy tới 17s. Bench trước (bảng 2 cột) 1M dòng chỉ ~11s → khác biệt là bảng RỘNG (~30+ cột varchar mostly-NULL như ảnh). Bench mới `bench_mysql_wide_100k` (35 cột: 4 int + 30 varchar NULL + datetime, 100k dòng, 2 biến thể collation):
+- **Trước fix**: wide_default (collation thường) = **9577 ms**; wide_bin (utf8mb4_bin → BINARY_FLAG) = **11228 ms**.
+- **Root cause phụ (fix được)**: `decode_rows` decode MỖI ô binary-family **HAI LẦN** (decode_value + pass relabel `try_get::<Option<Vec<u8>>>`) — kể cả ô NULL → bảng rộng _bin lãng phí ~15-20%. **Fix**: gộp thành 1 lần decode (lấy bytes 1 lần → vừa classify text/binary vừa dựng Value; NULL chỉ 1 try_get rẻ) + pre-own tên cột 1 lần. **Sau fix**: wide_bin **11228→8740 ms** (~22% nhanh hơn); wide_default 9303 ms (~không đổi, đúng — path non-bin). Correctness giữ nguyên (`mysql_bin_collation_text_column_is_not_hex` EXIT=0).
+- **Root cause chính (KHÔNG fix được nếu không cap/positional-rows)**: floor ~9.3s cho 100k×35 = 3.5M ô là chi phí **materialize object-per-row** (mỗi ô: try_get + clone tên cột + serde Map insert) + serialize IPC — cố hữu với hợp đồng "object rows + fetch đủ". User đã chốt **không cap** + **không positional-rows** → không hạ được floor này. 17s user thấy = ~9-11s backend (bảng có thể rộng hơn/nhiều text hơn) + IPC + render trên máy họ.
+- Bench `bench_mysql_wide_100k` giữ lại (`#[ignore]`). Gates: lib compile OK, correctness test EXIT=0.
+
+## PERF BENCH — bảng RỘNG 100k dòng × 35 cột (mostly-NULL) TẤT CẢ 7 engine
+User: kiểm tra bench wide-table cho các engine khác (không chỉ MySQL). `bench_*_wide_100k` (35 cột: 4 int + 30 varchar NULL + datetime, seed 100k, đo `exec`). Kết quả:
+  | Engine | wide 35c × 100k |
+  |---|---|
+  | ClickHouse | **6.056 ms** |
+  | MSSQL | **8.527 ms** |
+  | MySQL | **9.303 ms** |
+  | MariaDB | **11.981 ms** |
+  | PostgreSQL | **14.626 ms** |
+  | Oracle | **17.881 ms** |
+  | SQLite | **19.730 ms** |
+- **Kết luận**: chi phí chậm với bảng rộng là **ENGINE-AGNOSTIC**, KHÔNG phải bug riêng MySQL — MySQL còn ở giữa bảng; SQLite/Oracle/PG chậm HƠN (per-cell decode của driver + materialize 3.5M ô object-per-row + serialize IPC). 17s user thấy khớp dải này (Oracle/PG/SQLite ~15-20s). Chỉ **cap** hoặc **positional-rows** (đều đã bị user từ chối) mới hạ được floor chung này. Fix decode MySQL `_bin` (đợt trước, −22% cho bảng _bin) vẫn hữu ích riêng cho cột binary-flagged. Bench giữ lại (`#[ignore]`).

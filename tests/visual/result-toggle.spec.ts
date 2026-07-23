@@ -40,3 +40,42 @@ test('result panel: hidden on new tab, auto-shows on Run, X + Ctrl+J toggle', as
 
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
+
+// Cycling Grid → JSON → Single Row → Chart → Grid must render each view with no
+// page errors. JSON in particular renders one text node for large payloads (and
+// colorized spans for small ones) — this guards the fast-switch code path.
+test('result views: cycle Grid/JSON/Single Row/Chart renders each cleanly', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(String(e)))
+  await blockRemoteFonts(page)
+  await page.goto(APP_URL)
+  await page.waitForSelector('#app > *', { timeout: 15_000 })
+  await page.waitForTimeout(300)
+
+  await page.getByRole('button', { name: /Postgres/ }).first().click()
+  await page.waitForTimeout(200)
+  await page.getByTitle('New SQL tab (Ctrl+T)').first().click()
+  await page.waitForTimeout(200)
+  await page.locator('.cm-content').first().click()
+  await page.keyboard.type('SELECT * FROM students')
+  await page.getByRole('button', { name: 'Run' }).first().click()
+  await page.waitForTimeout(500)
+
+  // JSON — the pre body is visible (colorized for this small result)
+  await page.getByRole('button', { name: 'JSON', exact: true }).click()
+  await expect(page.locator('pre.mono.selectable')).toBeVisible()
+
+  // Single Row — field list with the row counter
+  await page.getByRole('button', { name: 'Single Row', exact: true }).click()
+  await expect(page.getByText('Row', { exact: true })).toBeVisible()
+
+  // Chart — the chart builder renders
+  await page.getByRole('button', { name: 'Chart', exact: true }).click()
+  await page.waitForTimeout(200)
+
+  // back to Grid
+  await page.getByRole('button', { name: 'Grid', exact: true }).click()
+  await expect(page.getByText(/Rows 1–3 of 3/).first()).toBeVisible()
+
+  expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
+})

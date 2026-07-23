@@ -1,5 +1,8 @@
 # SPEC_SUPPLEMENT — Database Studio
 
+> ⚠️ **Deprecated — backlog task T10–T31 (đã HOÀN TẤT).** Toàn bộ T10–T31 + T24–T31 đã xong (xem `CLAUDE.md`).
+> Giữ lại làm tham chiếu behavioral spec; hiện trạng thực tế theo **code** + `SPEC-INDEX.md`.
+
 Supplemental behavioral specs for every **Missing / Partial / Broken / Wired-but-unverified** item in `GAP_REVIEW.md`, plus standard database-tool features absent from both design and code. No code / no long pseudo-code — behavior, UI, per-dialect notes (PG vs ClickHouse where they differ), edge cases only.
 
 Dialect shorthand: **PG** = PostgreSQL (representative of PG/MySQL/MariaDB/MSSQL/SQLite relational path), **CH** = ClickHouse (async/columnar).

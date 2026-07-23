@@ -1,5 +1,8 @@
 # Phase 1 — MVP Relational
 
+> ⚠️ **Deprecated — checklist kế hoạch lịch sử.** Trạng thái `[ ]`/`[x]` và ước tính thời gian KHÔNG phản
+> ánh hiện trạng. Nguồn sự thật: **code** + `SPEC-INDEX.md` + spec tính năng + `CLAUDE.md`. Giữ để tham chiếu.
+
 **Mục tiêu:** App chạy được, kết nối được PG / MySQL / MariaDB / MSSQL / SQLite, viết và chạy SQL, xem kết quả (kèm lỗi thực thi chuẩn hóa tầng 2).
 **Thời gian ước tính:** ~~4–6 tuần~~ → **2–3 tuần** (vibe coding)
 

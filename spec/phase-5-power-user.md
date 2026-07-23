@@ -1,5 +1,9 @@
 # Phase 5 — Power User
 
+> ⚠️ **Deprecated — checklist kế hoạch lịch sử.** Các mục `[ ]` phần lớn ĐÃ làm (T14–T17 + addendum). Lưu ý
+> lệch: Index Scanner dùng `IndexScanRow.flags` (KHÔNG có `anti_pattern`); Query Plan struct thật xem
+> `SPEC-EXPLAIN-FEATURE.md`. Nguồn sự thật: **code** + `SPEC-INDEX.md` + `CLAUDE.md`.
+
 **Mục tiêu:** Công cụ nâng cao cho developer/DBA — query plan visualizer (đủ 10 hệ), index scanner/analyzer, ClickHouse nâng cao, table designer, ER diagram, import/export đầy đủ, command palette.
 **Thời gian ước tính:** ~~4–5 tuần~~ → **2–3 tuần** (vibe coding)
 **Yêu cầu:** Phase Cassandra hoàn thành

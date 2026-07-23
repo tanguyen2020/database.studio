@@ -1,5 +1,8 @@
 # Phase 4 — Kafka + NATS JetStream đầy đủ
 
+> ⚠️ **Deprecated — checklist kế hoạch lịch sử.** Trạng thái `[ ]`/`[x]` không phản ánh hiện trạng (Kafka/
+> NATS nay có Explorer trong cây; Kafka ACL + NATS NKey-JWT vẫn Deferred). Nguồn sự thật: **code** + `SPEC-INDEX.md` + `CLAUDE.md`.
+
 **Mục tiêu:** Hỗ trợ Apache Kafka đầy đủ — topic browser, consume/produce messages, consumer groups. NATS JetStream hoàn chỉnh với KV Store và Object Store.
 **Thời gian ước tính:** ~~3–4 tuần~~ → **2–3 tuần** (vibe coding — rdkafka phức tạp hơn các driver khác)
 **Yêu cầu:** Phase 3 hoàn thành

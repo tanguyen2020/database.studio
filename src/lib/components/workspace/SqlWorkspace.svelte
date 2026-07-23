@@ -61,7 +61,28 @@
   // connection's own DB attaches an internal sub-connection at run time, so the
   // connection dropdown keeps showing the base profile.
   let dbList = $state<string[]>([])
-  const dbOptions = $derived(dbList.map((d) => ({ value: d, label: d })))
+  // Database options for the picker. Merge three sources so a connection with a
+  // single database (or a transient introspection race at mount) never leaves the
+  // dropdown empty: (1) the eager list loaded below, (2) whatever the Explorer tree
+  // already introspected for this connection — same backend call, so the picker
+  // matches the tree even if the eager load failed — and (3) the connected database
+  // itself, which must always be selectable.
+  const dbOptions = $derived.by(() => {
+    const names: string[] = []
+    const add = (n?: string | null) => {
+      const v = (n ?? '').trim()
+      if (v && !names.includes(v)) names.push(v)
+    }
+    dbList.forEach(add)
+    const c = profile ? explorer.cache[profile.id] : undefined
+    if (c) {
+      if (['mysql', 'mariadb', 'clickhouse'].includes(tab.systemType)) (c.schemas ?? []).forEach((s) => add(s.name))
+      else (c.databases ?? []).forEach((d) => add(d.name))
+    }
+    add(currentDb)
+    add(profile?.database)
+    return names.map((d) => ({ value: d, label: d }))
+  })
   const supportsDbSwitch = $derived(
     !isOrphan && ['postgres', 'mysql', 'mariadb', 'mssql', 'clickhouse'].includes(tab.systemType),
   )

@@ -9,7 +9,10 @@ pub fn backup_tool(system: &str) -> Option<&'static str> {
         "mysql" | "mariadb" => Some("mysqldump"),
         "clickhouse" => Some("clickhouse-client"),
         "mongodb" => Some("mongodump"),
-        _ => None, // sqlite = in-process; redis/kafka/nats/cassandra = N/A
+        "oracle" => Some("expdp"), // Data Pump export (needs Instant Client Tools)
+        // sqlite = in-process (rusqlite); mssql = native BACKUP via the app connection
+        // (no external tool); redis/kafka/nats/cassandra = N/A.
+        _ => None,
     }
 }
 
@@ -83,7 +86,10 @@ pub fn restore_tool(system: &str) -> Option<&'static str> {
         "mysql" | "mariadb" => Some("mysql"),
         "clickhouse" => Some("clickhouse-client"),
         "mongodb" => Some("mongorestore"),
-        _ => None, // sqlite = in-process; redis/kafka/nats/cassandra/mssql = N/A
+        "oracle" => Some("impdp"), // Data Pump import
+        // sqlite = in-process; mssql = native RESTORE via the app connection;
+        // redis/kafka/nats/cassandra = N/A.
+        _ => None,
     }
 }
 
@@ -148,6 +154,92 @@ pub fn mongo_restore_cmd(t: &BackupTarget, src: &str) -> (String, Vec<String>) {
     }
     a.push(format!("--archive={src}"));
     ("mongorestore".into(), a)
+}
+
+// ---------------------------------------------------------------------------
+// MSSQL — native T-SQL BACKUP/RESTORE (run through the app's own connection,
+// no external tool). The .bak file lives on the SQL Server host (server-side).
+// ---------------------------------------------------------------------------
+
+/// `[...]`-quote an MSSQL identifier (double any `]`).
+fn mssql_ident(name: &str) -> String {
+    format!("[{}]", name.replace(']', "]]"))
+}
+/// Escape a string for an `N'...'` MSSQL literal (double any `'`).
+fn mssql_str(s: &str) -> String {
+    s.replace('\'', "''")
+}
+
+/// Native MSSQL full backup — `BACKUP DATABASE [db] TO DISK = N'dest'`. `dest` is
+/// a path ON THE SQL SERVER host, not the client.
+pub fn mssql_backup_sql(database: &str, dest: &str) -> String {
+    format!(
+        "BACKUP DATABASE {} TO DISK = N'{}' WITH FORMAT, INIT, NAME = N'Database Studio full backup', STATS = 10",
+        mssql_ident(database),
+        mssql_str(dest)
+    )
+}
+
+/// Native MSSQL restore — `RESTORE DATABASE [db] FROM DISK = N'src' WITH REPLACE`.
+/// Requires the DB not be in active use (may need single-user / a master
+/// connection); the `.bak` path is on the server.
+pub fn mssql_restore_sql(database: &str, src: &str) -> String {
+    format!(
+        "RESTORE DATABASE {} FROM DISK = N'{}' WITH REPLACE, STATS = 10",
+        mssql_ident(database),
+        mssql_str(src)
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Oracle — Data Pump (expdp/impdp). Dumps go to an Oracle DIRECTORY object that
+// maps to a path ON THE DB SERVER. Password is passed via STDIN (never argv).
+// ---------------------------------------------------------------------------
+
+/// Data Pump connect identifier (`user@//host:port/service`). Password supplied
+/// on STDIN by the caller, so it never appears in the process arguments.
+fn oracle_connect(t: &BackupTarget) -> String {
+    format!("{}@//{}:{}/{}", t.user, t.host, t.port, t.database)
+}
+
+/// `CREATE OR REPLACE DIRECTORY` mapping a logical name → OS path on the DB server.
+pub fn oracle_dir_sql(dir_name: &str, os_path: &str) -> String {
+    format!(
+        "CREATE OR REPLACE DIRECTORY \"{}\" AS '{}'",
+        dir_name.replace('"', ""),
+        os_path.replace('\'', "''")
+    )
+}
+
+/// `expdp` argv for a schema-level export. `dir_name` is an Oracle DIRECTORY
+/// object; `dumpfile`/`logfile` are filenames within it. NO password in argv.
+pub fn oracle_expdp_cmd(t: &BackupTarget, dir_name: &str, dumpfile: &str, logfile: &str) -> (String, Vec<String>) {
+    (
+        "expdp".into(),
+        vec![
+            oracle_connect(t),
+            format!("SCHEMAS={}", t.user),
+            format!("DIRECTORY={dir_name}"),
+            format!("DUMPFILE={dumpfile}"),
+            format!("LOGFILE={logfile}"),
+            "REUSE_DUMPFILES=YES".into(),
+        ],
+    )
+}
+
+/// `impdp` argv for a schema-level import (mirrors the export). NO password in argv.
+pub fn oracle_impdp_cmd(t: &BackupTarget, dir_name: &str, dumpfile: &str, logfile: &str) -> (String, Vec<String>) {
+    (
+        "impdp".into(),
+        vec![
+            oracle_connect(t),
+            format!("SCHEMAS={}", t.user),
+            format!("DIRECTORY={dir_name}"),
+            format!("DUMPFILE={dumpfile}"),
+            format!("LOGFILE={logfile}"),
+            "TABLE_EXISTS_ACTION=REPLACE".into(),
+        ],
+    )
 }
 
 #[cfg(test)]
@@ -236,5 +328,39 @@ mod tests {
     #[test]
     fn sqlite_has_no_external_cmd() {
         assert!(external_backup_cmd("sqlite", &tgt(), "/tmp/a.sql").is_none());
+    }
+
+    #[test]
+    fn mssql_native_sql_shape() {
+        // MSSQL uses in-process T-SQL, not an external tool.
+        assert_eq!(backup_tool("mssql"), None);
+        assert_eq!(restore_tool("mssql"), None);
+        let b = mssql_backup_sql("app", "/var/opt/mssql/app.bak");
+        assert!(b.starts_with("BACKUP DATABASE [app] TO DISK = N'/var/opt/mssql/app.bak'"));
+        assert!(b.contains("WITH FORMAT, INIT"));
+        let r = mssql_restore_sql("app", "/var/opt/mssql/app.bak");
+        assert!(r.starts_with("RESTORE DATABASE [app] FROM DISK = N'/var/opt/mssql/app.bak'"));
+        assert!(r.contains("WITH REPLACE"));
+        // identifier ] and literal ' are escaped
+        assert_eq!(mssql_ident("a]b"), "[a]]b]");
+        assert!(mssql_backup_sql("d", "o'brien.bak").contains("N'o''brien.bak'"));
+    }
+
+    #[test]
+    fn oracle_datapump_shape() {
+        assert_eq!(backup_tool("oracle"), Some("expdp"));
+        assert_eq!(restore_tool("oracle"), Some("impdp"));
+        let t = BackupTarget { host: "db.host".into(), port: 1521, database: "ORCLPDB1".into(), user: "APP".into() };
+        assert_eq!(oracle_dir_sql("DBSTUDIO_DUMP", "/u01/dump"), "CREATE OR REPLACE DIRECTORY \"DBSTUDIO_DUMP\" AS '/u01/dump'");
+        let (prog, args) = oracle_expdp_cmd(&t, "DBSTUDIO_DUMP", "app.dmp", "app.log");
+        assert_eq!(prog, "expdp");
+        assert_eq!(args[0], "APP@//db.host:1521/ORCLPDB1"); // service = database; no password in argv
+        assert!(args.iter().any(|a| a == "SCHEMAS=APP"));
+        assert!(args.iter().any(|a| a == "DIRECTORY=DBSTUDIO_DUMP"));
+        assert!(args.iter().any(|a| a == "DUMPFILE=app.dmp"));
+        assert!(!args.iter().any(|a| a.to_lowercase().contains("password")), "password must not be in argv");
+        let (iprog, iargs) = oracle_impdp_cmd(&t, "DBSTUDIO_DUMP", "app.dmp", "app.log");
+        assert_eq!(iprog, "impdp");
+        assert!(iargs.iter().any(|a| a == "TABLE_EXISTS_ACTION=REPLACE"));
     }
 }

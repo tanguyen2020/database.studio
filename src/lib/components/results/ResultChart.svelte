@@ -73,15 +73,33 @@
     chartY && names.includes(chartY) ? chartY : numNames[0] || names[1] || names[0],
   )
 
-  // group + aggregate (port dòng 5084-5091)
+  // group + aggregate (port dòng 5084-5091). Only the first 12 distinct X groups
+  // are ever charted, so bound the map at GROUP_CAP: on a unique-key X column
+  // (e.g. an id) a 1M-row result would otherwise build a 1M-entry object and
+  // freeze the tab. Rows whose key isn't already tracked once the cap is hit are
+  // skipped — they can't reach the shown top-12 anyway (insertion order).
+  const GROUP_CAP = 2000
+  // Scanning every row synchronously freezes the tab on huge results (measured:
+  // ~1.4s at 1M rows). A chart shows at most 12 groups, so aggregate over a sample
+  // of the first CHART_ROW_CAP rows and say so — enough to shape the chart without
+  // blocking the UI. Export/Group-By give exact full-set aggregates.
+  const CHART_ROW_CAP = 50_000
+  const chartSampled = $derived(data.rows.length > CHART_ROW_CAP)
   const chartData = $derived.by(() => {
+    const rows = data.rows
+    const n = Math.min(rows.length, CHART_ROW_CAP)
     const groups: Record<string, { sum: number; count: number; min: number; max: number }> = {}
-    for (const r of data.rows) {
-      const rec = r as Record<string, unknown>
+    let distinct = 0
+    for (let i = 0; i < n; i++) {
+      const rec = rows[i] as Record<string, unknown>
       const k = String(rec[cx])
+      let g = groups[k]
+      if (!g) {
+        if (distinct >= GROUP_CAP) continue
+        g = groups[k] = { sum: 0, count: 0, min: Infinity, max: -Infinity }
+        distinct++
+      }
       const yv = parseFloat(String(rec[cy]))
-      if (!groups[k]) groups[k] = { sum: 0, count: 0, min: Infinity, max: -Infinity }
-      const g = groups[k]
       g.count++
       if (!Number.isNaN(yv)) {
         g.sum += yv
@@ -198,7 +216,10 @@
   </div>
 
   <!-- chart area -->
-  <div style="flex:1;min-width:0;overflow:auto;padding:var(--px-18);display:flex;align-items:center;justify-content:center">
+  <div style="flex:1;min-width:0;overflow:auto;padding:var(--px-18);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:var(--px-8)">
+    {#if chartSampled}
+      <div style="flex:none;color:var(--warn);font-size:var(--px-11)" title="Aggregated over a sample so the chart renders instantly. Use Group By or Export for exact full-set totals.">Sampled first {CHART_ROW_CAP.toLocaleString()} of {data.rows.length.toLocaleString()} rows</div>
+    {/if}
     {#if chartData.length === 0}
       <div style="color:var(--muted);font-size:var(--px-13)">No data to chart</div>
     {:else}

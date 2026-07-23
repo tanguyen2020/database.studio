@@ -630,6 +630,30 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
     case 'exec_statement': {
       // Collation unification (MySQL/MariaDB) — feed the audit dialog demo data.
       const stmtSql = String(args?.sql ?? '')
+      // Perf harness hook: `SELECT * FROM perf_rows_<N>` returns N generated rows
+      // with a wide, mostly-NULL schema (mirrors a real classes-grades export) so
+      // the result-view performance test can load a genuine large set. Never typed
+      // by a user; guarded by the sentinel table name.
+      const perfM = stmtSql.match(/perf_rows_(\d+)/i)
+      if (perfM) {
+        const n = Math.min(Number(perfM[1]) || 0, 2_000_000)
+        const cols: [string, string][] = [
+          ['key_id', 'int4'], ['customer_id', 'int4'], ['class_id', 'int4'], ['class_term', 'int4'],
+          ['a_math_score', 'varchar'], ['a_math_graduate_score', 'varchar'], ['a_math_grade', 'varchar'],
+          ['b_science_score', 'varchar'], ['b_science_graduate_score', 'varchar'], ['b_science_grade', 'varchar'],
+          ['c_sport_score', 'varchar'], ['c_sport_grade', 'varchar'], ['created_at', 'timestamp'], ['note', 'varchar'],
+        ]
+        const rows = new Array(n)
+        for (let i = 0; i < n; i++) {
+          rows[i] = {
+            key_id: i + 1, customer_id: 42261 + i, class_id: 1359, class_term: 11,
+            a_math_score: null, a_math_graduate_score: null, a_math_grade: null,
+            b_science_score: null, b_science_graduate_score: null, b_science_grade: null,
+            c_sport_score: null, c_sport_grade: null, created_at: '2026-01-01 00:00:00', note: null,
+          }
+        }
+        return ok({ ok: true, result: { cols, rows, total: n }, duration_ms: 239 })
+      }
       // Table Data Viewer footer: a plain COUNT(*) → a fixed demo total.
       if (/^\s*SELECT\s+COUNT\(\*\)/i.test(stmtSql)) {
         return ok({ ok: true, result: { cols: [['c', 'int8']], rows: [{ c: 3842 }], total: 1 }, duration_ms: 4 })

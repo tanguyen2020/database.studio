@@ -1,10 +1,66 @@
 # SPEC — Thêm Oracle Database làm engine mới (feature parity đầy đủ)
 
-> Trạng thái: DRAFT để review. Branch đề xuất: `feat/oracle-engine`.
+> Trạng thái: **ĐÃ IMPLEMENT.** Phần lớn khớp code; các lệch quan trọng (đặc biệt **driver: code dùng crate A `oracle 0.6`, KHÔNG phải `oracle-rs`/B như phụ lục chốt**) đối chiếu ở **§0.0** — đọc trước tiên. Thân spec giữ nguyên làm tài liệu thiết kế + tham chiếu.
 > Mục tiêu: Oracle Database (RDBMS quan hệ, enterprise) đạt **đầy đủ** mọi tính năng mà các engine quan hệ hiện có (PostgreSQL/MySQL/MariaDB/MSSQL/SQLite/ClickHouse) đang có, không sót.
 > **RÀNG BUỘC BẮT BUỘC: chỉ THÊM cho Oracle, TUYỆT ĐỐI không đổi hành vi/không phá tính năng của 11 engine sẵn có** — mọi thay đổi phải additive (xem section **ADDITIVE** cuối spec: 3 loại thay đổi + cách sửa code-dùng-chung không gây regression + guard test). Suite test của engine cũ phải xanh KHÔNG ĐỔI.
 > Quy tắc (giống SPEC-MONGODB-FEATURE.md): chỉ ghi nhận tính năng THỰC SỰ tồn tại trong code (kèm `file:line`); không đề xuất tính năng mới ngoài phạm vi parity; chỗ chưa chắc đánh dấu **[CẦN XÁC MINH]**.
 > Nguồn: khảo sát read-only toàn bộ codebase (backend driver/commands/registry, frontend systems/dialect/components) — mọi `file:line` lấy trực tiếp từ working tree branch `feat/function-suggest-and-theme`.
+
+---
+
+## 0.0 ĐỐI CHIẾU CODE (cập nhật 2026-07-22 — nguồn sự thật cho các lệch spec↔code)
+
+> Oracle đã hiện thực. Thân spec phần LÕI khớp code (map theo khuôn relational như §0.1). Khi thân spec
+> mâu thuẫn với khối này (đặc biệt phụ lục "CHỐT driver"), **khối này đúng** (bám code).
+
+### ⚠️ Driver: code dùng CRATE A, KHÔNG phải oracle-rs/B (phụ lục §733 đã Deprecated)
+- **Thực tế**: `src-tauri/Cargo.toml:105` → `oracle = "0.6"` (crate A của Kubo — ODPI-C/OCI blocking +
+  **actor thread** `OracleDriver { tx: mpsc::Sender<Cmd> }` `oracle.rs:117` + **bundle Instant Client**
+  `instant_client_lib`/`init_client_dir` `oracle.rs:32-91`, wire `lib.rs:26-28`, có `scripts/fetch-instantclient.{ps1,sh}`).
+- **Lý do pivot khỏi B**: header `oracle.rs:1-8` ghi `// Pivoted from oracle-rs (pure Rust) which truncated
+  result sets at ~100 rows`; test `oracle_o0.rs:238 a_full_resultset_no_100_cap` chứng minh A trả đủ 2500 dòng.
+- **Hệ quả**: phụ lục "✅ CHỐT B = `oracle-rs` 0.1.7" (§Phụ lục mục 1) + §0.3 "khuyến nghị thử B, fallback A"
+  = **Deprecated**. Đường đi thật là A + actor thread (§3.2) + Instant Client (§3.3) — các mục mô tả A trong
+  thân spec (§3.2/§3.3) MỚI là đúng.
+- **KHÔNG feature-gate**: là dependency thường (`oracle = "0.6"`), không phải feature `oracle` optional (ngược §3.1/§0.2).
+
+### Khớp (bằng chứng)
+- `LiveConnection::Oracle(OracleDriver)` (`drivers/mod.rs:57`) + đủ **19 match arm** (exec/ping/exec_params/
+  apply_grid/schemas/…/scan_indexes). `SystemType::Oracle`→"oracle" (`types.rs`), `default_port=1521`.
+- Grid `Placeholder::Colon` → `:1,:2` (`grid.rs:20,28`); `build_select` Oracle `OFFSET…FETCH` (`grid.rs:359`).
+- `explain_oracle` + `parse_oracle` (`commands/plan.rs:152`, `plan.rs:1140`); admin sessions/locks/users +
+  kill resolve serial# (`admin.rs`); definition qua `DBMS_METADATA.GET_DDL` (`schema.rs:198,285`).
+- Toàn bộ nhánh `sql/*.ts` có `oracle` (dialect/datatypes/ddl/alter/partitions/routines/functions/reserved/…);
+  splitter `statements.ts` hiểu terminator `/` + block PL/SQL (`statements.ts:33`); `systems.ts` `EXTRA.oracle`.
+
+### Lệch có chủ đích / khoảng thiếu
+- **`databases()` trả rỗng** (`oracle.rs:210-212`, comment "PDB listing (V$PDBS) needs CDB privileges") →
+  KHÔNG list PDB như §1.1#8; nhánh multi-DB header (`pgMssqlMultiDb` += oracle) vì thế **không kích hoạt**.
+- **Query Plan chỉ estimated** (`plan.rs:152` `capability("oracle") = (true, ActualKind::None, CostBasis::Cost)`)
+  — KHÔNG actual/Analyze như §4.2/§2.G. Actual (GATHER_PLAN_STATISTICS+DISPLAY_CURSOR) là refinement sau.
+- **ConnectionProfile phương án A tối thiểu**: reuse `database` + `mssql_auth=="sid"` (`mod.rs:218-230`),
+  KHÔNG có field `oracle_service/sid/tns/…` như khuyến nghị B (§5.4).
+- **`supportsDbSwitch` KHÔNG có oracle** (`SqlWorkspace.svelte:66`) → mất DB dropdown; nhưng
+  `supportsSchemaSwitch` CÓ oracle (`:81`) — phù hợp bản chất schema≡user.
+
+### Backup / Streaming
+- **Backup `expdp`/`impdp` (§2.H/§O8) — ĐÃ LÀM** (native Data Pump): `drivers/backup.rs`
+  `backup_tool("oracle")=Some("expdp")` + `oracle_dir_sql`/`oracle_expdp_cmd`/`oracle_impdp_cmd`;
+  `commands/backup.rs` nhánh `system=="oracle"` (CREATE DIRECTORY + expdp/impdp, password qua STDIN). Unit
+  `oracle_datapump_shape`; integration `oracle_o0.rs::o_datapump_backup_restore_roundtrip` `#[ignore]` (cần
+  Instant Client Tools). Xem `SPEC-BACKUP-RESTORE.md`.
+- **Streaming export `stream_export` (§5.2/§O8) — CHƯA làm**: không có method trên `OracleDriver`, không arm
+  `commands/export.rs` → Oracle chỉ export buffered.
+
+### Test & giới hạn môi trường
+- `tests/oracle_o0.rs`: 5 test **đều `#[ignore]`** (O0/O1/O2 + `a_full_resultset_no_100_cap` +
+  `u6_user_manager_end_to_end`) — cần **Oracle Instant Client 64-bit** trên host (ODPI-C, DPI-1047 nếu
+  thiếu). Đây là giới hạn môi trường, KHÔNG phải bug.
+
+### Điểm mở rộng — Oracle đi theo khuôn RELATIONAL
+Thêm tính năng cho Oracle = thêm nhánh `"oracle"` vào pure-logic `sql/*.ts` + arm trong `drivers/mod.rs`
++ (nếu cần) method trên `OracleDriver` (nhớ: chạy qua **actor thread**, mọi op gửi `Cmd` qua mpsc). KHÔNG
+tạo workspace/explorer/tab riêng (dùng chung relational — §0.1).
 
 ---
 
@@ -727,6 +783,10 @@ Chèn `case 'oracle':` / `if (system === 'oracle')` / `SystemType::Oracle =>` **
 ---
 
 ## Phụ lục — Quyết định cần user CHỐT (tóm tắt)
+
+> ⚠️ **Deprecated (đối chiếu code 2026-07-22):** mục 1 dưới đây chốt "B = `oracle-rs`" nhưng **code thực tế
+> đã pivot sang crate A `oracle 0.6`** (oracle-rs cap ~100 dòng result — xem §0.0). Bảng dưới giữ lại làm
+> dấu vết quyết định; đường đi thật = A + actor thread + Instant Client.
 
 | # | Quyết định | Khuyến nghị |
 |---|---|---|

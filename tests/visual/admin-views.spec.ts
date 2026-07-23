@@ -21,6 +21,11 @@ test('admin views: session monitor + kill + users + extensions', async ({ page }
   await expect(page.getByText('4821').first()).toBeVisible()
   await expect(page.getByRole('button', { name: 'Kill', exact: true }).first()).toBeVisible()
 
+  // clicking a session row selects it (hover/selected highlight like the other grids)
+  const sessRow = page.locator('tr.adm-row').first()
+  await sessRow.click()
+  await expect(sessRow).toHaveClass(/sel/)
+
   // switch to Users view → role rows
   await page.getByRole('button', { name: 'Users & Privileges' }).first().click()
   await page.waitForTimeout(300)

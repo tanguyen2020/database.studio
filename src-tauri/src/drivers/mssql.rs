@@ -741,9 +741,14 @@ impl MssqlDriver {
 /// result set, so a raw batch is semantically equivalent and keeps the
 /// permission grammar off the sp_executesql path. The match is on the FIRST
 /// token only, so `SELECT * FROM grant` (kw = SELECT) is unaffected.
+/// BACKUP/RESTORE DATABASE (Backup & Restore · native MSSQL) are routed here too:
+/// they aren't allowed under sp_executesql and return only info messages.
 fn is_raw_batch(sql: &str) -> bool {
     let kw = sql.trim_start().split_whitespace().next().unwrap_or("").to_ascii_uppercase();
-    matches!(kw.as_str(), "SET" | "CREATE" | "ALTER" | "DROP" | "GRANT" | "DENY" | "REVOKE")
+    matches!(
+        kw.as_str(),
+        "SET" | "CREATE" | "ALTER" | "DROP" | "GRANT" | "DENY" | "REVOKE" | "BACKUP" | "RESTORE"
+    )
 }
 
 /// EXEC/EXECUTE (run a stored procedure) — its result set must be returned.
@@ -983,10 +988,15 @@ mod tests {
         assert!(is_raw_batch("DENY SELECT ON [dbo].[secret] TO [app]"));
         assert!(is_raw_batch("REVOKE SELECT ON SCHEMA::[dbo] FROM [app]"));
         assert!(is_raw_batch("  grant execute on schema::[dbo] to [app]")); // leading ws + lowercase
+        // BACKUP/RESTORE DATABASE (native backup) route as raw batch
+        assert!(is_raw_batch("BACKUP DATABASE [app] TO DISK = N'/tmp/app.bak' WITH FORMAT, INIT"));
+        assert!(is_raw_batch("RESTORE DATABASE [app] FROM DISK = N'/tmp/app.bak' WITH REPLACE"));
+        assert!(is_raw_batch("  restore database [app] from disk = N'x'")); // lowercase
         // must NOT misfire on identifiers containing the keyword
         assert!(!is_raw_batch("SELECT * FROM grant"));
         assert!(!is_raw_batch("SELECT granted FROM t"));
         assert!(!is_raw_batch("INSERT INTO revoke_log VALUES (1)"));
+        assert!(!is_raw_batch("SELECT * FROM backup_history"));
         // EXEC stays on the rows path
         assert!(!is_raw_batch("EXEC sp_who"));
         assert!(is_exec("EXEC sp_who"));

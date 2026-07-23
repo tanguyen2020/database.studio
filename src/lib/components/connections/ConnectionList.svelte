@@ -18,6 +18,12 @@
   import { ui } from '$lib/stores/ui.svelte'
   import type { ProfilePublic } from '$lib/types'
 
+  // Environment badge colors are theme-aware CSS vars (--env-*-bg/fg in app.css):
+  // the generated ENV_GEN hex is dark-only, so map the env key → the var suffix and
+  // let light/dark mode pick the readable pair. envMeta() still supplies the label.
+  const ENV_VAR: Record<string, string> = { production: 'prod', staging: 'stg', development: 'dev', local: 'local' }
+  const envKey = (env: string | null | undefined) => ENV_VAR[env ?? 'development'] ?? 'dev'
+
   // filter theo name/host/database (placeholder dòng 92)
   const filtered = $derived(
     connections.profiles.filter((p) => {
@@ -245,7 +251,7 @@
         {#if p.ephemeral}
           <span style="flex:none;margin-right:var(--px-6);font-size:var(--px-8_5);font-weight:700;letter-spacing:.04em;padding:var(--px-1) var(--px-5);border-radius:var(--px-4);background:var(--panel);color:var(--muted);border:var(--px-1) solid var(--border)" title="One-off · not saved">1×</span>
         {/if}
-        <span style="flex:none;margin-right:var(--px-7);font-size:var(--px-8_5);font-weight:700;letter-spacing:.04em;padding:var(--px-1) var(--px-5);border-radius:var(--px-4);background:{envMeta(p.env).bg};color:{envMeta(p.env).fg}">{envMeta(p.env).label}</span>
+        <span style="flex:none;margin-right:var(--px-7);font-size:var(--px-8_5);font-weight:700;letter-spacing:.04em;padding:var(--px-1) var(--px-5);border-radius:var(--px-4);background:var(--env-{envKey(p.env)}-bg);color:var(--env-{envKey(p.env)}-fg)">{envMeta(p.env).label}</span>
       </div>
     </ContextMenu.Trigger>
     <ContextMenu.Content class="w-56">

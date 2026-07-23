@@ -21,9 +21,13 @@
     result = null
     confirmRestore = false
     running = false
-    dest = `${backupWizard.system || 'db'}-backup-${Date.now()}.${
-      backupWizard.system === 'sqlite' ? 'db' : backupWizard.system === 'mongodb' ? 'archive' : 'sql'
-    }`
+    const ext =
+      backupWizard.system === 'sqlite' ? 'db'
+      : backupWizard.system === 'mongodb' ? 'archive'
+      : backupWizard.system === 'mssql' ? 'bak'   // native BACKUP DATABASE (server-side)
+      : backupWizard.system === 'oracle' ? 'dmp'  // Data Pump export (server-side)
+      : 'sql'
+    dest = `${backupWizard.system || 'db'}-backup-${Date.now()}.${ext}`
     src = ''
     if (backupWizard.connId) {
       toolStatus = await ipc.backupToolStatus(backupWizard.connId).catch(() => null)

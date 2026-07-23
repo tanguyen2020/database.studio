@@ -4718,6 +4718,53 @@ async fn pg_pg_dump_if_binary_present() {
     eprintln!("CHK pg_dump backup OK ({} bytes)", content.len());
 }
 
+/// Backup & Restore (native MSSQL) — `BACKUP DATABASE … TO DISK` / `RESTORE …
+/// FROM DISK` chạy qua CHÍNH connection app (`mssql_backup_sql`/`mssql_restore_sql`,
+/// route qua is_raw_batch). Connect tới master để BACKUP/RESTORE `bkptest` tự do
+/// (DB không bận). .bak nằm trong container (server-side path).
+#[tokio::test]
+async fn mssql_native_backup_restore_roundtrip() {
+    use database_studio_lib::drivers::backup::{mssql_backup_sql, mssql_restore_sql};
+
+    let c = GenericImage::new("mcr.microsoft.com/mssql/server", "2022-latest")
+        .with_exposed_port(1433.tcp())
+        .with_env_var("ACCEPT_EULA", "Y")
+        .with_env_var("MSSQL_SA_PASSWORD", MSSQL_PASS)
+        .start()
+        .await
+        .expect("start mssql container");
+    let port = c.get_host_port_ipv4(1433).await.unwrap();
+    let params = MssqlConnParams {
+        host: "localhost".into(),
+        port,
+        database: String::new(), // master — không bận bkptest khi RESTORE
+        user: "sa".into(),
+        password: MSSQL_PASS.into(),
+        ssl: false,
+        ssl_ca: String::new(),
+        auth: "sql".into(),
+    };
+    let mut drv = retry("mssql", || MssqlDriver::connect(&params)).await;
+
+    // seed 1 user database thật với 2 dòng
+    drv.exec("CREATE DATABASE bkptest").await.unwrap();
+    drv.exec("CREATE TABLE bkptest.dbo.t (id int PRIMARY KEY)").await.unwrap();
+    drv.exec("INSERT INTO bkptest.dbo.t VALUES (1), (2)").await.unwrap();
+
+    // BACKUP → .bak server-side
+    let bak = "/var/opt/mssql/data/bkptest.bak";
+    drv.exec(&mssql_backup_sql("bkptest", bak)).await.unwrap();
+
+    // đổi dữ liệu (thêm dòng 3) → RESTORE WITH REPLACE → về đúng 2 dòng
+    drv.exec("INSERT INTO bkptest.dbo.t VALUES (3)").await.unwrap();
+    drv.exec(&mssql_restore_sql("bkptest", bak)).await.unwrap();
+
+    let out = drv.exec("SELECT count(*) AS n FROM bkptest.dbo.t").await.unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    assert_eq!(result.rows[0]["n"], serde_json::json!(2), "restore khôi phục đúng 2 dòng (bỏ dòng 3)");
+    eprintln!("CHK MSSQL native BACKUP/RESTORE round-trip OK");
+}
+
 /// Phase 5 · T23 — Admin views đọc system view THẬT của Postgres: Session Monitor
 /// (pg_stat_activity) + Users (pg_roles) + Extensions (pg_available_extensions) +
 /// Kill session (pg_terminate_backend) trên 1 phiên thứ hai.
@@ -5723,4 +5770,390 @@ async fn pg_aclitem_query_uses_text_protocol() {
         .await
         .expect("aclitem-derived query must execute");
     eprintln!("CHK pg_aclitem_query_uses_text_protocol OK");
+}
+
+// ============================================================================
+// PERF BENCH — SELECT of 1,000,000 rows: real backend exec() time per engine.
+//
+// The interactive query editor path (`exec`) uses fetch_all: it buffers EVERY
+// row in memory, then decodes each cell into a serde_json object-per-row before
+// returning. These benches print the wall time of a full `SELECT *` (all 1M) vs
+// a `LIMIT 1000` capped fetch — the capped number is the headroom an automatic
+// result cap would recover. #[ignore]d (they seed 1M rows); run explicitly:
+//   cargo test --test drivers_integration bench_ -- --ignored --nocapture --test-threads=1
+// ============================================================================
+
+fn bench_rows(o: &StatementOutcome) -> u64 {
+    match o {
+        StatementOutcome::Rows { result } => result.total,
+        _ => 0,
+    }
+}
+
+#[tokio::test]
+#[ignore]
+async fn bench_pg_select_million() {
+    let (_c, port) = start_pg().await;
+    let params = PgConnParams {
+        host: "localhost".into(), port, database: "testdb".into(), user: "postgres".into(),
+        password: PASS.into(), ssl: false, ssl_ca: String::new(), ssl_cert: String::new(), ssl_key: String::new(),
+    };
+    let mut drv = retry("postgres", || PgDriver::connect(&params)).await;
+    drv.exec("CREATE TABLE big AS SELECT g AS id, 'row-' || g AS label FROM generate_series(1,1000000) g")
+        .await.unwrap();
+
+    let t = std::time::Instant::now();
+    let full = drv.exec("SELECT * FROM big").await.unwrap();
+    let full_ms = t.elapsed().as_millis();
+    let t = std::time::Instant::now();
+    let _capped = drv.exec("SELECT * FROM big LIMIT 1000").await.unwrap();
+    let capped_ms = t.elapsed().as_millis();
+
+    // Open Data path: first page (LIMIT 100) + footer COUNT(*).
+    let t = std::time::Instant::now();
+    let _page = drv.exec("SELECT * FROM big LIMIT 100").await.unwrap();
+    let page_ms = t.elapsed().as_millis();
+    let t = std::time::Instant::now();
+    let _cnt = drv.exec("SELECT COUNT(*) AS c FROM big").await.unwrap();
+    let count_ms = t.elapsed().as_millis();
+
+    eprintln!(
+        "BENCH postgres   full SELECT*={} ms | cap1000={} ms || OpenData: page100={} ms + count(*)={} ms  (rows={})",
+        full_ms, capped_ms, page_ms, count_ms, bench_rows(&full)
+    );
+    assert_eq!(bench_rows(&full), 1_000_000);
+}
+
+#[tokio::test]
+#[ignore]
+async fn bench_mysql_select_million() {
+    let c = GenericImage::new("mysql", "8")
+        .with_exposed_port(3306.tcp())
+        .with_env_var("MYSQL_ROOT_PASSWORD", PASS)
+        .with_env_var("MYSQL_DATABASE", "testdb")
+        .start().await.expect("start mysql");
+    let port = c.get_host_port_ipv4(3306).await.unwrap();
+    let params = MySqlConnParams {
+        host: "localhost".into(), port, database: "testdb".into(), user: "root".into(),
+        password: PASS.into(), ssl: false, ssl_ca: String::new(), ssl_cert: String::new(), ssl_key: String::new(),
+    };
+    let mut drv = retry("mysql", || MySqlDriver::connect(&params, "mysql")).await;
+    drv.exec("SET SESSION cte_max_recursion_depth = 2000000").await.unwrap();
+    drv.exec("CREATE TABLE big AS WITH RECURSIVE seq(id) AS (SELECT 1 UNION ALL SELECT id+1 FROM seq WHERE id < 1000000) SELECT id, CONCAT('row-', id) AS label FROM seq")
+        .await.unwrap();
+
+    let t = std::time::Instant::now();
+    let full = drv.exec("SELECT * FROM big").await.unwrap();
+    let full_ms = t.elapsed().as_millis();
+    let t = std::time::Instant::now();
+    let _capped = drv.exec("SELECT * FROM big LIMIT 1000").await.unwrap();
+    let capped_ms = t.elapsed().as_millis();
+
+    let t = std::time::Instant::now();
+    let _page = drv.exec("SELECT * FROM big LIMIT 100").await.unwrap();
+    let page_ms = t.elapsed().as_millis();
+    let t = std::time::Instant::now();
+    let _cnt = drv.exec("SELECT COUNT(*) AS c FROM big").await.unwrap();
+    let count_ms = t.elapsed().as_millis();
+
+    eprintln!(
+        "BENCH mysql      full SELECT*={} ms | cap1000={} ms || OpenData: page100={} ms + count(*)={} ms  (rows={})",
+        full_ms, capped_ms, page_ms, count_ms, bench_rows(&full)
+    );
+    assert_eq!(bench_rows(&full), 1_000_000);
+}
+
+#[tokio::test]
+#[ignore]
+async fn bench_mariadb_select_million() {
+    let c = GenericImage::new("mariadb", "11")
+        .with_exposed_port(3306.tcp())
+        .with_env_var("MARIADB_ROOT_PASSWORD", PASS)
+        .with_env_var("MARIADB_DATABASE", "testdb")
+        .start().await.expect("start mariadb");
+    let port = c.get_host_port_ipv4(3306).await.unwrap();
+    let params = MySqlConnParams {
+        host: "localhost".into(), port, database: "testdb".into(), user: "root".into(),
+        password: PASS.into(), ssl: false, ssl_ca: String::new(), ssl_cert: String::new(), ssl_key: String::new(),
+    };
+    let mut drv = retry("mariadb", || MySqlDriver::connect(&params, "mariadb")).await;
+    // MariaDB defaults max_recursive_iterations = 1000 → raise it for the 1M seed.
+    drv.exec("SET SESSION max_recursive_iterations = 2000000").await.unwrap();
+    drv.exec("CREATE TABLE big AS WITH RECURSIVE seq(id) AS (SELECT 1 UNION ALL SELECT id+1 FROM seq WHERE id < 1000000) SELECT id, CONCAT('row-', id) AS label FROM seq")
+        .await.unwrap();
+
+    let t = std::time::Instant::now();
+    let full = drv.exec("SELECT * FROM big").await.unwrap();
+    let full_ms = t.elapsed().as_millis();
+    let t = std::time::Instant::now();
+    let _capped = drv.exec("SELECT * FROM big LIMIT 1000").await.unwrap();
+    let capped_ms = t.elapsed().as_millis();
+
+    let t = std::time::Instant::now();
+    let _page = drv.exec("SELECT * FROM big LIMIT 100").await.unwrap();
+    let page_ms = t.elapsed().as_millis();
+    let t = std::time::Instant::now();
+    let _cnt = drv.exec("SELECT COUNT(*) AS c FROM big").await.unwrap();
+    let count_ms = t.elapsed().as_millis();
+
+    eprintln!(
+        "BENCH mariadb    full SELECT*={} ms | cap1000={} ms || OpenData: page100={} ms + count(*)={} ms  (rows={})",
+        full_ms, capped_ms, page_ms, count_ms, bench_rows(&full)
+    );
+    assert_eq!(bench_rows(&full), 1_000_000);
+}
+
+#[tokio::test]
+#[ignore]
+async fn bench_clickhouse_select_million() {
+    let c = GenericImage::new("clickhouse/clickhouse-server", "24.8")
+        .with_exposed_port(8123.tcp())
+        .with_env_var("CLICKHOUSE_PASSWORD", PASS)
+        .start().await.expect("start clickhouse");
+    let port = c.get_host_port_ipv4(8123).await.unwrap();
+    let params = ChConnParams {
+        host: "localhost".into(), port, database: "default".into(), user: "default".into(),
+        password: PASS.into(), ssl: false,
+    };
+    let mut drv = retry("clickhouse", || ChDriver::connect(&params)).await;
+    // ClickHouse HTTP connects lazily (stateless) → retry a trivial query until the
+    // server actually answers before seeding.
+    for _ in 0..30 {
+        if drv.exec("SELECT 1").await.is_ok() { break; }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
+    drv.exec("CREATE TABLE big ENGINE = MergeTree ORDER BY id AS SELECT number AS id, concat('row-', toString(number)) AS label FROM numbers(1000000)")
+        .await.unwrap();
+
+    let t = std::time::Instant::now();
+    let full = drv.exec("SELECT * FROM big").await.unwrap();
+    let full_ms = t.elapsed().as_millis();
+    let t = std::time::Instant::now();
+    let _capped = drv.exec("SELECT * FROM big LIMIT 1000").await.unwrap();
+    let capped_ms = t.elapsed().as_millis();
+
+    let t = std::time::Instant::now();
+    let _page = drv.exec("SELECT * FROM big LIMIT 100").await.unwrap();
+    let page_ms = t.elapsed().as_millis();
+    let t = std::time::Instant::now();
+    let _cnt = drv.exec("SELECT COUNT(*) AS c FROM big").await.unwrap();
+    let count_ms = t.elapsed().as_millis();
+
+    eprintln!(
+        "BENCH clickhouse full SELECT*={} ms | cap1000={} ms || OpenData: page100={} ms + count(*)={} ms  (rows={})",
+        full_ms, capped_ms, page_ms, count_ms, bench_rows(&full)
+    );
+    assert_eq!(bench_rows(&full), 1_000_000);
+}
+
+#[tokio::test]
+#[ignore]
+async fn bench_sqlite_select_million() {
+    // No container — in-process file DB.
+    let path = std::env::temp_dir().join(format!("ds_bench_{}.db", std::process::id()));
+    let params = SqliteConnParams { path: path.to_string_lossy().into_owned(), mode: SqliteMode::ReadWrite };
+    let drv = SqliteDriver::connect(&params).await.unwrap();
+    drv.exec("CREATE TABLE big AS WITH RECURSIVE seq(id) AS (SELECT 1 UNION ALL SELECT id+1 FROM seq WHERE id < 1000000) SELECT id, 'row-' || id AS label FROM seq")
+        .await.unwrap();
+
+    let t = std::time::Instant::now();
+    let full = drv.exec("SELECT * FROM big").await.unwrap();
+    let full_ms = t.elapsed().as_millis();
+    let t = std::time::Instant::now();
+    let _capped = drv.exec("SELECT * FROM big LIMIT 1000").await.unwrap();
+    let capped_ms = t.elapsed().as_millis();
+
+    let t = std::time::Instant::now();
+    let _page = drv.exec("SELECT * FROM big LIMIT 100").await.unwrap();
+    let page_ms = t.elapsed().as_millis();
+    let t = std::time::Instant::now();
+    let _cnt = drv.exec("SELECT COUNT(*) AS c FROM big").await.unwrap();
+    let count_ms = t.elapsed().as_millis();
+
+    eprintln!(
+        "BENCH sqlite     full SELECT*={} ms | cap1000={} ms || OpenData: page100={} ms + count(*)={} ms  (rows={})",
+        full_ms, capped_ms, page_ms, count_ms, bench_rows(&full)
+    );
+    assert_eq!(bench_rows(&full), 1_000_000);
+    let _ = std::fs::remove_file(&path);
+}
+
+#[tokio::test]
+#[ignore]
+async fn bench_mssql_select_million() {
+    let c = GenericImage::new("mcr.microsoft.com/mssql/server", "2022-latest")
+        .with_exposed_port(1433.tcp())
+        .with_env_var("ACCEPT_EULA", "Y")
+        .with_env_var("MSSQL_SA_PASSWORD", MSSQL_PASS)
+        .start().await.expect("start mssql");
+    let port = c.get_host_port_ipv4(1433).await.unwrap();
+    let params = MssqlConnParams {
+        host: "localhost".into(), port, database: "".into(), user: "sa".into(),
+        password: MSSQL_PASS.into(), ssl: false, ssl_ca: String::new(), auth: "sql".into(),
+    };
+    let mut drv = retry("mssql", || MssqlDriver::connect(&params)).await;
+    // Seed 1M rows via a cross join of the catalog (fast; sys.all_objects^2 ≫ 1M).
+    drv.exec("SELECT TOP 1000000 ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS id, CAST(NULL AS varchar(32)) AS label INTO big FROM sys.all_objects a CROSS JOIN sys.all_objects b")
+        .await.unwrap();
+    drv.exec("UPDATE big SET label = CONCAT('row-', id)").await.unwrap();
+
+    let t = std::time::Instant::now();
+    let full = drv.exec("SELECT * FROM big").await.unwrap();
+    let full_ms = t.elapsed().as_millis();
+    let t = std::time::Instant::now();
+    let _capped = drv.exec("SELECT TOP 1000 * FROM big").await.unwrap();
+    let capped_ms = t.elapsed().as_millis();
+
+    let t = std::time::Instant::now();
+    let _page = drv.exec("SELECT TOP 100 * FROM big").await.unwrap();
+    let page_ms = t.elapsed().as_millis();
+    let t = std::time::Instant::now();
+    let _cnt = drv.exec("SELECT COUNT(*) AS c FROM big").await.unwrap();
+    let count_ms = t.elapsed().as_millis();
+
+    eprintln!(
+        "BENCH mssql      full SELECT*={} ms | cap1000={} ms || OpenData: page100={} ms + count(*)={} ms  (rows={})",
+        full_ms, capped_ms, page_ms, count_ms, bench_rows(&full)
+    );
+    assert_eq!(bench_rows(&full), 1_000_000);
+}
+
+#[tokio::test]
+#[ignore]
+async fn bench_mysql_wide_100k() {
+    let c = GenericImage::new("mysql", "8")
+        .with_exposed_port(3306.tcp())
+        .with_env_var("MYSQL_ROOT_PASSWORD", PASS)
+        .with_env_var("MYSQL_DATABASE", "testdb")
+        .start().await.expect("start mysql");
+    let port = c.get_host_port_ipv4(3306).await.unwrap();
+    let params = MySqlConnParams {
+        host: "localhost".into(), port, database: "testdb".into(), user: "root".into(),
+        password: PASS.into(), ssl: false, ssl_ca: String::new(), ssl_cert: String::new(), ssl_key: String::new(),
+    };
+    let mut drv = retry("mysql", || MySqlDriver::connect(&params, "mysql")).await;
+    drv.exec("SET SESSION cte_max_recursion_depth = 200000").await.unwrap();
+
+    // 30 varchar "score/grade" columns (mostly NULL) + 4 int + datetime — mimics the
+    // reported course_test_ism (wide, mostly-NULL). Build two variants: default
+    // collation (VAR_STRING) vs utf8mb4_bin (flagged BINARY → the relabel pass runs).
+    let vcols = |collate: &str| -> String {
+        (1..=30).map(|i| format!("s{i} VARCHAR(32){collate}")).collect::<Vec<_>>().join(", ")
+    };
+    let mk = |name: &str, collate: &str| {
+        format!(
+            "CREATE TABLE {name} (key_id INT, customer_id INT, class_id INT, class_term INT, {}, created_at DATETIME)",
+            vcols(collate)
+        )
+    };
+    let seed = |name: &str| format!(
+        "INSERT INTO {name} (key_id, customer_id, class_id, class_term, created_at) \
+         WITH RECURSIVE seq(id) AS (SELECT 1 UNION ALL SELECT id+1 FROM seq WHERE id < 100000) \
+         SELECT id, 42260+id, 1359, 11, NOW() FROM seq"
+    );
+
+    for (name, collate) in [("wide_default", ""), ("wide_bin", " COLLATE utf8mb4_bin")] {
+        drv.exec(&mk(name, collate)).await.unwrap();
+        drv.exec(&seed(name)).await.unwrap();
+        let t = std::time::Instant::now();
+        let out = drv.exec(&format!("SELECT * FROM {name} LIMIT 100000")).await.unwrap();
+        let ms = t.elapsed().as_millis();
+        let (rows, ncols) = match &out {
+            StatementOutcome::Rows { result } => (result.total, result.cols.len()),
+            _ => (0, 0),
+        };
+        eprintln!("BENCH mysql-wide {name}: SELECT* LIMIT 100000 = {ms} ms  ({rows} rows x {ncols} cols)");
+    }
+}
+
+// Wide-table (35 cols, 100k rows, mostly-NULL) benches for the OTHER engines — to
+// see whether the object-per-row materialization cost is engine-agnostic (it is).
+// vcols(n, type) builds "s1 <type>, s2 <type>, …".
+fn wide_vcols(ty: &str) -> String {
+    (1..=30).map(|i| format!("s{i} {ty}")).collect::<Vec<_>>().join(", ")
+}
+
+#[tokio::test]
+#[ignore]
+async fn bench_pg_wide_100k() {
+    let (_c, port) = start_pg().await;
+    let params = PgConnParams {
+        host: "localhost".into(), port, database: "testdb".into(), user: "postgres".into(),
+        password: PASS.into(), ssl: false, ssl_ca: String::new(), ssl_cert: String::new(), ssl_key: String::new(),
+    };
+    let mut drv = retry("postgres", || PgDriver::connect(&params)).await;
+    drv.exec(&format!("CREATE TABLE wide (key_id int, customer_id int, class_id int, class_term int, {}, created_at timestamp)", wide_vcols("varchar(32)"))).await.unwrap();
+    drv.exec("INSERT INTO wide (key_id, customer_id, class_id, class_term, created_at) SELECT g, 42260+g, 1359, 11, now() FROM generate_series(1,100000) g").await.unwrap();
+    let t = std::time::Instant::now();
+    let out = drv.exec("SELECT * FROM wide LIMIT 100000").await.unwrap();
+    let ms = t.elapsed().as_millis();
+    eprintln!("BENCH wide postgres  = {ms} ms  ({} rows x {} cols)", bench_rows(&out), match &out { StatementOutcome::Rows { result } => result.cols.len(), _ => 0 });
+}
+
+#[tokio::test]
+#[ignore]
+async fn bench_mariadb_wide_100k() {
+    let c = GenericImage::new("mariadb", "11")
+        .with_exposed_port(3306.tcp()).with_env_var("MARIADB_ROOT_PASSWORD", PASS).with_env_var("MARIADB_DATABASE", "testdb")
+        .start().await.expect("start mariadb");
+    let port = c.get_host_port_ipv4(3306).await.unwrap();
+    let params = MySqlConnParams { host: "localhost".into(), port, database: "testdb".into(), user: "root".into(), password: PASS.into(), ssl: false, ssl_ca: String::new(), ssl_cert: String::new(), ssl_key: String::new() };
+    let mut drv = retry("mariadb", || MySqlDriver::connect(&params, "mariadb")).await;
+    drv.exec("SET SESSION max_recursive_iterations = 2000000").await.unwrap();
+    drv.exec(&format!("CREATE TABLE wide (key_id int, customer_id int, class_id int, class_term int, {}, created_at datetime)", wide_vcols("varchar(32)"))).await.unwrap();
+    drv.exec("INSERT INTO wide (key_id, customer_id, class_id, class_term, created_at) WITH RECURSIVE seq(id) AS (SELECT 1 UNION ALL SELECT id+1 FROM seq WHERE id < 100000) SELECT id, 42260+id, 1359, 11, NOW() FROM seq").await.unwrap();
+    let t = std::time::Instant::now();
+    let out = drv.exec("SELECT * FROM wide LIMIT 100000").await.unwrap();
+    let ms = t.elapsed().as_millis();
+    eprintln!("BENCH wide mariadb   = {ms} ms  ({} rows x {} cols)", bench_rows(&out), match &out { StatementOutcome::Rows { result } => result.cols.len(), _ => 0 });
+}
+
+#[tokio::test]
+#[ignore]
+async fn bench_mssql_wide_100k() {
+    let c = GenericImage::new("mcr.microsoft.com/mssql/server", "2022-latest")
+        .with_exposed_port(1433.tcp()).with_env_var("ACCEPT_EULA", "Y").with_env_var("MSSQL_SA_PASSWORD", MSSQL_PASS)
+        .start().await.expect("start mssql");
+    let port = c.get_host_port_ipv4(1433).await.unwrap();
+    let params = MssqlConnParams { host: "localhost".into(), port, database: "".into(), user: "sa".into(), password: MSSQL_PASS.into(), ssl: false, ssl_ca: String::new(), auth: "sql".into() };
+    let mut drv = retry("mssql", || MssqlDriver::connect(&params)).await;
+    drv.exec(&format!("CREATE TABLE wide (key_id int, customer_id int, class_id int, class_term int, {}, created_at datetime)", wide_vcols("varchar(32)"))).await.unwrap();
+    drv.exec("INSERT INTO wide (key_id, customer_id, class_id, class_term, created_at) SELECT n, 42260+n, 1359, 11, GETDATE() FROM (SELECT TOP 100000 ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS n FROM sys.all_objects a CROSS JOIN sys.all_objects b) t").await.unwrap();
+    let t = std::time::Instant::now();
+    let out = drv.exec("SELECT TOP 100000 * FROM wide").await.unwrap();
+    let ms = t.elapsed().as_millis();
+    eprintln!("BENCH wide mssql     = {ms} ms  ({} rows x {} cols)", bench_rows(&out), match &out { StatementOutcome::Rows { result } => result.cols.len(), _ => 0 });
+}
+
+#[tokio::test]
+#[ignore]
+async fn bench_clickhouse_wide_100k() {
+    let c = GenericImage::new("clickhouse/clickhouse-server", "24.8")
+        .with_exposed_port(8123.tcp()).with_env_var("CLICKHOUSE_PASSWORD", PASS)
+        .start().await.expect("start clickhouse");
+    let port = c.get_host_port_ipv4(8123).await.unwrap();
+    let params = ChConnParams { host: "localhost".into(), port, database: "default".into(), user: "default".into(), password: PASS.into(), ssl: false };
+    let mut drv = retry("clickhouse", || ChDriver::connect(&params)).await;
+    for _ in 0..30 { if drv.exec("SELECT 1").await.is_ok() { break; } tokio::time::sleep(std::time::Duration::from_millis(500)).await; }
+    drv.exec(&format!("CREATE TABLE wide (key_id UInt64, customer_id UInt64, class_id UInt64, class_term UInt64, {}, created_at DateTime) ENGINE = MergeTree ORDER BY key_id", wide_vcols("Nullable(String)"))).await.unwrap();
+    drv.exec("INSERT INTO wide (key_id, customer_id, class_id, class_term, created_at) SELECT number, 42260+number, 1359, 11, now() FROM numbers(100000)").await.unwrap();
+    let t = std::time::Instant::now();
+    let out = drv.exec("SELECT * FROM wide LIMIT 100000").await.unwrap();
+    let ms = t.elapsed().as_millis();
+    eprintln!("BENCH wide clickhouse = {ms} ms  ({} rows x {} cols)", bench_rows(&out), match &out { StatementOutcome::Rows { result } => result.cols.len(), _ => 0 });
+}
+
+#[tokio::test]
+#[ignore]
+async fn bench_sqlite_wide_100k() {
+    let path = std::env::temp_dir().join(format!("ds_bench_wide_{}.db", std::process::id()));
+    let params = SqliteConnParams { path: path.to_string_lossy().into_owned(), mode: SqliteMode::ReadWrite };
+    let drv = SqliteDriver::connect(&params).await.unwrap();
+    drv.exec(&format!("CREATE TABLE wide (key_id INTEGER, customer_id INTEGER, class_id INTEGER, class_term INTEGER, {}, created_at TEXT)", wide_vcols("TEXT"))).await.unwrap();
+    drv.exec("INSERT INTO wide (key_id, customer_id, class_id, class_term, created_at) WITH RECURSIVE seq(id) AS (SELECT 1 UNION ALL SELECT id+1 FROM seq WHERE id < 100000) SELECT id, 42260+id, 1359, 11, datetime('now') FROM seq").await.unwrap();
+    let t = std::time::Instant::now();
+    let out = drv.exec("SELECT * FROM wide LIMIT 100000").await.unwrap();
+    let ms = t.elapsed().as_millis();
+    eprintln!("BENCH wide sqlite    = {ms} ms  ({} rows x {} cols)", bench_rows(&out), match &out { StatementOutcome::Rows { result } => result.cols.len(), _ => 0 });
+    let _ = std::fs::remove_file(&path);
 }

@@ -1,5 +1,8 @@
 # Phase 6 — Polish
 
+> ⚠️ **Deprecated — checklist kế hoạch lịch sử.** Trạng thái `[ ]`/`[x]` không phản ánh hiện trạng. Nguồn
+> sự thật: **code** + `SPEC-INDEX.md` + `CLAUDE.md`.
+
 **Mục tiêu:** Tối ưu performance, hoàn thiện UX, đóng gói installer, auto-update. App sẵn sàng dùng hàng ngày.
 **Thời gian ước tính:** ~~2 tuần~~ → **1–1.5 tuần** (vibe coding)
 **Yêu cầu:** Phase 5 hoàn thành

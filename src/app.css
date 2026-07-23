@@ -79,6 +79,20 @@
   /* MongoDB brand green (#00ED64) is a neon that washes out on the light sidebar —
      use MongoDB's darker "forest green" for light; dark keeps the brand accent. */
   --sacc-mongo: #00684a; /* token-exempt: legible MongoDB green for light mode */
+
+  /* Environment badge (PROD/STG/DEV/LOCAL pills in the connection list). The
+   * generated ENV_GEN tokens are dark-only (near-black bg + neon fg) → unreadable
+   * on the light sidebar. These LIGHT values are soft tints + saturated text; the
+   * .dark block restores the exact ENV_GEN hex. Token-exempt, same pattern as
+   * --sacc-* above. */
+  --env-prod-bg: #fde3e1; /* token-exempt: light env badge */
+  --env-prod-fg: #b42318; /* token-exempt: light env badge */
+  --env-stg-bg: #fbeecb; /* token-exempt: light env badge */
+  --env-stg-fg: #8a6410; /* token-exempt: light env badge */
+  --env-dev-bg: #dcf3e6; /* token-exempt: light env badge */
+  --env-dev-fg: #157f3c; /* token-exempt: light env badge */
+  --env-local-bg: #ece9fb; /* token-exempt: light env badge */
+  --env-local-fg: #6d3fc4; /* token-exempt: light env badge */
 }
 
 .dark {
@@ -104,6 +118,16 @@
   --sacc-mauve: var(--hex-b48ead);
   --sacc-red: var(--hex-e06c75);
   --sacc-mongo: var(--sys-mongodb-accent);
+
+  /* Environment badge — dark mode keeps the exact ENV_GEN hex (prototype baseline). */
+  --env-prod-bg: #3d0c08;
+  --env-prod-fg: #f07070;
+  --env-stg-bg: #2e2600;
+  --env-stg-fg: #ffe066;
+  --env-dev-bg: #0d2e1a;
+  --env-dev-fg: #6ee7a0;
+  --env-local-bg: #1a1a2e;
+  --env-local-fg: #c4b5fd;
 }
 
 /* ---------------------------------------------------------------------------

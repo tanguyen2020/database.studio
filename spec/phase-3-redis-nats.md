@@ -1,5 +1,8 @@
 # Phase 3 — Redis + NATS
 
+> ⚠️ **Deprecated — checklist kế hoạch lịch sử.** Trạng thái `[ ]`/`[x]` không phản ánh hiện trạng (vd Redis
+> CLI console đã bị thay bằng RedisExplorer key-browser). Nguồn sự thật: **code** + `SPEC-INDEX.md` + `CLAUDE.md`.
+
 **Mục tiêu:** Hỗ trợ Redis và NATS — key browser, real-time messaging, JetStream cơ bản. SSL cho tất cả connections. Tab groups.
 **Thời gian ước tính:** ~~3–4 tuần~~ → **1.5–2 tuần** (vibe coding)
 **Yêu cầu:** Phase 2 hoàn thành

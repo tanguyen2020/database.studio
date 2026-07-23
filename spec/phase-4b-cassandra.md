@@ -1,5 +1,9 @@
 # Phase Cassandra (giữa Phase 4 và Phase 5)
 
+> ⚠️ **Deprecated — checklist kế hoạch lịch sử.** Cassandra đã hiện thực đầy đủ hơn (CQL editor qua
+> `cql_exec`, editable grid, consistency per-statement, DDL viewer đầy đủ, Ring — xem C1–C5 trong `CLAUDE.md`).
+> Nguồn sự thật: **code** + addendum Cassandra + `SPEC-INDEX.md`.
+
 **Mục tiêu:** Hỗ trợ Cassandra đúng ngữ nghĩa wide-column — CQL editor (KHÔNG phải SQL), keyspace tree, Ring Topology.
 **Thời gian ước tính:** **1–1.5 tuần** (vibe coding)
 **Yêu cầu:** Phase 4 hoàn thành

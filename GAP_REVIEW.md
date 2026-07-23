@@ -1,5 +1,10 @@
 # GAP_REVIEW — Database Studio (design ↔ code)
 
+> ⚠️ **Deprecated — snapshot backlog CŨ (giai đoạn ~T10, refreshed 2026-07-05).** Nhiều mục "Missing/Partial"
+> NAY đã làm (xem `SPEC-AUDIT-PHASE1.md` Nhóm B: streaming export nay PG+CH+Mongo; Cassandra consistency
+> toolbar + DDL viewer đã đủ). Chỉ bao 10 hệ gốc — KHÔNG có MongoDB/Oracle/Users&Privileges/Partitions.
+> Backlog hiện tại: `SPEC-INDEX.md` + `CLAUDE.md`.
+
 Audit-only. Design sources read in full: `Database Studio.dc.html` (6053 lines, exhaustive element inventory), `CLICKHOUSE_SPEC_ADDENDUM.md`, `phase-1..6`. Code base: `src/` (Svelte) + `src-tauri/` (Rust).
 
 Status legend: **Implemented** (wired end-to-end, evidence) · **Partial** (present but missing part) · **Missing** (no code) · **Broken** (UI present, handler is a no-op/stub or backend link dead) · **Wired-but-unverified** (code path exists but runtime correctness unconfirmed / known runtime doubt).

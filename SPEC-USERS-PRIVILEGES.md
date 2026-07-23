@@ -1,10 +1,74 @@
 # SPEC — Users / Roles & Privileges Manager (per-engine)
 
-> Trạng thái: **DRAFT để review — phiên spec, KHÔNG code.**
+> Trạng thái: **ĐÃ IMPLEMENT (U0–U7, 8/8 engine).** Phần lõi khớp code; các lệch/thiếu đã đối chiếu ở **§0.0** (đọc trước tiên). Phần thân dưới đây giữ nguyên làm tài liệu thiết kế chi tiết + tham chiếu extension.
 > Phạm vi (user đã chốt): **8 engine** — PostgreSQL, MySQL, MariaDB, MSSQL, ClickHouse, Cassandra, MongoDB, Oracle. Mỗi engine có **UI riêng** vì mô hình phân quyền/tạo user/password khác nhau hoàn toàn.
 > **NGOÀI PHẠM VI (user chốt 2026-07-15): Redis, Kafka, NATS — không làm.** SQLite không có hệ thống user (§13, chỉ ẩn entry point).
 > Quy tắc viết spec: mọi câu lệnh/catalog ghi **chính xác nguyên văn**; chỗ chưa chắc chắn 100% đánh dấu **[CẦN XÁC MINH]** kèm cách xác minh; không mơ hồ vì đây là phần cốt lõi để grant permission.
 > Quy tắc code (khi làm): **additive-only, cách ly tuyệt đối theo §1.0 — không được ảnh hưởng tính năng khác**; UI text English, token-only styles, popup backdrop KHÔNG đóng, confirm in-app cho thao tác destructive, Refresh theo rule chung (spin + guard + re-query).
+
+---
+
+## 0.0 ĐỐI CHIẾU CODE (cập nhật 2026-07-22 — nguồn sự thật cho các lệch spec↔code)
+
+> Feature đã hiện thực xong (U0–U7). Phần thân spec (§1–§17) phần LÕI khớp code, nhưng có một số lệch
+> **có chủ đích** + vài khoảng thiếu thật. Khi thân spec mâu thuẫn với khối này, **khối này đúng** (bám code).
+
+### Kiến trúc thực tế (khớp — bằng chứng)
+- Tab type `'user-manager'` (`src/lib/types.ts:239`); `tabs.openUserManager(connId, focus?)` singleton
+  (`stores/tabs.svelte.ts:466`); `UserManagerView.svelte:119-132` dispatch theo `tab.systemType`.
+- Component per-engine ở **`src/lib/components/workspace/users/*.svelte`** (`PgUserManager`, `MySqlUserManager`,
+  `MssqlUserManager`, `ClickHouseUserManager`, `CassandraUserManager`, `MongoUserManager`, `OracleUserManager`).
+- Backend: `commands/users_admin.rs` — `pub fn users_query(system, view, arg) -> Option<String>` (`:58`,
+  pure builder per engine) + command `users_view(conn_id, view, arg)` (`:308`) qua `registry.exec_statement`;
+  đăng ký `lib.rs:180`; wrapper `ipc.usersView` (`ipc.ts:596`) + demo case (`demo.ts:438`).
+- Escaper backend `quote_ident`/`quote_str`/`mysql_account` (`users_admin.rs:23-53`) + unit test (`:349`).
+- §1.4b đường thực thi (khớp): MSSQL `is_raw_batch` mở rộng GRANT/DENY/REVOKE (`drivers/mssql.rs:744`,
+  chỉ token đầu, có unit test); MySQL/MariaDB TEXT-protocol tránh 1295 (`drivers/mysql.rs:83`); Oracle
+  filter-by-grantee né cap 100 (`users_admin.rs:259`).
+- 3 entry point (toolbar Explorer / context-menu connection / AdminView "Manage…") + node Security trong
+  cây (`ObjectExplorer.svelte:199` `secFolders`).
+- Integration 6-bước §1.9 EXIT=0 cho **8/8 engine**: `pg_/mysql_/mariadb_/mssql_/clickhouse_/cassandra_
+  user_manager_end_to_end` (`drivers_integration.rs`), `mongo_…` (`mongo_integration.rs`), Oracle
+  `u6_user_manager_end_to_end` (`oracle_o0.rs:261`, `#[ignore]` — cần Instant Client).
+
+### Lệch có chủ đích (spec nói A, code làm B — KHÔNG mất chức năng)
+- **`MariaDbUserManager.svelte` KHÔNG tồn tại** (§1.1 liệt kê). MySQL+MariaDB dùng chung `MySqlUserManager`
+  adapt theo `systemType` (`UserManagerView.svelte:121`).
+- **3 dialog MSSQL riêng (§5.3) → gộp 1 `MssqlCreateDialog.svelte`** (mode login/user/role).
+- **`NoUserSystem.svelte` (§13) KHÔNG tồn tại** — đúng chủ đích §17.2 (ẩn hẳn entry cho SQLite).
+- **Cây §1.2c**: MSSQL `Security→Users/Roles` và MongoDB `Users` render ở **CẤP CONNECTION**, CHƯA nest
+  trong từng database node như sơ đồ (`ObjectExplorer.svelte:1453` comment "connection-level nodes").
+
+### Khoảng THIẾU thật (TODO — spec mô tả nhưng code CHƯA có)
+- **MongoDB custom-role builder (§8.1/§8.2)**: code chỉ có **7 command** (`mongo_users`, `mongo_roles`,
+  `mongo_create_user`, `mongo_change_password`, `mongo_drop_user`, `mongo_grant_roles`, `mongo_revoke_roles`).
+  `mongo_user_detail` + `mongo_create_role`/`mongo_update_role`/`mongo_drop_role` CHƯA làm.
+- **View backend còn thiếu** (spec liệt kê, `users_query` chưa có nhánh): MySQL `column_privs`; ClickHouse
+  `grants_for`/`row_policies`/`quotas`/`settings_profiles`; Oracle `col_privs`. Ảnh hưởng hiển thị
+  partial/inherited đúng như §1.8.5.
+
+### Code CÓ nhưng spec THIẾU (bổ sung UX sau khi chốt spec — cần đưa vào thân khi rảnh)
+- **Grant Access wizard dùng chung** cross-engine: `stores/grantwizard.svelte.ts:124` (`GrantWizardStore`,
+  `GrantActionKind = 'grant'|'deny'|'revoke'`) + `GrantAccessDialog.svelte` (3 bước Role→Scope→Level +
+  live SQL preview). Grid ma trận chi tiết chuyển xuống "Advanced".
+- **Builder wizard-action per engine**: `accessStatement`/`parseGrantLevel`/`parseScope` (mysql.ts:161,
+  clickhouse.ts:136), `parseSecurable`/`accessStatement` (mssql.ts:178), `parseResource`/`resourceAccessStatement`
+  (cassandra.ts:137), `objectAccessStatement`/`parseOwnerObject` (oracle.ts:134).
+- **Tab "Access" per engine** (hiển thị principal thấy DB/schema nào + quyền gì) — không có trong §1.8.6.
+- **PG Grant access multi-database** (scope2 Databases, `grantwizard.svelte.ts:25 GrantGroup`,
+  apply qua `attach_database` sub-connection).
+- **Grid-column constants** `PG_/MYSQL_/CH_/MSSQL_/CASS_GRID_COLUMNS` + `grantColumn`/`revokeColumn`/`denyColumn`.
+- Chi tiết các bổ sung này: xem `CLAUDE.md` phần "USERS & PRIVILEGES" (các mục UX/Grant-wizard/Access-tab).
+
+### Điểm mở rộng — thêm 1 engine mới vào User Manager
+1. `src/lib/users/<engine>.ts` — pure builders (createUser/alterPassword/drop/grant/revoke/…), unit-test.
+2. `commands/users_admin.rs::users_query` — thêm nhánh `("<engine>", view)` trả SQL introspection (hoặc
+   dùng cơ chế riêng như Cassandra `cql_exec` / Mongo command nếu không SQL).
+3. `src/lib/components/workspace/users/<Engine>UserManager.svelte` + dialog tạo (popup, §1.2 rule) + store.
+4. `UserManagerView.svelte` — thêm nhánh dispatch `systemType`.
+5. Command mới (nếu có) → đăng ký `lib.rs` + `ipc.ts` + `demo.ts`.
+6. `ObjectExplorer.svelte` `secFolders` — thêm cấu hình node Security (thuật ngữ bản địa).
+7. Integration `<engine>_user_manager_end_to_end` đủ 6 bước §1.9 trên container thật.
 
 ---
 

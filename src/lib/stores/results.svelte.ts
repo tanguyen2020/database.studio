@@ -261,6 +261,13 @@ class ResultsStore {
 
       if (response.ok) {
         if (response.result) {
+          // Freeze the rows array so Svelte does NOT deep-proxy it. Result rows are
+          // an immutable snapshot (grid edits live in a separate Map; a new query
+          // replaces the whole object), and a proxied 1M-row array makes every view
+          // that scans rows — Chart's aggregation, JSON serialize — pay a proxy trap
+          // on each element access (measured: Chart froze ~3.5s at 1M rows). Frozen
+          // objects are Svelte's opt-out: `data.rows[i]` stays a raw object.
+          Object.freeze(response.result.rows)
           const table = mainTableOf(stmt.sql)
           exec.subResults.push({
             index,
@@ -365,7 +372,7 @@ class ResultsStore {
         return
       }
       if (c.result) {
-        sub.result.rows = [...sub.result.rows, ...c.result.rows]
+        sub.result.rows = Object.freeze([...sub.result.rows, ...c.result.rows]) as Record<string, unknown>[]
         sub.result.total = sub.result.rows.length
         sub.label = `#${sub.index} ${sub.table ?? 'result'} · ${sub.result.total.toLocaleString()} rows`
       }

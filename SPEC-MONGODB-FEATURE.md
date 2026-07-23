@@ -1,8 +1,29 @@
 # SPEC — Thêm MongoDB làm engine mới (feature parity đầy đủ)
 
-> Trạng thái: DRAFT để review. Branch: `feat/mongodb-engine`.
+> Trạng thái: **ĐÃ IMPLEMENT** (§M6–§M6.4 + engine core). Đối chiếu code ở **§0.0** (đọc trước). Thân spec khớp code tốt; chỉ vài lệch nhỏ nêu ở §0.0.
 > Mục tiêu: MongoDB (document DB, NoSQL) đạt **đầy đủ** mọi tính năng mà 10 engine hiện có đang có, không sót.
 > Quy tắc: chỉ ghi nhận tính năng THỰC SỰ tồn tại trong code (kèm `file:line`); không đề xuất tính năng mới ngoài phạm vi parity; chỗ chưa chắc đánh dấu **[CẦN XÁC MINH]**.
+
+---
+
+## 0.0 ĐỐI CHIẾU CODE (cập nhật 2026-07-22)
+
+> §M6–§M6.4 (Design Document, pagination, autocomplete mongosh, number color, New Database, tree
+> double-click, DB dropdown) đều **khớp code** với bằng chứng file:line. Các điểm cần lưu ý:
+
+- **[LỆCH thật]** `MONGO_METHODS` (`src/lib/mongo/functions.ts:16-29`) **gợi ý** `findOne`/`replaceOne`/
+  `dropIndex`/`estimatedDocumentCount` nhưng `exec_mongo` (`drivers/mongo.rs:599-841`) **KHÔNG có match arm**
+  cho chúng → rơi vào `other => Err("unsupported … method")` (`mongo.rs:838`). Người dùng chọn suggest 4
+  method này rồi Run sẽ nhận lỗi. **TODO**: thêm arm exec cho 4 method, HOẶC bỏ chúng khỏi danh sách suggest.
+- **[CẦN XÁC MINH]** `demo.ts` mới thấy 4 case mongo_* (`mongo_users`/`mongo_roles`/`mongo_create_user`/
+  `mongo_exec`); `mongo_change_password`/`mongo_drop_user`/`mongo_grant_roles`/`mongo_revoke_roles` chưa
+  thấy case — nếu thiếu có thể vỡ demo/Playwright cho luồng User Manager Mongo. Kiểm khi đụng tới.
+- **Ngoài §M6** (thuộc mục khác của spec, đã có trong code): `admin_view`/`kill_op` (`mongo.rs:1233,1610`),
+  User Manager U5 (`um_*` `mongo.rs:1347+`, xem SPEC-USERS-PRIVILEGES), `stream_export` (`mongo.rs:1495`),
+  `explain_mongo` (`mongo.rs:1015`), `collection_ddl` (`mongo.rs:1191`), `scan_indexes`/`collection_fields`
+  (`mongo.rs:1136,952`), `mongo_change_preview` (`mongo.rs:467`).
+- **Query Plan Mongo**: `explain_plan` short-circuit `if system == "mongodb"` → `explain_mongo` →
+  `parse_mongodb` (`commands/plan.rs:36,233`; `plan.rs:995`). Xem SPEC-EXPLAIN-FEATURE §2.
 
 ---
 
