@@ -18,6 +18,14 @@ export const SHORTCUTS: Shortcut[] = [
   { id: 'result-single', ctrl: true, shift: false, alt: true, key: 'r', label: 'Result: Single Row' },
   { id: 'find-in-explorer', ctrl: true, shift: false, alt: false, key: 'f', label: 'Find in Explorer' },
   { id: 'toggle-result', ctrl: true, shift: false, alt: false, key: 'j', label: 'Toggle Result panel' },
+  // Connections sidebar. Inside the list itself: ↑/↓ move, Home/End jump,
+  // Enter opens (connects), F2 edits, Delete removes, → / ← expand/collapse a group.
+  // NOTE: Ctrl+Shift+E is already Explain (editor keymap) and Ctrl+Shift+F is
+  // Format — the Connections keys must not shadow them.
+  { id: 'connections-focus', ctrl: true, shift: true, alt: false, key: 'b', label: 'Focus Connections list' },
+  { id: 'connection-new', ctrl: true, shift: true, alt: false, key: 'n', label: 'New connection' },
+  { id: 'connections-filter', ctrl: true, shift: true, alt: false, key: 'k', label: 'Filter connections' },
+  { id: 'connection-toggle', ctrl: true, shift: true, alt: false, key: 'o', label: 'Connect / disconnect selected' },
 ]
 
 export interface KeyLike {

@@ -295,14 +295,31 @@
               <div>
                 <div class="cm-label">{hostLabel}</div>
                 {#if isSqlite}
-                  <input
-                    class="cm-input mono"
-                    bind:value={draft.sqlite_path}
-                    placeholder={hostPlaceholder}
-                    title="Double-click to browse"
-                    disabled={draft.sqlite_mode === 'in-memory'}
-                    ondblclick={browseSqliteFile}
-                  />
+                  <!-- SQLite is file-based: the path input keeps its double-click
+                       shortcut, plus a visible Browse button (the double-click was
+                       an invisible affordance nobody could discover). -->
+                  <div style="display:flex;gap:var(--px-6)">
+                    <input
+                      class="cm-input mono"
+                      style="flex:1;min-width:0"
+                      bind:value={draft.sqlite_path}
+                      placeholder={hostPlaceholder}
+                      title="Path to the .db file — double-click or use Browse…"
+                      disabled={draft.sqlite_mode === 'in-memory'}
+                      ondblclick={browseSqliteFile}
+                    />
+                    <span
+                      onclick={() => draft?.sqlite_mode !== 'in-memory' && browseSqliteFile()}
+                      onkeydown={(e) => e.key === 'Enter' && draft?.sqlite_mode !== 'in-memory' && browseSqliteFile()}
+                      role="button"
+                      tabindex="0"
+                      title={draft.sqlite_mode === 'in-memory' ? 'In-memory database — no file' : 'Choose a SQLite database file'}
+                      aria-disabled={draft.sqlite_mode === 'in-memory'}
+                      style="flex:none;display:flex;align-items:center;gap:var(--px-6);background:var(--bg);border:var(--px-1) solid var(--border);border-radius:var(--px-8);padding:var(--px-8) var(--px-12);font-size:var(--px-12_5);font-weight:600;cursor:pointer;color:var(--text2);opacity:{draft.sqlite_mode === 'in-memory' ? '.5' : '1'}"
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path></svg>Browse…
+                    </span>
+                  </div>
                 {:else}
                   <input class="cm-input mono" bind:value={draft.host} placeholder={hostPlaceholder} />
                 {/if}

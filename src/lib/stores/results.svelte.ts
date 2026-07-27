@@ -4,6 +4,7 @@
 
 import * as ipc from '$lib/ipc'
 import type { SplitStatement } from '$lib/sql/statements'
+import { supportsTxn, txnEffect } from '$lib/sql/txn'
 import type { QueryError, QueryResultSet } from '$lib/types'
 import { connections, baseConnId as baseOf } from './connections.svelte'
 import { toasts } from './toast.svelte'
@@ -74,6 +75,24 @@ class ResultsStore {
   byTab = $state<Record<string, TabExecution>>({})
   /** Query plan per tab — rendered as a sub-view of the Result panel (Explain). */
   explainByTab = $state<Record<string, ExplainState>>({})
+  /** Connections the editor left inside an OPEN transaction (keyed by the exact
+   *  run-connection id). A pinned transaction is the one way a working driver
+   *  still shows "cached" rows — under REPEATABLE READ the snapshot is frozen
+   *  and the writes stay invisible to everyone else — so the workspace surfaces
+   *  it with a badge + Commit/Rollback instead of leaving it silent. */
+  txnOpen = $state<Record<string, boolean>>({})
+
+  inTransaction(connId: string | null | undefined): boolean {
+    return !!connId && !!this.txnOpen[connId]
+  }
+
+  /** Forget transaction state for a connection (disconnect / reconnect). */
+  clearTxn(connId: string) {
+    delete this.txnOpen[connId]
+    for (const id of Object.keys(this.txnOpen)) {
+      if (baseOf(id) === baseOf(connId)) delete this.txnOpen[id]
+    }
+  }
 
   get(tabId: string): TabExecution | undefined {
     return this.byTab[tabId]
@@ -251,6 +270,14 @@ class ResultsStore {
       }
 
       exec.totalMs += response.duration_ms
+
+      // Track whether this statement left the connection inside a transaction —
+      // a pinned snapshot (REPEATABLE READ) or uncommitted writes are exactly
+      // what "the editor shows stale data" looks like, so it must be visible.
+      if (response.ok && supportsTxn(profile.system)) {
+        const eff = txnEffect(stmt.sql, profile.system)
+        if (eff) this.txnOpen[connId] = eff === 'begin'
+      }
 
       // Cassandra server warnings (e.g. ALLOW FILTERING full-scan) are non-fatal —
       // log them to Messages and toast, without failing the statement.

@@ -588,6 +588,31 @@
     showExecErrors()
   }
 
+  // ---- open-transaction indicator -------------------------------------------
+  // A connection left inside a transaction keeps ONE snapshot (REPEATABLE READ)
+  // and hides its writes from everyone else — the classic "the editor shows
+  // cached data" trap. results.run tracks the state per run-connection; here we
+  // surface it and offer Commit/Rollback (the always-on BEGIN/COMMIT/ROLLBACK
+  // buttons removed in AUDIT-2 are NOT back — this appears only when a
+  // transaction is actually open).
+  const txnConnId = $derived(runConnId ?? tab.connectionId)
+  const txnPending = $derived(results.inTransaction(txnConnId))
+
+  async function endTxn(kind: 'COMMIT' | 'ROLLBACK') {
+    const cid = txnConnId
+    if (!cid) return
+    await results.run(tab.id, cid, [{ sql: kind, from: 0, to: kind.length, startLine: 1, startCol: 1 }])
+    showExecErrors()
+  }
+
+  // Closing the connection drops the server-side transaction with it.
+  $effect(() => {
+    const cid = txnConnId
+    const connected = !!connections.byId(cid ?? '')?.connected
+    if (!cid || connected) return
+    untrack(() => results.clearTxn(cid))
+  })
+
   // Focus the editor when a Query tab opens (e.g. Ctrl/Cmd+N) so you can type
   // immediately. Parent onMount runs after the child editor's view is created.
   onMount(() => {
@@ -947,6 +972,35 @@
         style="display:flex;align-items:center;gap:var(--px-7);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-7);padding:var(--px-5) var(--px-13);cursor:{isOrphan || !tab.connectionId ? 'not-allowed' : 'pointer'};opacity:{isOrphan || !tab.connectionId ? 0.5 : 1};font-weight:600;font-size:var(--px-12)"
       >
         <span>▶</span><span>Run</span><span class="mono" style="opacity:.7;font-size:var(--px-10)">F5</span>
+      </div>
+    {/if}
+
+    <!-- Open transaction — the one state in which this connection stops seeing
+         other sessions' commits (pinned snapshot) and its own writes stay
+         invisible to them. Shown only while a transaction is actually open. -->
+    {#if txnPending}
+      <div
+        class="mono"
+        title="This connection is inside an open transaction: it keeps ONE snapshot of the data (so other sessions' changes may not appear) and its writes are not committed yet."
+        style="display:flex;align-items:center;gap:var(--px-6);background:color-mix(in srgb, var(--warn) 18%, transparent);border:var(--px-1) solid var(--warn);color:var(--warn);border-radius:var(--px-7);padding:var(--px-3) var(--px-8);font-size:var(--px-11);font-weight:700"
+      >
+        <span>⚠ TXN open</span>
+        <span
+          onclick={() => endTxn('COMMIT')}
+          onkeydown={(e) => e.key === 'Enter' && endTxn('COMMIT')}
+          role="button"
+          tabindex="0"
+          title="COMMIT the open transaction"
+          style="cursor:pointer;text-decoration:underline">Commit</span
+        >
+        <span
+          onclick={() => endTxn('ROLLBACK')}
+          onkeydown={(e) => e.key === 'Enter' && endTxn('ROLLBACK')}
+          role="button"
+          tabindex="0"
+          title="ROLLBACK the open transaction"
+          style="cursor:pointer;text-decoration:underline">Rollback</span
+        >
       </div>
     {/if}
 

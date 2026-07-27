@@ -66,6 +66,24 @@
   const editable = $derived(!!editTarget)
   const pendingCount = $derived(edits.size + deletedRows.size + insertedRows.length)
 
+  // A NEW result set invalidates every pending grid change: they are keyed by row
+  // INDEX, so replaying them over freshly fetched rows shows the old values on top
+  // of new data (the "results look cached" report) and Execute would write them to
+  // the wrong rows — Table Viewer restarts indices at 0 on each server-side page.
+  // The panel reuses this component across runs, so clear the buffer whenever the
+  // result object identity changes, and say so if anything was actually dropped.
+  let lastData: QueryResultSet | null = null
+  $effect(() => {
+    const d = data
+    untrack(() => {
+      if (d === lastData) return
+      const dropped = lastData !== null && pendingCount > 0
+      lastData = d
+      discard()
+      if (dropped) toasts.show('Pending grid changes were discarded — the result was refreshed.')
+    })
+  })
+
   function cellKey(row: number, col: string) {
     return `${row}:${col}`
   }

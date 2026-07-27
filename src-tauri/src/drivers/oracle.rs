@@ -580,6 +580,12 @@ fn do_exec(conn: &Connection, sql: &str) -> Result<StatementOutcome, QueryError>
         Ok(StatementOutcome::Rows { result: do_query(conn, &stmt)? })
     } else {
         let s = conn.execute(&stmt, &[]).map_err(|e| map_error(&e))?;
+        // ODPI-C defaults to autocommit OFF, so an editor INSERT/UPDATE/DELETE (or a
+        // PL/SQL block doing DML) stayed in an open transaction forever: the engine
+        // never got the new value and no other session could see it. Every other
+        // engine in this app runs the editor in autocommit — match that. Committing
+        // with nothing pending is a no-op; DDL commits itself anyway.
+        conn.commit().map_err(|e| map_error(&e))?;
         if crate::drivers::util::is_dml(&stmt) {
             Ok(StatementOutcome::Affected { affected: s.row_count().unwrap_or(0) })
         } else {
@@ -612,6 +618,8 @@ fn do_exec_params(conn: &Connection, sql: &str, params: &[Json]) -> Result<State
         Ok(StatementOutcome::Rows { result: QueryResultSet { cols, rows: out, total } })
     } else {
         let s = conn.execute(&stmt, &binds).map_err(|e| map_error(&e))?;
+        // Autocommit semantics — see do_exec.
+        conn.commit().map_err(|e| map_error(&e))?;
         Ok(StatementOutcome::Affected { affected: s.row_count().unwrap_or(0) })
     }
 }

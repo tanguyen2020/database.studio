@@ -1586,6 +1586,153 @@ async fn mariadb_roundtrip() {
     mysql_like_roundtrip(("mariadb", "11"), "MARIADB", "mariadb").await;
 }
 
+/// Query Editor must ALWAYS return the latest committed data — reproduces the
+/// "results are cached" report. The container's server default is
+/// `autocommit=0`; before the driver pinned `SET SESSION autocommit = 1`, the
+/// editor's long-lived connection opened an implicit transaction on its first
+/// statement and, under InnoDB's REPEATABLE READ, replayed that same snapshot
+/// for every later SELECT — so another session's committed UPDATE stayed
+/// invisible forever.
+async fn mysql_like_reads_latest_committed(image: (&str, &str), env_prefix: &str, system: &'static str) {
+    let c = GenericImage::new(image.0, image.1)
+        .with_exposed_port(3306.tcp())
+        .with_env_var(format!("{env_prefix}_ROOT_PASSWORD"), PASS)
+        .with_env_var(format!("{env_prefix}_DATABASE"), "testdb")
+        .with_cmd(vec!["--autocommit=0"])
+        .start()
+        .await
+        .unwrap_or_else(|e| panic!("start {system} container: {e}"));
+    let port = c.get_host_port_ipv4(3306).await.unwrap();
+    let params = MySqlConnParams {
+        host: "localhost".into(),
+        port,
+        database: "testdb".into(),
+        user: "root".into(),
+        password: PASS.into(),
+        ssl: false,
+        ssl_ca: String::new(),
+        ssl_cert: String::new(),
+        ssl_key: String::new(),
+    };
+    // The editor's connection (the app keeps one per tab, long-lived).
+    let mut editor = retry(system, || MySqlDriver::connect(&params, system)).await;
+    // A second, independent session stands in for "someone else changes the data"
+    // (another app, another tab, a DBA). It COMMITs explicitly, so the test proves
+    // the reader's behaviour and does not depend on the writer's autocommit.
+    let mut writer = MySqlDriver::connect(&params, system).await.expect("second session");
+
+    async fn v_of(drv: &mut MySqlDriver) -> i64 {
+        let out = drv.exec("SELECT v FROM fresh_reads WHERE id = 1").await.unwrap();
+        let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+        result.rows[0]["v"].as_i64().expect("int value")
+    }
+
+    writer.exec("CREATE TABLE fresh_reads (id int PRIMARY KEY, v int)").await.unwrap();
+    writer.exec("INSERT INTO fresh_reads VALUES (1, 1)").await.unwrap();
+    writer.exec("COMMIT").await.unwrap();
+
+    assert_eq!(v_of(&mut editor).await, 1, "{system}: editor reads the seeded value");
+
+    writer.exec("UPDATE fresh_reads SET v = 2 WHERE id = 1").await.unwrap();
+    writer.exec("COMMIT").await.unwrap();
+
+    assert_eq!(
+        v_of(&mut editor).await,
+        2,
+        "{system}: the editor connection served a STALE snapshot — a committed change was not visible",
+    );
+
+    // The fix must not take explicit transactions away: a user-typed
+    // START TRANSACTION still overrides autocommit until COMMIT/ROLLBACK.
+    editor.exec("START TRANSACTION").await.unwrap();
+    editor.exec("UPDATE fresh_reads SET v = 9 WHERE id = 1").await.unwrap();
+    assert_eq!(v_of(&mut editor).await, 9, "{system}: sees its own uncommitted write");
+    editor.exec("ROLLBACK").await.unwrap();
+    assert_eq!(v_of(&mut editor).await, 2, "{system}: ROLLBACK restored the committed value");
+
+    // …and after the transaction ends, fresh reads resume.
+    writer.exec("UPDATE fresh_reads SET v = 3 WHERE id = 1").await.unwrap();
+    writer.exec("COMMIT").await.unwrap();
+    assert_eq!(v_of(&mut editor).await, 3, "{system}: reads stay fresh after an explicit transaction");
+    eprintln!("CHK {system}_editor_reads_latest_committed OK");
+}
+
+/// Same freshness contract for PostgreSQL, including the hostile server config
+/// (`default_transaction_isolation = repeatable read`) — each editor statement
+/// must still see another session's committed change. Also pins down the ONE
+/// way a PG editor connection can serve stale data: a transaction the user
+/// opened by hand (`BEGIN`) and never closed.
+#[tokio::test]
+async fn pg_editor_reads_latest_committed() {
+    let c = GenericImage::new("postgres", "16-alpine")
+        .with_exposed_port(5432.tcp())
+        .with_env_var("POSTGRES_PASSWORD", PASS)
+        .with_env_var("POSTGRES_DB", "testdb")
+        // Worst case for snapshot reuse: a session that opens a transaction keeps
+        // ONE snapshot for its whole life.
+        .with_cmd(vec!["postgres", "-c", "default_transaction_isolation=repeatable read"])
+        .start()
+        .await
+        .expect("start postgres container");
+    let port = c.get_host_port_ipv4(5432).await.unwrap();
+    let params = PgConnParams {
+        host: "localhost".into(),
+        port,
+        database: "testdb".into(),
+        user: "postgres".into(),
+        password: PASS.into(),
+        ssl: false,
+        ssl_ca: String::new(),
+        ssl_cert: String::new(),
+        ssl_key: String::new(),
+    };
+    let mut editor = retry("postgres", || PgDriver::connect(&params)).await;
+    let mut writer = PgDriver::connect(&params).await.expect("second session");
+
+    async fn v_of(d: &mut PgDriver) -> i64 {
+        let out = d.exec("SELECT v FROM fresh_reads WHERE id = 1").await.unwrap();
+        let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+        result.rows[0]["v"].as_i64().expect("int value")
+    }
+
+    writer.exec("CREATE TABLE fresh_reads (id int PRIMARY KEY, v int)").await.unwrap();
+    writer.exec("INSERT INTO fresh_reads VALUES (1, 1)").await.unwrap();
+    assert_eq!(v_of(&mut editor).await, 1, "editor reads the seeded value");
+
+    writer.exec("UPDATE fresh_reads SET v = 2 WHERE id = 1").await.unwrap();
+    assert_eq!(
+        v_of(&mut editor).await,
+        2,
+        "postgres: the editor connection served a STALE snapshot — a committed change was not visible",
+    );
+
+    // The editor's own writes are committed immediately (autocommit), so another
+    // session sees them without any extra step.
+    editor.exec("UPDATE fresh_reads SET v = 5 WHERE id = 1").await.unwrap();
+    assert_eq!(v_of(&mut writer).await, 5, "postgres: editor write was not committed");
+
+    // …and the ONE stale case: a hand-typed BEGIN pins the snapshot until the
+    // user ends the transaction (this is correct SQL semantics, not a bug — the
+    // app must SHOW it, which is what the transaction indicator does).
+    editor.exec("BEGIN").await.unwrap();
+    let _ = v_of(&mut editor).await; // takes the snapshot
+    writer.exec("UPDATE fresh_reads SET v = 6 WHERE id = 1").await.unwrap();
+    assert_eq!(v_of(&mut editor).await, 5, "inside an explicit transaction the snapshot is pinned");
+    editor.exec("ROLLBACK").await.unwrap();
+    assert_eq!(v_of(&mut editor).await, 6, "after ROLLBACK reads are fresh again");
+    eprintln!("CHK pg_editor_reads_latest_committed OK");
+}
+
+#[tokio::test]
+async fn mysql_editor_reads_latest_committed() {
+    mysql_like_reads_latest_committed(("mysql", "8"), "MYSQL", "mysql").await;
+}
+
+#[tokio::test]
+async fn mariadb_editor_reads_latest_committed() {
+    mysql_like_reads_latest_committed(("mariadb", "11"), "MARIADB", "mariadb").await;
+}
+
 /// Phase 5 · T16 — MariaDB `ANALYZE FORMAT=JSON` (số liệu thực tế). Seed rows,
 /// chạy ANALYZE, parse → mode=actual + node có actual_rows (r_rows).
 #[tokio::test]

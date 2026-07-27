@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { findShortcut } from './shortcuts'
+import { findShortcut, SHORTCUTS } from './shortcuts'
 
 const ev = (over: Partial<Parameters<typeof findShortcut>[0]>) => ({
   ctrlKey: false,
@@ -34,5 +34,27 @@ describe('findShortcut', () => {
   })
   it('plain Ctrl+C (copy) is not a mapped shortcut', () => {
     expect(findShortcut(ev({ ctrlKey: true, key: 'c' }))).toBeUndefined()
+  })
+  it('Connections shortcuts: Ctrl+Shift+B/N/K/O', () => {
+    // B, not E — Ctrl+Shift+E is the editor's Explain binding.
+    expect(findShortcut(ev({ ctrlKey: true, shiftKey: true, key: 'b' }))?.id).toBe('connections-focus')
+    expect(findShortcut(ev({ ctrlKey: true, shiftKey: true, key: 'e' }))).toBeUndefined()
+    expect(findShortcut(ev({ ctrlKey: true, shiftKey: true, key: 'N' }))?.id).toBe('connection-new')
+    expect(findShortcut(ev({ ctrlKey: true, shiftKey: true, key: 'k' }))?.id).toBe('connections-filter')
+    expect(findShortcut(ev({ ctrlKey: true, shiftKey: true, key: 'o' }))?.id).toBe('connection-toggle')
+  })
+  it('Connections shortcuts do not shadow the plain-Ctrl bindings', () => {
+    // Ctrl+N (no shift) stays "new query tab" (bound in App.svelte, unmapped here).
+    expect(findShortcut(ev({ ctrlKey: true, key: 'n' }))).toBeUndefined()
+    expect(findShortcut(ev({ ctrlKey: true, key: 'e' }))).toBeUndefined()
+    expect(findShortcut(ev({ ctrlKey: true, key: 'o' }))).toBeUndefined()
+  })
+  it('every shortcut combination is unique', () => {
+    const seen = new Set<string>()
+    for (const s of SHORTCUTS) {
+      const combo = `${s.ctrl}-${s.shift}-${s.alt}-${s.key}`
+      expect(seen.has(combo), `duplicate binding for ${combo} (${s.id})`).toBe(false)
+      seen.add(combo)
+    }
   })
 })

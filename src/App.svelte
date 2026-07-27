@@ -121,6 +121,19 @@
         case 'toggle-result':
           ui.toggleResultPanel()
           break
+        case 'connections-focus':
+          ui.requestConnectionsFocus()
+          break
+        case 'connections-filter':
+          ui.requestConnectionsFilter()
+          break
+        case 'connection-new':
+          ui.pickerQuick = false
+          ui.pickerOpen = true
+          break
+        case 'connection-toggle':
+          ui.requestConnectionToggle()
+          break
       }
       return
     }

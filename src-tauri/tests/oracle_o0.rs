@@ -74,6 +74,43 @@ async fn o0_connect_exec_decode() {
     println!("O0 LIVE OK — connect + DDL + DML + dynamic decode + FETCH FIRST verified");
 }
 
+/// The Query Editor must leave data COMMITTED in the engine and read the LATEST
+/// committed data. ODPI-C defaults to autocommit OFF, so an editor
+/// INSERT/UPDATE/DELETE used to sit in an open transaction forever — the engine
+/// never got the value and no other session could see it. `do_exec` now commits,
+/// matching every other engine in the app.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs a live Oracle container (gvenzl/oracle-free) + Instant Client — run with --ignored"]
+async fn o_editor_dml_is_committed_and_reads_are_fresh() {
+    async fn v_of(d: &mut OracleDriver) -> String {
+        let out = d.exec("SELECT v FROM o_fresh WHERE id = 1").await.expect("select");
+        let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+        assert_eq!(result.total, 1, "row 1 is visible");
+        result.rows[0]["V"].to_string().trim_matches('"').to_string()
+    }
+
+    let mut editor = OracleDriver::connect(&params()).await.expect("connect");
+    let _ = editor
+        .exec("BEGIN EXECUTE IMMEDIATE 'DROP TABLE o_fresh'; EXCEPTION WHEN OTHERS THEN NULL; END;")
+        .await;
+    editor.exec("CREATE TABLE o_fresh (id NUMBER PRIMARY KEY, v NUMBER)").await.expect("create");
+    editor.exec("INSERT INTO o_fresh VALUES (1, 1)").await.expect("insert");
+
+    // A second, independent session sees only COMMITTED data.
+    let mut other = OracleDriver::connect(&params()).await.expect("second session");
+    assert_eq!(v_of(&mut other).await, "1", "editor INSERT was not committed — invisible to other sessions");
+
+    editor.exec("UPDATE o_fresh SET v = 2 WHERE id = 1").await.expect("update");
+    assert_eq!(v_of(&mut other).await, "2", "editor UPDATE was not committed");
+
+    // …and the editor reads other sessions' commits.
+    other.exec("UPDATE o_fresh SET v = 3 WHERE id = 1").await.expect("update from other session");
+    assert_eq!(v_of(&mut editor).await, "3", "editor served a stale value");
+
+    let _ = editor.exec("DROP TABLE o_fresh").await;
+    println!("ORACLE FRESHNESS OK — editor DML committed + reads see other sessions' commits");
+}
+
 /// Backup & Restore (native Oracle Data Pump) — CREATE OR REPLACE DIRECTORY +
 /// expdp export → mutate → impdp import (TABLE_EXISTS_ACTION=REPLACE). Password
 /// on STDIN (never argv). #[ignore]: needs a live Oracle + Instant Client Tools

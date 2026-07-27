@@ -62,6 +62,24 @@ class UiStore {
   requestCopyJson() {
     this.copyJsonTick++
   }
+
+  // Connections sidebar shortcuts — the list owns the behaviour, App.svelte only
+  // ticks the signal (same pattern as the editor/explorer ticks above).
+  connFocusTick = $state(0)
+  connFilterTick = $state(0)
+  connToggleTick = $state(0)
+  /** Move keyboard focus into the Connections list (Ctrl/Cmd+Shift+B). */
+  requestConnectionsFocus() {
+    this.connFocusTick++
+  }
+  /** Open + focus the Connections filter box (Ctrl/Cmd+Shift+K). */
+  requestConnectionsFilter() {
+    this.connFilterTick++
+  }
+  /** Connect / disconnect the selected connection (Ctrl/Cmd+Shift+O). */
+  requestConnectionToggle() {
+    this.connToggleTick++
+  }
   toggleResultPanel() {
     this.resultPanelHidden = !this.resultPanelHidden
     this.persistSizes()

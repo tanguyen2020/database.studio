@@ -4,6 +4,7 @@
   // gating theo selConn/selRel dòng 4783-4797) + filter box + cây My Databases
   // (category label + group per hệ + connection row, dòng 98-125).
   // Context menu dùng bits-ui (chức năng như connMenu của prototype).
+  import { untrack } from 'svelte'
   import * as ContextMenu from '$lib/components/ui/context-menu'
   import ConnectionIndicator from '$lib/components/ConnectionIndicator.svelte'
   import SystemIcon from '$lib/components/SystemIcon.svelte'
@@ -209,6 +210,146 @@
     ui.pickerQuick = true
     ui.pickerOpen = true
   }
+
+  // ---- keyboard: navigate + act on the Connections list ---------------------
+  // Ctrl/Cmd+Shift+B focuses the list, then ↑/↓ move, Home/End jump, Enter opens
+  // (connects), F2 edits, Delete removes, ←/→ collapse/expand the group. The
+  // handler sits on the LIST container so it works whether focus is on the
+  // container itself or on a row (keydown bubbles), and selection never depends
+  // on a row element still being mounted.
+  let listEl = $state<HTMLDivElement | null>(null)
+
+  const visibleProfiles = $derived.by(() => {
+    const out: ProfilePublic[] = []
+    if (!myDbOpen) return out
+    if (ui.connGroupMode === 'folder') {
+      for (const f of folders) if (!collapsed.has(`folder:${f.name}`)) out.push(...f.items)
+    } else {
+      for (const g of groups) if (!collapsed.has(g.system)) out.push(...g.items)
+    }
+    return out
+  })
+
+  function groupKeyOf(p: ProfilePublic): string {
+    if (ui.connGroupMode === 'folder') {
+      const f = folders.find((x) => x.items.some((i) => i.id === p.id))
+      return f ? `folder:${f.name}` : ''
+    }
+    return p.system
+  }
+
+  function revealSelected() {
+    const id = connections.selectedId
+    if (!id || !listEl) return
+    const row = listEl.querySelector<HTMLElement>(`[data-conn-id="${CSS.escape(id)}"]`)
+    row?.scrollIntoView({ block: 'nearest' })
+  }
+
+  function moveSelection(delta: number) {
+    const list = visibleProfiles
+    if (list.length === 0) return
+    const cur = list.findIndex((p) => p.id === connections.selectedId)
+    const next = cur < 0 ? (delta > 0 ? 0 : list.length - 1) : Math.min(list.length - 1, Math.max(0, cur + delta))
+    connections.selectedId = list[next].id
+    revealSelected()
+  }
+
+  function selectEdge(last: boolean) {
+    const list = visibleProfiles
+    if (list.length === 0) return
+    connections.selectedId = list[last ? list.length - 1 : 0].id
+    revealSelected()
+  }
+
+  function setGroupCollapsed(key: string, isCollapsed: boolean) {
+    if (!key) return
+    const next = new Set(collapsed)
+    if (isCollapsed) next.add(key)
+    else next.delete(key)
+    collapsed = next
+  }
+
+  function onListKeydown(e: KeyboardEvent) {
+    // A row's own Enter handler runs first and marks the event handled.
+    if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return
+    const p = selConn
+    switch (e.key) {
+      case 'ArrowDown':
+        e.preventDefault()
+        moveSelection(1)
+        break
+      case 'ArrowUp':
+        e.preventDefault()
+        moveSelection(-1)
+        break
+      case 'Home':
+        e.preventDefault()
+        selectEdge(false)
+        break
+      case 'End':
+        e.preventDefault()
+        selectEdge(true)
+        break
+      case 'Enter':
+        if (!p) return
+        e.preventDefault()
+        void openOrToggle(p)
+        break
+      case 'F2':
+        if (!p || p.ephemeral) return
+        e.preventDefault()
+        ui.formProfile = { ...p }
+        break
+      case 'Delete':
+        if (!p) return
+        e.preventDefault()
+        if (p.ephemeral) void connections.remove(p.id)
+        else ui.deleteTarget = p
+        break
+      case 'ArrowLeft':
+        if (!p) return
+        e.preventDefault()
+        setGroupCollapsed(groupKeyOf(p), true)
+        break
+      case 'ArrowRight':
+        if (!p) return
+        e.preventDefault()
+        setGroupCollapsed(groupKeyOf(p), false)
+        break
+    }
+  }
+
+  function focusList() {
+    myDbOpen = true
+    if (!connections.selectedId && visibleProfiles.length) connections.selectedId = visibleProfiles[0].id
+    listEl?.focus()
+    revealSelected()
+  }
+
+  // Shortcut signals from App.svelte (Ctrl/Cmd+Shift+E / +K / +O).
+  $effect(() => {
+    if (!ui.connFocusTick) return
+    untrack(() => focusList())
+  })
+  $effect(() => {
+    if (!ui.connFilterTick) return
+    untrack(() => {
+      filterOpen = true
+      setTimeout(() => filterInput?.focus(), 0)
+    })
+  })
+  $effect(() => {
+    if (!ui.connToggleTick) return
+    untrack(() => {
+      const p = selConn
+      if (!p) {
+        toasts.show('Pick a connection first')
+        return
+      }
+      if (p.connected) void connections.disconnect(p.id)
+      else void openOrToggle(p)
+    })
+  })
 </script>
 
 <!-- hidden picker cho Import Connections (JSON) -->
@@ -229,9 +370,16 @@
       <div
         class="conn-row"
         class:selected={connections.selectedId === p.id}
+        data-conn-id={p.id}
         onclick={() => select(p)}
         ondblclick={() => openOrToggle(p)}
-        onkeydown={(e) => e.key === 'Enter' && openOrToggle(p)}
+        onkeydown={(e) => {
+          // Mark handled so the list-level handler doesn't open it twice.
+          if (e.key === 'Enter') {
+            e.preventDefault()
+            void openOrToggle(p)
+          }
+        }}
         role="button"
         tabindex="0"
         style="display:flex;align-items:center;gap:var(--px-9);padding:var(--px-6) var(--px-6) var(--px-6) 0;border-radius:var(--px-7);cursor:pointer;position:relative;margin-bottom:var(--px-1)"
@@ -297,12 +445,15 @@
 <div style="flex:none;border-bottom:var(--px-1) solid var(--border)">
   <!-- header — dòng 74-76 -->
   <div style="padding:var(--px-9) var(--px-12) var(--px-5)">
-    <span style="font-size:var(--px-10_5);font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--muted)">Connections</span>
+    <span
+      style="font-size:var(--px-10_5);font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--muted)"
+      title="Ctrl+Shift+B focus list · ↑/↓ move · Enter open · F2 edit · Delete remove · ←/→ collapse/expand&#10;Ctrl+Shift+N new · Ctrl+Shift+K filter · Ctrl+Shift+O connect/disconnect"
+    >Connections</span>
   </div>
 
   <!-- toolbar — dòng 77-87 -->
   <div style="display:flex;align-items:center;gap:var(--px-1);padding:0 var(--px-8) var(--px-7);color:var(--text2)">
-    <span class="tbtn" onclick={() => (ui.pickerOpen = true)} onkeydown={(e) => e.key === 'Enter' && (ui.pickerOpen = true)} role="button" tabindex="0" title="New connection" style="cursor:pointer">
+    <span class="tbtn" onclick={() => (ui.pickerOpen = true)} onkeydown={(e) => e.key === 'Enter' && (ui.pickerOpen = true)} role="button" tabindex="0" title="New connection (Ctrl+Shift+N)" style="cursor:pointer">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
     </span>
     <span class="tbtn" onclick={() => selConn && (ui.formProfile = { ...selConn })} onkeydown={(e) => e.key === 'Enter' && selConn && (ui.formProfile = { ...selConn })} role="button" tabindex="0" title="Properties / Edit connection" style="cursor:{selConn ? 'pointer' : 'not-allowed'};opacity:{selConn ? 1 : 0.35}">
@@ -322,7 +473,7 @@
     <span class="tbtn" onclick={() => selRel && tabs.openSchemaCompare(selConn?.id ?? null)} onkeydown={(e) => e.key === 'Enter' && selRel && tabs.openSchemaCompare(selConn?.id ?? null)} role="button" tabindex="0" title="Compare schemas" style="cursor:{selRel ? 'pointer' : 'not-allowed'};opacity:{selRel ? 1 : 0.35}">
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 8h13l-3-3M5 8l3 3"></path><path d="M19 16H6l3 3M19 16l-3-3"></path></svg>
     </span>
-    <span class="tbtn" onclick={toggleFilter} onkeydown={(e) => e.key === 'Enter' && toggleFilter()} role="button" tabindex="0" title="Filter connections" style="cursor:pointer;background:{filterOpen ? 'var(--hover)' : 'transparent'}">
+    <span class="tbtn" onclick={toggleFilter} onkeydown={(e) => e.key === 'Enter' && toggleFilter()} role="button" tabindex="0" title="Filter connections (Ctrl+Shift+K)" style="cursor:pointer;background:{filterOpen ? 'var(--hover)' : 'transparent'}">
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4h18l-7 8v6l-4 2v-8z"></path></svg>
     </span>
   </div>
@@ -343,8 +494,16 @@
     </div>
   {/if}
 
-  <!-- cây connections — dòng 97-130 -->
-  <div style="padding:0 var(--px-6) var(--px-8);height:{ui.connListHeight}px;overflow:auto">
+  <!-- cây connections — dòng 97-130. tabindex=-1 + role=tree: the list can take
+       keyboard focus (Ctrl/Cmd+Shift+B) and owns the ↑/↓/Enter/F2/Delete keys. -->
+  <div
+    bind:this={listEl}
+    tabindex="-1"
+    role="tree"
+    aria-label="Connections"
+    onkeydown={onListKeydown}
+    style="padding:0 var(--px-6) var(--px-8);height:{ui.connListHeight}px;overflow:auto;outline:none"
+  >
     <ContextMenu.Root>
       <ContextMenu.Trigger>
         <div class="hoverable" onclick={() => (myDbOpen = !myDbOpen)} onkeydown={(e) => e.key === 'Enter' && (myDbOpen = !myDbOpen)} role="button" tabindex="0" style="display:flex;align-items:center;gap:var(--px-7);padding:var(--px-5) var(--px-6);border-radius:var(--px-6);cursor:pointer">

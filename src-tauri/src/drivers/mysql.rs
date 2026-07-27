@@ -57,7 +57,16 @@ impl MySqlDriver {
         if !p.database.is_empty() {
             opts = opts.database(&p.database);
         }
-        let conn = opts.connect().await.map_err(|e| map_error(system, &e))?;
+        let mut conn = opts.connect().await.map_err(|e| map_error(system, &e))?;
+        // The editor must always read the LATEST committed data. When the server's
+        // default is `autocommit=0` (my.cnf, a `SET autocommit=0` in init_connect,
+        // or a proxy), this long-lived connection opens an implicit transaction on
+        // its first statement and never commits — and because InnoDB defaults to
+        // REPEATABLE READ, every later SELECT replays the SAME snapshot, so results
+        // look cached forever. Pin autocommit for the session. An explicit
+        // START TRANSACTION/BEGIN the user types still overrides it until COMMIT.
+        // Best-effort: never fail a connect over a hygiene statement.
+        let _ = execute(&mut conn, "SET SESSION autocommit = 1").await;
         Ok(Self { conn, system })
     }
 

@@ -73,9 +73,19 @@ impl MssqlDriver {
             .map_err(|e| QueryError::new("mssql", format!("Failed to connect to {}:{} — {e}", p.host, p.port), e.to_string()))?;
         tcp.set_nodelay(true)
             .map_err(|e| QueryError::new("mssql", e.to_string(), e.to_string()))?;
-        let client = Client::connect(config, tcp.compat_write())
+        let mut client = Client::connect(config, tcp.compat_write())
             .await
             .map_err(|e| map_error(&e))?;
+        // Same "always read/write the latest" hygiene as the MySQL driver: when the
+        // server's `user options` turn IMPLICIT_TRANSACTIONS ON, every statement on
+        // this long-lived connection opens a transaction that is never committed —
+        // writes stay invisible to other sessions and hold locks. Best-effort:
+        // never fail a connect over a hygiene statement.
+        if let Ok(stream) = client.simple_query("SET IMPLICIT_TRANSACTIONS OFF").await {
+            // Drain the stream: an unconsumed tiberius result leaves the connection
+            // mid-protocol for the next statement.
+            let _ = stream.into_results().await;
+        }
         Ok(Self { client })
     }
 
