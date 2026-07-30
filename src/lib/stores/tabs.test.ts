@@ -13,6 +13,7 @@ vi.mock('$lib/ipc', () => ({
 
 import * as ipc from '$lib/ipc'
 import { tabs } from './tabs.svelte'
+import { explorer } from './explorer.svelte'
 import type { TabState } from '$lib/types'
 
 function reset() {
@@ -304,5 +305,44 @@ describe('Objects tab — pinned, non-closable singleton', () => {
     tabs.restored = false
     await tabs.restore()
     expect(tabs.tabs[0].contentType).toBe('objects')
+  })
+})
+
+// A new Query Editor console must open bound to whatever the Explorer tree points
+// at — not only when a database node is selected, but also when the selection is a
+// table/view/function/procedure/trigger inside a schema (the reported gap).
+describe('openQueryConsole — binds the selected database + schema', () => {
+  beforeEach(() => {
+    explorer.selectedDatabase = null
+  })
+
+  it('binds both database and schema from the tree selection', () => {
+    explorer.selectedDatabase = { base: 'c1', database: 'analytics', schema: 'reporting' }
+    const t = tabs.openQueryConsole()
+    expect(t.connectionId).toBe('c1')
+    expect(t.state.database).toBe('analytics')
+    expect(t.state.schema).toBe('reporting')
+  })
+
+  it('schema-as-database engines bind the database only (no schema pick)', () => {
+    explorer.selectedDatabase = { base: 'c1', database: 'library_db' }
+    const t = tabs.openQueryConsole()
+    expect(t.state.database).toBe('library_db')
+    expect(t.state.schema).toBeUndefined()
+  })
+
+  it('an explicit connection elsewhere ignores the selection', () => {
+    explorer.selectedDatabase = { base: 'c1', database: 'analytics', schema: 'reporting' }
+    const t = tabs.openQueryConsole({ connectionId: 'c2' })
+    expect(t.connectionId).toBe('c2')
+    expect(t.state.database).toBeUndefined()
+    expect(t.state.schema).toBeUndefined()
+  })
+
+  it('useSelection: false opts out entirely', () => {
+    explorer.selectedDatabase = { base: 'c1', database: 'analytics', schema: 'reporting' }
+    const t = tabs.openQueryConsole({ connectionId: 'c1', useSelection: false })
+    expect(t.state.database).toBeUndefined()
+    expect(t.state.schema).toBeUndefined()
   })
 })

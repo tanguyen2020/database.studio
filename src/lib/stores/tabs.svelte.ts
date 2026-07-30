@@ -66,6 +66,8 @@ class TabsStore {
     autoRun?: boolean
     /** bind the tab to a specific database within the connection (runs there) */
     database?: string
+    /** pre-select a schema (PG/MSSQL/Oracle — scopes autocomplete + search_path) */
+    schema?: string
   }): TabState {
     const connId =
       opts?.connectionId !== undefined
@@ -87,6 +89,7 @@ class TabsStore {
         query: opts?.query ?? '',
         autoRun: opts?.autoRun ?? false,
         ...(opts?.database ? { database: opts.database } : {}),
+        ...(opts?.schema ? { schema: opts.schema } : {}),
       },
     }
     this.tabs.push(tab)
@@ -115,8 +118,11 @@ class TabsStore {
         : dbSel
           ? dbSel.base
           : this.active?.connectionId ?? connections.selectedId
-    const database =
-      opts?.useSelection !== false && dbSel && dbSel.base === connId ? dbSel.database : undefined
+    const useSel = opts?.useSelection !== false && dbSel && dbSel.base === connId
+    const database = useSel ? dbSel!.database : undefined
+    // Schema-based engines (PG/MSSQL/Oracle) also carry the selected schema, so the
+    // editor's Schema dropdown pre-selects it (and Postgres scopes search_path).
+    const schema = useSel ? dbSel!.schema : undefined
     // MongoDB consoles are mongosh (db.<coll>.find(…)) — title them so they read as
     // Mongo, matching the Explorer's "New Query" (Ctrl/Cmd+N opens the right editor).
     const title = connections.byId(connId)?.system === 'mongodb' ? 'Untitled Mongo' : 'Untitled query'
@@ -124,6 +130,7 @@ class TabsStore {
       connectionId: connId,
       title,
       ...(database ? { database } : {}),
+      ...(schema ? { schema } : {}),
     })
   }
 

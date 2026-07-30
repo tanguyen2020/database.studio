@@ -66,6 +66,7 @@
   import { kafkaTopicRows, natsStreamRows, filterStreamRows, filterTopicRows } from '$lib/stream/explorer'
   import { toAlterStatement, type AlterKind } from '$lib/sql/alter'
   import { objectFilterMatch } from '$lib/explorer/filter'
+  import { foreignOfTreeKey, schemaOfTreeKey } from '$lib/explorer/target'
   import { autofocus } from '$lib/actions/autofocus'
   import { toSqlInsert } from '$lib/export/rows'
   import type { ColumnInfo, PartitionInfo, RoutineInfo, TableInfo } from '$lib/types'
@@ -335,35 +336,45 @@
     const tdb = connections.databaseOf(toolTarget.connId)
     return tdb && tdb !== toolTarget.schema ? `${tdb}.${toolTarget.schema}` : toolTarget.schema
   })
-  // The database a NEW Query Editor tab should bind to, from the current tree
-  // selection. Unlike `erTarget` this resolves the database NAME even for a
+  // The database + schema a NEW Query Editor tab should bind to, from the current
+  // tree selection. Unlike `erTarget` this resolves the NAMES even for a
   // not-yet-expanded foreign database — New Query doesn't need the sub-connection
-  // (SqlWorkspace attaches its own per-tab connection at run time). For PG/MSSQL a
-  // schema node maps to the connection's current database; MySQL/MariaDB/ClickHouse
-  // treat the schema itself as the database; a foreign-DB node carries its name.
+  // (SqlWorkspace attaches its own per-tab connection at run time) — and it resolves
+  // them from ANY node inside the schema (a folder, a table/view/routine/trigger/
+  // sequence/column), not just the schema node itself. For PG/MSSQL/Oracle a schema
+  // node maps to the connection's current database + that schema; MySQL/MariaDB/
+  // ClickHouse treat the schema itself as the database (no schema pick); a
+  // foreign-DB node carries its own name (+ schema once expanded).
   const dbTarget = $derived.by(() => {
     const t = treeSel
     if (!selected || !t) return null
-    if (t.startsWith('s:')) {
-      const schema = t.slice(2)
-      const db = dbForSchema(schema) ?? (isClickhouse ? schema : curDbName || selected.database)
-      return db ? { base: selected.id, database: db } : null
-    }
+    const fdb = foreignOfTreeKey(t)
+    if (fdb) return { base: selected.id, database: fdb.database, ...(fdb.schema ? { schema: fdb.schema } : {}) }
     if (t === 'curdb') {
       const db = curDbName || selected.database
       return db ? { base: selected.id, database: db } : null
     }
-    const mSub = t.match(/^fdb:(.+):s:(.+)$/)
-    if (mSub) return { base: selected.id, database: mSub[1] }
-    const mDb = t.match(/^fdb:([^:]+)$/)
-    if (mDb) return { base: selected.id, database: mDb[1] }
-    return null
+    const schema = schemaOfTreeKey(t, (cache?.schemas ?? []).map((s) => s.name))
+    if (!schema) return null
+    // schema-as-database engines: the "schema" IS the database → bind it as such.
+    if (schemaNodeIsDatabase) return { base: selected.id, database: schema }
+    const db = curDbName || selected.database
+    return db ? { base: selected.id, database: db, schema } : { base: selected.id, database: '', schema }
   })
   $effect(() => {
     // MongoDB is browsed by MongoExplorer (a child component) which owns the
     // selected-database signal for the Mongo tree — don't clobber it here.
     if (selected?.system !== 'mongodb') explorer.selectedDatabase = dbTarget
   })
+  // "New query console" only needs the database/schema NAME (no sub-connection), so
+  // unlike the rest of the toolbar it enables for ANY node inside a relational
+  // database — a table/view/routine/trigger selection included.
+  const queryTarget = $derived(
+    toolTarget ? dbTarget : dbTarget && selected && RELATIONAL_TOOLS.includes(selected.system) ? dbTarget : null,
+  )
+  const queryTargetLabel = $derived(
+    queryTarget ? [queryTarget.database, queryTarget.schema].filter(Boolean).join('.') : '',
+  )
   // Top filter — DATABASE names only (item 1). Object filtering is per-folder.
   let dbFilter = $state('')
   const dbFiltering = $derived(!!dbFilter.trim())
@@ -862,16 +873,18 @@
   function newQuery(schema: string, table?: string, database?: string) {
     if (!selected) return
     const query = table ? selectStarSql(selected.system, schema, table) : ''
-    const tab = tabs.openSqlTab({
+    // Bind the tab to the database the node lives in, and — on schema-based engines
+    // (PG/MSSQL/Oracle) — pre-select its schema so the editor opens scoped like the
+    // node the user right-clicked.
+    const db = database ?? (schemaNodeIsDatabase ? schema : curDbName || selected.database)
+    const sch = schemaNodeIsDatabase ? '' : schema
+    tabs.openSqlTab({
       connectionId: selected.id,
       title: table ? `${table} · SELECT` : 'Untitled query',
       query,
+      ...(db ? { database: db } : {}),
+      ...(sch ? { schema: sch } : {}),
     })
-    const db = dbForSchema(schema, database)
-    if (db) {
-      tab.state.database = db
-      tabs.schedulePersist()
-    }
   }
 
   async function copyName(name: string) {
@@ -2729,7 +2742,7 @@
 
   <!-- bottom toolbar — dòng 155-166 -->
   <div style="flex:none;display:flex;align-items:center;gap:var(--px-1);padding:var(--px-5) var(--px-8);border-top:var(--px-1) solid var(--border);background:var(--header);color:var(--text2)">
-    <span class="xbtn" class:off={!toolTarget} onclick={() => toolTarget && tabs.openQueryConsole()} onkeydown={(e) => e.key === 'Enter' && toolTarget && tabs.openQueryConsole()} role="button" tabindex="0" title={toolTarget ? `Query console: ${toolTargetLabel}` : 'Select a schema / database first'}>
+    <span class="xbtn" class:off={!queryTarget} onclick={() => queryTarget && tabs.openQueryConsole()} onkeydown={(e) => e.key === 'Enter' && queryTarget && tabs.openQueryConsole()} role="button" tabindex="0" title={queryTarget ? `Query console: ${queryTargetLabel}` : 'Select a schema / database first'}>
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M7 9l3 3-3 3M13 15h4"></path></svg>
     </span>
     <span style="width:var(--px-1);height:var(--px-16);background:var(--border);margin:0 var(--px-3)"></span>

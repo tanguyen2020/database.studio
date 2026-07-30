@@ -61,3 +61,72 @@ test('single-database connection still fills the Database picker', async ({ page
 
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
+
+// The tree selection does not have to be a database/schema node: picking a TABLE
+// (or view/function/procedure/trigger) inside one must bind the new console to the
+// database + schema that object lives in — the reported gap (no database/schema was
+// picked up at all when an object row was selected).
+test('new query console binds the database + schema of a selected TABLE', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(String(e)))
+  await blockRemoteFonts(page)
+  await page.goto(APP_URL)
+  await page.waitForSelector('#app > *', { timeout: 15_000 })
+  await page.waitForTimeout(300)
+
+  await page.getByRole('button', { name: /Postgres/ }).first().click()
+  await page.waitForTimeout(700)
+
+  // expand the current database's `public` schema, then its Tables folder (chevron
+  // clicks — a row's double-click would open the Objects tab instead)
+  await page.getByRole('treeitem', { name: /public/ }).first().getByRole('button').first().click()
+  await page.waitForTimeout(600)
+  await page.getByRole('treeitem', { name: /Tables/ }).first().getByRole('button').first().click()
+  await page.waitForTimeout(600)
+
+  // select the TABLE row (single click selects only — no expand, no tab)
+  await page.getByRole('treeitem', { name: /\bstudents\b/ }).first().click()
+  await page.waitForTimeout(200)
+
+  await page.getByTitle('New query console').click()
+  await page.waitForTimeout(700)
+
+  // bound to the database the table lives in ('app' — the connection's CURRENT
+  // database, not the profile's configured `sis_prod`) and to its schema
+  await expect(page.getByTitle('Database', { exact: true })).toHaveValue('app')
+  await expect(page.getByTitle('Schema', { exact: true })).toHaveValue('public')
+
+  expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
+})
+
+// Same, one level deeper: an object inside ANOTHER database on the same server must
+// bind both that database and its (non-default) schema.
+test('new query console binds a foreign database + its schema from an object row', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(String(e)))
+  await blockRemoteFonts(page)
+  await page.goto(APP_URL)
+  await page.waitForSelector('#app > *', { timeout: 15_000 })
+  await page.waitForTimeout(300)
+
+  await page.getByRole('button', { name: /Postgres/ }).first().click()
+  await page.waitForTimeout(700)
+
+  // expand the foreign database `analytics` → its own schemas (public + reporting)
+  await page.getByRole('treeitem', { name: /analytics/ }).first().dblclick()
+  await page.waitForTimeout(900)
+  await page.getByRole('treeitem', { name: /reporting/ }).first().getByRole('button').first().click()
+  await page.waitForTimeout(800)
+  await page.getByRole('treeitem', { name: /Tables/ }).last().getByRole('button').first().click()
+  await page.waitForTimeout(800)
+  await page.getByRole('treeitem', { name: /\bstudents\b/ }).last().click()
+  await page.waitForTimeout(200)
+
+  await page.getByTitle('New query console').click()
+  await page.waitForTimeout(900)
+
+  await expect(page.getByTitle('Database', { exact: true })).toHaveValue('analytics')
+  await expect(page.getByTitle('Schema', { exact: true })).toHaveValue('reporting')
+
+  expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
+})
