@@ -6,6 +6,7 @@ use tiberius::{AuthMethod, Client, ColumnType, Config, EncryptionLevel};
 use tokio::net::TcpStream;
 use tokio_util::compat::{Compat, TokioAsyncWriteCompatExt};
 
+use crate::drivers::cancel;
 use crate::drivers::types::*;
 use crate::drivers::util;
 use crate::error::{ErrorPosition, QueryError};
@@ -129,7 +130,11 @@ impl MssqlDriver {
             let results = stream.into_results().await.map_err(|e| map_error(&e))?;
             let rows_flat: Vec<tiberius::Row> = results.into_iter().flatten().collect();
             let mut out_rows: Vec<Value> = Vec::new();
-            for row in &rows_flat {
+            for (n, row) in rows_flat.iter().enumerate() {
+                // Long CPU stretch — see the same tick in the Postgres driver.
+                if n % cancel::CHECK_EVERY == 0 {
+                    cancel::tick("mssql").await?;
+                }
                 let mut obj = Map::new();
                 for (i, col) in row.columns().iter().enumerate() {
                     obj.insert(col.name().to_string(), decode_value(row, i, col.column_type()));

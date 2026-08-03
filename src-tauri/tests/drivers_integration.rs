@@ -3940,6 +3940,181 @@ async fn query_cancel_aborts_and_connection_recovers() {
     eprintln!("CHK follow-up query OK — test end");
 }
 
+// ---------------------------------------------------------------------------
+// Cancel of a LARGE result set — the case T11 above does not cover.
+//
+// `pg_sleep(30)` is cancelled while the task sits on an `.await`, which the old
+// abort-only implementation handled. A big SELECT is different: the rows arrive,
+// and the driver then spends seconds in ONE synchronous loop turning them into
+// JSON. `AbortHandle::abort()` cannot interrupt that (a tokio abort only lands at
+// an await point), so Cancel was silently ignored until the whole result had been
+// built — the reported "cannot stop it". Cancel must now:
+//   * return CANCELLED to the caller immediately,
+//   * stop the query ON THE SERVER (pg_cancel_backend over a second connection),
+//   * leave the connection usable.
+//
+// Multi-threaded on purpose: that is the runtime Tauri gives the commands, and a
+// synchronous decode loop occupies a worker for its whole duration. On the
+// single-threaded runtime `#[tokio::test]` defaults to, that loop would starve
+// the test itself (and Cancel with it) — which is precisely the behaviour this
+// test must not depend on.
+// ---------------------------------------------------------------------------
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn query_cancel_stops_a_large_result_and_the_server() {
+    use std::sync::Arc;
+    use database_studio_lib::connections::profile::{ConnectionProfile, Environment, SqliteMode, SshConfig};
+    use database_studio_lib::connections::registry::Registry;
+    use database_studio_lib::drivers::types::SystemType;
+
+    let (_c, port) = start_pg().await;
+    let profile = |id: &str| ConnectionProfile {
+        id: id.into(),
+        name: "t".into(),
+        system: SystemType::Postgres,
+        host: "localhost".into(),
+        port,
+        database: "testdb".into(),
+        user: "postgres".into(),
+        password_enc: String::new(),
+        group: String::new(),
+        env: Environment::Development,
+        ssh: SshConfig::default(),
+        ssl: false,
+        ssl_ca: String::new(),
+        ssl_cert: String::new(),
+        ssl_key: String::new(),
+        sqlite_path: String::new(),
+        sqlite_mode: SqliteMode::ReadWrite,
+        mssql_auth: String::new(),
+        schema_registry_url: String::new(),
+        cassandra_dc: String::new(),
+        cassandra_consistency: String::new(),
+    };
+
+    let reg = Arc::new(Registry::default());
+    {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        loop {
+            match reg.connect(profile("big"), PASS.into(), String::new()).await {
+                Ok(_) => break,
+                Err(e) => {
+                    assert!(Instant::now() < deadline, "connect PG failed: {e:?}");
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                }
+            }
+        }
+    }
+    // Observer connection — proves what the SERVER is doing, independently.
+    reg.connect(profile("watch"), PASS.into(), String::new()).await.unwrap();
+
+    // ---- (a) a big result set: the caller must be released, not made to wait ---
+    // The server produces these rows quickly; the seconds go into the driver's
+    // synchronous row→JSON loop, which is exactly the stretch a tokio abort
+    // cannot interrupt. Baseline first, so "it stopped early" is measured against
+    // this machine instead of a hard-coded number.
+    const BIG: &str = "SELECT i AS id, md5(i::text) AS h FROM generate_series(1, 1500000) AS i";
+    let base_start = Instant::now();
+    let full = reg.exec_statement("big", BIG.into()).await.unwrap().unwrap();
+    let baseline = base_start.elapsed();
+    match full {
+        StatementOutcome::Rows { result } => assert_eq!(result.total, 1_500_000, "baseline must return every row"),
+        other => panic!("expected Rows, got {other:?}"),
+    }
+    assert!(baseline > Duration::from_secs(3), "baseline too fast to be a meaningful test: {baseline:?}");
+    eprintln!("CHK uncancelled baseline = {baseline:?}");
+
+    let r2 = reg.clone();
+    let run_start = Instant::now();
+    let handle = tokio::spawn(async move { r2.exec_statement("big", BIG.into()).await });
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+
+    // While that big result is being decoded, ANOTHER connection (i.e. another
+    // tab, or the Explorer) must stay responsive. Without the periodic yield in
+    // the driver's row loop this measured multiple seconds — the decode held its
+    // worker and delayed every other command, `cancel_query` included, which is
+    // what made one tab's query freeze the rest of the app.
+    let probe = Instant::now();
+    reg.exec_statement("watch", "SELECT 1 AS n".into()).await.unwrap().unwrap();
+    let probe = probe.elapsed();
+    assert!(probe < Duration::from_secs(2), "another connection must stay responsive, took {probe:?}");
+    eprintln!("CHK second connection answered in {probe:?} while the big result was decoding");
+
+    let cstart = Instant::now();
+    assert!(reg.cancel("big"), "cancel must find the in-flight statement");
+    let joined = tokio::time::timeout(Duration::from_secs(5), handle)
+        .await
+        .expect("exec_statement must return right after cancel (not after the full decode)")
+        .unwrap();
+    let (ack, total) = (cstart.elapsed(), run_start.elapsed());
+    assert!(ack < Duration::from_secs(2), "cancel must release the caller fast, took {ack:?}");
+    assert!(
+        total < baseline / 2,
+        "the run must stop early, not finish: total {total:?} vs baseline {baseline:?}"
+    );
+    match joined {
+        Ok(Err(qe)) => assert_eq!(qe.code.as_deref(), Some("CANCELLED"), "expected CANCELLED, got {qe:?}"),
+        other => panic!("expected Ok(Err(CANCELLED)), got {other:?}"),
+    }
+    eprintln!("CHK large result cancelled: caller released in {ack:?}, run stopped after {total:?}");
+
+    // ---- (b) a long SERVER-side query: the server must stop too ---------------
+    // Tiny result, huge amount of work inside PG — so this measures the server,
+    // not the decode loop. Abandoning the client task would leave PG grinding;
+    // `pg_cancel_backend` over a second connection is what actually stops it.
+    const SLOW: &str = "SELECT count(*) AS n FROM generate_series(1, 4000000000) AS g";
+    const WATCH: &str = "SELECT count(*) AS n FROM pg_stat_activity WHERE state = 'active' \
+                         AND query LIKE '%generate_series(1, 4000000000)%' \
+                         AND query NOT LIKE '%pg_stat_activity%'";
+    let active_count = |reg: Arc<Registry>| async move {
+        match reg.exec_statement("watch", WATCH.into()).await.unwrap().unwrap() {
+            StatementOutcome::Rows { result } => result.rows[0]["n"].as_i64().unwrap_or(-1),
+            other => panic!("expected Rows, got {other:?}"),
+        }
+    };
+
+    let r3 = reg.clone();
+    let slow = tokio::spawn(async move { r3.exec_statement("big", SLOW.into()).await });
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    assert_eq!(active_count(reg.clone()).await, 1, "the slow query must be running server-side");
+    eprintln!("CHK slow query is active on the server");
+
+    assert!(reg.cancel("big"), "cancel must find the slow statement");
+    let joined = tokio::time::timeout(Duration::from_secs(5), slow)
+        .await
+        .expect("exec_statement must return right after cancel")
+        .unwrap();
+    match joined {
+        Ok(Err(qe)) => assert_eq!(qe.code.as_deref(), Some("CANCELLED"), "expected CANCELLED, got {qe:?}"),
+        other => panic!("expected Ok(Err(CANCELLED)), got {other:?}"),
+    }
+
+    // The server-side cancel is dispatched asynchronously (it needs its own
+    // connection), so poll rather than assume.
+    let mut still_active = -1;
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        still_active = active_count(reg.clone()).await;
+        if still_active == 0 {
+            break;
+        }
+    }
+    assert_eq!(still_active, 0, "the server must stop executing the cancelled query");
+    eprintln!("CHK server stopped executing the cancelled query");
+
+    // The connection heals and is usable again.
+    let follow = reg
+        .exec_statement("big", "SELECT 1 AS n".into())
+        .await
+        .expect("registry err")
+        .expect("follow-up query must work after cancel");
+    match follow {
+        StatementOutcome::Rows { result } => assert_eq!(result.rows[0]["n"], serde_json::json!(1)),
+        other => panic!("expected Rows, got {other:?}"),
+    }
+    eprintln!("CHK connection reusable — test end");
+}
+
 /// Phase 5 · T13 — Import wizard batched-INSERT path at scale. Mirrors the
 /// wizard's approach (chunked multi-row INSERT via exec) by importing 100k rows
 /// into a real PG table, then querying back the count (seed → verify, not

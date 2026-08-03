@@ -5,6 +5,7 @@ use sqlx::postgres::{PgConnectOptions, PgConnection, PgDatabaseError, PgSslMode}
 use sqlx::{Column, ConnectOptions, Connection, Executor, Row, TypeInfo};
 use std::time::Instant;
 
+use crate::drivers::cancel;
 use crate::drivers::types::*;
 use crate::drivers::util;
 use crate::error::{ErrorPosition, QueryError};
@@ -99,7 +100,13 @@ impl PgDriver {
                     cols.push((c.name().to_string(), c.type_info().name().to_lowercase()));
                 }
             }
-            for row in &rows {
+            for (n, row) in rows.iter().enumerate() {
+                // Turning a large result into JSON is a long CPU stretch: without
+                // this a Cancel sits unheard until it finishes, and every other
+                // tab's command waits behind it. See `cancel::tick`.
+                if n % cancel::CHECK_EVERY == 0 {
+                    cancel::tick("postgres").await?;
+                }
                 let mut obj = Map::new();
                 for (i, c) in row.columns().iter().enumerate() {
                     obj.insert(c.name().to_string(), decode_value(row, i));

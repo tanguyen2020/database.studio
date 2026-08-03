@@ -960,7 +960,11 @@
         title="Cancel (Ctrl+F5 / Esc)"
         style="display:flex;align-items:center;gap:var(--px-7);background:var(--error);color:var(--hex-fff);border-radius:var(--px-7);padding:var(--px-5) var(--px-13);cursor:pointer;font-weight:600;font-size:var(--px-12)"
       >
-        <span>■</span><span>Cancel</span><span class="mono" style="opacity:.85;font-size:var(--px-10)">running {runningSecs}s</span>
+        <span>■</span><span>{exec.cancelling ? 'Cancelling…' : 'Cancel'}</span><span
+          class="mono"
+          style="opacity:.85;font-size:var(--px-10)">running {runningSecs}s{exec.receivedRows
+            ? ` · ${exec.receivedRows.toLocaleString()} rows`
+            : ''}</span>
       </div>
     {:else}
       <div

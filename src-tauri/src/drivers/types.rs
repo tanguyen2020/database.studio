@@ -90,6 +90,12 @@ pub struct ExecResponse {
     pub error: Option<QueryError>,
     /// Server-side execution time in milliseconds.
     pub duration_ms: u64,
+    /// `exec_statement_stream` only: the rows were delivered over the progress
+    /// channel instead of inside `result`, so `result.rows` is empty and the
+    /// caller must fill it from the chunks it received. Never set by
+    /// `exec_statement` — the plain contract is unchanged.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub streamed: bool,
 }
 
 impl ExecResponse {
@@ -101,6 +107,7 @@ impl ExecResponse {
                 affected: None,
                 error: None,
                 duration_ms,
+                streamed: false,
             },
             StatementOutcome::Affected { affected } => Self {
                 ok: true,
@@ -108,6 +115,7 @@ impl ExecResponse {
                 affected: Some(affected),
                 error: None,
                 duration_ms,
+                streamed: false,
             },
             StatementOutcome::Ok => Self {
                 ok: true,
@@ -115,6 +123,7 @@ impl ExecResponse {
                 affected: None,
                 error: None,
                 duration_ms,
+                streamed: false,
             },
         }
     }
@@ -126,6 +135,7 @@ impl ExecResponse {
             affected: None,
             error: Some(error),
             duration_ms,
+            streamed: false,
         }
     }
 }

@@ -8,6 +8,7 @@ use sqlx::mysql::{MySqlConnectOptions, MySqlConnection, MySqlSslMode};
 use sqlx::{Column, ConnectOptions, Connection, Executor, Row, TypeInfo};
 use std::time::Instant;
 
+use crate::drivers::cancel;
 use crate::drivers::types::*;
 use crate::drivers::util;
 use crate::error::{ErrorPosition, QueryError};
@@ -94,7 +95,7 @@ impl MySqlDriver {
             let rows = fetch_all(&mut self.conn, sql)
                 .await
                 .map_err(|e| map_exec_error(self.system, &e))?;
-            let (mut cols, out_rows) = decode_rows(&rows);
+            let (mut cols, out_rows) = decode_rows(&rows, self.system).await?;
             // Empty result set has no rows to read column types from → describe().
             if cols.is_empty() {
                 if let Ok(desc) = describe(&mut self.conn, sql).await {
@@ -130,7 +131,7 @@ impl MySqlDriver {
         let rows = mysql_fetch_params(&mut self.conn, sql, params)
             .await
             .map_err(|e| map_exec_error(self.system, &e))?;
-        let (cols, out_rows) = decode_rows(&rows);
+        let (cols, out_rows) = decode_rows(&rows, self.system).await?;
         let total = out_rows.len() as u64;
         Ok(StatementOutcome::Rows { result: QueryResultSet { cols, rows: out_rows, total } })
     }
@@ -603,7 +604,10 @@ fn text_type_for(binary_type: &str) -> String {
 /// its header type is relabelled to the text equivalent so the grid shows
 /// `varchar` instead of `varbinary`. A column stays binary if any value was
 /// genuine binary (or it had no non-null value to judge from).
-fn decode_rows(rows: &[sqlx::mysql::MySqlRow]) -> (Vec<ColumnDef>, Vec<Value>) {
+async fn decode_rows(
+    rows: &[sqlx::mysql::MySqlRow],
+    system: &str,
+) -> Result<(Vec<ColumnDef>, Vec<Value>), QueryError> {
     let mut cols: Vec<ColumnDef> = Vec::new();
     if let Some(first) = rows.first() {
         for c in first.columns() {
@@ -619,7 +623,11 @@ fn decode_rows(rows: &[sqlx::mysql::MySqlRow]) -> (Vec<ColumnDef>, Vec<Value>) {
     let mut has_value = vec![false; n]; // at least one non-null value seen
 
     let mut out_rows: Vec<Value> = Vec::with_capacity(rows.len());
-    for row in rows {
+    for (r, row) in rows.iter().enumerate() {
+        // Long CPU stretch — see the same tick in the Postgres driver.
+        if r % cancel::CHECK_EVERY == 0 {
+            cancel::tick(system).await?;
+        }
         let mut obj = Map::new();
         for i in 0..n {
             let v = if bin_family[i] {
@@ -655,7 +663,7 @@ fn decode_rows(rows: &[sqlx::mysql::MySqlRow]) -> (Vec<ColumnDef>, Vec<Value>) {
             cols[i].1 = text_type_for(&cols[i].1);
         }
     }
-    (cols, out_rows)
+    Ok((cols, out_rows))
 }
 
 /// Like [`text`] but preserves SQL NULL as `None` (nullable columns, e.g. defaults).

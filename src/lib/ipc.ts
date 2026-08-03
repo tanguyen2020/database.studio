@@ -61,6 +61,35 @@ export const pingConnection = (id: string) => invoke<boolean>('ping_connection',
 export const execStatement = (connId: string, sql: string, statementIndex?: number) =>
   invoke<ExecResponse>('exec_statement', { connId, sql, statementIndex })
 
+/** One batch of a streamed result set. `cols` comes with the first chunk only. */
+export interface RowChunk {
+  cols?: [string, string][]
+  rows: Record<string, unknown>[]
+  received: number
+  total: number
+}
+
+/** Query-editor execution: a large result arrives in chunks instead of as one
+ *  giant IPC response, which is what used to block the webview's single UI
+ *  thread (freezing every tab and the Cancel button) while it was parsed.
+ *  Outside Tauri there is no channel to stream over → plain `execStatement`. */
+export const execStatementStream = (
+  connId: string,
+  sql: string,
+  statementIndex: number | undefined,
+  onChunk: (chunk: RowChunk) => void,
+): Promise<ExecResponse> => {
+  if (!IS_TAURI) return execStatement(connId, sql, statementIndex)
+  const channel = new Channel<RowChunk>()
+  channel.onmessage = onChunk
+  return tauriInvoke<ExecResponse>('exec_statement_stream', {
+    connId,
+    sql,
+    statementIndex,
+    onChunk: channel,
+  })
+}
+
 export const cancelQuery = (connId: string) =>
   invoke<{ cancelled: boolean }>('cancel_query', { connId })
 

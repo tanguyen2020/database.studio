@@ -8,10 +8,11 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use tokio::task::AbortHandle;
+use tokio_util::sync::CancellationToken;
 
 use crate::connections::profile::ConnectionProfile;
 use crate::connections::tunnel::{open_tunnel, TunnelHandle};
-use crate::drivers::{Endpoint, LiveConnection};
+use crate::drivers::{cancel, Endpoint, LiveConnection};
 use crate::error::{AppError, AppResult, QueryError};
 
 struct LiveEntry {
@@ -22,8 +23,62 @@ struct LiveEntry {
     password: String,
     endpoint: Endpoint,
     running: Option<AbortHandle>,
+    /// Cooperative cancel signal for the statement (and its chunked delivery)
+    /// currently in flight. `cancel` fires it so drivers stop mid-row-loop
+    /// instead of only at the next `.await`.
+    cancel: Option<CancellationToken>,
+    /// Server-side session identifier (PG backend pid / MySQL connection id),
+    /// used to cancel the query *on the server* — aborting the client task
+    /// leaves the server happily producing rows.
+    session_id: Option<String>,
     poisoned: bool,
     latency_ms: Option<u64>,
+}
+
+/// Statement that cancels the *currently running query* of `session_id` on the
+/// server, issued over a separate short-lived connection. Only engines with a
+/// query-scoped cancel are listed: killing a session outright (MSSQL `KILL`)
+/// would roll back an open transaction, so those engines rely on the socket
+/// being dropped by the post-cancel reconnect instead.
+fn kill_statement(system: &str, session_id: &str) -> Option<String> {
+    match system {
+        "postgres" => Some(format!("SELECT pg_cancel_backend({session_id})")),
+        "mysql" | "mariadb" => Some(format!("KILL QUERY {session_id}")),
+        _ => None,
+    }
+}
+
+/// Query that returns the connection's own server-side session id, for engines
+/// where [`kill_statement`] can use it. `None` → no probe (no extra round trip).
+fn session_id_query(system: &str) -> Option<&'static str> {
+    match system {
+        "postgres" => Some("SELECT pg_backend_pid()"),
+        "mysql" | "mariadb" => Some("SELECT CONNECTION_ID()"),
+        _ => None,
+    }
+}
+
+/// Reads the session id right after connecting (best effort — a failure only
+/// means Cancel falls back to dropping the socket).
+async fn probe_session_id(driver: &mut LiveConnection, system: &str) -> Option<String> {
+    let sql = session_id_query(system)?;
+    let outcome = driver.exec(sql).await.ok()?;
+    let crate::drivers::types::StatementOutcome::Rows { result } = outcome else {
+        return None;
+    };
+    let first = result.rows.first()?;
+    let value = first.as_object()?.values().next()?;
+    let id = match value {
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::String(s) => s.clone(),
+        _ => return None,
+    };
+    // Guard against anything that isn't a plain integer — it goes into SQL text.
+    if !id.is_empty() && id.chars().all(|c| c.is_ascii_digit()) {
+        Some(id)
+    } else {
+        None
+    }
 }
 
 #[derive(Default)]
@@ -40,6 +95,16 @@ async fn run_statement(
 ) -> Result<crate::drivers::types::StatementOutcome, QueryError> {
     let mut d = driver.lock().await;
     d.exec(&sql).await
+}
+
+/// Same, with the cooperative cancel token installed for the whole statement so
+/// driver row loops can bail out mid-decode.
+async fn run_statement_cancellable(
+    driver: Arc<tokio::sync::Mutex<LiveConnection>>,
+    sql: String,
+    token: CancellationToken,
+) -> Result<crate::drivers::types::StatementOutcome, QueryError> {
+    cancel::scope(token, run_statement(driver, sql)).await
 }
 
 /// True when an error message indicates the underlying socket was closed by the
@@ -124,7 +189,7 @@ impl Registry {
             (Endpoint { host: profile.host.clone(), port: profile.port }, None)
         };
 
-        let driver = LiveConnection::connect(&profile, &endpoint, &password)
+        let mut driver = LiveConnection::connect(&profile, &endpoint, &password)
             .await
             .map_err(|e| {
                 let mut msg = e.message;
@@ -144,6 +209,7 @@ impl Registry {
                 AppError::Driver(msg)
             })?;
         let latency = started.elapsed().as_millis() as u64;
+        let session_id = probe_session_id(&mut driver, profile.system.as_str()).await;
 
         let entry = LiveEntry {
             driver: Arc::new(tokio::sync::Mutex::new(driver)),
@@ -152,6 +218,8 @@ impl Registry {
             password,
             endpoint,
             running: None,
+            cancel: None,
+            session_id,
             poisoned: false,
             latency_ms: Some(latency),
         };
@@ -197,12 +265,17 @@ impl Registry {
             let e = map.get(id).ok_or_else(|| AppError::NotConnected(id.to_string()))?;
             (Arc::clone(&e.driver), e.profile.clone(), e.endpoint.clone(), e.password.clone())
         };
-        let fresh = LiveConnection::connect(&profile, &endpoint, &password)
+        let mut fresh = LiveConnection::connect(&profile, &endpoint, &password)
             .await
             .map_err(|e| AppError::Driver(e.message))?;
+        let session_id = probe_session_id(&mut fresh, profile.system.as_str()).await;
+        // Replacing the driver drops the old connection, which closes its socket.
+        // That is also what makes the server abandon whatever it was still doing
+        // for us on engines without a query-scoped cancel statement.
         *driver_arc.lock().await = fresh;
         if let Some(e) = self.entries.lock().unwrap().get_mut(id) {
             e.poisoned = false;
+            e.session_id = session_id;
         }
         Ok(())
     }
@@ -256,57 +329,150 @@ impl Registry {
     /// Runs one statement on the live connection with cancellation tracking.
     /// A cancel aborts the task, poisons the connection (mid-protocol) and
     /// returns a CANCELLED QueryError.
+    ///
+    /// The wait is on the cancel token as well as on the task: a task stuck in a
+    /// synchronous section (building JSON out of a million rows) cannot be
+    /// aborted at once, and the caller must not be kept waiting for it. Once the
+    /// token fires we return CANCELLED immediately and let the orphaned task
+    /// unwind on its own — it observes the same token and drops its partial
+    /// result within a few hundred rows.
     async fn run_tracked(
         &self,
         id: &str,
         sql: String,
     ) -> AppResult<Result<crate::drivers::types::StatementOutcome, QueryError>> {
         let driver = self.driver_handle(id)?;
-        let system = {
+        let (system, armed) = {
             let map = self.entries.lock().unwrap();
-            map.get(id)
-                .map(|e| e.profile.system.as_str())
-                .unwrap_or("unknown")
+            match map.get(id) {
+                Some(e) => (e.profile.system.as_str(), e.cancel.clone()),
+                None => ("unknown", None),
+            }
         };
+        // A run armed by the caller (`arm_cancel`, editor path) owns the token's
+        // lifetime — it also covers chunked delivery after this returns. Anything
+        // else gets a fresh token that only lives for this statement.
+        let token = armed.clone().unwrap_or_default();
 
-        let task = tokio::spawn(run_statement(driver, sql));
+        let mut task = tokio::spawn(run_statement_cancellable(driver, sql, token.clone()));
         // Register the abort handle so `cancel` can reach it.
         {
             let mut map = self.entries.lock().unwrap();
             if let Some(e) = map.get_mut(id) {
                 e.running = Some(task.abort_handle());
+                if armed.is_none() {
+                    e.cancel = Some(token.clone());
+                }
             }
         }
-        let joined = task.await;
+        let joined = tokio::select! {
+            joined = &mut task => Some(joined),
+            _ = token.cancelled() => {
+                task.abort();
+                None
+            }
+        };
         {
             let mut map = self.entries.lock().unwrap();
             if let Some(e) = map.get_mut(id) {
                 e.running = None;
+                if armed.is_none() {
+                    e.cancel = None;
+                }
             }
         }
+        let cancelled = || {
+            // The connection may be mid-protocol — mark for reconnect.
+            self.poison(id);
+            Ok(Err(cancel::cancelled_error(system)))
+        };
         match joined {
-            Ok(res) => Ok(res),
-            Err(join_err) if join_err.is_cancelled() => {
-                // The connection may be mid-protocol — mark for reconnect.
-                self.poison(id);
-                let mut qe = QueryError::new(system, "Query was cancelled", "cancelled by user");
-                qe.code = Some("CANCELLED".into());
-                Ok(Err(qe))
-            }
-            Err(join_err) => Err(AppError::Driver(join_err.to_string())),
+            None => cancelled(),
+            Some(Ok(res)) => Ok(res),
+            Some(Err(join_err)) if join_err.is_cancelled() => cancelled(),
+            Some(Err(join_err)) => Err(AppError::Driver(join_err.to_string())),
         }
     }
 
-    /// Aborts the statement currently running on this connection, if any.
+    /// Arms cancellation for one editor run and returns its token. The token
+    /// stays armed until [`disarm_cancel`], so it covers both the statement and
+    /// the chunked delivery of its rows to the frontend.
+    pub fn arm_cancel(&self, id: &str) -> CancellationToken {
+        let token = CancellationToken::new();
+        if let Some(e) = self.entries.lock().unwrap().get_mut(id) {
+            e.cancel = Some(token.clone());
+        }
+        token
+    }
+
+    /// Releases the token armed by [`arm_cancel`] (end of the run).
+    pub fn disarm_cancel(&self, id: &str) {
+        if let Some(e) = self.entries.lock().unwrap().get_mut(id) {
+            e.cancel = None;
+        }
+    }
+
+    /// Stops the statement currently running on this connection, if any.
+    ///
+    /// Three things have to happen for a Cancel to actually stop work, and the
+    /// old implementation only did the first:
+    ///   1. abort the client task (only lands at an `.await`),
+    ///   2. fire the cooperative token so driver row loops bail out and the
+    ///      caller stops waiting,
+    ///   3. tell the *server* to stop, with a query-scoped cancel statement
+    ///      issued over a second connection (`kill_statement`). Engines without
+    ///      one stop when the poisoned connection is reconnected (its socket is
+    ///      dropped) on the next statement.
     pub fn cancel(&self, id: &str) -> bool {
-        let mut map = self.entries.lock().unwrap();
-        if let Some(e) = map.get_mut(id) {
-            if let Some(h) = e.running.take() {
-                h.abort();
+        let kill = {
+            let mut map = self.entries.lock().unwrap();
+            let Some(e) = map.get_mut(id) else { return false };
+            let was_running = e.running.take().map(|h| h.abort()).is_some();
+            let token_fired = match e.cancel.take() {
+                Some(t) => {
+                    t.cancel();
+                    true
+                }
+                None => false,
+            };
+            if !was_running && !token_fired {
+                return false;
+            }
+            if !was_running {
+                // Only the armed token fired: the statement itself already
+                // finished and we are cancelling the delivery of its rows. The
+                // connection is clean — nothing to poison, nothing to kill.
                 return true;
             }
+            // Mid-protocol from here on: the next statement must reconnect.
+            e.poisoned = true;
+            let stmt = e
+                .session_id
+                .as_deref()
+                .and_then(|sid| kill_statement(e.profile.system.as_str(), sid));
+            (stmt, e.profile.clone(), e.endpoint.clone(), e.password.clone())
+        };
+
+        let (stmt, profile, endpoint, password) = kill;
+        if let Some(sql) = stmt {
+            // Detached: Cancel must return to the UI immediately, and opening the
+            // side connection must not hold it up.
+            tokio::spawn(async move {
+                // A separate connection is required — the one running the query
+                // cannot answer until that query is done.
+                let side = tokio::time::timeout(
+                    std::time::Duration::from_secs(10),
+                    LiveConnection::connect(&profile, &endpoint, &password),
+                )
+                .await;
+                if let Ok(Ok(mut conn)) = side {
+                    let _ =
+                        tokio::time::timeout(std::time::Duration::from_secs(10), conn.exec(&sql))
+                            .await;
+                }
+            });
         }
-        false
+        true
     }
 
     /// Runs an introspection closure against the live driver.
@@ -392,7 +558,35 @@ impl Registry {
 
 #[cfg(test)]
 mod tests {
-    use super::is_connection_lost;
+    use super::{is_connection_lost, kill_statement, session_id_query};
+
+    #[test]
+    fn cancels_the_query_not_the_session_where_possible() {
+        // Query-scoped cancel: the session (and any open transaction) survives.
+        assert_eq!(
+            kill_statement("postgres", "4711").as_deref(),
+            Some("SELECT pg_cancel_backend(4711)")
+        );
+        assert_eq!(kill_statement("mysql", "12").as_deref(), Some("KILL QUERY 12"));
+        assert_eq!(kill_statement("mariadb", "12").as_deref(), Some("KILL QUERY 12"));
+    }
+
+    #[test]
+    fn no_kill_statement_for_engines_without_a_query_scoped_cancel() {
+        // These stop when the poisoned connection is reconnected (socket dropped);
+        // MSSQL's `KILL` would take the whole session, transaction included.
+        for system in ["mssql", "sqlite", "clickhouse", "oracle", "cassandra", "mongodb", "redis"] {
+            assert!(kill_statement(system, "1").is_none(), "{system} must not be killed");
+            assert!(session_id_query(system).is_none(), "{system} must not be probed");
+        }
+    }
+
+    #[test]
+    fn probes_a_session_id_only_where_it_is_used() {
+        assert_eq!(session_id_query("postgres"), Some("SELECT pg_backend_pid()"));
+        assert_eq!(session_id_query("mysql"), Some("SELECT CONNECTION_ID()"));
+        assert_eq!(session_id_query("mariadb"), Some("SELECT CONNECTION_ID()"));
+    }
 
     #[test]
     fn detects_server_dropped_connection() {

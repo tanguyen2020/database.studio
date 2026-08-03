@@ -68,6 +68,7 @@ pub fn run() {
             commands::connections::ping_connection,
             // query
             commands::query::exec_statement,
+            commands::query::exec_statement_stream,
             commands::query::cancel_query,
             // redis
             commands::redis::redis_scan,

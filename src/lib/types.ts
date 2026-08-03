@@ -105,6 +105,9 @@ export interface ExecResponse {
   affected?: number
   error?: QueryError
   duration_ms: number
+  /** `execStatementStream` only: rows arrived over the chunk channel, so
+   *  `result.rows` is empty and the caller fills it from what it received. */
+  streamed?: boolean
 }
 
 export interface TestResult {

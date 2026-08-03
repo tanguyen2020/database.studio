@@ -50,6 +50,10 @@ export interface ExplainState {
 export interface TabExecution {
   running: boolean
   cancelled: boolean
+  /** Cancel was requested and we are waiting for the statement to unwind. */
+  cancelling: boolean
+  /** Rows received so far on the streaming path — progress for a big result. */
+  receivedRows: number
   subResults: SubResult[]
   messages: MessageEntry[]
   activeSub: number // index into subResults, or -1 for Messages
@@ -174,6 +178,8 @@ class ResultsStore {
     const seed: TabExecution = {
       running: true,
       cancelled: false,
+      cancelling: false,
+      receivedRows: 0,
       subResults: [],
       messages: [],
       activeSub: 0,
@@ -239,7 +245,17 @@ class ResultsStore {
               : undefined,
           }
         } else {
-          response = await ipc.execStatement(connId, stmt.sql, index)
+          // Large results come back in chunks so the webview's UI thread is never
+          // blocked by one huge payload — that block is what froze every other tab
+          // and made the Cancel button unclickable. Rows are accumulated in a
+          // plain array (never a $state proxy) and attached to the response.
+          const streamed: Record<string, unknown>[] = []
+          exec.receivedRows = 0
+          response = await ipc.execStatementStream(connId, stmt.sql, index, (chunk) => {
+            for (const row of chunk.rows) streamed.push(row)
+            exec.receivedRows = chunk.received
+          })
+          if (response.streamed && response.result) response.result.rows = streamed
         }
       } catch (e) {
         // IPC/infra-level failure (not a QueryError)
@@ -380,6 +396,7 @@ class ResultsStore {
     }
 
     exec.running = false
+    exec.cancelling = false
     if (!exec.cancelled && exec.subResults.every((s) => s.kind !== 'error')) {
       const n = exec.subResults.length
       toasts.success(`Ran ${n} statement(s) · ${exec.totalMs} ms`, profile.system)
@@ -410,12 +427,20 @@ class ResultsStore {
     }
   }
 
-  async cancel(tabId: string, connId: string) {
+  async cancel(tabId: string, connId?: string) {
     const exec = this.byTab[tabId]
     if (!exec?.running) return
+    // Cancel the connection the run actually went to. The caller's `connId` can
+    // still be the base profile id — a per-tab (`{base}#tab-…`) or per-database
+    // (`{base}::{db}`) connection is resolved asynchronously *after* Run is
+    // pressed — and cancelling the base id aborts nothing at all.
+    const target = exec.connId || connId
+    if (!target) return
+    exec.cancelling = true
     try {
-      await ipc.cancelQuery(connId)
+      await ipc.cancelQuery(target)
     } catch (e) {
+      exec.cancelling = false
       toasts.error(`Cancel failed: ${e}`)
     }
   }
