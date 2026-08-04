@@ -57,6 +57,21 @@ describe('installNativeMenuGuard', () => {
     expect(appMenuOpened).toBe(1)
   })
 
+  it("does not swallow the app's own context menus (bits-ui trigger contract)", () => {
+    // bits-ui's ContextMenuTriggerState.oncontextmenu bails out on an already
+    // prevented event, then opens the menu and prevents the default itself.
+    document.body.innerHTML = '<div id="row">students</div>'
+    dispose = installNativeMenuGuard()
+    let opened = 0
+    document.getElementById('row')!.addEventListener('contextmenu', (e) => {
+      if (e.defaultPrevented) return
+      opened++
+      e.preventDefault()
+    })
+    expect(rightClick(document.getElementById('row')!)).toBe(true) // no WebView menu
+    expect(opened).toBe(1) // …and the app menu did open
+  })
+
   it('the disposer removes the guard', () => {
     document.body.innerHTML = '<div id="row">students</div>'
     installNativeMenuGuard()()

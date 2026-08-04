@@ -20,8 +20,9 @@ document.documentElement.classList.toggle('dark', localStorage.getItem('theme') 
 
 // Desktop only: kill the WebView's browser page menu (Back/Refresh/Save as/Print/…)
 // so right-click shows the app's own menus. The browser build (demo + Playwright)
-// keeps the native menu.
-if (IS_TAURI) installNativeMenuGuard()
+// keeps the native menu; `?lockMenu=1` is a test seam so Playwright can prove the
+// app's own right-click menus still open with the guard installed.
+if (IS_TAURI || location.search.includes('lockMenu=1')) installNativeMenuGuard()
 
 // Browser-chrome shortcuts (Ctrl+R / F5 reload, Ctrl+S save-as, Ctrl+P print,
 // Ctrl+U view-source, F12 devtools) — blocked in the RELEASE desktop build only, so
