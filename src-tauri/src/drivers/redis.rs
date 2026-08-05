@@ -141,16 +141,15 @@ impl RedisDriver {
             .map_err(|e| err("DBSIZE error", e))
     }
 
-    /// SCAN cursor-based (KHÔNG dùng KEYS *) + TYPE + TTL cho từng key.
-    /// Trả (cursor kế tiếp, keys). cursor = 0 nghĩa là hết vòng.
-    pub async fn scan(
+    /// Một vòng SCAN thô: chỉ tên key (1 round-trip).
+    async fn scan_names(
         &mut self,
         pattern: &str,
         cursor: u64,
         count: usize,
-    ) -> Result<(u64, Vec<RedisKey>), QueryError> {
+    ) -> Result<(u64, Vec<String>), QueryError> {
         let pat = if pattern.is_empty() { "*" } else { pattern };
-        let (next, names): (u64, Vec<String>) = redis::cmd("SCAN")
+        redis::cmd("SCAN")
             .arg(cursor)
             .arg("MATCH")
             .arg(pat)
@@ -158,19 +157,63 @@ impl RedisDriver {
             .arg(count.max(1))
             .query_async(&mut self.conn)
             .await
-            .map_err(|e| err("SCAN error", e))?;
+            .map_err(|e| err("SCAN error", e))
+    }
 
-        let mut keys = Vec::with_capacity(names.len());
-        for name in names {
-            let key_type: String = redis::cmd("TYPE")
-                .arg(&name)
-                .query_async(&mut self.conn)
-                .await
-                .unwrap_or_else(|_| "none".into());
-            let ttl: i64 = redis::cmd("TTL").arg(&name).query_async(&mut self.conn).await.unwrap_or(-1);
-            keys.push(RedisKey { name, key_type, ttl });
+    /// TYPE + TTL cho CẢ batch key trong MỘT round-trip (redis pipeline).
+    /// Trước đây mỗi key tốn 2 round-trip tuần tự (2N cho N key) → key explorer
+    /// chậm tuyến tính theo latency; nay là 1 bất kể N.
+    /// `extra` là các lệnh phụ nối vào cuối cùng pipeline (vd DBSIZE) để không
+    /// tốn thêm round-trip; reply của chúng trả ở đuôi Vec.
+    async fn type_ttl_pipeline(
+        &mut self,
+        names: &[String],
+        extra: &[&str],
+    ) -> Result<Vec<redis::Value>, QueryError> {
+        if names.is_empty() && extra.is_empty() {
+            return Ok(Vec::new());
         }
-        Ok((next, keys))
+        let mut pipe = redis::pipe();
+        for name in names {
+            pipe.cmd("TYPE").arg(name);
+            pipe.cmd("TTL").arg(name);
+        }
+        for c in extra {
+            pipe.cmd(*c);
+        }
+        pipe.query_async(&mut self.conn)
+            .await
+            .map_err(|e| err("SCAN metadata (TYPE/TTL) error", e))
+    }
+
+    /// SCAN cursor-based (KHÔNG dùng KEYS *) + TYPE + TTL cho từng key.
+    /// Trả (cursor kế tiếp, keys). cursor = 0 nghĩa là hết vòng.
+    /// 2 round-trip/vòng (SCAN + 1 pipeline), không phụ thuộc số key.
+    pub async fn scan(
+        &mut self,
+        pattern: &str,
+        cursor: u64,
+        count: usize,
+    ) -> Result<(u64, Vec<RedisKey>), QueryError> {
+        let (next, names) = self.scan_names(pattern, cursor, count).await?;
+        let replies = self.type_ttl_pipeline(&names, &[]).await?;
+        Ok((next, zip_type_ttl(names, &replies)))
+    }
+
+    /// Như [`Self::scan`] nhưng DBSIZE đi kèm trong CÙNG pipeline (miễn phí một
+    /// round-trip) — đúng thứ mà key explorer cần mỗi vòng.
+    pub async fn scan_page(
+        &mut self,
+        pattern: &str,
+        cursor: u64,
+        count: usize,
+    ) -> Result<(u64, Vec<RedisKey>, u64), QueryError> {
+        let (next, names) = self.scan_names(pattern, cursor, count).await?;
+        let replies = self.type_ttl_pipeline(&names, &["DBSIZE"]).await?;
+        // DBSIZE là reply cuối; phần đầu là các cặp (TYPE, TTL).
+        let (meta, tail) = replies.split_at(replies.len().saturating_sub(1));
+        let dbsize = tail.first().and_then(as_i64).unwrap_or(0).max(0) as u64;
+        Ok((next, zip_type_ttl(names, meta), dbsize))
     }
 
     /// Đọc key: TYPE + TTL + giá trị theo đúng kiểu (GET/HGETALL/LRANGE/SMEMBERS/
@@ -341,6 +384,39 @@ impl RedisDriver {
     }
 }
 
+/// Đọc số nguyên từ reply (TTL/DBSIZE trả Int; một số proxy trả bulk string).
+fn as_i64(v: &redis::Value) -> Option<i64> {
+    match v {
+        redis::Value::Int(i) => Some(*i),
+        redis::Value::BulkString(b) => std::str::from_utf8(b).ok()?.trim().parse().ok(),
+        redis::Value::SimpleString(s) => s.trim().parse().ok(),
+        redis::Value::Double(d) => Some(*d as i64),
+        _ => None,
+    }
+}
+
+/// Ghép tên key với reply của pipeline `[TYPE k1, TTL k1, TYPE k2, TTL k2, …]`.
+/// Pipeline trả reply THEO ĐÚNG THỨ TỰ lệnh gửi, nên key thứ i lấy cặp (2i, 2i+1).
+/// Reply thiếu/không đọc được → giữ đúng fallback của bản tuần tự cũ: kiểu
+/// "none", TTL -1 (không hết hạn).
+fn zip_type_ttl(names: Vec<String>, replies: &[redis::Value]) -> Vec<RedisKey> {
+    names
+        .into_iter()
+        .enumerate()
+        .map(|(i, name)| {
+            let key_type = match replies.get(i * 2) {
+                Some(redis::Value::Nil) | None => "none".into(),
+                Some(v) => {
+                    let s = val_to_string(v);
+                    if s.is_empty() { "none".into() } else { s }
+                }
+            };
+            let ttl = replies.get(i * 2 + 1).and_then(as_i64).unwrap_or(-1);
+            RedisKey { name, key_type, ttl }
+        })
+        .collect()
+}
+
 /// Parse mảng XRANGE (Array of [id, [f,v,…]]) → StreamEntry[].
 fn parse_stream(raw: &redis::Value) -> Vec<StreamEntry> {
     let mut out = Vec::new();
@@ -463,4 +539,58 @@ pub struct RedisScan {
     pub cursor: u64,
     pub keys: Vec<RedisKey>,
     pub dbsize: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use redis::Value;
+
+    fn ty(s: &str) -> Value {
+        Value::SimpleString(s.into())
+    }
+
+    #[test]
+    fn zip_type_ttl_maps_each_key_to_its_own_pair_in_order() {
+        // Pipeline reply = [TYPE a, TTL a, TYPE b, TTL b, TYPE c, TTL c]
+        let names = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        let replies = vec![
+            ty("string"),
+            Value::Int(-1),
+            ty("hash"),
+            Value::Int(100),
+            ty("zset"),
+            Value::Int(-2),
+        ];
+        let keys = zip_type_ttl(names, &replies);
+        assert_eq!(keys.len(), 3);
+        assert_eq!((keys[0].name.as_str(), keys[0].key_type.as_str(), keys[0].ttl), ("a", "string", -1));
+        assert_eq!((keys[1].name.as_str(), keys[1].key_type.as_str(), keys[1].ttl), ("b", "hash", 100));
+        assert_eq!((keys[2].name.as_str(), keys[2].key_type.as_str(), keys[2].ttl), ("c", "zset", -2));
+    }
+
+    #[test]
+    fn zip_type_ttl_falls_back_like_the_old_sequential_path() {
+        // Missing / nil / unreadable replies must not shift the mapping or panic:
+        // type → "none", ttl → -1 (same as the per-key unwrap_or before pipelining).
+        let names = vec!["a".to_string(), "b".to_string()];
+        let replies = vec![Value::Nil, Value::Nil]; // only a's pair, both unusable
+        let keys = zip_type_ttl(names, &replies);
+        assert_eq!((keys[0].key_type.as_str(), keys[0].ttl), ("none", -1));
+        assert_eq!((keys[1].key_type.as_str(), keys[1].ttl), ("none", -1), "missing tail still yields a row");
+    }
+
+    #[test]
+    fn zip_type_ttl_on_empty_batch_is_empty() {
+        assert!(zip_type_ttl(Vec::new(), &[]).is_empty());
+    }
+
+    #[test]
+    fn as_i64_reads_the_integer_shapes_ttl_and_dbsize_come_back_as() {
+        assert_eq!(as_i64(&Value::Int(42)), Some(42));
+        assert_eq!(as_i64(&Value::BulkString(b"7".to_vec())), Some(7));
+        assert_eq!(as_i64(&Value::SimpleString("-1".into())), Some(-1));
+        assert_eq!(as_i64(&Value::Nil), None);
+        assert_eq!(as_i64(&Value::Okay), None);
+    }
 }

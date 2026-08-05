@@ -5900,6 +5900,172 @@ async fn redis_del_removes_key_and_scan_reflects_it() {
     eprintln!("CHK redis_del_removes_key_and_scan_reflects_it OK");
 }
 
+/// Key-explorer load path: `scan_page` fetches TYPE + TTL for the whole batch (plus
+/// DBSIZE) in ONE pipelined round-trip instead of 2·N sequential commands. Pipelines
+/// answer in send order, so the risk of the optimisation is a shifted mapping — this
+/// seeds every Redis type interleaved, each string with its OWN distinct TTL, and
+/// verifies each key still reports its own type and TTL across several SCAN pages.
+#[tokio::test]
+async fn redis_scan_page_pipelines_type_ttl_and_dbsize_without_mismatching_keys() {
+    use database_studio_lib::drivers::redis::{RedisConnParams, RedisDriver};
+    let (_c, port) = start_redis("test123").await;
+    let params = RedisConnParams { host: "localhost".into(), port, password: "test123".into(), db: 0, ssl: false, ssl_ca: String::new() };
+    let mut drv = retry("redis", || RedisDriver::connect(&params)).await;
+
+    // Seed: 30 of each type. Strings carry a unique TTL (100 + i) so any off-by-one
+    // in the pairing shows up as a wrong TTL, not just a wrong type.
+    const N: i64 = 30;
+    let mut expected: std::collections::HashMap<String, (&'static str, i64)> = std::collections::HashMap::new();
+    for i in 0..N {
+        let s = format!("str:{i:03}");
+        drv.command(&["SET".into(), s.clone(), format!("v{i}")]).await.unwrap();
+        drv.command(&["EXPIRE".into(), s.clone(), (100 + i).to_string()]).await.unwrap();
+        expected.insert(s, ("string", 100 + i));
+
+        let h = format!("hash:{i:03}");
+        drv.command(&["HSET".into(), h.clone(), "f".into(), "v".into()]).await.unwrap();
+        expected.insert(h, ("hash", -1));
+
+        let l = format!("list:{i:03}");
+        drv.command(&["RPUSH".into(), l.clone(), "a".into()]).await.unwrap();
+        expected.insert(l, ("list", -1));
+
+        let st = format!("set:{i:03}");
+        drv.command(&["SADD".into(), st.clone(), "m".into()]).await.unwrap();
+        expected.insert(st, ("set", -1));
+
+        let z = format!("z:{i:03}");
+        drv.command(&["ZADD".into(), z.clone(), "1".into(), "m".into()]).await.unwrap();
+        expected.insert(z, ("zset", -1));
+    }
+    let total = expected.len() as u64;
+
+    // Page through the keyspace with a small COUNT so several pipelines are exercised.
+    let mut seen = std::collections::HashMap::new();
+    let mut cursor = 0u64;
+    let mut pages = 0;
+    loop {
+        let (next, keys, dbsize) = drv.scan_page("*", cursor, 10).await.unwrap();
+        assert_eq!(dbsize, total, "DBSIZE rides along in the same pipeline");
+        for k in keys {
+            seen.insert(k.name, (k.key_type, k.ttl));
+        }
+        pages += 1;
+        cursor = next;
+        if cursor == 0 {
+            break;
+        }
+        assert!(pages < 100, "SCAN must terminate");
+    }
+    assert!(pages > 1, "small COUNT must span multiple pages, got {pages}");
+    assert_eq!(seen.len() as u64, total, "every seeded key surfaced");
+
+    for (name, (want_type, want_ttl)) in &expected {
+        let (got_type, got_ttl) = seen.get(name).unwrap_or_else(|| panic!("missing {name}"));
+        assert_eq!(got_type, want_type, "{name} kept its own TYPE");
+        if *want_ttl < 0 {
+            assert_eq!(*got_ttl, -1, "{name} has no expiry");
+        } else {
+            // TTL counts down; must be its own value (±2s), never a neighbour's.
+            assert!(
+                (*got_ttl - *want_ttl).abs() <= 2,
+                "{name} kept its own TTL: want ~{want_ttl}, got {got_ttl}"
+            );
+        }
+    }
+
+    // A pattern that matches nothing: MATCH filters AFTER the scan, so the cursor keeps
+    // walking the keyspace and pages come back empty — DBSIZE must still be reported
+    // (that page's pipeline holds only the DBSIZE command).
+    let mut cursor = 0u64;
+    let mut matched = 0usize;
+    loop {
+        let (next, keys, dbsize) = drv.scan_page("nothing-matches:*", cursor, 10).await.unwrap();
+        matched += keys.len();
+        assert_eq!(dbsize, total, "DBSIZE unaffected by MATCH, even on an empty page");
+        cursor = next;
+        if cursor == 0 {
+            break;
+        }
+    }
+    assert_eq!(matched, 0, "no key matches the pattern");
+
+    eprintln!("CHK redis_scan_page_pipelines_type_ttl_and_dbsize_without_mismatching_keys OK ({pages} pages, {total} keys)");
+}
+
+/// Bench (ignored): what the key-explorer load actually costs on a 5k keyspace, new
+/// pipelined path vs the old "TYPE + TTL per key, sequentially" path replayed here.
+/// Round-trips are what matters — on localhost each is ~0.05 ms, on a remote/tunnelled
+/// server 10–30 ms, so multiply the round-trip counts printed below by your RTT.
+/// Run: cargo test --test drivers_integration bench_redis_ -- --ignored --nocapture
+#[tokio::test]
+#[ignore]
+async fn bench_redis_scan_load_pipelined_vs_sequential() {
+    use database_studio_lib::drivers::redis::{RedisConnParams, RedisDriver};
+    use std::time::Instant;
+
+    let (_c, port) = start_redis("test123").await;
+    let params = RedisConnParams { host: "localhost".into(), port, password: "test123".into(), db: 0, ssl: false, ssl_ca: String::new() };
+    let mut drv = retry("redis", || RedisDriver::connect(&params)).await;
+
+    // seed 5000 keys (pipelined so seeding is not the bottleneck)
+    const N: usize = 5000;
+    let client = redis::Client::open(format!("redis://:test123@localhost:{port}/0")).unwrap();
+    let mut raw = client.get_multiplexed_async_connection().await.unwrap();
+    for chunk in (0..N).collect::<Vec<_>>().chunks(500) {
+        let mut pipe = redis::pipe();
+        for i in chunk {
+            pipe.cmd("SET").arg(format!("bench:{i:05}")).arg("v").ignore();
+        }
+        let _: () = pipe.query_async(&mut raw).await.unwrap();
+    }
+
+    // NEW: SCAN + one pipeline (TYPE/TTL batch + DBSIZE) per page — 2 round-trips/page.
+    let t0 = Instant::now();
+    let (mut cursor, mut got, mut pages) = (0u64, 0usize, 0u32);
+    loop {
+        let (next, keys, _dbsize) = drv.scan_page("*", cursor, 500).await.unwrap();
+        got += keys.len();
+        pages += 1;
+        cursor = next;
+        if cursor == 0 {
+            break;
+        }
+    }
+    let new_ms = t0.elapsed().as_millis();
+    let new_rt = pages * 2;
+
+    // OLD: SCAN, then TYPE and TTL awaited per key, plus a separate DBSIZE per page.
+    let t1 = Instant::now();
+    let (mut cursor, mut old_keys, mut old_pages) = (0u64, 0usize, 0u32);
+    loop {
+        let (next, names): (u64, Vec<String>) = redis::cmd("SCAN")
+            .arg(cursor).arg("MATCH").arg("*").arg("COUNT").arg(500)
+            .query_async(&mut raw).await.unwrap();
+        for name in &names {
+            let _t: String = redis::cmd("TYPE").arg(name).query_async(&mut raw).await.unwrap();
+            let _l: i64 = redis::cmd("TTL").arg(name).query_async(&mut raw).await.unwrap();
+        }
+        let _d: u64 = redis::cmd("DBSIZE").query_async(&mut raw).await.unwrap();
+        old_keys += names.len();
+        old_pages += 1;
+        cursor = next;
+        if cursor == 0 {
+            break;
+        }
+    }
+    let old_ms = t1.elapsed().as_millis();
+    let old_rt = old_pages * 2 + old_keys as u32 * 2;
+
+    assert_eq!(got, N, "new path returned every key");
+    assert_eq!(old_keys, N, "replayed old path saw the same keyspace");
+    eprintln!(
+        "BENCH redis load {N} keys: pipelined {new_ms} ms / {new_rt} round-trips ({pages} pages) \
+         vs sequential {old_ms} ms / {old_rt} round-trips — {:.0}x fewer round-trips",
+        old_rt as f64 / new_rt.max(1) as f64
+    );
+}
+
 // Task 4 — Design Table edit/delete across tabs: the DROP + ALTER COLUMN DDL that
 // buildTableDdl emits for an existing table runs on real PostgreSQL.
 #[tokio::test]

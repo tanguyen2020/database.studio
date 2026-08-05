@@ -36,8 +36,9 @@ pub async fn redis_scan(
             let mut d = driver.lock().await;
             match &mut *d {
                 LiveConnection::Redis(r) => {
-                    let (next, keys) = r.scan(&pattern, cursor, count).await?;
-                    let dbsize = r.dbsize().await?;
+                    // scan_page = SCAN + một pipeline (TYPE/TTL cả batch + DBSIZE) =
+                    // 2 round-trip/vòng, thay cho SCAN + 2·N + DBSIZE tuần tự.
+                    let (next, keys, dbsize) = r.scan_page(&pattern, cursor, count).await?;
                     Ok(RedisScan { cursor: next, keys, dbsize })
                 }
                 _ => Err(not_redis()),

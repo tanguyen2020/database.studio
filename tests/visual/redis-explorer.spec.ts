@@ -132,6 +132,114 @@ test('redis explorer: key context menu Delete + Refresh hit the server', async (
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
 
+// Load cost: mounting the key browser must SCAN once (two independent effects used to
+// fire in parallel → every load ran twice), and typing in the pattern box must be
+// debounced instead of re-scanning the whole keyspace on every keystroke.
+test('redis explorer: one SCAN on mount, debounced pattern box', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(String(e)))
+  await blockRemoteFonts(page)
+  await page.goto(APP_URL)
+  await page.waitForSelector('#app > *', { timeout: 15_000 })
+  await page.waitForTimeout(400)
+
+  const count = (c: string) =>
+    page.evaluate((k) => (window as unknown as { __ipcCalls?: Record<string, number> }).__ipcCalls?.[k] ?? 0, c)
+
+  await page.getByRole('button', { name: /Cache Redis 10\.0\.1\.7/ }).dblclick()
+  await expect(page.getByText(/SCAN ·/).first()).toBeVisible({ timeout: 8000 })
+  await page.waitForTimeout(700)
+  const onMount = await count('redis_scan')
+  expect(onMount, 'mount scans once, not once per effect').toBeLessThanOrEqual(1)
+
+  // six keystrokes → one reload after the last one (not six full scans)
+  await page.getByPlaceholder('pattern (e.g. user:*)').pressSequentially('user:*', { delay: 40 })
+  await page.waitForTimeout(700)
+  const whileTyping = (await count('redis_scan')) - onMount
+  expect(whileTyping, 'the pattern still triggers a reload').toBeGreaterThan(0)
+  expect(whileTyping, 'debounced: far fewer scans than keystrokes').toBeLessThanOrEqual(2)
+
+  expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
+})
+
+// Redis SCAN applies MATCH *after* reading hash buckets, so a narrow pattern on a big
+// keyspace exhausts the round cap while matching only a few keys. That must be visible
+// (partial badge) and continuable ("Scan more"), never a silently truncated list.
+test('redis explorer: partial scan is flagged and "Scan more" continues it', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(String(e)))
+  await blockRemoteFonts(page)
+  await page.goto(APP_URL)
+  await page.waitForSelector('#app > *', { timeout: 15_000 })
+  await page.waitForTimeout(400)
+
+  const count = (c: string) =>
+    page.evaluate((k) => (window as unknown as { __ipcCalls?: Record<string, number> }).__ipcCalls?.[k] ?? 0, c)
+
+  await page.getByRole('button', { name: /Cache Redis 10\.0\.1\.7/ }).dblclick()
+  await expect(page.getByText(/SCAN ·/).first()).toBeVisible({ timeout: 8000 })
+
+  // a keyspace the capped walk cannot finish → the badge appears with what it covered
+  await page.getByPlaceholder('pattern (e.g. user:*)').fill('big:')
+  await expect(page.getByText(/Partial scan/)).toBeVisible({ timeout: 8000 })
+  await expect(page.getByText(/walked ~25,000 of 200,040/)).toBeVisible()
+  const scanMore = page.getByText('Scan more ▸')
+  await expect(scanMore).toBeVisible()
+
+  // continuing picks up from the stored cursor: more SCANs, more keys, badge stays.
+  // Keys are `big:<n>` so the tree nests them under a "big" folder — expand it and
+  // count the leaf rows (segments like 000500).
+  await page.getByText('big', { exact: true }).first().click()
+  const leaf = page.getByText(/^\d{6}$/)
+  const rowsBefore = await leaf.count()
+  expect(rowsBefore, 'first walk collected one key per round').toBeGreaterThan(0)
+  const scansBefore = await count('redis_scan')
+  await scanMore.click()
+  await page.waitForTimeout(1000)
+  expect(await count('redis_scan'), 'Scan more issues further SCANs').toBeGreaterThan(scansBefore)
+  expect(await leaf.count(), 'more keys appended').toBeGreaterThan(rowsBefore)
+  await expect(page.getByText(/walked ~50,000 of 200,040/)).toBeVisible()
+
+  // a keyspace that finishes in one walk shows no badge at all (unchanged behaviour)
+  await page.getByPlaceholder('pattern (e.g. user:*)').fill('')
+  await expect(page.getByText('leaderboard').first()).toBeVisible({ timeout: 8000 })
+  await expect(page.getByText(/Partial scan/)).toHaveCount(0)
+  await expect(page.getByText('Scan more ▸')).toHaveCount(0)
+
+  expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
+})
+
+// Switching logical DB (db0 → db1) runs SELECT + a fresh SCAN while the tree still
+// shows the previous DB's keys — without a spinner that reads as "nothing happened".
+// `?slowRedis=<ms>` delays the Redis mocks so the in-flight state is observable.
+test('redis explorer: switching DB shows a scan indicator while it works', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(String(e)))
+  await blockRemoteFonts(page)
+  await page.goto(`${APP_URL}${APP_URL.includes('?') ? '&' : '?'}slowRedis=600`)
+  await page.waitForSelector('#app > *', { timeout: 15_000 })
+  await page.waitForTimeout(400)
+
+  await page.getByRole('button', { name: /Cache Redis 10\.0\.1\.7/ }).dblclick()
+
+  // the very first scan already reports activity, then settles into the key count
+  await expect(page.getByText(/Scanning db0…/)).toBeVisible({ timeout: 8000 })
+  await expect(page.getByText(/SCAN ·/).first()).toBeVisible({ timeout: 15_000 })
+  await expect(page.getByText('leaderboard').first()).toBeVisible()
+
+  // switch to db1 → indicator names the DB being scanned, picker is locked meanwhile
+  await page.getByLabel('Redis database').selectOption('1')
+  await expect(page.getByText(/Scanning db1…/)).toBeVisible({ timeout: 5000 })
+  await expect(page.getByLabel('Redis database')).toBeDisabled()
+
+  // …and it clears once the scan lands, leaving the normal key count
+  await expect(page.getByText(/SCAN ·/).first()).toBeVisible({ timeout: 15_000 })
+  await expect(page.getByText(/Scanning db/)).toHaveCount(0)
+  await expect(page.getByLabel('Redis database')).toBeEnabled()
+
+  expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
+})
+
 // Flush uses an in-app confirm dialog (window.prompt is unreliable in the Tauri
 // webview). Confirm must send FLUSHDB to the server (redis_flushdb).
 test('redis explorer: Flush opens an in-app confirm and runs FLUSHDB', async ({ page }) => {

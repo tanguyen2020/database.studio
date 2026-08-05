@@ -9,7 +9,7 @@
   import { explorer } from '$lib/stores/explorer.svelte'
   import { tabs } from '$lib/stores/tabs.svelte'
   import { toasts } from '$lib/stores/toast.svelte'
-  import { buildRedisTree, flattenRedisTree, keysUnderPrefix, type RedisKeyInfo } from '$lib/redis/tree'
+  import { buildRedisTree, flattenRedisTree, keysUnderPrefix, mergeRedisKeys, type RedisKeyInfo } from '$lib/redis/tree'
 
   interface Props {
     connId: string
@@ -53,54 +53,124 @@
       : null,
   )
 
+  // A SCAN round costs one IPC hop plus (server-side) two round-trips, so prefer
+  // fewer/larger rounds over many small ones. MAX_KEYS caps how much of the keyspace
+  // the sidebar materialises.
+  const SCAN_COUNT = 500
+  const MAX_KEYS = 5000
+  const MAX_ROUNDS = 50
+  /** Typing in the pattern box would otherwise re-scan the whole keyspace per keystroke. */
+  const TYPE_DEBOUNCE_MS = 250
+
+  // Where a capped scan stopped. Redis SCAN walks hash buckets and applies MATCH
+  // *after* reading them, so a narrow pattern on a huge keyspace can burn every round
+  // while matching only a few keys — the caps above then stop the walk before cursor
+  // reaches 0. Remember that cursor so the sidebar can say so and offer "Scan more"
+  // instead of silently showing a partial list.
+  let nextCursor = $state(0)
+  let scanned = $state(0) // buckets walked so far (≈ SCAN_COUNT per round)
+  let loadingMore = $state(false)
+  const partial = $derived(nextCursor !== 0)
+
+  // Generation guard: only the newest load may write state, and a superseded one
+  // stops scanning mid-way instead of burning round-trips on a result nobody wants.
+  let gen = 0
+
+  /** One capped walk from `cursor`; returns what it saw and where it stopped. */
+  async function walk(cursor: number, mine: number) {
+    const collected: RedisKeyInfo[] = []
+    let size = dbsize
+    let rounds = 0
+    for (let i = 0; i < MAX_ROUNDS; i++) {
+      const res = await ipc.redisScan(connId, pattern, cursor, SCAN_COUNT)
+      if (mine !== gen) return null // superseded by a newer load → abandon this scan
+      collected.push(...res.keys)
+      size = res.dbsize
+      cursor = res.cursor
+      rounds++
+      if (cursor === 0 || collected.length >= MAX_KEYS) break
+    }
+    return { collected, size, cursor, rounds }
+  }
+
   async function load() {
     if (!connId) return
+    const mine = ++gen
     loading = true
     error = null
     try {
-      const collected: RedisKeyInfo[] = []
-      let cursor = 0
-      let size = 0
-      for (let i = 0; i < 50; i++) {
-        const res = await ipc.redisScan(connId, pattern, cursor, 200)
-        collected.push(...res.keys)
-        size = res.dbsize
-        cursor = res.cursor
-        if (cursor === 0 || collected.length >= 5000) break
-      }
-      keys = collected
-      dbsize = size
+      const r = await walk(0, mine)
+      if (!r) return
+      keys = r.collected
+      dbsize = r.size
+      nextCursor = r.cursor
+      scanned = r.rounds * SCAN_COUNT
     } catch (e) {
-      error = String(e)
+      if (mine === gen) error = String(e)
     } finally {
-      loading = false
+      if (mine === gen) loading = false
     }
   }
 
-  // reload when connection or pattern changes (untrack: load writes state synchronously)
+  /** Continue the capped walk from where it stopped, appending to the current tree. */
+  async function scanMore() {
+    if (!connId || nextCursor === 0 || loadingMore) return
+    const mine = ++gen
+    loadingMore = true
+    error = null
+    try {
+      const r = await walk(nextCursor, mine)
+      if (!r) return
+      keys = mergeRedisKeys(keys, r.collected) // SCAN may repeat keys across rounds
+      dbsize = r.size
+      nextCursor = r.cursor
+      scanned += r.rounds * SCAN_COUNT
+    } catch (e) {
+      if (mine === gen) error = String(e)
+    } finally {
+      if (mine === gen) loadingMore = false
+    }
+  }
+
+  // Single reload trigger — connection, pattern, or a keyspace-mutation tick from a
+  // key-viewer tab (delete / add / TTL). One effect, so mounting scans once instead
+  // of twice. Pattern edits are debounced; connection changes and Refresh reload now.
+  let lastPattern = ''
+  let debounce: ReturnType<typeof setTimeout> | undefined
   $effect(() => {
     void connId
-    void pattern
-    untrack(() => void load())
+    const pat = pattern
+    void explorer.redisTick[connId]
+    const typing = pat !== lastPattern
+    lastPattern = pat
+    clearTimeout(debounce)
+    if (typing) debounce = setTimeout(() => untrack(() => void load()), TYPE_DEBOUNCE_MS)
+    else untrack(() => void load()) // untrack: load writes state synchronously
+    return () => clearTimeout(debounce)
   })
   $effect(() => {
     const cid = connId
     if (cid) untrack(() => void ipc.redisDatabaseCount(cid).then((n) => (dbCount = n)).catch(() => {}))
   })
-  // reload the key list when a key-viewer tab mutates the keyspace (delete/add/TTL)
-  $effect(() => {
-    void explorer.redisTick[connId]
-    untrack(() => void load())
-  })
+
+  // Switching logical DB = SELECT n + a fresh scan. Guarded against double-fire and
+  // surfaced through `busy` so the header shows activity (the tree still holds the
+  // previous DB's keys until the new scan lands, which would otherwise look frozen).
+  let switching = $state(false)
+  const busy = $derived(loading || loadingMore || switching)
 
   async function switchDb(e: Event) {
     const n = Number((e.currentTarget as HTMLSelectElement).value)
+    if (switching) return
     curDb = n
+    switching = true
     try {
       await ipc.redisSelectDb(connId, n)
       await load()
     } catch (err) {
       error = String(err)
+    } finally {
+      switching = false
     }
   }
 
@@ -235,10 +305,18 @@
   <!-- sticky header: DB selector + SCAN count + actions -->
   <div style="position:sticky;top:0;z-index:2;background:var(--surface);flex:none;padding:var(--px-8) var(--px-8) var(--px-6);border-bottom:var(--px-1) solid var(--border);display:flex;align-items:center;gap:var(--px-8);flex-wrap:wrap">
     <span style="font-size:var(--px-12);color:var(--text2)">DB</span>
-    <select value={curDb} onchange={switchDb} class="mono" title="Select logical database" aria-label="Redis database" style="font-size:var(--px-11);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-3) var(--px-6);color:var(--text);cursor:pointer;outline:none">
+    <select value={curDb} onchange={switchDb} disabled={switching} class="mono" title="Select logical database" aria-label="Redis database" style="font-size:var(--px-11);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-3) var(--px-6);color:var(--text);cursor:pointer;outline:none{switching ? ';opacity:.6' : ''}">
       {#each Array.from({ length: dbCount }, (_, i) => i) as n (n)}<option value={n}>db{n}</option>{/each}
     </select>
-    <span class="mono" style="font-size:var(--px-10_5);color:var(--muted)">SCAN · {dbsize} keys</span>
+    {#if busy}
+      <!-- Any scan in flight (mount, DB switch, pattern, Refresh, Scan more) shows a
+           spinning glyph so the sidebar never looks idle while it is working. -->
+      <span class="mono" aria-live="polite" style="font-size:var(--px-10_5);color:var(--primary);display:inline-flex;align-items:center;gap:var(--px-4)">
+        <span class="rx-spin" aria-hidden="true">⟳</span> Scanning db{curDb}…
+      </span>
+    {:else}
+      <span class="mono" style="font-size:var(--px-10_5);color:var(--muted)">SCAN · {dbsize} keys</span>
+    {/if}
     <span style="margin-left:auto;display:flex;gap:var(--px-8);align-items:center">
       <span onclick={openAdd} onkeydown={(e) => e.key === 'Enter' && openAdd()} role="button" tabindex="0" title="Add a new key" style="font-size:var(--px-10_5);color:var(--primary);cursor:pointer">＋ Key</span>
       <span onclick={() => tabs.openRedisPubSubTab(connId)} onkeydown={(e) => e.key === 'Enter' && tabs.openRedisPubSubTab(connId)} role="button" tabindex="0" title="Pub/Sub Monitor" style="font-size:var(--px-10_5);color:var(--primary);cursor:pointer">Pub/Sub ▸</span>
@@ -250,9 +328,29 @@
       class="mono"
       style="width:100%;background:var(--raised);border:var(--px-1) solid var(--border2);border-radius:var(--px-6);padding:var(--px-5) var(--px-8);font-size:var(--px-11_5);color:var(--text);outline:none"
     />
+    {#if partial}
+      <!-- The walk hit its cap before the cursor came back to 0: say so rather than
+           presenting a partial key list as if it were the whole match. -->
+      <div style="width:100%;display:flex;align-items:center;gap:var(--px-8);flex-wrap:wrap">
+        <span class="mono" style="font-size:var(--px-10_5);color:var(--sacc-amber)" title="Redis SCAN walks the keyspace in batches and applies the pattern afterwards, so a narrow pattern on a big keyspace needs several passes. Keys not yet walked are not shown.">
+          ⚠ Partial scan · walked ~{scanned.toLocaleString()} of {dbsize.toLocaleString()}
+        </span>
+        <span
+          onclick={scanMore}
+          onkeydown={(e) => e.key === 'Enter' && scanMore()}
+          role="button"
+          tabindex="0"
+          title="Continue scanning from where it stopped"
+          aria-busy={loadingMore}
+          style="font-size:var(--px-10_5);color:var(--primary);cursor:pointer;font-weight:600;{loadingMore ? 'opacity:.6;pointer-events:none' : ''}"
+        >{loadingMore ? 'Scanning…' : 'Scan more ▸'}</span>
+      </div>
+    {/if}
   </div>
 
-  <!-- key tree -->
+  <!-- key tree — dimmed while a scan is in flight: what is on screen still belongs to
+       the previous DB / pattern until the new result lands. -->
+  <div aria-busy={busy} style="min-height:0;{busy && rows.length ? 'opacity:.5' : ''}">
   {#if error}
     <div style="padding:var(--px-10);font-size:var(--px-11_5);color:var(--error)">{error}</div>
   {:else if loading && rows.length === 0}
@@ -306,6 +404,7 @@
       {/if}
     {/each}
   {/if}
+  </div>
 </div>
 
 {#if flushOpen}
@@ -401,6 +500,16 @@
 {/if}
 
 <style>
+  /* Scan-in-flight glyph (same affordance as the Explorer/Objects Refresh spinner). */
+  .rx-spin {
+    display: inline-block;
+    animation: rx-spin 900ms linear infinite;
+  }
+  @keyframes rx-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
   .eg-btn {
     font-size: var(--px-12);
     color: var(--text2);

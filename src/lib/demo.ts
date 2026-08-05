@@ -256,6 +256,18 @@ let demoKafkaTopics: DemoKafkaTopic[] = [
  * Mock trả lời cho từng IPC command khi không có Tauri runtime.
  * Chỉ đủ cho render/visual — thao tác ghi là no-op.
  */
+/**
+ * e2e seam (demo/browser only, like `?lockKeys=1`): `?slowRedis=<ms>` makes the Redis
+ * mocks answer after a delay so tests can observe in-flight indicators, which resolve
+ * instantly otherwise. Never active in Tauri — demoInvoke isn't used there.
+ */
+function redisLagMs(): number {
+  if (typeof window === 'undefined') return 0
+  const raw = new URLSearchParams(window.location.search).get('slowRedis')
+  const ms = raw ? Number(raw) : 0
+  return Number.isFinite(ms) && ms > 0 ? Math.min(ms, 2000) : 0
+}
+
 export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   // Test observability (demo/browser only): count IPC calls per command so e2e can
   // assert that actions like Refresh actually re-hit the backend. No effect in Tauri.
@@ -264,7 +276,9 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
     w.__ipcCalls = w.__ipcCalls ?? {}
     w.__ipcCalls[cmd] = (w.__ipcCalls[cmd] ?? 0) + 1
   }
-  const ok = (v: unknown) => Promise.resolve(v as T)
+  const lag = cmd.startsWith('redis_') ? redisLagMs() : 0
+  const ok = (v: unknown): Promise<T> =>
+    lag > 0 ? new Promise<T>((r) => setTimeout(() => r(v as T), lag)) : Promise.resolve(v as T)
   switch (cmd) {
     case 'list_connections':
       return ok(DEMO_PROFILES)
@@ -723,7 +737,19 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
       return ok(((args?.changes as unknown[]) ?? []).length)
     case 'exec_filtered':
       return demoInvoke('exec_statement', args)
-    case 'redis_scan':
+    case 'redis_scan': {
+      // A keyspace too large to finish in one capped walk: SCAN keeps handing back a
+      // non-zero cursor (MATCH is applied after the buckets are read), so the explorer
+      // stops at its round cap and must show the partial-scan badge + "Scan more".
+      const pat = (args?.pattern as string) ?? ''
+      if (pat.startsWith('big:')) {
+        const cur = (args?.cursor as number) ?? 0
+        return ok({
+          cursor: cur + 500,
+          dbsize: 200_040,
+          keys: [{ name: `big:${String(cur).padStart(6, '0')}`, key_type: 'string', ttl: -1 }],
+        })
+      }
       // port key store demo của prototype (user:*, session:*, cache:*)
       return ok({
         cursor: 0,
@@ -737,6 +763,7 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
           { name: 'leaderboard', key_type: 'zset', ttl: -1 },
         ],
       })
+    }
     case 'redis_get': {
       const key = (args?.key as string) ?? ''
       if (key.startsWith('user:'))
