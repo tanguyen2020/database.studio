@@ -333,9 +333,18 @@
   // unqualified name valid); MSSQL keeps the DB default so a picked non-default schema
   // still inserts qualified (schema.table) — correct, since MSSQL can't switch the
   // session default schema. Non-schema systems fall through to the DB default.
-  const defaultSchema = $derived(
-    tab.systemType === 'postgres' ? selectedSchema || dbDefaultSchema : dbDefaultSchema,
-  )
+  const defaultSchema = $derived.by(() => {
+    if (tab.systemType !== 'postgres' || !selectedSchema) return dbDefaultSchema
+    // The pick must exist on the connection the completion introspects. A schema
+    // carried over from another database (tab bound from the tree, then the attach
+    // fell back to the base connection) would otherwise become the anchor, and
+    // lang-sql hoists NO tables for an unknown schema — unqualified names then
+    // suggest nothing at all.
+    const cid = acConnId
+    const schemas = cid ? explorer.cache[cid]?.schemas : undefined
+    if (schemas && !schemas.some((s) => s.name === selectedSchema)) return dbDefaultSchema
+    return selectedSchema
+  })
 
   // ---- server function catalog (list_functions) --------------------------------
   // The live server's full function list (PG/SQLite/ClickHouse: built-ins +
@@ -402,7 +411,17 @@
   function colsOf(cid: string, schema: string, table: string): { name: string; data_type: string }[] | null {
     const cols = explorer.cache[cid]?.bySchema[schema]?.tableDetails[table]?.columns
     if (!cols) {
-      void explorer.loadTableDetail(cid, schema, table)
+      // Kick off the load and re-open the popup once it lands. The completion
+      // source must stay synchronous (a Promise leaves the popup pending, so
+      // Tab/Enter can't accept), so the columns of a server that answers in
+      // hundreds of ms would otherwise only show after the NEXT keystroke.
+      // Refresh only when columns actually arrived: a table that yields none
+      // (permission error, dropped table) must not retrigger the same lookup.
+      void explorer.loadTableDetail(cid, schema, table).then(() => {
+        if (explorer.cache[cid]?.bySchema[schema]?.tableDetails[table]?.columns?.length) {
+          editor?.refreshCompletion()
+        }
+      })
       return null
     }
     return cols

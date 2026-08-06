@@ -196,6 +196,30 @@ class ExplorerStore {
   async loadTableDetail(connId: string, schema: string, table: string, force = false) {
     const sc = this.schema(connId, schema)
     if (sc.tableDetails[table]?.columns && !force) return
+    // Coalesce concurrent requests for the same table. Autocomplete asks on every
+    // keystroke while the first answer is still in flight, and each call is 4
+    // round-trips (columns/indexes/constraints/partitions) — without this a few
+    // fast keystrokes queue dozens of duplicate queries and the columns land even
+    // later than they had to.
+    const flightKey = `${connId}|${schema}|${table}`
+    if (force) this.detailFlights.delete(flightKey)
+    const inFlight = this.detailFlights.get(flightKey)
+    if (inFlight) return inFlight
+    const run = this.loadTableDetailNow(connId, schema, table).finally(() => {
+      // Only clear the entry if it's still OURS: a forced reload replaces the map
+      // entry while the earlier request is still running, and a blind delete would
+      // drop the newer one (losing the dedupe, not correctness).
+      if (this.detailFlights.get(flightKey) === run) this.detailFlights.delete(flightKey)
+    })
+    this.detailFlights.set(flightKey, run)
+    return run
+  }
+
+  /** In-flight loadTableDetail promises, keyed conn|schema|table (see above). */
+  private detailFlights = new Map<string, Promise<void>>()
+
+  private async loadTableDetailNow(connId: string, schema: string, table: string) {
+    const sc = this.schema(connId, schema)
     await this.track(connId, `table:${schema}.${table}`, async () => {
       // allSettled, NOT Promise.all: index/constraint introspection can fail on some
       // engines/servers, and Promise.all would then discard the columns that loaded

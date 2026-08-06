@@ -33,6 +33,7 @@
     acceptCompletion,
     moveCompletionSelection,
     completionStatus,
+    startCompletion,
     closeBrackets,
     closeBracketsKeymap,
     completionKeymap,
@@ -100,6 +101,9 @@
   let container = $state<HTMLDivElement | null>(null)
   let view: EditorView | null = null
   const langCompartment = new Compartment()
+  /** Set when Escape closes the popup; cleared on the next edit. Keeps a late
+   *  column load (see refreshCompletion) from re-opening a dismissed popup. */
+  let completionDismissed = false
 
   function baseDialect(sys: string): SQLDialect {
     switch (sys) {
@@ -381,6 +385,7 @@
           {
             key: 'Escape',
             run: () => {
+              completionDismissed = true // don't let a late load re-open the popup
               onCancel?.()
               return false // let Esc also close panels etc.
             },
@@ -408,6 +413,7 @@
         ]),
         EditorView.updateListener.of((update) => {
           if (update.docChanged) {
+            completionDismissed = false // typing again re-arms completion
             onChange?.(update.state.doc.toString())
           }
         }),
@@ -421,6 +427,11 @@
   // → reconfigure lang: reload autocomplete (spec phase-1 §6 + phase-2 §1)
   $effect(() => {
     void schema
+    // Picking another schema must repoint unqualified completions. Today a cache
+    // mutation usually rebuilds anyway, but that is incidental — depend on the
+    // pick itself.
+    void defaultSchema
+    void system
     void dynamicFunctions // server functions arrived → rebuild the completion source
     view?.dispatch({ effects: langCompartment.reconfigure(langExt(system)) })
   })
@@ -430,6 +441,27 @@
   /** Focus the editor (e.g. when a fresh Query tab opens via Ctrl/Cmd+N). */
   export function focus() {
     view?.focus()
+  }
+
+  /** Re-run the completion sources because data they need has just arrived
+   *  (columns load lazily — the source returns null on the first call and kicks
+   *  off the fetch). Without this the popup stays empty until the user types
+   *  another character, which reads as "no column suggestions" on any server that
+   *  doesn't answer instantly.
+   *
+   *  Deliberately narrow, so a late background answer can only ever FILL the popup
+   *  the user was already waiting on — never open one they didn't ask for:
+   *   - the editor must have focus,
+   *   - Escape must not have dismissed completion since the last edit,
+   *   - the caret must sit right after an identifier char or a dot (the contexts
+   *     that suggest something). startCompletion() counts as an EXPLICIT request,
+   *     and an explicit request in empty space would dump the whole function
+   *     catalog on screen. */
+  export function refreshCompletion() {
+    if (!view?.hasFocus || completionDismissed) return
+    const pos = view.state.selection.main.head
+    if (!/[\w$.]/.test(view.state.sliceDoc(Math.max(0, pos - 1), pos))) return
+    startCompletion(view)
   }
 
   export function getDoc(): string {

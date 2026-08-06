@@ -261,12 +261,27 @@ let demoKafkaTopics: DemoKafkaTopic[] = [
  * mocks answer after a delay so tests can observe in-flight indicators, which resolve
  * instantly otherwise. Never active in Tauri — demoInvoke isn't used there.
  */
-function redisLagMs(): number {
+function lagFor(param: string): number {
   if (typeof window === 'undefined') return 0
-  const raw = new URLSearchParams(window.location.search).get('slowRedis')
+  const raw = new URLSearchParams(window.location.search).get(param)
   const ms = raw ? Number(raw) : 0
   return Number.isFinite(ms) && ms > 0 ? Math.min(ms, 2000) : 0
 }
+
+function redisLagMs(): number {
+  return lagFor('slowRedis')
+}
+
+/** Introspection commands the completion depends on. `?slowIntrospect=<ms>` delays
+ *  them so tests see what a real server looks like: columns arrive AFTER the
+ *  keystroke that asked for them (the demo answers in a microtask otherwise, which
+ *  hid the missing "refresh the popup once they land" step). */
+const SLOW_INTROSPECT = new Set([
+  'list_columns',
+  'list_indexes',
+  'list_constraints',
+  'list_partitions',
+])
 
 export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   // Test observability (demo/browser only): count IPC calls per command so e2e can
@@ -276,7 +291,11 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
     w.__ipcCalls = w.__ipcCalls ?? {}
     w.__ipcCalls[cmd] = (w.__ipcCalls[cmd] ?? 0) + 1
   }
-  const lag = cmd.startsWith('redis_') ? redisLagMs() : 0
+  const lag = cmd.startsWith('redis_')
+    ? redisLagMs()
+    : SLOW_INTROSPECT.has(cmd)
+      ? lagFor('slowIntrospect')
+      : 0
   const ok = (v: unknown): Promise<T> =>
     lag > 0 ? new Promise<T>((r) => setTimeout(() => r(v as T), lag)) : Promise.resolve(v as T)
   switch (cmd) {
@@ -340,7 +359,14 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
       if (schemaConn.endsWith('::analytics')) return ok([{ name: 'public', is_default: true }, { name: 'reporting', is_default: false }])
       return ok([{ name: 'public', is_default: true }])
     }
-    case 'list_tables':
+    case 'list_tables': {
+      // A non-default schema owns DIFFERENT tables — so tests can tell which schema
+      // the completion is anchored to (picking a schema must repoint suggestions).
+      if (String(args?.schema ?? '') === 'reporting')
+        return ok([
+          { name: 'report_daily', kind: 'table', row_estimate: 90, locked: false, engine: 'MergeTree', data_length: 8192 },
+          { name: 'report_monthly', kind: 'table', row_estimate: 12, locked: false, engine: 'MergeTree', data_length: 4096 },
+        ])
       return ok([
         { name: 'students', kind: 'table', row_estimate: 3842, locked: false, engine: 'MergeTree', data_length: 1114112 },
         { name: 'courses', kind: 'table', row_estimate: 214, locked: false, engine: 'ReplacingMergeTree', data_length: 65536 },
@@ -353,6 +379,7 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
         { name: 'vw_active_students', kind: 'view', row_estimate: null, locked: false, engine: 'MaterializedView' },
         { name: 'vw_recent_enrollments', kind: 'view', row_estimate: null, locked: false, engine: 'View' },
       ])
+    }
     case 'list_columns': {
       // Table-aware columns so the ER diagram shows real PK↔FK relationships:
       // enrollments holds FKs (student_id, course_id) referencing students.id /

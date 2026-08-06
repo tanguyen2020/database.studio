@@ -119,7 +119,8 @@ test('new query console binds a foreign database + its schema from an object row
   await page.waitForTimeout(800)
   await page.getByRole('treeitem', { name: /Tables/ }).last().getByRole('button').first().click()
   await page.waitForTimeout(800)
-  await page.getByRole('treeitem', { name: /\bstudents\b/ }).last().click()
+  // `reporting` owns its own tables in the demo (not the same set as `public`)
+  await page.getByRole('treeitem', { name: /\breport_daily\b/ }).last().click()
   await page.waitForTimeout(200)
 
   await page.getByTitle('New query console').click()

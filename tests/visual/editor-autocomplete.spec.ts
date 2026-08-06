@@ -121,6 +121,72 @@ async function columnPopup(page: import('@playwright/test').Page, text: string, 
   return tip.innerText()
 }
 
+// A real server answers list_columns in hundreds of ms, so the columns for
+// `alias.` land AFTER the keystroke that asked for them. The popup must pick them
+// up on its own — the user types the dot and waits, they do not type an extra
+// character to "wake" the suggestions. `?slowIntrospect` reproduces that timing
+// (the demo otherwise answers in a microtask, which hid this).
+async function openSlowSqlTab(page: import('@playwright/test').Page) {
+  await blockRemoteFonts(page)
+  await page.goto(`${APP_URL}?slowIntrospect=900`)
+  await page.waitForSelector('#app > *', { timeout: 15_000 })
+  await page.waitForTimeout(400)
+  await page.getByRole('button', { name: /Postgres/ }).first().click()
+  await page.waitForTimeout(400)
+  await page.getByTitle('New SQL tab (Ctrl+T)').first().click()
+  await page.waitForTimeout(600)
+}
+
+test('columns appear on their own when the server answers slowly (no extra keystroke)', async ({ page }) => {
+  await openSlowSqlTab(page)
+  await page.locator('.cm-content').first().click()
+  await page.keyboard.press('Control+A')
+  await page.keyboard.press('Delete')
+  await page.keyboard.type('SELECT * FROM students WHERE students.')
+  // stop typing — exactly what a user does — and let the lazy load finish
+  const tip = page.locator('.cm-tooltip-autocomplete')
+  await expect(tip).toBeVisible({ timeout: 6000 })
+  await expect(tip).toContainText('first_name', { timeout: 6000 })
+})
+
+test('bare column names appear on their own once the slow load lands', async ({ page }) => {
+  await openSlowSqlTab(page)
+  await page.locator('.cm-content').first().click()
+  await page.keyboard.press('Control+A')
+  await page.keyboard.press('Delete')
+  await page.keyboard.type('SELECT fir FROM students')
+  // put the caret back on the partial column word and stop
+  for (let i = 0; i < ' FROM students'.length; i++) await page.keyboard.press('ArrowLeft')
+  await page.keyboard.type('s')
+  const tip = page.locator('.cm-tooltip-autocomplete')
+  await expect(tip).toBeVisible({ timeout: 6000 })
+  await expect(tip).toContainText('first_name', { timeout: 6000 })
+})
+
+// The late-arriving columns may only FILL a popup the user is waiting on — they
+// must never open one that was dismissed or that the caret has moved away from.
+test('Escape stays closed when the slow column load lands', async ({ page }) => {
+  await openSlowSqlTab(page)
+  await page.locator('.cm-content').first().click()
+  await page.keyboard.press('Control+A')
+  await page.keyboard.press('Delete')
+  await page.keyboard.type('SELECT * FROM students WHERE students.')
+  await page.keyboard.press('Escape')
+  await page.waitForTimeout(2000) // columns land in ~900ms
+  await expect(page.locator('.cm-tooltip-autocomplete')).toHaveCount(0)
+})
+
+test('a late column load does not pop a menu open in empty space', async ({ page }) => {
+  await openSlowSqlTab(page)
+  await page.locator('.cm-content').first().click()
+  await page.keyboard.press('Control+A')
+  await page.keyboard.press('Delete')
+  await page.keyboard.type('SELECT * FROM students WHERE students.')
+  await page.keyboard.type(' ') // caret now sits after whitespace
+  await page.waitForTimeout(2000)
+  await expect(page.locator('.cm-tooltip-autocomplete')).toHaveCount(0)
+})
+
 // ---- function completion: full per-dialect catalog (not just the curated ~11) --
 
 test('PostgreSQL: suggests functions from the live server catalog (list_functions)', async ({ page }) => {
