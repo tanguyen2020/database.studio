@@ -16,6 +16,11 @@ use crate::storage::Storage;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        // In-app updates: the frontend checks GitHub Releases on start-up, and the
+        // user installs from a prompt (see src/lib/update.ts). `process` provides the
+        // relaunch that finishes the install.
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
             // Point ODPI-C at the bundled Oracle Instant Client (shipped as a Tauri
             // resource under `instantclient/`) so Oracle works without a system-wide

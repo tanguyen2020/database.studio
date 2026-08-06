@@ -8,6 +8,16 @@ name: Build beta (Windows / Ubuntu / macOS)
 # Trigger by hand from the Actions tab (Run workflow) or by pushing a tag like
 # `v0.1.0-beta.2`. Installers are uploaded as build artifacts on each run.
 #
+# Pushing a tag ALSO publishes a GitHub Release carrying the signed updater
+# artifacts and `latest.json`. That manifest is what the in-app updater reads
+# (see tauri.conf.json → plugins.updater.endpoints), so an installed app can
+# update itself instead of the user fetching an installer by hand.
+# Requires ONE repo secret — without it the build fails, because the config asks
+# for updater artifacts and they must be signed:
+#   TAURI_SIGNING_PRIVATE_KEY   contents of the minisign private key file
+# TAURI_SIGNING_PRIVATE_KEY_PASSWORD is only needed if the key was generated WITH
+# a password; ours has none, and an unset secret resolves to "" which is correct.
+#
 # macOS is UNSIGNED (no Apple Developer certificate) — testers open it past
 # Gatekeeper with `xattr -cr "/Applications/Database Studio.app"` on first launch.
 # The Oracle Instant Client is NOT bundled in this beta; Oracle connections fall
@@ -52,6 +62,9 @@ jobs:
               src-tauri/target/universal-apple-darwin/release/bundle/macos/*.app.tar.gz
 
     runs-on: ${{ matrix.os }}
+    # tauri-action creates/updates the GitHub Release when a tag is pushed.
+    permissions:
+      contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -105,8 +118,26 @@ jobs:
           # EMPTY value makes codesign try identity "" and fail, and skipping it
           # leaves the arm64 slice unrunnable. Ignored on Windows/Linux.
           APPLE_SIGNING_IDENTITY: "-"
+          # Signs the updater artifacts + latest.json. The app only installs an
+          # update whose signature matches the pubkey baked into tauri.conf.json.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           args: ${{ matrix.args }}
+          # On a tag push: publish (or add to) the release for that tag and upload
+          # the installers, the updater bundles and latest.json. On a manual run
+          # tagName is empty, so tauri-action just builds and the step below keeps
+          # uploading plain workflow artifacts as before.
+          tagName: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
+          releaseName: ${{ startsWith(github.ref, 'refs/tags/') && format('Database Studio {0}', github.ref_name) || '' }}
+          releaseBody: ${{ startsWith(github.ref, 'refs/tags/') && 'Installed copies of 0.1.0-beta.12 or newer offer this update in-app (Settings → Updates re-checks on demand). Earlier builds need a one-time manual install.' || '' }}
+          releaseDraft: false
+          # NOT marked as a pre-release on purpose: GitHub's `releases/latest`
+          # skips pre-releases, so the updater endpoint
+          # (releases/latest/download/latest.json) would 404 and no beta would
+          # ever see an update. The beta status is carried by the version/tag name.
+          prerelease: false
 
       - name: Upload installers
         uses: actions/upload-artifact@v4

@@ -3,8 +3,13 @@
   // Query/Data/Kafka/Shortcuts. Lưu vào SQLite (app_state) on-change. Reset defaults.
   import { settings } from '$lib/stores/settings.svelte'
   import { ui } from '$lib/stores/ui.svelte'
+  import { updater } from '$lib/stores/updater.svelte'
+  import { IS_TAURI } from '$lib/demo'
 
-  const sections = ['Appearance', 'Editor', 'Query', 'Data', 'Kafka', 'Connections', 'Shortcuts'] as const
+  // Injected by Vite from package.json — the version the updater compares against.
+  const APP_VERSION = __APP_VERSION__
+
+  const sections = ['Appearance', 'Editor', 'Query', 'Data', 'Kafka', 'Connections', 'Updates', 'Shortcuts'] as const
   let active = $state<(typeof sections)[number]>('Appearance')
 
   const s = $derived(settings.value)
@@ -82,6 +87,30 @@
             <label class="set-row">Acquire timeout (s) <input type="number" min="1" max="300" bind:value={s.poolAcquireSecs} onchange={save} class="set-inp" /></label>
             <label class="set-row">Connect retry attempts <input type="number" min="1" max="10" bind:value={s.connectRetryAttempts} onchange={save} class="set-inp" /></label>
             <label class="set-row">Retry backoff base (ms) <input type="number" min="10" max="60000" bind:value={s.connectRetryBackoffMs} onchange={save} class="set-inp" /></label>
+          {:else if active === 'Updates'}
+            <div class="set-row">
+              <span>Current version <span class="mono" style="color:var(--text)">{APP_VERSION}</span></span>
+              <button
+                onclick={() => void updater.checkManually()}
+                disabled={updater.checking || updater.installing || !IS_TAURI}
+                title={IS_TAURI ? 'Check GitHub for a newer release' : 'Updates are only available in the desktop app'}
+                class="set-inp"
+                style="width:auto;cursor:{updater.checking || !IS_TAURI ? 'default' : 'pointer'};opacity:{updater.checking || !IS_TAURI ? 0.6 : 1}"
+              >{updater.checking ? 'Checking…' : 'Check for updates'}</button>
+            </div>
+            <div style="font-size:var(--px-11_5);color:var(--muted)">
+              Database Studio checks for a new release when it starts and can install it
+              itself — you don't need to download an installer. Updates are signed; a
+              package that fails signature verification is rejected.
+            </div>
+            {#if updater.error}
+              <div style="font-size:var(--px-11_5);color:var(--error)">Last check failed: {updater.error}</div>
+            {/if}
+            {#if updater.skippedVersion}
+              <div style="font-size:var(--px-11_5);color:var(--muted)">
+                Skipped version: <span class="mono">{updater.skippedVersion}</span> — "Check for updates" offers it again.
+              </div>
+            {/if}
           {:else}
             <table style="border-collapse:collapse;font-size:var(--px-12);width:100%">
               <tbody>

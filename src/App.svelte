@@ -60,6 +60,8 @@
   import AddPartitionDialog from '$lib/components/AddPartitionDialog.svelte'
   import TruncateDialog from '$lib/components/TruncateDialog.svelte'
   import NewDatabaseDialog from '$lib/components/NewDatabaseDialog.svelte'
+  import UpdateDialog from '$lib/components/UpdateDialog.svelte'
+  import { updater } from '$lib/stores/updater.svelte'
   import DesignDocumentDialog from '$lib/components/DesignDocumentDialog.svelte'
   import NatsAddMessageDialog from '$lib/components/NatsAddMessageDialog.svelte'
   import NatsCreateStreamDialog from '$lib/components/NatsCreateStreamDialog.svelte'
@@ -83,6 +85,10 @@
       await connections.load()
       await tabs.restore()
       ready = true
+      // Check GitHub Releases once the app is usable. Silent: offline or a
+      // release without a manifest must never interrupt start-up, and a version
+      // the user skipped doesn't prompt again. No-op outside Tauri.
+      void updater.check({ silent: true })
     })()
 
     // flush tab state when the window closes
@@ -388,6 +394,7 @@
 <AddPartitionDialog />
 <TruncateDialog />
 <NewDatabaseDialog />
+<UpdateDialog />
 <DesignDocumentDialog />
 <NatsAddMessageDialog />
 <NatsCreateStreamDialog />
