@@ -128,6 +128,82 @@ describe('run — chunked delivery of a large result', () => {
   })
 })
 
+describe('run — a lost connection stops pretending to be open', () => {
+  const lost: ExecResponse = {
+    ok: false,
+    error: {
+      system: 'postgres',
+      code: 'CONNECTION_LOST',
+      message: 'Connection lost — the server closed it. Reconnect, then run again.',
+      severity: 'error',
+      raw: 'expected to read 5 bytes, got 0 bytes at EOF',
+    },
+    duration_ms: 2,
+  }
+
+  it('marks the profile closed so the sidebar dot and the Reconnect banner appear', async () => {
+    connections.profiles = [profile('c1', true)]
+    connections.connectErrors = {}
+    await results.run('tab-1', 'c1', [stmt('SELECT 1')])
+
+    const p = connections.byId('c1')!
+    expect(p.connected).toBe(false)
+    expect(p.latency_ms).toBeUndefined()
+    expect(connections.connectErrors['c1']).toMatch(/connection lost/i)
+    // still reported in the result panel as the failing statement
+    expect(results.get('tab-1')!.subResults[0].kind).toBe('error')
+  })
+
+  it('marks the BASE profile when the run used a per-tab connection', async () => {
+    connections.profiles = [profile('c1', true)]
+    connections.connectErrors = {}
+    await results.run('tab-1', 'c1#tab-tab-1', [stmt('SELECT 1')])
+    expect(connections.byId('c1')!.connected).toBe(false)
+    expect(connections.connectErrors['c1']).toBeTruthy()
+  })
+
+  it('forgets the transaction state — a new connection is not inside the old one', async () => {
+    connections.profiles = [profile('c1', true)]
+    results.txnOpen = { 'c1#tab-tab-1': true }
+    await results.run('tab-1', 'c1#tab-tab-1', [stmt('SELECT 1')])
+    expect(results.inTransaction('c1#tab-tab-1')).toBe(false)
+  })
+
+  it('also fires when the command rejects outright ("not connected")', async () => {
+    connections.profiles = [profile('c1', true)]
+    connections.connectErrors = {}
+    stream = async () => {
+      throw new Error('not connected: c1#tab-tab-1')
+    }
+    await results.run('tab-1', 'c1#tab-tab-1', [stmt('SELECT 1')])
+    expect(connections.byId('c1')!.connected).toBe(false)
+  })
+
+  it('leaves the connection open for an ordinary SQL error', async () => {
+    connections.profiles = [profile('c1', true)]
+    connections.connectErrors = {}
+    stream = async () => ({
+      ok: false,
+      error: {
+        system: 'postgres',
+        code: '42P01',
+        message: 'relation "nope" does not exist',
+        severity: 'error',
+        raw: '',
+      },
+      duration_ms: 1,
+    })
+    await results.run('tab-1', 'c1', [stmt('SELECT * FROM nope')])
+    expect(connections.byId('c1')!.connected).toBe(true)
+    expect(connections.connectErrors['c1']).toBeUndefined()
+  })
+
+  beforeEach(() => {
+    stream = async () => lost
+    results.txnOpen = {}
+  })
+})
+
 describe('cancel — targets the connection the run used', () => {
   it('cancels the per-tab connection, not the base profile id', async () => {
     connections.profiles = [profile('c1', true)]

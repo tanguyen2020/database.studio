@@ -180,6 +180,22 @@ class ConnectionsStore {
     }
   }
 
+  /** A live connection turned out to be dead (the server closed it while the
+   *  tab sat idle, a restart, a dropped tunnel). Flip the profile to closed and
+   *  remember why, so the sidebar dot goes red and every tab on it shows the
+   *  "Disconnected · Reconnect" banner — instead of a green dot next to a query
+   *  that keeps failing. `id` may be a derived id (`{base}::db`, `{base}#tab-…`).
+   *  Returns the base id that was marked. */
+  markLost(id: string, reason: string): string {
+    const base = baseConnId(id)
+    const profile = this.byId(base)
+    if (!profile || !profile.connected) return base
+    profile.connected = false
+    profile.latency_ms = undefined
+    this.connectErrors[base] = reason
+    return base
+  }
+
   async disconnect(id: string) {
     const profile = this.byId(id)
     try {

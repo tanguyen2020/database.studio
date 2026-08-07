@@ -272,6 +272,24 @@ function redisLagMs(): number {
   return lagFor('slowRedis')
 }
 
+/**
+ * e2e seam (demo/browser only): `?connLost=1` makes the NEXT statement fail the
+ * way a server-closed connection does — a `CONNECTION_LOST` QueryError, exactly
+ * what the backend returns once it cannot heal the socket behind the user's back
+ * (registry.rs). Reconnecting rearms nothing: the flag is consumed, so the run
+ * after Reconnect succeeds, which is the whole flow a test needs to walk.
+ */
+let connLostArmed: boolean | null = null
+function takeConnLost(): boolean {
+  if (connLostArmed === null) {
+    connLostArmed =
+      typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('connLost')
+  }
+  if (!connLostArmed) return false
+  connLostArmed = false
+  return true
+}
+
 /** Introspection commands the completion depends on. `?slowIntrospect=<ms>` delays
  *  them so tests see what a real server looks like: columns arrive AFTER the
  *  keystroke that asked for them (the demo answers in a microtask otherwise, which
@@ -677,6 +695,22 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
     case 'exec_statement': {
       // Collation unification (MySQL/MariaDB) — feed the audit dialog demo data.
       const stmtSql = String(args?.sql ?? '')
+      // Not on the session-setup `SET search_path` the PG editor sends before a
+      // run — the seam has to hit the user's statement.
+      if (!/^\s*SET\s/i.test(stmtSql) && takeConnLost()) {
+        return ok({
+          ok: false,
+          error: {
+            system: 'postgres',
+            code: 'CONNECTION_LOST',
+            message:
+              'Connection lost — the server closed it (idle timeout, restart, or a dropped network/SSH tunnel). Reconnect, then run again.',
+            severity: 'error',
+            raw: 'expected to read 5 bytes, got 0 bytes at EOF',
+          },
+          duration_ms: 2,
+        })
+      }
       // Perf harness hook: `SELECT * FROM perf_rows_<N>` returns N generated rows
       // with a wide, mostly-NULL schema (mirrors a real classes-grades export) so
       // the result-view performance test can load a genuine large set. Never typed

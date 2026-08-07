@@ -388,7 +388,7 @@
         {#if connections.connecting.has(p.id)}
           <span style="width:var(--px-7);height:var(--px-7);border-radius:50%;flex:none;background:var(--warn)" title="Connecting…"></span>
         {:else if connections.connectErrors[p.id] && !p.connected}
-          <span style="width:var(--px-7);height:var(--px-7);border-radius:50%;flex:none;background:var(--error)" title="Connect failed: {connections.connectErrors[p.id]}"></span>
+          <span style="width:var(--px-7);height:var(--px-7);border-radius:50%;flex:none;background:var(--error)" title="Not connected — {connections.connectErrors[p.id]}"></span>
         {:else}
           <span style="width:var(--px-7);height:var(--px-7);border-radius:50%;flex:none;background:{p.connected ? systemMeta(p.system).accent : 'var(--sys-orphan-accent)'}" title={p.connected ? `Connected · ${p.latency_ms ?? '–'} ms` : 'Disconnected'}></span>
         {/if}

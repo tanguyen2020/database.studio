@@ -121,22 +121,17 @@ pub async fn disconnect(state: State<'_, AppState>, id: String) -> Result<(), Ap
     state.kafka_stops.stop(&id);
     // Sweep internal per-database sub-connections (attach_database, `{id}::db`) AND
     // per-tab connections (open_tab_connection, `{id}#tab-…`) opened off this base.
-    let db_prefix = format!("{id}::");
-    let tab_prefix = format!("{id}#");
-    for sub in state
-        .registry
-        .connected_ids()
-        .into_iter()
-        .filter(|c| c.starts_with(&db_prefix) || c.starts_with(&tab_prefix))
-    {
-        let _ = state.registry.disconnect(&sub).await;
-    }
+    state.registry.drop_derived(&id).await;
     state.registry.disconnect(&id).await
 }
 
-/// Reconnect with the *saved* profile (used by "Save & Reconnect").
+/// Reconnect with the *saved* profile (used by "Save & Reconnect" and by the
+/// editor's "Reconnect" banner after a connection was lost).
 #[tauri::command]
 pub async fn reconnect(state: State<'_, AppState>, id: String) -> Result<u64, AppError> {
+    // Derived connections ({id}::db, {id}#tab-…) are opened off this base and
+    // are just as dead as it is — drop them so the next use opens a fresh one.
+    state.registry.drop_derived(&id).await;
     state.registry.disconnect(&id).await?;
     let profile = state.storage.get_connection(&id)?;
     let password = crypto::decrypt(&profile.password_enc)?;

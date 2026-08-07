@@ -2,6 +2,7 @@
 // sequential run (stop-at-error), cancel. Results are runtime-only state —
 // they are never persisted with the tab.
 
+import { isConnectionLost, lostReason } from '$lib/connection/lost'
 import * as ipc from '$lib/ipc'
 import type { SplitStatement } from '$lib/sql/statements'
 import { supportsTxn, txnEffect } from '$lib/sql/txn'
@@ -96,6 +97,16 @@ class ResultsStore {
     for (const id of Object.keys(this.txnOpen)) {
       if (baseOf(id) === baseOf(connId)) delete this.txnOpen[id]
     }
+  }
+
+  /** A statement failed because the connection is gone (idle timeout, server
+   *  restart, dropped tunnel — the backend types this as `CONNECTION_LOST`).
+   *  Mark the profile closed so the sidebar dot goes red and the tab shows its
+   *  Reconnect banner, and drop the transaction state we can no longer trust:
+   *  a new connection is never inside the old one's transaction. */
+  noteConnectionLost(connId: string, err: QueryError | string) {
+    connections.markLost(connId, lostReason(err))
+    this.clearTxn(connId)
   }
 
   get(tabId: string): TabExecution | undefined {
@@ -258,7 +269,10 @@ class ResultsStore {
           if (response.streamed && response.result) response.result.rows = streamed
         }
       } catch (e) {
-        // IPC/infra-level failure (not a QueryError)
+        // IPC/infra-level failure (not a QueryError) — a command that rejected
+        // before the statement ran ("not connected: …") also means the
+        // connection is gone, so it gets the same Reconnect treatment.
+        if (isConnectionLost(String(e))) this.noteConnectionLost(connId, String(e))
         const err: QueryError = {
           system: profile.system,
           statement_index: index,
@@ -389,6 +403,7 @@ class ResultsStore {
           exec.cancelled = true
           toasts.show('Query cancelled', { system: profile.system })
         } else {
+          if (isConnectionLost(err)) this.noteConnectionLost(connId, err)
           toasts.error(`#${index}: ${err.message}`, profile.system)
         }
         break // sequential execution stops at the failing statement

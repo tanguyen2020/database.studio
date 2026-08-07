@@ -6645,3 +6645,239 @@ async fn bench_sqlite_wide_100k() {
     eprintln!("BENCH wide sqlite    = {ms} ms  ({} rows x {} cols)", bench_rows(&out), match &out { StatementOutcome::Rows { result } => result.cols.len(), _ => 0 });
     let _ = std::fs::remove_file(&path);
 }
+
+/// A Query Editor tab that sat idle: the server closed its connection while
+/// nobody was looking, and the next Execute hits a dead socket. Two guarantees
+/// are proven here against a real server, because the reported symptom ("says
+/// the connection is lost, but the list still shows connected") is exactly what
+/// happens when neither one holds:
+///   1. a recoverable loss is healed behind the user's back — the statement is
+///      reconnected and re-run, and a write is applied exactly once;
+///   2. a loss that CANNOT be healed (server gone) comes back typed as
+///      `CONNECTION_LOST`, which is what makes the UI close the connection and
+///      offer Reconnect instead of showing a raw wire error next to a green dot.
+#[tokio::test]
+async fn pg_idle_connection_is_healed_and_a_dead_server_is_reported() {
+    use database_studio_lib::connections::profile::{
+        ConnectionProfile, Environment, SqliteMode, SshConfig,
+    };
+    use database_studio_lib::connections::registry::Registry;
+    use database_studio_lib::drivers::types::SystemType;
+
+    let (container, port) = start_pg().await;
+    let profile = ConnectionProfile {
+        id: "idle-tab".into(),
+        name: "idle".into(),
+        system: SystemType::Postgres,
+        host: "localhost".into(),
+        port,
+        database: "testdb".into(),
+        user: "postgres".into(),
+        password_enc: String::new(),
+        group: String::new(),
+        env: Environment::Development,
+        ssh: SshConfig::default(),
+        ssl: false,
+        ssl_ca: String::new(),
+        ssl_cert: String::new(),
+        ssl_key: String::new(),
+        sqlite_path: String::new(),
+        sqlite_mode: SqliteMode::ReadWrite,
+        mssql_auth: String::new(),
+        schema_registry_url: String::new(),
+        cassandra_dc: String::new(),
+        cassandra_consistency: String::new(),
+    };
+
+    let registry = Registry::default();
+    let deadline = Instant::now() + Duration::from_secs(240);
+    loop {
+        match registry.connect(profile.clone(), PASS.into(), String::new()).await {
+            Ok(_) => break,
+            Err(e) => {
+                assert!(Instant::now() < deadline, "connect hết 240s: {e:?}");
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+        }
+    }
+    registry
+        .exec_statement("idle-tab", "CREATE TABLE t_idle(id int)".into())
+        .await
+        .unwrap()
+        .expect("setup");
+
+    // A second connection plays the server: it terminates the tab's backend, the
+    // same thing an idle timeout / restart / dropped tunnel does to the socket.
+    let killer_params = PgConnParams {
+        host: "localhost".into(),
+        port,
+        database: "testdb".into(),
+        user: "postgres".into(),
+        password: PASS.into(),
+        ssl: false,
+        ssl_ca: String::new(),
+        ssl_cert: String::new(),
+        ssl_key: String::new(),
+    };
+    let mut killer = retry("pg killer", || PgDriver::connect(&killer_params)).await;
+    let kill_others = "SELECT pg_terminate_backend(pid) FROM pg_stat_activity \
+                       WHERE datname = 'testdb' AND pid <> pg_backend_pid()";
+    killer.exec(kill_others).await.expect("terminate the idle backend");
+
+    // 1a. A read after the drop just works — no error reaches the user.
+    let out = registry
+        .exec_statement("idle-tab", "SELECT 1 AS n".into())
+        .await
+        .unwrap()
+        .expect("a server-closed connection must be healed, not reported");
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    assert_eq!(result.rows[0]["n"], serde_json::json!(1));
+
+    // 1b. A write after the drop is applied EXACTLY once: the statement never
+    // reached the server before the retry, so healing cannot double-insert.
+    killer.exec(kill_others).await.expect("terminate again");
+    registry
+        .exec_statement("idle-tab", "INSERT INTO t_idle VALUES (7)".into())
+        .await
+        .unwrap()
+        .expect("write must survive a healed connection");
+    let out = registry
+        .exec_statement("idle-tab", "SELECT count(*) AS c FROM t_idle".into())
+        .await
+        .unwrap()
+        .unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    assert_eq!(result.rows[0]["c"], serde_json::json!(1), "the retry must not double-apply the write");
+
+    // 2. Server gone → nothing to heal. The error must be typed so the UI can
+    //    say "Connection lost" and show Reconnect.
+    drop(killer);
+    container.stop().await.expect("stop the postgres container");
+    let err = registry
+        .exec_statement("idle-tab", "SELECT 1".into())
+        .await
+        .unwrap()
+        .expect_err("a dead server must surface an error");
+    assert_eq!(
+        err.code.as_deref(),
+        Some("CONNECTION_LOST"),
+        "unhealable loss must be typed CONNECTION_LOST, got: {err:?}"
+    );
+    assert!(err.message.contains("Reconnect"), "message must point at the way out: {}", err.message);
+    assert!(!err.raw.is_empty(), "the wire text must be kept for View raw");
+}
+
+/// The reported scenario, reproduced end to end on a real server: a tab runs a
+/// query, sits idle past the server's `wait_timeout`, and the user presses
+/// Execute again. MySQL reaps the idle connection and answers the next statement
+/// with an ordinary error (4031 "disconnected … because of inactivity" / 2006
+/// "server has gone away") — no socket error at all — which is why this used to
+/// come back as an unrecoverable failure while the connection list still showed
+/// a green dot. The registry must heal it and run the statement.
+#[tokio::test]
+async fn mysql_idle_connection_past_wait_timeout_is_healed() {
+    use database_studio_lib::connections::profile::{
+        ConnectionProfile, Environment, SqliteMode, SshConfig,
+    };
+    use database_studio_lib::connections::registry::Registry;
+    use database_studio_lib::drivers::types::SystemType;
+
+    // 3-second idle limit — the real thing, just impatient.
+    let c = GenericImage::new("mysql", "8")
+        .with_exposed_port(3306.tcp())
+        .with_env_var("MYSQL_ROOT_PASSWORD", PASS)
+        .with_env_var("MYSQL_DATABASE", "testdb")
+        .with_cmd(vec!["--wait-timeout=3", "--interactive-timeout=3"])
+        .start()
+        .await
+        .expect("start mysql container");
+    let port = c.get_host_port_ipv4(3306).await.unwrap();
+
+    let profile = ConnectionProfile {
+        id: "my-idle".into(),
+        name: "idle".into(),
+        system: SystemType::Mysql,
+        host: "localhost".into(),
+        port,
+        database: "testdb".into(),
+        user: "root".into(),
+        password_enc: String::new(),
+        group: String::new(),
+        env: Environment::Development,
+        ssh: SshConfig::default(),
+        ssl: false,
+        ssl_ca: String::new(),
+        ssl_cert: String::new(),
+        ssl_key: String::new(),
+        sqlite_path: String::new(),
+        sqlite_mode: SqliteMode::ReadWrite,
+        mssql_auth: String::new(),
+        schema_registry_url: String::new(),
+        cassandra_dc: String::new(),
+        cassandra_consistency: String::new(),
+    };
+    let registry = Registry::default();
+    let deadline = Instant::now() + Duration::from_secs(240);
+    loop {
+        match registry.connect(profile.clone(), PASS.into(), String::new()).await {
+            Ok(_) => break,
+            Err(e) => {
+                assert!(Instant::now() < deadline, "mysql connect hết 240s: {e:?}");
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+        }
+    }
+
+    // The tab runs something, then the user walks away.
+    registry
+        .exec_statement("my-idle", "CREATE TABLE t_idle(id int)".into())
+        .await
+        .unwrap()
+        .expect("first statement");
+    let session_before = mysql_session_id(&registry).await;
+    tokio::time::sleep(Duration::from_secs(6)).await; // > wait_timeout
+
+    // Execute again — this is where it used to fail.
+    let out = registry
+        .exec_statement("my-idle", "SELECT 1 AS n".into())
+        .await
+        .unwrap()
+        .expect("an idle-reaped connection must be healed, not reported");
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    assert_eq!(result.rows[0]["n"], serde_json::json!(1));
+    // Proof this is not a vacuous pass: the statement ran on a DIFFERENT server
+    // session, i.e. the old one really was reaped and rebuilt underneath us.
+    let session_after = mysql_session_id(&registry).await;
+    assert_ne!(
+        session_before, session_after,
+        "the idle connection must have been replaced (same session id = the server never dropped it, \
+         so this test would prove nothing)"
+    );
+
+    // And a write after another idle stretch lands exactly once.
+    tokio::time::sleep(Duration::from_secs(6)).await;
+    registry
+        .exec_statement("my-idle", "INSERT INTO t_idle VALUES (1)".into())
+        .await
+        .unwrap()
+        .expect("write after an idle drop");
+    let out = registry
+        .exec_statement("my-idle", "SELECT count(*) AS c FROM t_idle".into())
+        .await
+        .unwrap()
+        .unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    assert_eq!(result.rows[0]["c"], serde_json::json!(1), "the retry must not double-apply the write");
+}
+
+/// Server-side session id of the live MySQL connection (a new id means the
+/// registry rebuilt the connection).
+async fn mysql_session_id(registry: &database_studio_lib::connections::registry::Registry) -> String {
+    let out = registry
+        .exec_statement("my-idle", "SELECT CONNECTION_ID() AS id".into())
+        .await
+        .unwrap()
+        .expect("session id");
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    result.rows[0]["id"].to_string()
+}

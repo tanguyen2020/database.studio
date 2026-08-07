@@ -53,6 +53,16 @@
   const profile = $derived(connections.byId(tab.connectionId))
   const isOrphan = $derived(tab.systemType === 'orphan' || (!!tab.connectionId && !profile))
   const disconnected = $derived(!!profile && !profile.connected)
+  // Why it is closed. Set when a run failed on a dead socket (results.noteConnectionLost)
+  // or when an Open Connection failed — so the banner explains itself instead of
+  // just saying "Disconnected" after a query that used to work.
+  const lostReasonText = $derived(profile ? connections.connectErrors[profile.id] : undefined)
+  const reconnecting = $derived(!!profile && connections.connecting.has(profile.id))
+  async function reconnectNow() {
+    if (!profile || reconnecting) return
+    const ok = await connections.reconnect(profile.id)
+    if (ok) toasts.success(`"${profile.name}" reconnected`, profile.system)
+  }
 
   // ---- database dropdown (AUDIT-5 items 1 + 10) --------------------------------
   // Query editor shows the active connection AND lets you pick a database within
@@ -866,17 +876,32 @@
       </div>
     </div>
   {:else if disconnected}
-    <!-- disconnected banner — SPEC_v2 §12 (không chặn nội dung) -->
-    <div style="flex:none;display:flex;align-items:center;gap:var(--px-8);padding:var(--px-6) var(--px-12);border-bottom:var(--px-1) solid var(--border);background:var(--panel);font-size:var(--px-12)">
-      <span style="width:var(--px-7);height:var(--px-7);border-radius:50%;background:var(--border2)"></span>
-      <span style="color:var(--text2)">Disconnected</span>
-      <div
-        onclick={() => profile && connections.connect(profile.id)}
-        onkeydown={(e) => e.key === 'Enter' && profile && connections.connect(profile.id)}
-        role="button"
-        tabindex="0"
-        style="margin-left:auto;color:var(--error);font-weight:700;cursor:pointer"
-      >Reconnect</div>
+    <!-- disconnected banner — SPEC_v2 §12 (không chặn nội dung).
+         Also the landing spot for a connection the server closed underneath us:
+         `results.noteConnectionLost` flips the profile to closed and stores the
+         reason, so a tab that was working an hour ago now says why it stopped
+         and offers one obvious way back. -->
+    <div
+      data-testid="disconnected-banner"
+      style="flex:none;display:flex;align-items:center;gap:var(--px-8);padding:var(--px-6) var(--px-12);border-bottom:var(--px-1) solid var(--border);background:var(--panel);font-size:var(--px-12)"
+    >
+      <span style="width:var(--px-7);height:var(--px-7);border-radius:50%;flex:none;background:{lostReasonText ? 'var(--error)' : 'var(--border2)'}"></span>
+      <span style="color:var(--text2);font-weight:600;flex:none">{lostReasonText ? 'Connection lost' : 'Disconnected'}</span>
+      {#if lostReasonText}
+        <span
+          style="color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+          title={lostReasonText}>· {lostReasonText}</span>
+      {/if}
+      <button
+        onclick={reconnectNow}
+        disabled={reconnecting}
+        aria-busy={reconnecting}
+        title="Open this connection again"
+        style="margin-left:auto;flex:none;display:flex;align-items:center;gap:var(--px-6);background:var(--raised);border:var(--px-1) solid var(--border2);border-radius:var(--px-6);padding:var(--px-3) var(--px-10);color:var(--error);font-weight:700;font-size:var(--px-12);cursor:{reconnecting ? 'default' : 'pointer'};opacity:{reconnecting ? 0.6 : 1}"
+      >
+        <span class:spin={reconnecting} style="display:inline-block">⟳</span>
+        {reconnecting ? 'Reconnecting…' : 'Reconnect'}
+      </button>
     </div>
   {/if}
 
@@ -1152,6 +1177,15 @@
 {/if}
 
 <style>
+  /* Reconnect in progress — same spinning-glyph idiom as the Refresh rule. */
+  .spin {
+    animation: wk-spin 900ms linear infinite;
+  }
+  @keyframes wk-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
   /* nút toolbar editor — dòng 255 */
   .wk-tbtn {
     display: flex;

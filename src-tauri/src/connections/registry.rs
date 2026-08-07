@@ -110,11 +110,80 @@ async fn run_statement_cancellable(
 /// True when an error message indicates the underlying socket was closed by the
 /// server (idle timeout, restart, NAT/firewall drop, dropped SSH tunnel) rather
 /// than a legitimate SQL error. Such a connection is dead and must be
-/// reconnected before the statement can succeed. Matches the sqlx/tiberius/etc.
-/// wire-level messages ("expected to read N bytes, got 0 bytes at EOF",
-/// "connection reset", Windows WSAECONNRESET 10054, …).
+/// reconnected before the statement can succeed.
+///
+/// Two families have to be covered, and only the first one used to be:
+///   * **wire-level** errors from the socket itself (sqlx/tiberius report the
+///     I/O failure: "expected to read N bytes, got 0 bytes at EOF",
+///     "connection reset", Windows WSAECONNRESET 10054, …);
+///   * **server-reported** disconnects, which arrive as a perfectly ordinary
+///     database error and therefore look like a SQL failure. This is what an
+///     idle tab hits in practice: MySQL answers a statement on a connection it
+///     already reaped with 4031 "The client was disconnected by the server
+///     because of inactivity" or 2006 "MySQL server has gone away", and Oracle
+///     with ORA-02396 / ORA-03113. Missing those is why "run again after a long
+///     pause" surfaced a raw, unrecoverable error instead of self-healing.
 fn is_connection_lost(msg: &str) -> bool {
     let m = msg.to_ascii_lowercase();
+    lost_before_send(&m) || lost_mid_statement(&m)
+}
+
+/// Dropped while the statement was in flight: recoverable, but not safely
+/// repeatable for a write (see `exec_statement`). Takes a lowercased message.
+fn lost_mid_statement(m: &str) -> bool {
+    m.contains("lost connection")
+        || m.contains("during query")
+        || m.contains("ora-03113") // end-of-file on communication channel
+        || m.contains("end-of-file on communication channel")
+        || m.contains("communication link failure")
+        || m.contains("transport error")
+}
+
+/// SQLSTATEs that mean *the server is closing this session*. PostgreSQL reports
+/// these as an ordinary database error — with a SQLSTATE and a message — just
+/// before it drops the socket, so a killed or idle-timed-out session never looks
+/// like an I/O failure at all. The session is gone and whatever was running was
+/// rolled back with it, which makes re-running safe.
+fn lost_by_sqlstate(code: Option<&str>) -> bool {
+    let Some(c) = code else { return false };
+    let c = c.to_ascii_uppercase();
+    c.starts_with("08")   // class 08 — connection exception
+        || c == "57P01"   // admin shutdown: pg_terminate_backend, server restart
+        || c == "57P02"   // crash shutdown
+        || c == "57P03"   // cannot connect now (server still starting)
+        || c == "57P05"   // idle_session_timeout — the idle-tab case
+        || c == "25P03"   // idle-in-transaction session timeout
+}
+
+/// What a failed statement says about the connection underneath it.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum Loss {
+    /// A genuine SQL failure — the connection is fine.
+    None,
+    /// The connection was already gone when the statement was sent (or the
+    /// server killed the session and rolled it back). Re-running is safe.
+    BeforeSend,
+    /// It died mid-flight: the server may already have applied the statement.
+    MidStatement,
+}
+
+fn classify_loss(qe: &QueryError) -> Loss {
+    let m = qe.message.to_ascii_lowercase();
+    if lost_before_send(&m) || lost_by_sqlstate(qe.code.as_deref()) {
+        Loss::BeforeSend
+    } else if lost_mid_statement(&m) {
+        Loss::MidStatement
+    } else {
+        Loss::None
+    }
+}
+
+/// Subset of [`is_connection_lost`]: signals that the connection was **already
+/// dead before the statement could reach the server**. Re-running the statement
+/// after reconnecting therefore cannot apply a write twice.
+///
+/// Takes an already-lowercased message.
+fn lost_before_send(m: &str) -> bool {
     m.contains("bytes at eof")
         || m.contains("expected to read")
         || m.contains("connection reset")
@@ -123,9 +192,52 @@ fn is_connection_lost(msg: &str) -> bool {
         || m.contains("connection was closed")
         || m.contains("connection is closed")
         || m.contains("server closed the connection")
+        || m.contains("no connection to the server")
         || m.contains("unexpected end of file")
         || m.contains("10054") // WSAECONNRESET
         || m.contains("10053") // WSAECONNABORTED
+        || m.contains("os error 104") // ECONNRESET
+        || m.contains("os error 32") // EPIPE
+        // MySQL / MariaDB reap an idle connection and say so on the next use.
+        || m.contains("server has gone away")
+        || m.contains("disconnected by the server because of inactivity")
+        // PostgreSQL says goodbye in words before closing the socket
+        // (57P01 admin shutdown, 57P05 idle_session_timeout, shutdown/restart).
+        || m.contains("terminating connection due to")
+        || m.contains("database system is shutting down")
+        // Oracle: idle-time profile limit, session killed, no longer logged on.
+        || m.contains("ora-02396")
+        || m.contains("ora-03114")
+        || m.contains("ora-00028")
+        || m.contains("ora-01012")
+        || m.contains("dpi-1080")
+}
+
+/// Statements with no side effects, which are safe to re-run after *any* kind of
+/// connection loss — including one that happened mid-statement, where we cannot
+/// know whether the server had already applied it.
+fn is_read_only(sql: &str) -> bool {
+    matches!(
+        crate::drivers::util::leading_verb(sql).as_str(),
+        "SELECT" | "SHOW" | "EXPLAIN" | "DESCRIBE" | "DESC" | "PRAGMA"
+    )
+}
+
+/// The error the UI gets when a connection is gone and could not be healed
+/// behind the user's back. Carries the `CONNECTION_LOST` code so the frontend
+/// can mark the connection closed and offer Reconnect, instead of showing a raw
+/// wire message next to a still-green "connected" dot.
+pub fn connection_lost_error(system: &str, raw: &str, mid_statement: bool) -> QueryError {
+    let message = if mid_statement {
+        "Connection lost while the statement was running — it may or may not have been applied. \
+         Reconnect, check the data, then run it again."
+    } else {
+        "Connection lost — the server closed it (idle timeout, restart, or a dropped network/SSH \
+         tunnel). Reconnect, then run again."
+    };
+    let mut qe = QueryError::new(system, message, raw);
+    qe.code = Some("CONNECTION_LOST".into());
+    qe
 }
 
 impl Registry {
@@ -168,9 +280,26 @@ impl Registry {
         password: String,
         ssh_password: String,
     ) -> AppResult<u64> {
-        // Already connected → no-op (idempotent).
+        // Already connected → no-op (idempotent) — but only if the socket is
+        // actually alive. A registry entry outlives the connection the server
+        // reaped underneath it, and returning that stale entry made "Reconnect"
+        // a silent no-op that reported success while every statement kept
+        // failing. Ping first; a dead entry is rebuilt in place.
         if self.is_connected(&profile.id) {
-            return Ok(self.latency(&profile.id).unwrap_or(0));
+            if self.ping(&profile.id).await {
+                return Ok(self.latency(&profile.id).unwrap_or(0));
+            }
+            let started = std::time::Instant::now();
+            self.reconnect(&profile.id).await?;
+            let latency = started.elapsed().as_millis() as u64;
+            // Per-database (`{id}::db`) and per-tab (`{id}#tab-…`) connections
+            // were dropped by the same idle timeout / restart; forget them so the
+            // next use opens a fresh one instead of reviving a dead id.
+            self.drop_derived(&profile.id).await;
+            if let Some(e) = self.entries.lock().unwrap().get_mut(&profile.id) {
+                e.latency_ms = Some(latency);
+            }
+            return Ok(latency);
         }
 
         let started = std::time::Instant::now();
@@ -240,6 +369,23 @@ impl Registry {
         Ok(())
     }
 
+    /// Drops the connections derived from a base one: per-database
+    /// (`{id}::db`, attach_database) and per-tab (`{id}#tab-…`) sockets. They
+    /// share the base's fate — an idle timeout or a server restart kills them
+    /// all — so they must not survive the base being rebuilt.
+    pub async fn drop_derived(&self, id: &str) {
+        let db_prefix = format!("{id}::");
+        let tab_prefix = format!("{id}#");
+        let derived: Vec<String> = self
+            .connected_ids()
+            .into_iter()
+            .filter(|c| c.starts_with(&db_prefix) || c.starts_with(&tab_prefix))
+            .collect();
+        for sub in derived {
+            let _ = self.disconnect(&sub).await;
+        }
+    }
+
     pub async fn disconnect_all(&self) {
         let ids = self.connected_ids();
         for id in ids {
@@ -303,9 +449,19 @@ impl Registry {
     ///
     /// If the statement fails because the server closed the connection (idle
     /// timeout / restart / dropped tunnel — see `is_connection_lost`), the dead
-    /// connection is transparently reconnected and the statement retried once.
-    /// An idle connection the server dropped never received the statement, so
-    /// the single retry cannot double-apply a write.
+    /// connection is transparently reconnected and the statement retried once,
+    /// so the common "came back to a tab hours later and pressed Run" case just
+    /// works.
+    ///
+    /// The retry is deliberately not unconditional. It is safe when the
+    /// connection was already dead before the statement was sent
+    /// ([`lost_before_send`]) — the server never saw it — or when the statement
+    /// has no side effects ([`is_read_only`]). A write that died *mid-flight*
+    /// may already have been applied, so it is reported instead of silently
+    /// replayed.
+    ///
+    /// Anything that cannot be healed comes back as `CONNECTION_LOST`, which the
+    /// UI turns into a "Reconnect" affordance rather than a cryptic wire error.
     pub async fn exec_statement(
         &self,
         id: &str,
@@ -313,17 +469,33 @@ impl Registry {
     ) -> AppResult<Result<crate::drivers::types::StatementOutcome, QueryError>> {
         self.heal_if_poisoned(id).await?;
         let first = self.run_tracked(id, sql.clone()).await?;
-        if let Err(qe) = &first {
-            // Do not retry a user cancellation (poisoned + handled above).
-            if qe.code.as_deref() != Some("CANCELLED") && is_connection_lost(&qe.message) {
-                if self.reconnect(id).await.is_ok() {
-                    return self.run_tracked(id, sql).await;
-                }
-                // Reconnect failed — leave it poisoned so the next use retries.
-                self.poison(id);
-            }
+        let Err(qe) = &first else { return Ok(first) };
+        // A user cancellation poisons the connection on purpose (handled above).
+        let loss = classify_loss(qe);
+        if qe.code.as_deref() == Some("CANCELLED") || loss == Loss::None {
+            return Ok(first);
         }
-        Ok(first)
+
+        let system = self.system_of(id).unwrap_or_else(|| "unknown".into());
+        let raw = qe.message.clone();
+        let mid_statement = loss == Loss::MidStatement;
+        if (!mid_statement || is_read_only(&sql)) && self.reconnect(id).await.is_ok() {
+            let second = self.run_tracked(id, sql).await?;
+            return match &second {
+                // Still dead after a fresh connection: the server/tunnel is down,
+                // not just this socket. Say so plainly.
+                Err(qe2) if classify_loss(qe2) != Loss::None => {
+                    let raw2 = qe2.message.clone();
+                    self.poison(id);
+                    Ok(Err(connection_lost_error(&system, &raw2, false)))
+                }
+                _ => Ok(second),
+            };
+        }
+        // Not retried (a write of unknown outcome), or the reconnect failed:
+        // leave it poisoned so the next use reconnects first.
+        self.poison(id);
+        Ok(Err(connection_lost_error(&system, &raw, mid_statement)))
     }
 
     /// Runs one statement on the live connection with cancellation tracking.
@@ -486,13 +658,17 @@ impl Registry {
         let res = f(driver).await;
         // The closure is FnOnce (can't retry in place), but if the socket died
         // we poison the connection so the next call reconnects first — a Refresh
-        // then succeeds instead of failing forever on a dead connection.
-        if let Err(qe) = &res {
-            if is_connection_lost(&qe.message) {
+        // then succeeds instead of failing forever on a dead connection. The
+        // error is re-typed as CONNECTION_LOST so the UI offers Reconnect here
+        // too (introspection after an idle pause hits exactly this path).
+        match res {
+            Err(qe) if classify_loss(&qe) != Loss::None => {
                 self.poison(id);
+                let system = self.system_of(id).unwrap_or_else(|| qe.system.clone());
+                Ok(Err(connection_lost_error(&system, &qe.message, false)))
             }
+            other => Ok(other),
         }
-        Ok(res)
     }
 
     /// Params để mở connection Redis phụ (pub/sub) — lấy endpoint/password/db/ssl
@@ -558,7 +734,17 @@ impl Registry {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_connection_lost, kill_statement, session_id_query};
+    use super::{
+        classify_loss, connection_lost_error, is_connection_lost, is_read_only, kill_statement,
+        lost_before_send, session_id_query, Loss,
+    };
+    use crate::error::QueryError;
+
+    fn err(code: Option<&str>, message: &str) -> QueryError {
+        let mut qe = QueryError::new("postgres", message, message);
+        qe.code = code.map(|c| c.to_string());
+        qe
+    }
 
     #[test]
     fn cancels_the_query_not_the_session_where_possible() {
@@ -606,5 +792,102 @@ mod tests {
         assert!(!is_connection_lost("syntax error at or near \"slect\""));
         assert!(!is_connection_lost("permission denied for table students"));
         assert!(!is_connection_lost("duplicate key value violates unique constraint"));
+    }
+
+    #[test]
+    fn detects_the_disconnect_the_server_reports_as_a_plain_error() {
+        // The idle-tab case: the server reaped the connection and answers the
+        // next statement with an ordinary database error, not an I/O failure.
+        // Missing these is what left the editor with an unrecoverable error
+        // while the connection list still showed a green dot.
+        for msg in [
+            "The client was disconnected by the server because of inactivity. See wait_timeout \
+             and interactive_timeout for configuring this behavior.",
+            "MySQL server has gone away",
+            "ORA-02396: exceeded maximum idle time, please connect again",
+            "ORA-03114: not connected to ORACLE",
+            "ORA-00028: your session has been killed",
+            "DPI-1080: connection was closed by ORA-3113",
+        ] {
+            assert!(is_connection_lost(msg), "must be recognised: {msg}");
+            // Dead before the statement was sent → replaying it is safe.
+            assert!(lost_before_send(&msg.to_ascii_lowercase()), "must be safe to retry: {msg}");
+        }
+    }
+
+    #[test]
+    fn a_mid_statement_drop_is_recoverable_but_not_replayable() {
+        // The server may already have applied the statement, so a write must be
+        // reported rather than silently re-run (`exec_statement`).
+        for msg in [
+            "Lost connection to MySQL server during query",
+            "ORA-03113: end-of-file on communication channel",
+            "Communication link failure",
+        ] {
+            assert!(is_connection_lost(msg), "must be recognised: {msg}");
+            assert!(!lost_before_send(&msg.to_ascii_lowercase()), "must not be replayed: {msg}");
+        }
+    }
+
+    #[test]
+    fn only_side_effect_free_statements_are_replayable_after_a_mid_query_drop() {
+        assert!(is_read_only("SELECT * FROM students"));
+        assert!(is_read_only("  -- comment\n  select 1"));
+        assert!(is_read_only("SHOW TABLES"));
+        assert!(is_read_only("EXPLAIN SELECT 1"));
+        for sql in [
+            "INSERT INTO t VALUES (1)",
+            "UPDATE t SET a = 1",
+            "DELETE FROM t",
+            "CALL p_charge_customer(1)",
+            "WITH x AS (INSERT INTO t VALUES (1) RETURNING id) SELECT * FROM x",
+            "CREATE TABLE t (id int)",
+        ] {
+            assert!(!is_read_only(sql), "must not be replayed: {sql}");
+        }
+    }
+
+    #[test]
+    fn detects_the_session_the_server_terminates_with_a_sqlstate() {
+        // PostgreSQL kills a session (pg_terminate_backend, restart,
+        // idle_session_timeout) by sending a normal database error first — the
+        // socket error never arrives. Found by the integration test: without
+        // this the statement failed with a raw 57P01 instead of self-healing.
+        for (code, msg) in [
+            ("57P01", "terminating connection due to administrator command"),
+            ("57P05", "terminating connection due to idle-session timeout"),
+            ("25P03", "terminating connection due to idle-in-transaction session timeout"),
+            ("08006", "connection failure"),
+            ("08003", "connection does not exist"),
+        ] {
+            // The session is gone and its work was rolled back → safe to re-run.
+            assert_eq!(classify_loss(&err(Some(code), msg)), Loss::BeforeSend, "{code}");
+        }
+        // The message alone is enough when the driver reports no SQLSTATE.
+        assert_eq!(
+            classify_loss(&err(None, "terminating connection due to administrator command")),
+            Loss::BeforeSend
+        );
+    }
+
+    #[test]
+    fn classifies_a_plain_sql_error_as_no_loss() {
+        assert_eq!(classify_loss(&err(Some("42P01"), "relation \"foo\" does not exist")), Loss::None);
+        assert_eq!(classify_loss(&err(Some("23505"), "duplicate key value")), Loss::None);
+        assert_eq!(
+            classify_loss(&err(Some("HY000"), "Lost connection to MySQL server during query")),
+            Loss::MidStatement
+        );
+    }
+
+    #[test]
+    fn connection_lost_error_is_typed_and_keeps_the_wire_text() {
+        let qe = connection_lost_error("postgres", "expected to read 5 bytes, got 0 bytes at EOF", false);
+        assert_eq!(qe.code.as_deref(), Some("CONNECTION_LOST"));
+        assert!(qe.message.contains("Reconnect"), "{}", qe.message);
+        assert!(qe.raw.contains("0 bytes at EOF"));
+        // A write that died mid-flight says so instead of implying nothing ran.
+        let mid = connection_lost_error("mysql", "Lost connection during query", true);
+        assert!(mid.message.contains("may or may not have been applied"), "{}", mid.message);
     }
 }
