@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { APP_URL, blockRemoteFonts } from './helpers'
+import { APP_URL, blockRemoteFonts, openDatabaseNode } from './helpers'
 
 // Item 1 — Ctrl/Cmd+N opens a new Query Editor tab.
 test('Ctrl+N opens a new query editor tab', async ({ page }) => {
@@ -11,6 +11,7 @@ test('Ctrl+N opens a new query editor tab', async ({ page }) => {
   await page.waitForTimeout(300)
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(200)
+  await openDatabaseNode(page)
   const before = await page.getByRole('tab').count()
   await page.keyboard.press('Control+n')
   await page.waitForTimeout(300)
@@ -29,6 +30,7 @@ test('Run executes the selected statement only', async ({ page }) => {
   await page.waitForTimeout(300)
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(200)
+  await openDatabaseNode(page)
   await page.getByTitle('New SQL tab (Ctrl+T)').first().click()
   await page.waitForTimeout(200)
   await page.locator('.cm-content').first().click()
@@ -80,6 +82,7 @@ test('function context menu has Execute, Alter, Drop', async ({ page }) => {
   await page.waitForTimeout(300)
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(500)
+  await openDatabaseNode(page)
   await page.getByText('public', { exact: true }).first().dblclick()
   await page.waitForTimeout(300)
   await page.getByText('Functions', { exact: true }).first().dblclick()
@@ -102,6 +105,7 @@ test('closing a dirty query tab prompts to save', async ({ page }) => {
   await page.waitForTimeout(300)
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(200)
+  await openDatabaseNode(page)
   await page.getByTitle('New SQL tab (Ctrl+T)').first().click()
   await page.waitForTimeout(200)
   await page.locator('.cm-content').first().click()
@@ -127,6 +131,7 @@ test('Compare Databases entry preselects the same connection', async ({ page }) 
   await page.waitForTimeout(300)
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(500)
+  await openDatabaseNode(page)
   await page.getByRole('treeitem', { name: /app current/ }).first().click({ button: 'right' })
   await page.waitForTimeout(200)
   await page.getByText(/Compare Databases…/).first().click()
@@ -149,6 +154,7 @@ test('table context menu: Design Table (merged Alter)', async ({ page }) => {
   await page.waitForTimeout(300)
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(500)
+  await openDatabaseNode(page)
   await page.getByText('public', { exact: true }).first().dblclick()
   await page.waitForTimeout(300)
   await page.getByText('Tables', { exact: true }).first().dblclick()
@@ -206,6 +212,7 @@ test('database node context menu can drop a database', async ({ page }) => {
   await page.waitForTimeout(300)
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(500)
+  await openDatabaseNode(page)
   await page.getByRole('treeitem', { name: /analytics database/ }).first().click({ button: 'right' })
   await page.waitForTimeout(200)
   await page.getByText('Drop Database…', { exact: true }).first().click()
@@ -270,6 +277,7 @@ test('explorer database filter narrows database nodes', async ({ page }) => {
   await page.waitForTimeout(300)
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(500)
+  await openDatabaseNode(page)
 
   // demo databases: app (current), analytics, postgres
   const filter = page.getByPlaceholder('Filter databases…')
@@ -296,6 +304,7 @@ test('per-folder filter narrows objects inside Tables', async ({ page }) => {
   await page.waitForTimeout(300)
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(500)
+  await openDatabaseNode(page)
   await page.getByText('public', { exact: true }).first().dblclick()
   await page.waitForTimeout(300)
   await page.getByText('Tables', { exact: true }).first().dblclick()

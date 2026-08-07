@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { APP_URL, blockRemoteFonts } from './helpers'
+import { APP_URL, blockRemoteFonts, openDatabaseNode } from './helpers'
 
 // The desktop build installs a guard that kills the WebView's own page menu
 // (Back/Refresh/Save as/Print/…). Regression covered here: the first version ran in
@@ -31,6 +31,7 @@ test('with the WebView menu guard on, the app context menus still open', async (
   // 2) Object Explorer tree (schema → Tables → table row)
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(400)
+  await openDatabaseNode(page)
   await page.getByText('public', { exact: true }).first().dblclick()
   await page.waitForTimeout(300)
   await page.getByText('Tables', { exact: true }).first().dblclick()

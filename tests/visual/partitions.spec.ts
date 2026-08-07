@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { APP_URL, blockRemoteFonts } from './helpers'
+import { APP_URL, blockRemoteFonts, openDatabaseNode } from './helpers'
 
 // Partitions node — expanding a partitioned table (demo: enrollments) shows a
 // "Partitions" folder listing its partitions, with a right-click maintenance menu.
@@ -13,6 +13,7 @@ test('explorer: partitioned table shows a Partitions node with partitions', asyn
 
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(500)
+  await openDatabaseNode(page)
 
   // public → Tables → enrollments (expand its detail)
   await page.getByText('public', { exact: true }).first().dblclick()
@@ -60,6 +61,7 @@ test('add partition dialog: structured form + live script', async ({ page }) => 
 
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(500)
+  await openDatabaseNode(page)
   await page.getByText('public', { exact: true }).first().dblclick()
   await page.waitForTimeout(300)
   await page.getByText('Tables', { exact: true }).first().dblclick()

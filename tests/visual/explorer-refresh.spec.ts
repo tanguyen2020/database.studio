@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
-import { APP_URL, blockRemoteFonts } from './helpers'
+import { APP_URL, blockRemoteFonts, openDatabaseNode } from './helpers'
 
 // The Explorer header Refresh must be labeled ("⟳ Refresh", not just an icon) and
 // must genuinely re-query the backend for EVERY connection type — dispatching to the
@@ -21,6 +21,7 @@ test('Explorer Refresh: labeled + re-queries per connection type', async ({ page
   // ---- relational (Postgres): the header shows the word "Refresh" and re-lists schemas
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(500)
+  await openDatabaseNode(page)
   await expect(refresh).toBeVisible()
   await expect(refresh).toContainText('Refresh')
   {

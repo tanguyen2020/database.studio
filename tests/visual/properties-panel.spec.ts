@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { APP_URL, blockRemoteFonts } from './helpers'
+import { APP_URL, blockRemoteFonts, openDatabaseNode } from './helpers'
 
 // Right-side Object Properties panel: shows details of the object selected in the
 // Explorer (columns for a table, type for a column, definition for a view).
@@ -21,6 +21,7 @@ test('properties panel shows selected table columns and column detail', async ({
   // connect + expand public → Tables
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(500)
+  await openDatabaseNode(page)
   await page.getByText('public', { exact: true }).first().dblclick()
   await page.waitForTimeout(300)
   await page.getByText('Tables', { exact: true }).first().dblclick()
@@ -61,6 +62,7 @@ test('properties panel shows a view definition', async ({ page }) => {
   await page.locator('[title="Show Properties panel"]').click()
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(500)
+  await openDatabaseNode(page)
   await page.getByText('public', { exact: true }).first().dblclick()
   await page.waitForTimeout(300)
   await page.getByText('Views', { exact: true }).first().dblclick()

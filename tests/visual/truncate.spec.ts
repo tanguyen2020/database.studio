@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { APP_URL, blockRemoteFonts } from './helpers'
+import { APP_URL, blockRemoteFonts, openDatabaseNode } from './helpers'
 
 // Truncate has per-engine variants (Postgres: plain / Cascade / Restart Identity) and
 // always runs behind a confirm popup showing the exact statement (backdrop does not close).
@@ -12,6 +12,7 @@ test('truncate: Postgres variants + confirm popup', async ({ page }) => {
   await page.waitForTimeout(300)
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(500)
+  await openDatabaseNode(page)
   await page.getByText('public', { exact: true }).first().dblclick()
   await page.waitForTimeout(300)
   await page.getByText('Tables', { exact: true }).first().dblclick()

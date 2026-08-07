@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { APP_URL, blockRemoteFonts } from './helpers'
+import { APP_URL, blockRemoteFonts, openDatabaseNode } from './helpers'
 
 // Open Data (Table Data Viewer): the footer shows the record + page count in
 // English, and the toolbar Refresh button carries a "Refresh" label (not just ⟳).
@@ -12,6 +12,7 @@ test('table viewer: footer shows records + pages (English) and Refresh has a lab
   await page.waitForTimeout(300)
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(500)
+  await openDatabaseNode(page)
 
   // reach a table's data via the Objects tab (double-click schema → right-click row → Open Data)
   await page.getByRole('treeitem', { name: /public/ }).first().dblclick()

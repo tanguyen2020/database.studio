@@ -20,6 +20,8 @@ const quickConnect = vi.fn(async (draft: { profile: ProfilePublic }) => ({
   has_password: false,
 }))
 
+const reconnect = vi.fn(async (_id: string) => 11)
+
 vi.mock('$lib/ipc', () => ({
   listConnections: vi.fn(async () => []),
   saveConnection: (d: unknown) => saveConnection(d as { profile: ConnectionProfile }),
@@ -28,7 +30,7 @@ vi.mock('$lib/ipc', () => ({
   quickConnect: (d: unknown) => quickConnect(d as { profile: ProfilePublic }),
   duplicateConnection: vi.fn(),
   connect: vi.fn(),
-  reconnect: vi.fn(),
+  reconnect: (id: string) => reconnect(id),
   testConnection: vi.fn(),
   pingConnection: vi.fn(),
 }))
@@ -46,6 +48,38 @@ beforeEach(() => {
   deleteConnection.mockClear()
   disconnect.mockClear()
   quickConnect.mockClear()
+  reconnect.mockClear()
+})
+
+describe('reconnect', () => {
+  // The backend reconnect disconnects first, dropping every derived connection
+  // ({id}::db sub-connections, {id}#tab-… per-tab ones). The profile must report
+  // that window as NOT connected so caches of derived ids can let go of them —
+  // otherwise the Explorer keeps handing out sub-connection ids the backend has
+  // already closed (or, worse, ones belonging to an older config).
+  it('marks the profile disconnected while reconnecting, connected again on success', async () => {
+    connections.profiles = [{ ...blank('svr'), id: 'c1', connected: true, latency_ms: 5 }]
+    let duringReconnect: boolean | undefined
+    reconnect.mockImplementationOnce(async () => {
+      duringReconnect = connections.byId('c1')!.connected
+      return 11
+    })
+    const ok = await connections.reconnect('c1')
+    expect(ok).toBe(true)
+    expect(duringReconnect).toBe(false)
+    expect(connections.byId('c1')!.connected).toBe(true)
+    expect(connections.byId('c1')!.latency_ms).toBe(11)
+  })
+
+  it('stays disconnected when the reconnect fails', async () => {
+    connections.profiles = [{ ...blank('svr'), id: 'c1', connected: true, latency_ms: 5 }]
+    reconnect.mockImplementationOnce(async () => {
+      throw new Error('server down')
+    })
+    expect(await connections.reconnect('c1')).toBe(false)
+    expect(connections.byId('c1')!.connected).toBe(false)
+    expect(connections.byId('c1')!.latency_ms).toBeUndefined()
+  })
 })
 
 describe('quickConnect', () => {

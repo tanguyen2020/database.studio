@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { APP_URL, blockRemoteFonts } from './helpers'
+import { APP_URL, blockRemoteFonts, openDatabaseNode } from './helpers'
 
 // User request — a freshly opened Query tab shows NO result panel; the editor
 // fills the pane until a statement (or Explain) runs, which auto-reveals it.
@@ -15,6 +15,7 @@ test('result panel: hidden on new tab, auto-shows on Run, X + Ctrl+J toggle', as
 
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(200)
+  await openDatabaseNode(page)
   await page.getByTitle('New SQL tab (Ctrl+T)').first().click()
   await page.waitForTimeout(200)
 
@@ -54,6 +55,7 @@ test('result views: cycle Grid/JSON/Single Row/Chart renders each cleanly', asyn
 
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(200)
+  await openDatabaseNode(page)
   await page.getByTitle('New SQL tab (Ctrl+T)').first().click()
   await page.waitForTimeout(200)
   await page.locator('.cm-content').first().click()

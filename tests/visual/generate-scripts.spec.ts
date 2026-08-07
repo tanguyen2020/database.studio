@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { APP_URL, blockRemoteFonts } from './helpers'
+import { APP_URL, blockRemoteFonts, openDatabaseNode } from './helpers'
 
 // T15 — Generate Scripts: whole-schema dump (structure). The "Generate" button
 // saves a .sql file (native Save dialog in the desktop app; a browser download
@@ -15,6 +15,7 @@ test('Generate Scripts (structure) → saves a .sql file with CREATE TABLE + FK 
 
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(500)
+  await openDatabaseNode(page)
   await page.getByTitle('Generate scripts (dump schema)').first().click()
   await page.waitForTimeout(400)
 

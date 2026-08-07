@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { APP_URL, blockRemoteFonts } from './helpers'
+import { APP_URL, blockRemoteFonts, openDatabaseNode } from './helpers'
 
 // Result Grid Export dropdown: each format writes a correctly-named file, shows a
 // progress overlay through completion, and highlights blue on hover.
@@ -13,6 +13,7 @@ test('result export: CSV downloads with a progress overlay + blue hover', async 
 
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(200)
+  await openDatabaseNode(page)
   await page.getByTitle('New SQL tab (Ctrl+T)').first().click()
   await page.waitForTimeout(200)
   await page.locator('.cm-content').first().click()

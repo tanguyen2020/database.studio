@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { APP_URL, blockRemoteFonts } from './helpers'
+import { APP_URL, blockRemoteFonts, openDatabaseNode } from './helpers'
 
 async function openSqlTab(page: import('@playwright/test').Page) {
   await blockRemoteFonts(page)
@@ -8,6 +8,7 @@ async function openSqlTab(page: import('@playwright/test').Page) {
   await page.waitForTimeout(400)
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(400)
+  await openDatabaseNode(page)
   await page.getByTitle('New SQL tab (Ctrl+T)').first().click()
   await page.waitForTimeout(600)
 }

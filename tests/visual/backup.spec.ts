@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { APP_URL, blockRemoteFonts } from './helpers'
+import { APP_URL, blockRemoteFonts, openDatabaseNode } from './helpers'
 
 // T22 — Backup & Restore dialog from the Explorer toolbar.
 
@@ -13,6 +13,7 @@ test('backup dialog: tool status + backup now + history', async ({ page }) => {
 
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(400)
+  await openDatabaseNode(page)
   await page.getByTitle('Backup & Restore').first().click()
   await page.waitForTimeout(300)
 

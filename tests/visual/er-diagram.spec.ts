@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { APP_URL, blockRemoteFonts } from './helpers'
+import { APP_URL, blockRemoteFonts, openDatabaseNode } from './helpers'
 
 test('ER diagram: nodes + edges + Mermaid/export toolbar', async ({ page }) => {
   const errors: string[] = []
@@ -12,6 +12,7 @@ test('ER diagram: nodes + edges + Mermaid/export toolbar', async ({ page }) => {
   // select Postgres → Explorer loads → right-click schema → View ER Diagram
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(500)
+  await openDatabaseNode(page)
   await page.getByText('public', { exact: true }).first().click({ button: 'right' })
   await page.waitForTimeout(200)
   await page.getByText('View ER Diagram').first().click()
@@ -53,6 +54,7 @@ test('ER diagram: drag from a PK column onto another table creates the relations
   await page.waitForTimeout(300)
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(500)
+  await openDatabaseNode(page)
   await page.getByText('public', { exact: true }).first().click({ button: 'right' })
   await page.waitForTimeout(200)
   await page.getByText('View ER Diagram').first().click()
@@ -105,6 +107,7 @@ test('ER diagram: select a table then drag a corner to shrink it', async ({ page
   await page.waitForTimeout(300)
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(500)
+  await openDatabaseNode(page)
   await page.getByText('public', { exact: true }).first().click({ button: 'right' })
   await page.waitForTimeout(200)
   await page.getByText('View ER Diagram').first().click()

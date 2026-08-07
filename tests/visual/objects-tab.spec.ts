@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { APP_URL, blockRemoteFonts } from './helpers'
+import { APP_URL, blockRemoteFonts, openDatabaseNode } from './helpers'
 
 // "Objects" tab — the pinned, non-closable singleton at index 0 listing a schema's
 // tables (# · Table Name · Data Length · Rows). For schema-based systems (PG/MSSQL)
@@ -13,6 +13,7 @@ async function openPg(page: import('@playwright/test').Page) {
   await page.waitForTimeout(300)
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(500)
+  await openDatabaseNode(page)
 }
 
 test('Objects tab: double-click a schema opens the pinned singleton scoped to it', async ({ page }) => {
@@ -61,10 +62,12 @@ test('Objects tab: double-click a schema opens the pinned singleton scoped to it
 test('Objects tab: double-clicking the DATABASE node does NOT open Objects (PG)', async ({ page }) => {
   await openPg(page)
 
-  // double-clicking the current-database header must NOT open an all-schemas Objects tab
+  // double-clicking the current-database header only collapses/expands it — it must
+  // NOT open an all-schemas Objects tab
   await page.getByRole('treeitem', { name: /current/ }).first().dblclick()
   await page.waitForTimeout(500)
   await expect(page.getByRole('tab').filter({ hasText: 'Objects' })).toHaveCount(0)
+  await openDatabaseNode(page) // that dblclick collapsed it — reopen to reach the schemas
 
   // …but double-clicking a schema DOES open it (scoped to the schema)
   await page.getByRole('treeitem', { name: /public/ }).first().dblclick()

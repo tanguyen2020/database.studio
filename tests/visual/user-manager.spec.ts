@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { APP_URL, blockRemoteFonts } from './helpers'
+import { APP_URL, blockRemoteFonts, openDatabaseNode } from './helpers'
 
 // U1 — PostgreSQL User Manager. The "Users & privileges" Explorer toolbar button
 // opens the User Manager tab (NOT the old Admin view) with the pgAdmin-style
@@ -11,6 +11,7 @@ async function openManager(page: import('@playwright/test').Page) {
   await page.waitForTimeout(300)
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(500)
+  await openDatabaseNode(page)
   await page.getByText('public', { exact: true }).first().click()
   await page.waitForTimeout(200)
   await page.getByTitle(/Users & privileges: /).click()
@@ -28,6 +29,7 @@ test('explorer: PG Security node lists roles + opens the manager', async ({ page
   await page.waitForTimeout(300)
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(500)
+  await openDatabaseNode(page)
 
   // the Security node (native pgAdmin term) sits in the tree
   const node = page.getByText('Login/Group Roles', { exact: true }).first()
@@ -222,6 +224,7 @@ test('user manager: Oracle users + system privs + object preset', async ({ page 
   await page.waitForTimeout(300)
   await page.getByText('10.0.7.1', { exact: false }).first().click() // Oracle connection (connected)
   await page.waitForTimeout(500)
+  await openDatabaseNode(page) // tree starts collapsed
   await page.getByText('public', { exact: true }).first().click()
   await page.waitForTimeout(200)
   await page.getByTitle(/Users & privileges: /).click()
@@ -366,6 +369,7 @@ test('user manager: MSSQL server logins + database permission grid', async ({ pa
   await page.waitForTimeout(300)
   await page.getByText('Connect', { exact: true }).first().click() // demo connects
   await page.waitForTimeout(500)
+  await openDatabaseNode(page) // tree starts collapsed
   await page.getByText('public', { exact: true }).first().click() // demo schema node
   await page.waitForTimeout(200)
   await page.getByTitle(/Users & privileges: /).click()

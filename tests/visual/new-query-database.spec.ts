@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { APP_URL, blockRemoteFonts } from './helpers'
+import { APP_URL, blockRemoteFonts, openDatabaseNode } from './helpers'
 
 // When a database node is selected in the ObjectExplorer, the sidebar "New query
 // console" button opens a Query Editor bound to THAT database — its Database
@@ -15,6 +15,7 @@ test('new query console binds to the selected database', async ({ page }) => {
   // select the Postgres connection and let the tree (incl. other databases) load
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(700)
+  await openDatabaseNode(page)
 
   // pick a NON-current database node (attaches a sub-connection on click)
   await page.getByText('analytics', { exact: true }).first().click()
@@ -76,6 +77,7 @@ test('new query console binds the database + schema of a selected TABLE', async 
 
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(700)
+  await openDatabaseNode(page)
 
   // expand the current database's `public` schema, then its Tables folder (chevron
   // clicks — a row's double-click would open the Objects tab instead)
@@ -111,6 +113,7 @@ test('new query console binds a foreign database + its schema from an object row
 
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(700)
+  await openDatabaseNode(page)
 
   // expand the foreign database `analytics` → its own schemas (public + reporting)
   await page.getByRole('treeitem', { name: /analytics/ }).first().dblclick()

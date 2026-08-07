@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { APP_URL, blockRemoteFonts } from './helpers'
+import { APP_URL, blockRemoteFonts, openDatabaseNode } from './helpers'
 
 // AUDIT-5 items 1 + 10 — Query Editor shows a database dropdown; picking a DB
 // updates the toolbar label (the tab now targets that database).
@@ -12,6 +12,7 @@ test('query editor database dropdown selects a database', async ({ page }) => {
   await page.waitForTimeout(300)
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(200)
+  await openDatabaseNode(page)
   await page.getByTitle('New SQL tab (Ctrl+T)').first().click()
   await page.waitForTimeout(300)
 
@@ -50,6 +51,7 @@ test('foreign database node has a context menu', async ({ page }) => {
   await page.waitForTimeout(300)
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(500)
+  await openDatabaseNode(page)
 
   // demo list_databases: current 'app' → foreign 'analytics','postgres' listed as
   // database nodes in the tree. Right-click one → context menu.
@@ -73,6 +75,7 @@ test('object folders offer Create <type>', async ({ page }) => {
   await page.waitForTimeout(300)
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(500)
+  await openDatabaseNode(page)
   await page.getByText('public', { exact: true }).first().dblclick() // expand schema → folders appear
   await page.waitForTimeout(400)
 
@@ -93,6 +96,7 @@ test('table designer header shows connection and database', async ({ page }) => 
   await page.waitForTimeout(300)
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(500)
+  await openDatabaseNode(page)
   await page.getByText('public', { exact: true }).first().click({ button: 'right' }) // schema menu
   await page.waitForTimeout(200)
   await page.getByText('New Table…', { exact: true }).first().click()
@@ -115,6 +119,7 @@ test('rename database from the current-db header context menu', async ({ page })
   await page.waitForTimeout(300)
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(500)
+  await openDatabaseNode(page)
 
   await page.getByRole('treeitem', { name: /app current/ }).first().click({ button: 'right' })
   await page.waitForTimeout(200)
@@ -136,6 +141,7 @@ test('result grid shows a No. gutter column', async ({ page }) => {
   await page.waitForTimeout(300)
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(200)
+  await openDatabaseNode(page)
   await page.getByTitle('New SQL tab (Ctrl+T)').first().click()
   await page.waitForTimeout(200)
   await page.locator('.cm-content').first().click()

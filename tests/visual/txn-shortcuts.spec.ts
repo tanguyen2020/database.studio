@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { APP_URL, blockRemoteFonts } from './helpers'
+import { APP_URL, blockRemoteFonts, openDatabaseNode } from './helpers'
 
 // AUDIT-2 item 6 — transaction buttons removed from the SQL toolbar.
 // Pooling/retry settings section still present (T21).
@@ -15,6 +15,7 @@ test('no transaction buttons in SQL toolbar + Connections settings (pool/retry)'
   // bound SQL tab (Postgres) → BEGIN/COMMIT/ROLLBACK buttons must NOT exist
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(300)
+  await openDatabaseNode(page)
   await page.getByTitle('New SQL tab (Ctrl+T)').first().click()
   await page.waitForTimeout(300)
   await expect(page.getByRole('button', { name: 'BEGIN', exact: true })).toHaveCount(0)

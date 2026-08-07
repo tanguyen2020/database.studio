@@ -198,6 +198,12 @@ class ConnectionsStore {
     const profile = this.byId(id)
     if (!profile) return false
     this.connecting = new Set([...this.connecting, id])
+    // The backend reconnect *disconnects first* — which also drops every derived
+    // connection ({id}::db, {id}#tab-…). Reflect that here instead of claiming the
+    // connection stayed up, so anything caching a derived id (e.g. the Explorer's
+    // per-database sub-connections) lets go of ids the backend no longer has. The UI
+    // renders the `connecting` state during this window, not "disconnected".
+    profile.connected = false
     try {
       const latency = await ipc.reconnect(id)
       profile.connected = true

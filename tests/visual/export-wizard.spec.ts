@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { APP_URL, blockRemoteFonts } from './helpers'
+import { APP_URL, blockRemoteFonts, openDatabaseNode } from './helpers'
 
 // T14 — Export wizard: table mode (from Explorer context) + result custom mode.
 
@@ -17,6 +17,7 @@ test('Table Export wizard: format/columns/WHERE/limit/filename → download', as
 
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(500)
+  await openDatabaseNode(page)
   await page.getByText('public', { exact: true }).first().dblclick()
   await page.waitForTimeout(300)
   await page.getByText('Tables', { exact: true }).first().dblclick()
@@ -50,6 +51,7 @@ test('Result Export ▾ offers XML and downloads an .xml file', async ({ page })
 
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(300)
+  await openDatabaseNode(page)
   await page.getByTitle('New SQL tab (Ctrl+T)').first().click()
   await page.waitForTimeout(300)
   await page.locator('.cm-content').first().click()
@@ -77,6 +79,7 @@ test('Result custom Export: run query → Export ▾ → Custom → download', a
 
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(300)
+  await openDatabaseNode(page)
   await page.getByTitle('New SQL tab (Ctrl+T)').first().click()
   await page.waitForTimeout(300)
   await page.locator('.cm-content').first().click()

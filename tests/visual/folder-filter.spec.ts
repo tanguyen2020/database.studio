@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { APP_URL, blockRemoteFonts } from './helpers'
+import { APP_URL, blockRemoteFonts, openDatabaseNode } from './helpers'
 
 // SSMS-style folder filter: hidden until "Filter…" is picked from the folder
 // context menu; typing narrows the folder; and a Clear Filter control restores
@@ -12,6 +12,7 @@ async function openExplorer(page: import('@playwright/test').Page) {
   await page.waitForTimeout(300)
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(400)
+  await openDatabaseNode(page)
   await page.getByText('public', { exact: true }).first().dblclick()
   await page.waitForTimeout(300)
 }

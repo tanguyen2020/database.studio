@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { APP_URL, blockRemoteFonts } from './helpers'
+import { APP_URL, blockRemoteFonts, openDatabaseNode } from './helpers'
 
 // Audit fixes: #3 connection row hover/selected, #4 table 3-mode Generate Scripts.
 
@@ -17,6 +17,7 @@ test('#3 connection row: selected class + hover style (no inline trap)', async (
 
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(300)
+  await openDatabaseNode(page)
   // selected → dòng có class .conn-row.selected (thanh accent) — không dựa inline bg
   await expect(page.locator('.conn-row.selected').first()).toBeVisible()
 
@@ -35,6 +36,7 @@ test('#4 table context menu: Generate Scripts → Structure and Data', async ({ 
 
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(500)
+  await openDatabaseNode(page)
   await page.getByText('public', { exact: true }).first().dblclick()
   await page.waitForTimeout(300)
   await page.getByText('Tables', { exact: true }).first().dblclick()

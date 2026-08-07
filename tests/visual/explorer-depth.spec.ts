@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { APP_URL, blockRemoteFonts } from './helpers'
+import { APP_URL, blockRemoteFonts, openDatabaseNode } from './helpers'
 
 // T18 — Explorer depth: Show Definition, view column expansion,
 // Object Properties panel. (Tree filter removed by later user request.)
@@ -14,6 +14,7 @@ test('explorer depth: Show Definition + properties + view columns', async ({ pag
 
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(500)
+  await openDatabaseNode(page)
 
   await page.getByText('public', { exact: true }).first().dblclick()
   await page.waitForTimeout(300)

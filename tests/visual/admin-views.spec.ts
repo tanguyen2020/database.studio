@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { APP_URL, blockRemoteFonts } from './helpers'
+import { APP_URL, blockRemoteFonts, openDatabaseNode } from './helpers'
 
 // T23 — Admin views: Session Monitor (+Kill), Users, Extensions.
 
@@ -13,8 +13,12 @@ test('admin views: session monitor + kill + users + extensions', async ({ page }
 
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(400)
+  await openDatabaseNode(page)
   await page.getByTitle('Session Monitor').first().click()
   await page.waitForTimeout(400)
+  // The Explorer toolbar carries its own "Session Monitor" / "Users & privileges"
+  // buttons, so scope the Admin view's switcher to the tab body.
+  const admin = page.locator('main')
 
   // Admin tab + session rows + Kill action
   await expect(page.getByRole('tab', { name: /Admin ·/ }).first()).toBeVisible()
@@ -27,17 +31,17 @@ test('admin views: session monitor + kill + users + extensions', async ({ page }
   await expect(sessRow).toHaveClass(/sel/)
 
   // switch to Users view → role rows
-  await page.getByRole('button', { name: 'Users & Privileges' }).first().click()
+  await admin.getByRole('button', { name: 'Users & Privileges' }).first().click()
   await page.waitForTimeout(300)
   await expect(page.getByText('postgres').first()).toBeVisible()
 
   // Extensions view → plpgsql
-  await page.getByRole('button', { name: 'Extensions', exact: true }).first().click()
+  await admin.getByRole('button', { name: 'Extensions', exact: true }).first().click()
   await page.waitForTimeout(300)
   await expect(page.getByText('plpgsql').first()).toBeVisible()
 
   // Kill a session (back to sessions) — demo ok, no error
-  await page.getByRole('button', { name: 'Session Monitor' }).first().click()
+  await admin.getByRole('button', { name: 'Session Monitor' }).first().click()
   await page.waitForTimeout(300)
   await page.getByRole('button', { name: 'Kill', exact: true }).first().click()
   await page.waitForTimeout(300)

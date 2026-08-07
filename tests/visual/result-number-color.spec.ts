@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { APP_URL, blockRemoteFonts } from './helpers'
+import { APP_URL, blockRemoteFonts, openDatabaseNode } from './helpers'
 
 // ResultGrid tints number-type columns (int/smallint/bigint/decimal/numeric/
 // float/double/real) for relational engines, using --syntax-number. The demo
@@ -15,6 +15,7 @@ test('result grid: numeric columns are color-tinted (relational)', async ({ page
 
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(200)
+  await openDatabaseNode(page)
   await page.getByTitle('New SQL tab (Ctrl+T)').first().click()
   await page.waitForTimeout(200)
 

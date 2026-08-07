@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { APP_URL, blockRemoteFonts } from './helpers'
+import { APP_URL, blockRemoteFonts, openDatabaseNode } from './helpers'
 
 // T29 — Index/FK Manager tab: lists indexes + FKs, and the create-index form
 // builds a live DDL preview. (Engine-aware DDL is unit-tested in sql/indexes.test.ts;
@@ -14,6 +14,7 @@ test('index/FK manager: lists indexes + live CREATE INDEX preview', async ({ pag
 
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(400)
+  await openDatabaseNode(page)
   await page.getByText('public', { exact: true }).first().dblclick()
   await page.waitForTimeout(200)
   await page.getByText('Tables', { exact: true }).first().dblclick()

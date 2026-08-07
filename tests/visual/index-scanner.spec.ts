@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { APP_URL, blockRemoteFonts } from './helpers'
+import { APP_URL, blockRemoteFonts, openDatabaseNode } from './helpers'
 
 test('index scanner: table + health flags + filter', async ({ page }) => {
   const errors: string[] = []
@@ -12,6 +12,7 @@ test('index scanner: table + health flags + filter', async ({ page }) => {
   // select Postgres → Explorer → right-click schema → Scan Indexes
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(500)
+  await openDatabaseNode(page)
   await page.getByText('public', { exact: true }).first().click({ button: 'right' })
   await page.waitForTimeout(200)
   await page.getByText('Scan Indexes').first().click()

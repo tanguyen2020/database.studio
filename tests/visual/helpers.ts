@@ -59,6 +59,27 @@ export async function openApp(page: Page): Promise<void> {
 }
 
 /**
+ * The Object Explorer tree opens fully collapsed (see explorer-collapse.spec.ts):
+ * for PG/MSSQL/Oracle the schemas hang off the current-database node, and for
+ * SQLite off the file node. Open that node so the schema list shows.
+ * No-op for engines that list their databases at the tree root (MySQL / MariaDB /
+ * ClickHouse) and for connections that are not open yet.
+ */
+export async function openDatabaseNode(page: Page): Promise<void> {
+  // anchored on the row's meta text ("… current" / "… file") so it can never match
+  // an object row that happens to contain the word (a `profile` table, say)
+  for (const re of [/\bcurrent$/, /\bfile$/]) {
+    const node = page.getByRole('treeitem', { name: re }).first()
+    if ((await node.count()) === 0) continue
+    if ((await node.getAttribute('aria-expanded')) === 'false') {
+      await node.dblclick()
+      await page.waitForTimeout(350)
+    }
+    return
+  }
+}
+
+/**
  * Đo computed style của 1 element — dùng cho bảng đối chiếu số đo
  * HTML-gốc vs Svelte (đối chiếu bằng số, không bằng mắt).
  */

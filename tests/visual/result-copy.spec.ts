@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { APP_URL, blockRemoteFonts } from './helpers'
+import { APP_URL, blockRemoteFonts, openDatabaseNode } from './helpers'
 
 // AUDIT-3 item 5 — Result Grid right-click "Copy as ▸" offers all 6 formats.
 test('result grid copy menu: raw + 6 extract formats', async ({ page }) => {
@@ -13,6 +13,7 @@ test('result grid copy menu: raw + 6 extract formats', async ({ page }) => {
 
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(200)
+  await openDatabaseNode(page)
   await page.getByTitle('New SQL tab (Ctrl+T)').first().click()
   await page.waitForTimeout(200)
   await page.locator('.cm-content').first().click()
@@ -76,6 +77,7 @@ test('result grid copy menu: stays fully inside the viewport', async ({ page }) 
 
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(200)
+  await openDatabaseNode(page)
   await page.getByTitle('New SQL tab (Ctrl+T)').first().click()
   await page.waitForTimeout(200)
   await page.locator('.cm-content').first().click()

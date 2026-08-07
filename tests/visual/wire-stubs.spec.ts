@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { APP_URL, blockRemoteFonts } from './helpers'
+import { APP_URL, blockRemoteFonts, openDatabaseNode } from './helpers'
 
 // T12 — các nút trước đây là stub (toast/no-op) nay phải làm việc THẬT.
 // (Convert + Split toolbar buttons removed in AUDIT-5 item 3 — split still works
@@ -19,6 +19,7 @@ test('Set as Filter → opens Table Viewer with the column filter', async ({ pag
 
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(500)
+  await openDatabaseNode(page)
   await page.getByText('public', { exact: true }).first().dblclick()
   await page.waitForTimeout(300)
   await page.getByText('Tables', { exact: true }).first().dblclick()
@@ -46,6 +47,7 @@ test('Chart SVG export → triggers a file download', async ({ page }) => {
   // selectedId, khác với tab orphan mặc định (connectionId=null → run() bỏ qua).
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(300)
+  await openDatabaseNode(page)
   await page.getByTitle('New SQL tab (Ctrl+T)').first().click()
   await page.waitForTimeout(300)
   await page.locator('.cm-content').first().click()

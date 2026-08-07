@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { APP_URL, blockRemoteFonts } from './helpers'
+import { APP_URL, blockRemoteFonts, openDatabaseNode } from './helpers'
 
 // Rule: every ObjectExplorer context menu offers Refresh; and clear/delete
 // confirm popups open with Cancel focused by default.
@@ -11,6 +11,7 @@ async function boot(page: import('@playwright/test').Page) {
   await page.waitForTimeout(400)
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(500)
+  await openDatabaseNode(page)
 }
 
 test('leaf (column) context menu offers Refresh', async ({ page }) => {

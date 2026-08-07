@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { APP_URL, blockRemoteFonts } from './helpers'
+import { APP_URL, blockRemoteFonts, openDatabaseNode } from './helpers'
 
 // T26 — Generate Test Data: per-column generators + preview + run. (Constraint
 // handling — NOT NULL / UNIQUE / FK-from-pool — is unit-tested in
@@ -14,6 +14,7 @@ test('generate test data: preview + run', async ({ page }) => {
 
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(400)
+  await openDatabaseNode(page)
   await page.getByText('public', { exact: true }).first().dblclick()
   await page.waitForTimeout(200)
   await page.getByText('Tables', { exact: true }).first().dblclick()

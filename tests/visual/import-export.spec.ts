@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { APP_URL, blockRemoteFonts } from './helpers'
+import { APP_URL, blockRemoteFonts, openDatabaseNode } from './helpers'
 
 test('CSV import wizard: file → preview → target → mapping', async ({ page }) => {
   const errors: string[] = []
@@ -12,6 +12,7 @@ test('CSV import wizard: file → preview → target → mapping', async ({ page
   // select Postgres so Explorer loads schemas, then click bottom "Import data"
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(500)
+  await openDatabaseNode(page)
   await page.getByTitle('Import data from file').first().click()
   await page.waitForTimeout(200)
 
@@ -35,6 +36,7 @@ test('CSV import full flow: file → mapping → Options → batched import (T13
 
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(500)
+  await openDatabaseNode(page)
   await page.getByTitle('Import data from file').first().click()
   await page.waitForTimeout(200)
 

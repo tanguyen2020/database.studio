@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { APP_URL, blockRemoteFonts } from './helpers'
+import { APP_URL, blockRemoteFonts, openDatabaseNode } from './helpers'
 
 // T27 — Result Grid Group By popover: pick columns + aggregate → collapsible
 // group tree with a grand total. (Multi-column grouping + aggregates are covered
@@ -14,6 +14,7 @@ test('result grid group by: popover groups rows with a grand total', async ({ pa
 
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(200)
+  await openDatabaseNode(page)
   await page.getByTitle('New SQL tab (Ctrl+T)').first().click()
   await page.waitForTimeout(200)
   await page.locator('.cm-content').first().click()

@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { APP_URL, blockRemoteFonts } from './helpers'
+import { APP_URL, blockRemoteFonts, openDatabaseNode } from './helpers'
 
 // DELETE without WHERE / TRUNCATE in the query editor must pop an in-app
 // confirm before running (all relational systems). Enter/Tab accept-completion
@@ -12,6 +12,7 @@ async function boot(page: import('@playwright/test').Page) {
   await page.waitForTimeout(400)
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(300)
+  await openDatabaseNode(page)
   await page.getByTitle('New SQL tab (Ctrl+T)').first().click()
   await page.waitForTimeout(300)
 }

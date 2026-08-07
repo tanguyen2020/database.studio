@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { APP_URL, blockRemoteFonts } from './helpers'
+import { APP_URL, blockRemoteFonts, openDatabaseNode } from './helpers'
 
 // Execute a function/procedure: the dialog collects args by signature, and the
 // "Execute" button runs the CALL/SELECT immediately (result grid shows output).
@@ -15,6 +15,7 @@ test('execute routine: dialog by signature → Execute runs and shows results', 
 
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(400)
+  await openDatabaseNode(page)
   await page.getByText('public', { exact: true }).first().dblclick()
   await page.waitForTimeout(200)
   await page.getByText('Functions', { exact: true }).first().dblclick()

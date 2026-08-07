@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { APP_URL, blockRemoteFonts } from './helpers'
+import { APP_URL, blockRemoteFonts, openDatabaseNode } from './helpers'
 
 test('table designer: columns grid + DDL preview + add column', async ({ page }) => {
   const errors: string[] = []
@@ -12,6 +12,7 @@ test('table designer: columns grid + DDL preview + add column', async ({ page })
   // select a Postgres connection so Explorer loads, then "New table" bottom button
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(500)
+  await openDatabaseNode(page)
   await page.getByTitle('New table').first().click()
   await page.waitForTimeout(300)
 
@@ -65,6 +66,7 @@ test('table designer: attribute tabs + index in DDL + Ctrl+S saves', async ({ pa
 
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(500)
+  await openDatabaseNode(page)
   await page.getByTitle('New table').first().click()
   await page.waitForTimeout(300)
 
@@ -124,6 +126,7 @@ test('table designer: # column, ArrowDown auto-appends a field row, drag reorder
   await page.waitForTimeout(300)
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(500)
+  await openDatabaseNode(page)
   await page.getByTitle('New table').first().click()
   await page.waitForTimeout(300)
 
@@ -192,6 +195,7 @@ test('table designer: existing table can drop a column (ALTER DROP COLUMN)', asy
 
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(500)
+  await openDatabaseNode(page)
   await page.getByText('public', { exact: true }).first().dblclick()
   await page.waitForTimeout(200)
   await page.getByText('Tables', { exact: true }).first().dblclick()
@@ -233,6 +237,7 @@ test('table designer: Partitioning tab emits PARTITION BY in the DDL preview', a
 
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(500)
+  await openDatabaseNode(page)
   await page.getByTitle('New table').first().click()
   await page.waitForTimeout(300)
 
@@ -262,6 +267,7 @@ test('table designer: Design existing partitioned table shows partitions + can a
 
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(500)
+  await openDatabaseNode(page)
   await page.getByText('public', { exact: true }).first().dblclick()
   await page.waitForTimeout(300)
   await page.getByText('Tables', { exact: true }).first().dblclick()
@@ -307,6 +313,7 @@ test('table designer: convert an existing non-partitioned table to partitioned',
 
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(500)
+  await openDatabaseNode(page)
   await page.getByText('public', { exact: true }).first().dblclick()
   await page.waitForTimeout(300)
   await page.getByText('Tables', { exact: true }).first().dblclick()

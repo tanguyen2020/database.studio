@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { APP_URL, blockRemoteFonts } from './helpers'
+import { APP_URL, blockRemoteFonts, openDatabaseNode } from './helpers'
 
 // The sidebar "View ER" + "Generate Scripts (DDL)" toolbar buttons are disabled until
 // a schema/database node (public / dbo / a database) is selected in the Explorer, then
@@ -17,6 +17,8 @@ test('connections toolbar: ER + DDL enable only when a schema is selected', asyn
   await page.waitForTimeout(500)
   await expect(page.getByTitle('View ER diagram (select a database or schema first)')).toBeVisible()
   await expect(page.getByTitle('Generate scripts (select a database or schema first)')).toBeVisible()
+  // open the database node (the tree starts collapsed) to reach its schemas
+  await openDatabaseNode(page)
 
   // pick the 'public' schema → both buttons enable (titles switch to the schema name)
   await page.getByText('public', { exact: true }).first().click()

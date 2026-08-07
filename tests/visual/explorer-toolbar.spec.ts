@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { APP_URL, blockRemoteFonts } from './helpers'
+import { APP_URL, blockRemoteFonts, openDatabaseNode } from './helpers'
 
 // The Explorer bottom toolbar (Query / Import / Backup / Sessions / Users — 5 .xbtn
 // buttons) is disabled until a relational schema/database node is selected, then acts
@@ -20,6 +20,9 @@ test('explorer bottom toolbar: enabled only when a relational schema is selected
   // connection selected but no schema node picked → all 5 toolbar buttons disabled
   await expect(page.locator('.xbtn.off')).toHaveCount(5)
   await expect(page.getByTitle('Select a schema / database first').first()).toBeVisible()
+
+  // the tree starts collapsed — open the database node to reach its schemas
+  await openDatabaseNode(page)
 
   // pick the 'public' schema → toolbar enables and reflects the target
   await page.getByText('public', { exact: true }).first().click()

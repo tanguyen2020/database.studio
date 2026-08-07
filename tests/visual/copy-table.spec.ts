@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { APP_URL, blockRemoteFonts } from './helpers'
+import { APP_URL, blockRemoteFonts, openDatabaseNode } from './helpers'
 
 // T25 — Copy Table to…: context menu opens the dialog, DDL is translated to the
 // destination dialect (dry-run preview), Copy is guarded until a dest is chosen,
@@ -14,6 +14,7 @@ test('copy table to another connection: preview + guard + run', async ({ page })
 
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(400)
+  await openDatabaseNode(page)
   await page.getByText('public', { exact: true }).first().dblclick()
   await page.waitForTimeout(200)
   await page.getByText('Tables', { exact: true }).first().dblclick()

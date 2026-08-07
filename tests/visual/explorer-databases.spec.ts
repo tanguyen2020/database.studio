@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { APP_URL, blockRemoteFonts } from './helpers'
+import { APP_URL, blockRemoteFonts, openDatabaseNode } from './helpers'
 
 // AUDIT-4 item 2 — relational Explorer shows every database: the connected one
 // as a "current" header (its schemas nest under it), and other databases as
@@ -15,6 +15,7 @@ test('explorer per-database tree: current header + foreign database expands', as
 
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(500)
+  await openDatabaseNode(page)
 
   // current-database header (meta "current") + a foreign database tree node
   await expect(page.getByText('current').first()).toBeVisible()

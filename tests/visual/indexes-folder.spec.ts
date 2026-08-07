@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { APP_URL, blockRemoteFonts } from './helpers'
+import { APP_URL, blockRemoteFonts, openDatabaseNode } from './helpers'
 
 // Schema-level "Indexes" folder: lists every index in the schema, with a folder
 // menu (Create Index / Filter / Refresh) and per-index menu (Alter / Drop / …).
@@ -12,6 +12,7 @@ test('explorer: schema-wide Indexes folder + context menus', async ({ page }) =>
   await page.waitForTimeout(300)
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(500)
+  await openDatabaseNode(page)
   await page.getByText('public', { exact: true }).first().dblclick()
   await page.waitForTimeout(300)
 

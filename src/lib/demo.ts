@@ -287,9 +287,15 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
   // Test observability (demo/browser only): count IPC calls per command so e2e can
   // assert that actions like Refresh actually re-hit the backend. No effect in Tauri.
   if (typeof window !== 'undefined') {
-    const w = window as unknown as { __ipcCalls?: Record<string, number> }
+    const w = window as unknown as { __ipcCalls?: Record<string, number>; __ipcAttach?: string[] }
     w.__ipcCalls = w.__ipcCalls ?? {}
     w.__ipcCalls[cmd] = (w.__ipcCalls[cmd] ?? 0) + 1
+    // attach_database also records WHICH connection+database was attached: a
+    // sub-connection is only correct when it derives from the selected connection.
+    if (cmd === 'attach_database') {
+      w.__ipcAttach = w.__ipcAttach ?? []
+      w.__ipcAttach.push(`${String(args?.connId ?? '')}:${String(args?.database ?? '')}`)
+    }
   }
   const lag = cmd.startsWith('redis_')
     ? redisLagMs()

@@ -67,6 +67,13 @@
   import { toAlterStatement, type AlterKind } from '$lib/sql/alter'
   import { objectFilterMatch } from '$lib/explorer/filter'
   import { foreignOfTreeKey, schemaOfTreeKey } from '$lib/explorer/target'
+  import {
+    cassandraExpandKeys,
+    natsExpandKeys,
+    relationalExpandKeys,
+    rootNodeKey,
+    supportsExpandAll,
+  } from '$lib/explorer/expand'
   import { autofocus } from '$lib/actions/autofocus'
   import { toSqlInsert } from '$lib/export/rows'
   import type { ColumnInfo, PartitionInfo, RoutineInfo, TableInfo } from '$lib/types'
@@ -382,6 +389,19 @@
     const q = dbFilter.trim().toLowerCase()
     return !q || name.toLowerCase().includes(q)
   }
+  // The tree always starts fully collapsed — `expanded` is session state only (never
+  // persisted), so closing and reopening the app shows every node closed. The schema
+  // list is part of that: it hangs off the current-database header (PG/MSSQL/Oracle)
+  // or the SQLite file node and stays hidden until that node is opened. Schema-as-
+  // database engines (MySQL/MariaDB/ClickHouse) list their databases at the root,
+  // which are collapsed nodes already.
+  // `rootKey` is only ever the key of a row that is actually rendered: `curdb` once
+  // the database list has loaded, `file` for SQLite. Before that (or for schema-as-
+  // database engines) there is no wrapper row, so the schema list renders as before.
+  const rootKey = $derived(pgMssqlMultiDb || isSqlite ? rootNodeKey(selected?.system ?? '') : null)
+  // A database filter still reveals matches without expanding first (keeps the
+  // filter box working), otherwise it would look broken.
+  const schemaListOpen = $derived(!rootKey || dbFiltering || expanded.has(rootKey))
   function matchSearch(_name: string): boolean {
     return true // top filter no longer filters objects
   }
@@ -536,28 +556,54 @@
 
   // AUDIT-4 item 2 — other databases are browsed through an internal sub-connection
   // (attach_database → {connId}::{db}), NOT a duplicate sidebar connection.
-  // `dbSubId` caches the resolved sub-connection id per database name.
-  let dbSubId = $state<Record<string, string>>({})
+  // Keyed by CONNECTION first: two servers can host databases with the same name, so a
+  // by-name-only cache would hand the newly selected connection a sub-connection still
+  // pointing at the previous one (wrong tree, and "Open Data" reading the wrong server).
+  let dbSubIds = $state<Record<string, Record<string, string>>>({})
+  // Sub-connections of the connection currently shown — every read site below stays
+  // `dbSubId[db]`, but can now only ever see ids derived from `selected`.
+  const dbSubId = $derived(selected ? (dbSubIds[selected.id] ?? {}) : {})
   let attaching = $state('')
   async function toggleForeignDb(dbName: string) {
     const key = `fdb:${dbName}`
-    if (expanded.has(key)) {
+    // Collapse only when this connection is the one that opened the subtree; an
+    // expansion left over from another connection must (re)attach instead.
+    if (expanded.has(key) && dbSubId[dbName]) {
       toggle(key)
       return
     }
     if (!selected || attaching) return
     attaching = dbName
+    const cid = selected.id
     try {
-      const sub = dbSubId[dbName] ?? (await ipc.attachDatabase(selected.id, dbName))
-      dbSubId = { ...dbSubId, [dbName]: sub }
+      // Always ask the backend: attach_database is idempotent (it returns the live
+      // sub-connection when there is one) and re-opens it after a disconnect, so a
+      // cached id can never outlive the connection it belongs to.
+      const sub = await ipc.attachDatabase(cid, dbName)
+      dbSubIds = { ...dbSubIds, [cid]: { ...(dbSubIds[cid] ?? {}), [dbName]: sub } }
       await explorer.loadSchemas(sub)
-      toggle(key)
+      if (!expanded.has(key)) toggle(key)
     } catch (e) {
       toasts.error(String(e))
     } finally {
       attaching = ''
     }
   }
+  // Disconnecting drops every `{id}::db` sub-connection server-side, so forget them
+  // here too: otherwise a reconnect would re-render a foreign subtree backed by dead
+  // sub-connections (every action on it failing with "not connected").
+  $effect(() => {
+    const s = selected
+    if (!s || s.connected) return
+    untrack(() => {
+      const subs = dbSubIds[s.id]
+      if (!subs) return
+      for (const sub of Object.values(subs)) explorer.invalidate(sub)
+      const { [s.id]: _dropped, ...rest } = dbSubIds
+      dbSubIds = rest
+      expanded = new Set([...expanded].filter((k) => !k.startsWith('fdb:')))
+    })
+  })
 
   // Double-clicking opens (or retargets) the pinned Objects tab. The unit differs by
   // system:
@@ -815,14 +861,18 @@
     )
   }
 
-  // ClickHouse Dictionaries (§3) — nạp lười khi mở folder.
+  // ClickHouse Dictionaries (§3) — nạp lười khi mở folder. Cached per connection +
+  // schema: two ClickHouse servers can hold a database of the same name, and a
+  // by-schema-only cache would show (and act on) the previous connection's list.
   let chDicts = $state<Record<string, string[]>>({})
+  const dictKey = (connId: string, schema: string) => `${connId}:${schema}`
   async function loadChDicts(connId: string, schema: string) {
-    if (chDicts[schema]) return
+    const k = dictKey(connId, schema)
+    if (chDicts[k]) return
     try {
-      chDicts = { ...chDicts, [schema]: await ipc.chDictionaries(connId, schema) }
+      chDicts = { ...chDicts, [k]: await ipc.chDictionaries(connId, schema) }
     } catch {
-      chDicts = { ...chDicts, [schema]: [] }
+      chDicts = { ...chDicts, [k]: [] }
     }
   }
 
@@ -1173,9 +1223,43 @@
     })
   }
 
+  // ---- Collapse / Expand All (header icons, next to Refresh) ----------------
   function collapseAll() {
     expanded = new Set()
   }
+  /** Opens every node the header owns for this connection: the current-database /
+   *  file node, each schema (loading its children first so the folders are filled),
+   *  and each object folder — or keyspaces/streams for Cassandra/NATS. Table and
+   *  column level nodes stay closed (one introspection round-trip per table), and
+   *  OTHER databases are left alone on purpose: expanding them would open a
+   *  connection per database on the server. */
+  let expandingTree = $state(false)
+  async function expandAll() {
+    const s = selected
+    if (!s || !s.connected || expandingTree || !supportsExpandAll(s.system)) return
+    expandingTree = true
+    try {
+      if (s.system === 'cassandra') {
+        for (const ks of cassKeyspaces) await loadCassKeyspace(s.id, ks)
+        expanded = new Set([...expanded, ...cassandraExpandKeys(cassKeyspaces)])
+      } else if (s.system === 'nats') {
+        expanded = new Set([...expanded, ...natsExpandKeys(streamRows.map((r) => r.name))])
+      } else {
+        const schemas = (cache?.schemas ?? []).map((x) => x.name)
+        for (const name of schemas) await explorer.loadSchemaChildren(s.id, name)
+        expanded = new Set([...expanded, ...relationalExpandKeys(s.system, schemas)])
+      }
+    } finally {
+      expandingTree = false
+    }
+  }
+  const canExpandAll = $derived(!!selected?.connected && supportsExpandAll(selected?.system))
+  // Icon-only header buttons: stacked double chevrons (down = open everything,
+  // up = close everything), the conventional tree affordance.
+  const EXPAND_ALL_SVG =
+    '<svg viewBox="0 0 14 14" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3.5 L7 7 L11 3.5"/><path d="M3 8 L7 11.5 L11 8"/></svg>'
+  const COLLAPSE_ALL_SVG =
+    '<svg viewBox="0 0 14 14" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6.5 L7 3 L11 6.5"/><path d="M3 11 L7 7.5 L11 11"/></svg>'
 
 
   // map C trong Component (dòng 3947): màu glyph per loại object
@@ -1367,16 +1451,40 @@
       <span style="display:flex;align-items:center;flex:none"><SystemIcon system={selected.system} size={16} /></span>
       <span class="mono" style="font-size:var(--px-11_5);color:var(--text2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{selected.name}</span>
     {/if}
-    <span
-      onclick={refreshConnection}
-      onkeydown={(e) => e.key === 'Enter' && refreshConnection()}
-      role="button"
-      tabindex="0"
-      aria-busy={refreshingTree}
-      aria-label="Refresh"
-      title="Refresh"
-      style="margin-left:auto;display:inline-flex;align-items:center;gap:var(--px-4);cursor:{refreshingTree ? 'default' : 'pointer'};color:var(--muted);font-size:var(--px-11_5);font-weight:600;opacity:{selected ? (refreshingTree ? 0.6 : 1) : 0.4}"
-    ><span class="tree-refresh-glyph" class:spinning={refreshingTree} style="font-size:var(--px-13)">⟳</span>{refreshingTree ? 'Refreshing…' : 'Refresh'}</span>
+    <div style="margin-left:auto;display:inline-flex;align-items:center;gap:var(--px-8);flex:none">
+      <!-- Expand all / Collapse all — icon-only quick actions next to Refresh -->
+      <span
+        onclick={expandAll}
+        onkeydown={(e) => e.key === 'Enter' && expandAll()}
+        role="button"
+        tabindex="0"
+        aria-busy={expandingTree}
+        aria-label="Expand all"
+        title={canExpandAll
+          ? 'Expand all (databases, schemas and object folders)'
+          : 'Expand all — not available for this connection'}
+        style="display:inline-flex;align-items:center;cursor:{canExpandAll && !expandingTree ? 'pointer' : 'default'};color:var(--muted);opacity:{canExpandAll ? (expandingTree ? 0.5 : 1) : 0.4}"
+      >{@html EXPAND_ALL_SVG}</span>
+      <span
+        onclick={collapseAll}
+        onkeydown={(e) => e.key === 'Enter' && collapseAll()}
+        role="button"
+        tabindex="0"
+        aria-label="Collapse all"
+        title="Collapse all"
+        style="display:inline-flex;align-items:center;cursor:{selected ? 'pointer' : 'default'};color:var(--muted);opacity:{selected ? 1 : 0.4}"
+      >{@html COLLAPSE_ALL_SVG}</span>
+      <span
+        onclick={refreshConnection}
+        onkeydown={(e) => e.key === 'Enter' && refreshConnection()}
+        role="button"
+        tabindex="0"
+        aria-busy={refreshingTree}
+        aria-label="Refresh"
+        title="Refresh"
+        style="display:inline-flex;align-items:center;gap:var(--px-4);cursor:{refreshingTree ? 'default' : 'pointer'};color:var(--muted);font-size:var(--px-11_5);font-weight:600;opacity:{selected ? (refreshingTree ? 0.6 : 1) : 0.4}"
+      ><span class="tree-refresh-glyph" class:spinning={refreshingTree} style="font-size:var(--px-13)">⟳</span>{refreshingTree ? 'Refreshing…' : 'Refresh'}</span>
+    </div>
   </div>
 
   <!-- filter — finds databases and objects by name (schema-tree systems) -->
@@ -1790,7 +1898,8 @@
           </ContextMenu.Content>
         {/snippet}
         {#if !dbFiltering || matchDb(curDbName)}
-          {@render row({ key: 'curdb', depth: 0, glyph: '', svg: DB_FOLDER_SVG, color: 'var(--primary)', name: curDb?.name ?? selected.database ?? 'database', meta: 'current', head: true }, curDbMenu)}
+          <!-- expandable + collapsed by default: its schemas only show when opened -->
+          {@render row({ key: 'curdb', depth: 0, glyph: '', svg: DB_FOLDER_SVG, color: 'var(--primary)', name: curDb?.name ?? selected.database ?? 'database', meta: 'current', head: true, expandable: true, onClick: () => toggle('curdb') }, curDbMenu)}
         {/if}
       {/if}
 
@@ -1803,10 +1912,12 @@
           name: (selected.sqlite_mode === 'in-memory' ? ':memory:' : selected.sqlite_path.split(/[\\/]/).pop()) || 'database',
           meta: 'file',
           head: true,
+          expandable: true,
+          onClick: () => toggle('file'),
         })}
       {/if}
 
-      {#each visibleSchemas as schema (schema.name)}
+      {#each schemaListOpen ? visibleSchemas : [] as schema (schema.name)}
         {@const sOpen = searching || expanded.has(`s:${schema.name}`)}
         {@const sc = cache?.bySchema[schema.name]}
         {#snippet schemaMenu()}
@@ -2119,13 +2230,13 @@
               glyph: '⊞',
               color: C.folder,
               name: 'Dictionaries',
-              meta: String((chDicts[schema.name] ?? []).length || ''),
+              meta: String((chDicts[dictKey(selected?.id ?? '', schema.name)] ?? []).length || ''),
               head: true,
               expandable: true,
               onClick: () => { toggle(dKey); if (selected) loadChDicts(selected.id, schema.name) },
             })}
             {#if expanded.has(dKey)}
-              {#each chDicts[schema.name] ?? [] as dic (dic)}
+              {#each chDicts[dictKey(selected?.id ?? '', schema.name)] ?? [] as dic (dic)}
                 {#snippet dictMenu()}
                   <ContextMenu.Content class="w-48">
                     <ContextMenu.Item onclick={() => stmtTab(`${dic} · DDL`, chops.dictShowDefinition(schema.name, dic))}>Show Definition</ContextMenu.Item>
