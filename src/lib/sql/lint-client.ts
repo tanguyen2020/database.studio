@@ -48,6 +48,11 @@ export function schemaLints(doc: string, knownTables: string[]): Diagnostic[] {
   if (knownTables.length === 0) return []
   const known = new Set(knownTables.map((t) => t.toLowerCase()))
   const out: Diagnostic[] = []
+  // One fuzzy search per DISTINCT unknown name. Without this, a long script that
+  // references the same missing table 500 times ran 500 full scans of the schema
+  // (500 × every known table) on every lint pass — the same "rescan per item"
+  // shape that made the statement splitter quadratic.
+  const suggestFor = new Map<string, string | null>()
   const re = /\b(?:FROM|JOIN|UPDATE|INTO)\s+((?:"[^"]+"|`[^`]+`|\[[^\]]+\]|[\w$.]+))/gi
   for (const m of doc.matchAll(re)) {
     const raw = m[1]
@@ -57,7 +62,8 @@ export function schemaLints(doc: string, knownTables: string[]): Diagnostic[] {
     const name = (bare.split('.').pop() ?? bare).toLowerCase()
     if (known.has(name)) continue
     const start = (m.index ?? 0) + m[0].length - raw.length
-    const suggestion = fuzzyClosest(name, knownTables)
+    if (!suggestFor.has(name)) suggestFor.set(name, fuzzyClosest(name, knownTables))
+    const suggestion = suggestFor.get(name) ?? null
     out.push({
       from: start,
       to: start + raw.length,

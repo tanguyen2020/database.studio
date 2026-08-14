@@ -301,6 +301,28 @@ const SLOW_INTROSPECT = new Set([
   'list_partitions',
 ])
 
+// `?bigSchema=<tables>&bigFns=<count>` makes the demo answer introspection with a
+// production-sized catalog (thousands of tables / a pg_catalog-sized function
+// list) so `tests/visual/editor-perf.spec.ts` can measure the editor's typing cost
+// under realistic data. Same shape as the `?slowIntrospect` / `?slowRedis` seams:
+// demo/browser only (ipc.ts routes to demoInvoke only when !IS_TAURI) and inert
+// unless the query parameter is present.
+let bigSchemaN: number | null = null
+let bigFnsN: number | null = null
+function bigParam(name: string): number {
+  if (typeof window === 'undefined') return 0
+  const v = Number(new URLSearchParams(window.location.search).get(name) ?? '0')
+  return Number.isFinite(v) && v > 0 ? Math.min(v, 20000) : 0
+}
+function bigSchemaSize(): number {
+  if (bigSchemaN === null) bigSchemaN = bigParam('bigSchema')
+  return bigSchemaN
+}
+function bigFnsSize(): number {
+  if (bigFnsN === null) bigFnsN = bigParam('bigFns')
+  return bigFnsN
+}
+
 export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   // Test observability (demo/browser only): count IPC calls per command so e2e can
   // assert that actions like Refresh actually re-hit the backend. No effect in Tauri.
@@ -384,6 +406,18 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
       return ok([{ name: 'public', is_default: true }])
     }
     case 'list_tables': {
+      // perf-gate seam (see the bigSchema comment above): a production-sized table list
+      if (bigSchemaSize() > 0)
+        return ok(
+          Array.from({ length: bigSchemaSize() }, (_, i) => ({
+            name: `tbl_${i}`,
+            kind: 'table',
+            row_estimate: 100 + i,
+            locked: false,
+            engine: 'MergeTree',
+            data_length: 8192,
+          })),
+        )
       // A non-default schema owns DIFFERENT tables — so tests can tell which schema
       // the completion is anchored to (picking a schema must repoint suggestions).
       if (String(args?.schema ?? '') === 'reporting')
@@ -405,6 +439,18 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
       ])
     }
     case 'list_columns': {
+      // perf-gate seam: 30 columns for every synthetic table
+      if (bigSchemaSize() > 0 && String(args?.table ?? '').startsWith('tbl_'))
+        return ok(
+          Array.from({ length: 30 }, (_, c) => ({
+            name: c === 0 ? 'id' : c === 1 ? 'order' : `col_${c}`,
+            data_type: 'varchar(80)',
+            nullable: true,
+            default: null,
+            is_pk: c === 0,
+            is_fk: false,
+          })),
+        )
       // Table-aware columns so the ER diagram shows real PK↔FK relationships:
       // enrollments holds FKs (student_id, course_id) referencing students.id /
       // courses.id. Other tables keep the generic demo shape.
@@ -676,6 +722,15 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
         { schema: 'public', name: 'recompute_ranks', kind: 'procedure', params: [] },
       ])
     case 'list_functions':
+      // perf-gate seam: a pg_catalog-sized function list
+      if (bigFnsSize() > 0)
+        return ok(
+          Array.from({ length: bigFnsSize() }, (_, i) => ({
+            name: `pg_fn_${i}`,
+            signature: `pg_fn_${i}(a text, b integer)`,
+            detail: 'function',
+          })),
+        )
       // A small slice standing in for the server catalog (pg_proc etc.). The real
       // engines return hundreds; the frontend merges these with its static set.
       return ok([

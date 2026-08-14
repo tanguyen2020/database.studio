@@ -112,6 +112,60 @@ describe('offset ↔ line/col', () => {
     expect(lineColToOffset(doc, 2, 2)).toBe(4)
     expect(doc[lineColToOffset(doc, 3, 1)]).toBe('e')
   })
+
+  // The index-based implementation must answer EXACTLY like the original
+  // scan-from-the-start one — otherwise error squiggles / click-to-jump land on
+  // the wrong character. Both directions are checked against a naive reference
+  // over every offset and every line/col of a document with the awkward cases
+  // (CRLF, empty lines, trailing newline, unicode, tabs).
+  const naiveOffsetToLineCol = (doc: string, offset: number) => {
+    let line = 1
+    let col = 1
+    for (let i = 0; i < offset && i < doc.length; i++) {
+      if (doc[i] === '\n') {
+        line++
+        col = 1
+      } else col++
+    }
+    return { line, col }
+  }
+  const naiveLineColToOffset = (doc: string, line: number, col: number) => {
+    let curLine = 1
+    let i = 0
+    while (i < doc.length && curLine < line) {
+      if (doc[i] === '\n') curLine++
+      i++
+    }
+    return Math.min(i + Math.max(0, col - 1), doc.length)
+  }
+
+  const TRICKY = 'SELECT 1;\r\n\nSELECT\t"tên cột";\nlast line\n'
+
+  it('offsetToLineCol khớp bản quét tuần tự ở MỌI offset (kể cả CRLF, dòng trống, ngoài biên)', () => {
+    for (let o = -3; o <= TRICKY.length + 3; o++) {
+      expect(offsetToLineCol(TRICKY, o), `offset ${o}`).toEqual(
+        naiveOffsetToLineCol(TRICKY, Math.max(0, Math.min(o, TRICKY.length))),
+      )
+    }
+  })
+
+  it('lineColToOffset khớp bản quét tuần tự ở MỌI line/col (kể cả line/col vượt biên)', () => {
+    for (let line = 0; line <= 8; line++) {
+      for (let col = 0; col <= 20; col++) {
+        expect(lineColToOffset(TRICKY, line, col), `${line}:${col}`).toBe(naiveLineColToOffset(TRICKY, line, col))
+      }
+    }
+  })
+
+  it('memo không rò rỉ giữa các document khác nhau', () => {
+    const a = 'aaa\nbbb'
+    const b = 'x\ny\nz\nw'
+    expect(offsetToLineCol(a, 5)).toEqual({ line: 2, col: 2 })
+    expect(offsetToLineCol(b, 6)).toEqual({ line: 4, col: 1 })
+    expect(offsetToLineCol(a, 5)).toEqual({ line: 2, col: 2 }) // quay lại doc cũ
+    expect(lineColToOffset(b, 3, 1)).toBe(4)
+    expect(lineColToOffset(a, 2, 1)).toBe(4)
+  })
 })
 
 describe('statementAtOffset (Ctrl+Enter)', () => {

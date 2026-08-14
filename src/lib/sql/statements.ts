@@ -43,6 +43,11 @@ export function splitStatements(doc: string, system?: string): SplitStatement[] 
   let beginDepth = 0
   const BLOCK_END_KW = new Set(['IF', 'CASE', 'LOOP', 'WHILE', 'REPEAT'])
 
+  // Line index for this document, built once. Held locally (not via the memo in
+  // offsetToLineCol) so the per-statement conversion below stays O(log n) even if
+  // another caller passes a different document in between.
+  const starts = lineStarts(doc)
+
   const push = (endExclusive: number) => {
     const raw = doc.slice(stmtStart, endExclusive)
     if (raw.trim().length > 0) {
@@ -51,8 +56,8 @@ export function splitStatements(doc: string, system?: string): SplitStatement[] 
       while (from < endExclusive && /\s/.test(doc[from])) from++
       let to = endExclusive
       while (to > from && /\s/.test(doc[to - 1])) to--
-      const { line, col } = offsetToLineCol(doc, from)
-      out.push({ sql: doc.slice(from, to), from, to, startLine: line, startCol: col })
+      const li = lineOf(starts, from)
+      out.push({ sql: doc.slice(from, to), from, to, startLine: li + 1, startCol: from - starts[li] + 1 })
     }
   }
 
@@ -170,28 +175,57 @@ export function splitStatements(doc: string, system?: string): SplitStatement[] 
   return out
 }
 
-export function offsetToLineCol(doc: string, offset: number): { line: number; col: number } {
-  let line = 1
-  let col = 1
-  for (let i = 0; i < offset && i < doc.length; i++) {
-    if (doc[i] === '\n') {
-      line++
-      col = 1
-    } else {
-      col++
-    }
+// ---- line index -------------------------------------------------------------
+// offset ↔ line/col used to be a scan from the start of the document on EVERY
+// call. That is O(n) per call, so any caller in a loop became O(n²): the editor's
+// completion source ran splitStatements on each keystroke, which converted the
+// start of every statement — a 10k-line script froze the UI for ~190ms per
+// keystroke. The same shape lurked in showErrors/toCmDiagnostics (one conversion
+// per diagnostic).
+//
+// The fix is structural rather than local: both conversions go through a line-start
+// index built in ONE pass and memoised for the last document, then answered by
+// binary search / direct lookup. Every current AND future caller is O(log n), so
+// the quadratic pattern cannot be reintroduced by calling these in a loop.
+// `statements.perf.test.ts` locks the scaling in.
+let idxDoc: string | null = null
+let idxStarts: number[] = [0]
+
+/** Offsets where each line begins (index 0 = line 1). One O(n) pass, memoised
+ *  for the most recent document — the hot callers all pass the same string. */
+export function lineStarts(doc: string): number[] {
+  if (idxDoc === doc) return idxStarts
+  const starts = [0]
+  for (let i = 0; i < doc.length; i++) if (doc.charCodeAt(i) === 10 /* \n */) starts.push(i + 1)
+  idxDoc = doc
+  idxStarts = starts
+  return starts
+}
+
+/** Largest index whose start is <= offset (binary search over line starts). */
+function lineOf(starts: number[], offset: number): number {
+  let lo = 0
+  let hi = starts.length - 1
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1
+    if (starts[mid] <= offset) lo = mid
+    else hi = mid - 1
   }
-  return { line, col }
+  return lo
+}
+
+export function offsetToLineCol(doc: string, offset: number): { line: number; col: number } {
+  const pos = Math.max(0, Math.min(offset, doc.length))
+  const starts = lineStarts(doc)
+  const i = lineOf(starts, pos)
+  return { line: i + 1, col: pos - starts[i] + 1 }
 }
 
 export function lineColToOffset(doc: string, line: number, col: number): number {
-  let curLine = 1
-  let i = 0
-  while (i < doc.length && curLine < line) {
-    if (doc[i] === '\n') curLine++
-    i++
-  }
-  return Math.min(i + Math.max(0, col - 1), doc.length)
+  const starts = lineStarts(doc)
+  // past the last line → clamp to the end of the document (previous behaviour)
+  const start = line <= 1 ? 0 : line - 1 < starts.length ? starts[line - 1] : doc.length
+  return Math.min(start + Math.max(0, col - 1), doc.length)
 }
 
 /** Statement containing the (0-based) cursor offset — for Ctrl+Enter. */
