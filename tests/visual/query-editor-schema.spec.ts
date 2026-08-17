@@ -29,11 +29,11 @@ async function newTabFor(page: import('@playwright/test').Page, hostText: string
 
 test('Postgres query editor shows a Schema dropdown', async ({ page }) => {
   await newTabFor(page, '10.0.1.5') // Postgres connection (unique host)
-  const schema = page.getByTitle('Schema', { exact: true })
+  const schema = page.locator('input[title="Schema"]:visible')
   await expect(schema).toBeVisible()
   await expect(schema).toHaveValue('public') // defaults to the DB's default schema
   // the Database dropdown is still there alongside it
-  await expect(page.getByTitle('Database', { exact: true })).toBeVisible()
+  await expect(page.locator('input[title="Database"]:visible')).toBeVisible()
 })
 
 // Picking a schema must repoint autocomplete at THAT schema's tables — including
@@ -42,13 +42,13 @@ test('Postgres query editor shows a Schema dropdown', async ({ page }) => {
 test('switching schema repoints unqualified table suggestions', async ({ page }) => {
   await newTabFor(page, '10.0.1.5') // Postgres
   // move to a database that has a second schema
-  const dbInput = page.getByTitle('Database', { exact: true })
+  const dbInput = page.locator('input[title="Database"]:visible')
   await dbInput.click()
   await dbInput.fill('analy')
   await page.getByRole('option', { name: 'analytics' }).first().click()
   await page.waitForTimeout(900)
 
-  const schema = page.getByTitle('Schema', { exact: true })
+  const schema = page.locator('input[title="Schema"]:visible')
   const type = async (text: string) => {
     await page.locator('.cm-content').first().click()
     await page.keyboard.press('Control+A')
@@ -73,6 +73,6 @@ test('switching schema repoints unqualified table suggestions', async ({ page })
 
 test('MySQL query editor has no Schema dropdown (database IS the schema)', async ({ page }) => {
   await newTabFor(page, 'localhost:3306') // MySQL connection
-  await expect(page.getByTitle('Database', { exact: true })).toBeVisible()
-  await expect(page.getByTitle('Schema', { exact: true })).toHaveCount(0)
+  await expect(page.locator('input[title="Database"]:visible')).toBeVisible()
+  await expect(page.locator('input[title="Schema"]:visible')).toHaveCount(0)
 })

@@ -25,8 +25,12 @@ test('query editor: a lost connection turns into a Reconnect banner, and reconne
   await page.getByText('New Query Console', { exact: true }).first().click()
   await page.waitForTimeout(600)
 
-  const banner = page.getByTestId('disconnected-banner')
-  await expect(banner).toHaveCount(0)
+  // Tabs stay mounted once shown (keep-alive), so every open tab on the dead
+  // connection carries the banner — `banners` counts them all, `banner` is the
+  // one on screen (the active tab renders first).
+  const banners = page.getByTestId('disconnected-banner')
+  const banner = banners.first()
+  await expect(banners).toHaveCount(0)
 
   // Run → the connection turns out to be dead.
   const editor = page.locator('.cm-content').first()
@@ -44,7 +48,7 @@ test('query editor: a lost connection turns into a Reconnect banner, and reconne
 
   // Reconnect → the banner clears (the connection is open again)…
   await reconnect.click()
-  await expect(banner).toHaveCount(0, { timeout: 5_000 })
+  await expect(banners).toHaveCount(0, { timeout: 5_000 })
 
   // …and the editor runs again (the seam is consumed, one failure only).
   await editor.click()
@@ -53,7 +57,7 @@ test('query editor: a lost connection turns into a Reconnect banner, and reconne
   await page.keyboard.press('F5')
   await page.waitForTimeout(700)
   await expect(page.getByText(/Rows 1–\d+ of/).first()).toBeVisible()
-  await expect(banner).toHaveCount(0)
+  await expect(banners).toHaveCount(0)
 
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })

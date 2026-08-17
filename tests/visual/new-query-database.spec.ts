@@ -26,7 +26,7 @@ test('new query console binds to the selected database', async ({ page }) => {
   await page.waitForTimeout(600)
 
   // the Query Editor's Database dropdown pre-selects the picked database
-  const dbDropdown = page.getByTitle('Database', { exact: true })
+  const dbDropdown = page.locator('input[title="Database"]:visible')
   await expect(dbDropdown).toBeVisible()
   await expect(dbDropdown).toHaveValue('analytics')
 
@@ -51,7 +51,7 @@ test('single-database connection still fills the Database picker', async ({ page
   await page.getByText('New Query Console', { exact: true }).first().click()
   await page.waitForTimeout(700)
 
-  const dbDropdown = page.getByTitle('Database', { exact: true })
+  const dbDropdown = page.locator('input[title="Database"]:visible')
   await expect(dbDropdown).toBeVisible()
 
   // open the picker and search — the single database is findable, not an empty list
@@ -95,8 +95,8 @@ test('new query console binds the database + schema of a selected TABLE', async 
 
   // bound to the database the table lives in ('app' — the connection's CURRENT
   // database, not the profile's configured `sis_prod`) and to its schema
-  await expect(page.getByTitle('Database', { exact: true })).toHaveValue('app')
-  await expect(page.getByTitle('Schema', { exact: true })).toHaveValue('public')
+  await expect(page.locator('input[title="Database"]:visible')).toHaveValue('app')
+  await expect(page.locator('input[title="Schema"]:visible')).toHaveValue('public')
 
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
@@ -129,8 +129,8 @@ test('new query console binds a foreign database + its schema from an object row
   await page.getByTitle('New query console').click()
   await page.waitForTimeout(900)
 
-  await expect(page.getByTitle('Database', { exact: true })).toHaveValue('analytics')
-  await expect(page.getByTitle('Schema', { exact: true })).toHaveValue('reporting')
+  await expect(page.locator('input[title="Database"]:visible')).toHaveValue('analytics')
+  await expect(page.locator('input[title="Schema"]:visible')).toHaveValue('reporting')
 
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })

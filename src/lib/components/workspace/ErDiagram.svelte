@@ -304,6 +304,8 @@
 
 <svelte:window
   onkeydown={(e) => {
+    // Only the visible diagram reacts — background tabs stay mounted (keep-alive).
+    if (tab.id !== tabs.activeTabId && tab.id !== tabs.activeTabId1) return
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
       e.preventDefault()
       searchEl?.focus()

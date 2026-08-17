@@ -46,7 +46,7 @@ test('suggests tables of the connected database', async ({ page }) => {
 test('suggests tables after switching the database', async ({ page }) => {
   await openSqlTab(page)
   // switch to another database via the searchable combobox: type to filter, pick
-  const dbInput = page.getByTitle('Database', { exact: true })
+  const dbInput = page.locator('input[title="Database"]:visible')
   await dbInput.click()
   await page.waitForTimeout(200)
   await dbInput.fill('analy')

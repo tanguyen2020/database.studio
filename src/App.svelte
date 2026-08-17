@@ -2,7 +2,7 @@
   // App shell:
   //  TitleBar → [Sidebar: ConnectionList / ObjectExplorer] | [TabBar → Workspace] → StatusBar
   // Global keyboard shortcuts + layout resizers (all sizes persisted).
-  import { onMount } from 'svelte'
+  import { onMount, untrack } from 'svelte'
   import TitleBar from '$lib/components/TitleBar.svelte'
   import StatusBar from '$lib/components/StatusBar.svelte'
   import PropertiesPanel from '$lib/components/PropertiesPanel.svelte'
@@ -176,6 +176,37 @@
     }
   }
 
+  // ---- tab keep-alive -------------------------------------------------------
+  // Switching tabs must never re-run a tab's work: a tab mounts the first time it
+  // is activated and then STAYS mounted, hidden with display:none, so its query,
+  // its results, scroll position, editor content and in-flight streams survive
+  // clicking away and back. Tabs that were never activated are not mounted at
+  // all (so restoring a session doesn't fire every tab's queries at once), and
+  // closed tabs drop out of the list, unmounting for real.
+  let mountedTabs = $state<string[]>([])
+
+  /** The pane's mounted tabs, active one FIRST. Order is invisible on screen (the
+   *  others are display:none) but keeps the tab the user is looking at first in
+   *  the DOM, so anything reading the document — assistive tech, "the editor",
+   *  the first result grid — lands on the visible tab, not a background one. */
+  function mountedInPane(p: 0 | 1, activeId: string | null) {
+    const list = tabs.tabsInPane(p).filter((t) => mountedTabs.includes(t.id))
+    const i = list.findIndex((t) => t.id === activeId)
+    return i > 0 ? [list[i], ...list.slice(0, i), ...list.slice(i + 1)] : list
+  }
+
+  $effect(() => {
+    const live = [tabs.activeTabId, tabs.activeTabId1].filter(Boolean) as string[]
+    const open = new Set(tabs.tabs.map((t) => t.id))
+    untrack(() => {
+      const next = mountedTabs.filter((id) => open.has(id))
+      for (const id of live) if (!next.includes(id)) next.push(id)
+      const changed =
+        next.length !== mountedTabs.length || next.some((id, i) => id !== mountedTabs[i])
+      if (changed) mountedTabs = next
+    })
+  })
+
   // ---- resizers (sidebar width + connection-list height) ----
   let draggingSidebar = $state(false)
   let draggingConnList = $state(false)
@@ -308,6 +339,21 @@
         {/key}
       {/snippet}
 
+      {#snippet paneView(p: 0 | 1)}
+        <!-- Every tab this pane has shown stays mounted; only the active one is
+             visible. Keeps state (results, scroll, editor) across tab switches. -->
+        {@const activeId = p === 1 ? tabs.activeTabId1 : tabs.activeTabId}
+        {#each mountedInPane(p, activeId) as t (t.id)}
+          <div
+            style="flex:1;flex-direction:column;min-width:0;min-height:0;display:{t.id === activeId ? 'flex' : 'none'}"
+            aria-hidden={t.id === activeId ? undefined : 'true'}
+          >
+            {@render paneBody(t)}
+          </div>
+        {/each}
+        {#if !tabs.activeInPane(p)}{@render emptyPane()}{/if}
+      {/snippet}
+
       {#snippet emptyPane()}
         {#if connections.profiles.length === 0}
           <!-- Welcome / onboarding (Phase 6 · T7) — chưa có connection nào -->
@@ -340,21 +386,21 @@
           <div style="flex:1;display:flex;flex-direction:column;min-width:0;min-height:0">
             <TabBar pane={0} />
             <div style="flex:1;display:flex;flex-direction:column;min-height:0">
-              {#if tabs.activeInPane(0)}{@render paneBody(tabs.activeInPane(0)!)}{:else}{@render emptyPane()}{/if}
+              {@render paneView(0)}
             </div>
           </div>
           <div style="flex:none;{tabs.splitDir === 'v' ? 'width:var(--px-1)' : 'height:var(--px-1)'};background:var(--border2)"></div>
           <div style="flex:1;display:flex;flex-direction:column;min-width:0;min-height:0">
             <TabBar pane={1} />
             <div style="flex:1;display:flex;flex-direction:column;min-height:0">
-              {#if tabs.activeInPane(1)}{@render paneBody(tabs.activeInPane(1)!)}{:else}{@render emptyPane()}{/if}
+              {@render paneView(1)}
             </div>
           </div>
         </div>
       {:else}
         <TabBar />
         <div style="flex:1;display:flex;flex-direction:column;min-height:0">
-          {#if tabs.active}{@render paneBody(tabs.active)}{:else}{@render emptyPane()}{/if}
+          {@render paneView(0)}
         </div>
       {/if}
       <!-- STATUS BAR nằm trong cột main — dòng 1501 -->
