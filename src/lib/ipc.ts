@@ -331,6 +331,9 @@ export interface KafkaPartition {
 export interface KafkaTopic {
   name: string
   partitions: KafkaPartition[]
+  /** false = the broker did not report offsets → the count is UNKNOWN, not 0 */
+  offsets_known?: boolean
+  offsets_error?: string | null
   internal: boolean
 }
 
@@ -357,7 +360,35 @@ export interface KafkaMsg {
   headers: [string, string][]
 }
 
-/** Consume topic → messages arrive via `kafka-msg` event. from: earliest|latest|offset. */
+export interface KafkaPage {
+  msgs: KafkaMsg[]
+  /** Σ(high − low) of the browsed partitions; **−1 = unknown** (never read as "empty"). */
+  retained: number
+  /** first offset of this window — pass as `until` to page older */
+  window_start: number
+  has_older: boolean
+  at_newest: boolean
+  /** why offsets could not be read (`retained` is −1 then) */
+  offsets_error?: string | null
+}
+
+/**
+ * Read ONE page of messages instead of streaming the whole log.
+ * `until` < 0 = newest page; otherwise it is the window's exclusive upper offset.
+ */
+export const kafkaFetchPage = (
+  connId: string,
+  topic: string,
+  partition: number | null,
+  until: number,
+  limit: number,
+) => invoke<KafkaPage>('kafka_fetch_page', { connId, topic, partition, until, limit })
+
+/**
+ * Consume topic → messages arrive BATCHED via the `kafka-msgs` event.
+ * from: recent|earliest|latest|offset. In `recent` mode `offset` is the number of
+ * newest records to start from (per topic, split across partitions).
+ */
 export const kafkaConsume = (
   connId: string,
   topic: string,

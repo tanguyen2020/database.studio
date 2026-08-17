@@ -11,12 +11,16 @@
 //! brokers advertise an internal hostname / the host's public IP that isn't
 //! reachable from this machine, so the reconnect times out. When this flag is
 //! set the forwarder becomes a Kafka-protocol-aware proxy: it rewrites every
-//! broker address in Metadata responses to `127.0.0.1:<local tunnel port>`, so
-//! librdkafka's reconnects loop back through this same tunnel. This makes Kafka
-//! work over SSH with NO server-side `advertised.listeners` change.
-//! LIMITATION: rewrites all brokers to the one tunnel → correct for a
-//! single-broker cluster (all metadata brokers are the same node); a multi-broker
-//! cluster would need one tunnel per broker.
+//! broker address in Metadata responses to a local port that loops back through
+//! this same SSH session. This makes Kafka work over SSH with NO server-side
+//! `advertised.listeners` change.
+//!
+//! Multi-broker: every broker gets its **own** local port (`BrokerForwards`, opened
+//! lazily as metadata reveals each broker). Pointing all brokers at ONE port used to
+//! be the behaviour, and it silently breaks any cluster with more than one broker:
+//! librdkafka then sends each partition's ListOffsets/Fetch to whichever single
+//! broker sits behind that port, which answers `NotLeaderForPartition` for every
+//! partition it does not lead — the app shows "0 msg" / no messages for most topics.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -70,15 +74,116 @@ impl client::Handler for AcceptAllHandler {
     }
 }
 
+/// Địa chỉ broker thật `(host, port)` → địa chỉ cục bộ thay thế `(host, port)`.
+type BrokerMap = HashMap<(String, i32), (String, i32)>;
+
+/// Một cổng cục bộ **cho MỖI broker**, mở lười qua cùng một phiên SSH.
+///
+/// Nếu mọi broker cùng trỏ về một cổng thì librdkafka gửi ListOffsets/Fetch của mọi
+/// partition tới đúng một broker, và broker trả `NotLeaderForPartition` cho mọi
+/// partition nó không làm leader — tức cluster nhiều broker không dùng được.
+struct BrokerForwards {
+    session: Arc<Handle<AcceptAllHandler>>,
+    /// (host thật, port thật) → cổng cục bộ đang lắng nghe cho riêng broker đó
+    ports: Mutex<HashMap<(String, i32), u16>>,
+    tasks: Mutex<Vec<tokio::task::JoinHandle<()>>>,
+}
+
+impl BrokerForwards {
+    /// Cổng cục bộ dành riêng cho broker này (mở mới nếu chưa có). `None` = không mở
+    /// được → caller dùng cổng bootstrap làm dự phòng (hành vi cũ).
+    ///
+    /// Trả future ĐÓNG HỘP kèm `Send` tường minh: hàm này đệ quy gián tiếp (mở cổng cho
+    /// broker → phục vụ kết nối bằng chính `proxy_kafka` → lại mở cổng cho broker mới),
+    /// nên nếu để `async fn` thì trình biên dịch không suy ra nổi `Send` (vòng lặp
+    /// auto-trait). Khai báo tường minh cắt vòng đó.
+    fn port_for<'a>(
+        self: &'a Arc<Self>,
+        host: &'a str,
+        port: i32,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Option<u16>> + Send + 'a>> {
+        Box::pin(async move {
+        let key = (host.to_string(), port);
+        // phạm vi rõ ràng: MutexGuard (không Send) không được sống qua bất kỳ .await nào
+        {
+            let ports = self.ports.lock().ok()?;
+            if let Some(p) = ports.get(&key) {
+                return Some(*p);
+            }
+        }
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.ok()?;
+        let local = listener.local_addr().ok()?.port();
+        let me = Arc::clone(self);
+        let host_owned = host.to_string();
+        let task = tokio::spawn(async move {
+            loop {
+                let Ok((socket, peer)) = listener.accept().await else { break };
+                let me2 = Arc::clone(&me);
+                let target = host_owned.clone();
+                tokio::spawn(async move {
+                    match me2
+                        .session
+                        .channel_open_direct_tcpip(
+                            target,
+                            port as u32,
+                            peer.ip().to_string(),
+                            peer.port() as u32,
+                        )
+                        .await
+                    {
+                        // Kết nối tới broker này cũng mang Metadata/FindCoordinator,
+                        // nên vẫn phải đi qua proxy Kafka.
+                        Ok(channel) => proxy_kafka(socket, channel.into_stream(), local, me2).await,
+                        Err(e) => eprintln!("tunnel broker channel error: {e}"),
+                    }
+                });
+            }
+        });
+        if let Ok(mut t) = self.tasks.lock() {
+            t.push(task);
+        }
+        {
+            let mut ports = self.ports.lock().ok()?;
+            ports.insert(key, local);
+        }
+        Some(local)
+        })
+    }
+
+    /// Mở cổng riêng cho mọi broker vừa thấy trong metadata rồi trả bản đồ thay thế.
+    async fn map_for(self: &Arc<Self>, seen: &[(String, i32)]) -> BrokerMap {
+        let mut map = BrokerMap::new();
+        for (host, port) in seen {
+            if let Some(local) = self.port_for(host, *port).await {
+                map.insert((host.clone(), *port), ("127.0.0.1".to_string(), local as i32));
+            }
+        }
+        map
+    }
+
+    fn abort_all(&self) {
+        if let Ok(t) = self.tasks.lock() {
+            for h in t.iter() {
+                h.abort();
+            }
+        }
+    }
+}
+
 pub struct TunnelHandle {
     pub local_port: u16,
     session: Arc<Handle<AcceptAllHandler>>,
     accept_task: tokio::task::JoinHandle<()>,
+    /// Chỉ có với Kafka: các cổng phụ mở cho từng broker.
+    forwards: Option<Arc<BrokerForwards>>,
 }
 
 impl TunnelHandle {
     pub async fn shutdown(self) {
         self.accept_task.abort();
+        if let Some(f) = &self.forwards {
+            f.abort_all();
+        }
         let _ = self
             .session
             .disconnect(russh::Disconnect::ByApplication, "closing tunnel", "en")
@@ -136,6 +241,14 @@ pub async fn open_tunnel(
         .map_err(|e| AppError::Tunnel(e.to_string()))?
         .port();
 
+    let forwards = rewrite_kafka_metadata.then(|| {
+        Arc::new(BrokerForwards {
+            session: Arc::clone(&session),
+            ports: Mutex::new(HashMap::new()),
+            tasks: Mutex::new(Vec::new()),
+        })
+    });
+    let fwd_forwards = forwards.clone();
     let fwd_session = Arc::clone(&session);
     let target_host = target_host.to_string();
     let accept_task = tokio::spawn(async move {
@@ -145,6 +258,7 @@ pub async fn open_tunnel(
             };
             let session = Arc::clone(&fwd_session);
             let target_host = target_host.clone();
+            let forwards = fwd_forwards.clone();
             tokio::spawn(async move {
                 match session
                     .channel_open_direct_tcpip(
@@ -157,10 +271,11 @@ pub async fn open_tunnel(
                 {
                     Ok(channel) => {
                         let mut stream = channel.into_stream();
-                        if rewrite_kafka_metadata {
+                        if let Some(fw) = forwards {
                             // Kafka-aware forwarding: rewrite advertised broker
-                            // addresses so reconnects loop back through us.
-                            proxy_kafka(socket, stream, local_port).await;
+                            // addresses so reconnects loop back through us — each
+                            // broker via its OWN local port.
+                            proxy_kafka(socket, stream, local_port, fw).await;
                         } else {
                             let _ = tokio::io::copy_bidirectional(&mut socket, &mut stream).await;
                         }
@@ -173,7 +288,7 @@ pub async fn open_tunnel(
         }
     });
 
-    Ok(TunnelHandle { local_port, session, accept_task })
+    Ok(TunnelHandle { local_port, session, accept_task, forwards })
 }
 
 // ---------------------------------------------------------------------------
@@ -183,8 +298,12 @@ pub async fn open_tunnel(
 /// Forward a single client<->broker connection while rewriting Kafka Metadata
 /// responses. Requests are inspected only to learn each correlation id's
 /// (api_key, api_version) so the matching response can be parsed correctly.
-async fn proxy_kafka<S>(client: tokio::net::TcpStream, upstream: S, local_port: u16)
-where
+async fn proxy_kafka<S>(
+    client: tokio::net::TcpStream,
+    upstream: S,
+    local_port: u16,
+    forwards: Arc<BrokerForwards>,
+) where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + 'static,
 {
     let trace = std::env::var("DBSTUDIO_KAFKA_TRACE").is_ok();
@@ -231,10 +350,17 @@ where
                 let meta = resp_map.lock().unwrap().remove(&corr);
                 match meta {
                     Some((API_KEY_METADATA, api_version)) => {
-                        match rewrite_metadata_response(&frame, api_version, "127.0.0.1", local_port as i32) {
-                            Some(rw) => {
+                        // lượt 1 khám phá địa chỉ broker thật, mở cổng riêng cho từng
+                        // broker, lượt 2 ghi lại bằng bản đồ đầy đủ
+                        let empty = BrokerMap::new();
+                        let seen = rewrite_metadata_response(&frame, api_version, &empty, "127.0.0.1", local_port as i32)
+                            .map(|(_, s)| s)
+                            .unwrap_or_default();
+                        let map = forwards.map_for(&seen).await;
+                        match rewrite_metadata_response(&frame, api_version, &map, "127.0.0.1", local_port as i32) {
+                            Some((rw, _)) => {
                                 if trace {
-                                    eprintln!("kafka-proxy[{cid}] <- Metadata corr={corr}: rewrote broker address(es) -> 127.0.0.1:{local_port}");
+                                    eprintln!("kafka-proxy[{cid}] <- Metadata corr={corr}: rewrote {} broker address(es), own port each: {:?}", seen.len(), map.values().collect::<Vec<_>>());
                                 }
                                 frame = rw;
                             }
@@ -245,10 +371,15 @@ where
                         }
                     }
                     Some((API_KEY_FIND_COORDINATOR, api_version)) => {
-                        match rewrite_findcoordinator_response(&frame, api_version, "127.0.0.1", local_port as i32) {
-                            Some(rw) => {
+                        let empty = BrokerMap::new();
+                        let seen = rewrite_findcoordinator_response(&frame, api_version, &empty, "127.0.0.1", local_port as i32)
+                            .map(|(_, s)| s)
+                            .unwrap_or_default();
+                        let map = forwards.map_for(&seen).await;
+                        match rewrite_findcoordinator_response(&frame, api_version, &map, "127.0.0.1", local_port as i32) {
+                            Some((rw, _)) => {
                                 if trace {
-                                    eprintln!("kafka-proxy[{cid}] <- FindCoordinator corr={corr}: rewrote coordinator address -> 127.0.0.1:{local_port}");
+                                    eprintln!("kafka-proxy[{cid}] <- FindCoordinator corr={corr}: rewrote coordinator address (own port)");
                                 }
                                 frame = rw;
                             }
@@ -382,12 +513,24 @@ fn skip_tagged_fields(buf: &[u8], i: &mut usize) -> Option<()> {
 /// flexible]. Everything after the brokers array is copied verbatim; the wire
 /// format is sequential so no later offsets need fixing. Flexible encoding
 /// (compact strings / arrays + tagged fields) applies from Metadata v9.
+///
+/// `map` gives each real broker `(host, port)` its OWN local port; brokers missing
+/// from the map fall back to `(fallback_host, fallback_port)`. Returns the rewritten
+/// payload **and the real broker addresses it saw**, so the caller can open a forward
+/// per broker and rewrite again with a complete map (a first pass with an empty map is
+/// how those addresses are discovered).
+///
+/// Giving every broker the SAME local port is what breaks multi-broker clusters:
+/// librdkafka then sends each partition's ListOffsets/Fetch to whichever single broker
+/// sits behind that port, and the broker answers `NotLeaderForPartition` for every
+/// partition it does not lead.
 fn rewrite_metadata_response(
     payload: &[u8],
     api_version: i16,
-    new_host: &str,
-    new_port: i32,
-) -> Option<Vec<u8>> {
+    map: &BrokerMap,
+    fallback_host: &str,
+    fallback_port: i32,
+) -> Option<(Vec<u8>, Vec<(String, i32)>)> {
     let flexible = api_version >= 9;
     let mut i = 4usize; // skip correlation id
     if flexible {
@@ -412,29 +555,41 @@ fn rewrite_metadata_response(
 
     // Header + array-length prefix are copied verbatim.
     let mut out = payload[..i].to_vec();
+    let mut seen: Vec<(String, i32)> = Vec::new();
 
     for _ in 0..count {
         // node_id
         out.extend_from_slice(payload.get(i..i + 4)?);
         i += 4;
-        // host (rewritten)
+        // host (rewritten — remember the real one so it can get its own forward)
         let host_len = if flexible {
             (read_uvarint(payload, &mut i)? as usize).checked_sub(1)?
         } else {
             read_i16(payload, &mut i)? as usize
         };
-        i += host_len; // skip original host bytes
+        let real_host = String::from_utf8_lossy(payload.get(i..i + host_len)?).into_owned();
+        i += host_len;
         if i > payload.len() {
             return None;
         }
+        let real_port = i32::from_be_bytes([
+            *payload.get(i)?,
+            *payload.get(i + 1)?,
+            *payload.get(i + 2)?,
+            *payload.get(i + 3)?,
+        ]);
+        i += 4;
+        seen.push((real_host.clone(), real_port));
+        let (new_host, new_port) = map
+            .get(&(real_host, real_port))
+            .map(|(h, p)| (h.as_str(), *p))
+            .unwrap_or((fallback_host, fallback_port));
         if flexible {
             write_uvarint(&mut out, new_host.len() as u64 + 1);
         } else {
             out.extend_from_slice(&(new_host.len() as i16).to_be_bytes());
         }
         out.extend_from_slice(new_host.as_bytes());
-        // port (rewritten)
-        i += 4; // skip original port
         out.extend_from_slice(&new_port.to_be_bytes());
         // rack (v1+): copied verbatim
         if api_version >= 1 {
@@ -462,7 +617,7 @@ fn rewrite_metadata_response(
 
     // Everything after the brokers array (cluster_id, controller_id, topics, …).
     out.extend_from_slice(payload.get(i..)?);
-    Some(out)
+    Some((out, seen))
 }
 
 // --- string / tagged-field helpers for FindCoordinator rewriting ------------
@@ -532,15 +687,50 @@ fn copy_tagged(payload: &[u8], i: &mut usize, out: &mut Vec<u8>) -> Option<()> {
 fn rewrite_findcoordinator_response(
     payload: &[u8],
     api_version: i16,
-    new_host: &str,
-    new_port: i32,
-) -> Option<Vec<u8>> {
+    map: &BrokerMap,
+    fallback_host: &str,
+    fallback_port: i32,
+) -> Option<(Vec<u8>, Vec<(String, i32)>)> {
     let flexible = api_version >= 3;
     let mut i = 4usize; // correlation id
     if flexible {
         skip_tagged_fields(payload, &mut i)?; // response header v1 tagged fields
     }
     let mut out = payload[..i].to_vec();
+    let mut seen: Vec<(String, i32)> = Vec::new();
+    // đọc host:port thật rồi tra bản đồ → cổng cục bộ RIÊNG của chính broker đó
+    macro_rules! put_addr {
+        ($compact:expr) => {{
+            let hstart = *(&mut i);
+            let _ = hstart;
+            let host_len = if $compact {
+                (read_uvarint(payload, &mut i)? as usize).checked_sub(1)?
+            } else {
+                read_i16(payload, &mut i)? as usize
+            };
+            let real_host = String::from_utf8_lossy(payload.get(i..i + host_len)?).into_owned();
+            i += host_len;
+            let real_port = i32::from_be_bytes([
+                *payload.get(i)?,
+                *payload.get(i + 1)?,
+                *payload.get(i + 2)?,
+                *payload.get(i + 3)?,
+            ]);
+            i += 4;
+            seen.push((real_host.clone(), real_port));
+            let (nh, np) = map
+                .get(&(real_host, real_port))
+                .map(|(h, p)| (h.as_str(), *p))
+                .unwrap_or((fallback_host, fallback_port));
+            if $compact {
+                write_uvarint(&mut out, nh.len() as u64 + 1);
+            } else {
+                out.extend_from_slice(&(nh.len() as i16).to_be_bytes());
+            }
+            out.extend_from_slice(nh.as_bytes());
+            out.extend_from_slice(&np.to_be_bytes());
+        }};
+    }
 
     if api_version >= 1 {
         copy_n(payload, &mut i, &mut out, 4)?; // throttle_time_ms
@@ -554,9 +744,7 @@ fn rewrite_findcoordinator_response(
         for _ in 0..count {
             copy_str(payload, &mut i, &mut out, true)?; // key
             copy_n(payload, &mut i, &mut out, 4)?; // node_id
-            put_str(payload, &mut i, &mut out, true, new_host)?; // host → tunnel
-            i += 4;
-            out.extend_from_slice(&new_port.to_be_bytes()); // port → tunnel
+            put_addr!(true); // host:port → cổng tunnel của CHÍNH broker đó
             copy_n(payload, &mut i, &mut out, 2)?; // error_code
             copy_str(payload, &mut i, &mut out, true)?; // error_message (nullable)
             copy_tagged(payload, &mut i, &mut out)?; // per-coordinator tagged fields
@@ -569,16 +757,14 @@ fn rewrite_findcoordinator_response(
             copy_str(payload, &mut i, &mut out, flexible)?; // error_message (nullable)
         }
         copy_n(payload, &mut i, &mut out, 4)?; // node_id
-        put_str(payload, &mut i, &mut out, flexible, new_host)?; // host → tunnel
-        i += 4;
-        out.extend_from_slice(&new_port.to_be_bytes()); // port → tunnel
+        put_addr!(flexible); // host:port → cổng tunnel của CHÍNH broker đó
         if flexible {
             copy_tagged(payload, &mut i, &mut out)?; // v3 tagged fields
         }
     }
     // Copy any trailing bytes (defensive; normally none).
     out.extend_from_slice(payload.get(i..)?);
-    Some(out)
+    Some((out, seen))
 }
 
 #[cfg(test)]
@@ -657,7 +843,7 @@ mod tests {
         p.extend_from_slice(&(-1i16).to_be_bytes()); // rack = null (v1+)
         p.extend_from_slice(&[0xAB, 0xCD]); // opaque tail (controller/topics/…)
 
-        let out = rewrite_metadata_response(&p, 1, "127.0.0.1", 54321).unwrap();
+        let out = rewrite_metadata_response(&p, 1, &BrokerMap::new(), "127.0.0.1", 54321).unwrap().0;
         assert_eq!(read_brokers(&out, 1), vec![("127.0.0.1".to_string(), 54321)]);
         // Tail must be preserved verbatim.
         assert_eq!(&out[out.len() - 2..], &[0xAB, 0xCD]);
@@ -680,7 +866,7 @@ mod tests {
         p.push(0x00); // per-broker tagged fields = 0
         p.push(0xAA); // opaque tail
 
-        let out = rewrite_metadata_response(&p, 12, "127.0.0.1", 40000).unwrap();
+        let out = rewrite_metadata_response(&p, 12, &BrokerMap::new(), "127.0.0.1", 40000).unwrap().0;
         assert_eq!(read_brokers(&out, 12), vec![("127.0.0.1".to_string(), 40000)]);
         assert_eq!(out[out.len() - 1], 0xAA);
     }
@@ -700,7 +886,7 @@ mod tests {
         }
         p.push(0x99); // tail
 
-        let out = rewrite_metadata_response(&p, 1, "127.0.0.1", 5000).unwrap();
+        let out = rewrite_metadata_response(&p, 1, &BrokerMap::new(), "127.0.0.1", 5000).unwrap().0;
         assert_eq!(
             read_brokers(&out, 1),
             vec![
@@ -734,7 +920,7 @@ mod tests {
         p.extend_from_slice(b"10.16.71.3"); // host
         p.extend_from_slice(&9092i32.to_be_bytes()); // port
 
-        let out = rewrite_findcoordinator_response(&p, 2, "127.0.0.1", 64045).expect("rewrite v2");
+        let out = rewrite_findcoordinator_response(&p, 2, &BrokerMap::new(), "127.0.0.1", 64045).expect("rewrite v2").0;
         // node_id preserved (bytes 12..16), host + port substituted
         assert_eq!(&out[12..16], &1i32.to_be_bytes());
         let hl = i16::from_be_bytes([out[16], out[17]]) as usize;
@@ -759,7 +945,7 @@ mod tests {
         p.extend_from_slice(&9092i32.to_be_bytes()); // port
         p.push(0x00); // tagged fields
 
-        let out = rewrite_findcoordinator_response(&p, 3, "127.0.0.1", 64045).expect("rewrite v3");
+        let out = rewrite_findcoordinator_response(&p, 3, &BrokerMap::new(), "127.0.0.1", 64045).expect("rewrite v3").0;
         assert!(has(&out, b"127.0.0.1") && !has(&out, b"kafka"), "coordinator host rewritten");
         assert!(has(&out, &64045i32.to_be_bytes()), "coordinator port rewritten");
     }
@@ -781,9 +967,105 @@ mod tests {
         p.push(0x00); // per-coord tagged
         p.push(0x00); // top-level tagged
 
-        let out = rewrite_findcoordinator_response(&p, 4, "127.0.0.1", 64045).expect("rewrite v4");
+        let out = rewrite_findcoordinator_response(&p, 4, &BrokerMap::new(), "127.0.0.1", 64045).expect("rewrite v4").0;
         assert!(has(&out, b"mygroup"), "coordinator key preserved");
         assert!(has(&out, b"127.0.0.1") && !has(&out, b"10.16.71.3"), "coordinator host rewritten");
         assert!(has(&out, &64045i32.to_be_bytes()), "coordinator port rewritten");
     }
+
+    // --- multi-broker: MOI broker phai co cong cuc bo RIENG ---------------------
+    // Dung mot cong cho tat ca la nguyen nhan NotLeaderForPartition: librdkafka gui
+    // ListOffsets/Fetch cua moi partition toi dung mot broker, broker do tra loi cho
+    // moi partition no khong lam leader.
+    fn meta_v1_two_brokers() -> Vec<u8> {
+        let mut p = Vec::new();
+        p.extend_from_slice(&7i32.to_be_bytes()); // correlation id
+        p.extend_from_slice(&2i32.to_be_bytes()); // broker count
+        for (id, host, port) in [(1i32, "kafka-1.internal", 9092i32), (2, "kafka-2.internal", 9092)] {
+            p.extend_from_slice(&id.to_be_bytes());
+            p.extend_from_slice(&(host.len() as i16).to_be_bytes());
+            p.extend_from_slice(host.as_bytes());
+            p.extend_from_slice(&port.to_be_bytes());
+            p.extend_from_slice(&(-1i16).to_be_bytes()); // rack null
+        }
+        p.push(0x99); // tail
+        p
+    }
+
+    #[test]
+    fn first_pass_reports_the_real_broker_addresses() {
+        let p = meta_v1_two_brokers();
+        let (_, seen) =
+            rewrite_metadata_response(&p, 1, &BrokerMap::new(), "127.0.0.1", 5000).unwrap();
+        assert_eq!(
+            seen,
+            vec![
+                ("kafka-1.internal".to_string(), 9092),
+                ("kafka-2.internal".to_string(), 9092)
+            ],
+            "luot 1 phai tra ve dia chi THAT de mo cong rieng cho tung broker"
+        );
+    }
+
+    #[test]
+    fn each_broker_gets_its_own_local_port() {
+        let p = meta_v1_two_brokers();
+        let mut map = BrokerMap::new();
+        map.insert(("kafka-1.internal".into(), 9092), ("127.0.0.1".into(), 5001));
+        map.insert(("kafka-2.internal".into(), 9092), ("127.0.0.1".into(), 5002));
+
+        let (out, _) = rewrite_metadata_response(&p, 1, &map, "127.0.0.1", 5000).unwrap();
+        let brokers = read_brokers(&out, 1);
+        assert_eq!(
+            brokers,
+            vec![("127.0.0.1".to_string(), 5001), ("127.0.0.1".to_string(), 5002)],
+            "moi broker phai tro toi cong RIENG cua no"
+        );
+        assert_ne!(brokers[0].1, brokers[1].1, "hai broker khong duoc dung chung mot cong");
+        assert_eq!(out[out.len() - 1], 0x99, "phan duoi payload giu nguyen");
+    }
+
+    #[test]
+    fn broker_missing_from_the_map_falls_back_to_the_bootstrap_port() {
+        let p = meta_v1_two_brokers();
+        let mut map = BrokerMap::new();
+        map.insert(("kafka-1.internal".into(), 9092), ("127.0.0.1".into(), 5001));
+        let (out, _) = rewrite_metadata_response(&p, 1, &map, "127.0.0.1", 5000).unwrap();
+        assert_eq!(
+            read_brokers(&out, 1),
+            vec![("127.0.0.1".to_string(), 5001), ("127.0.0.1".to_string(), 5000)],
+            "broker chua mo duoc cong rieng thi ve cong bootstrap (hanh vi cu)"
+        );
+    }
+
+    #[test]
+    fn flexible_v12_also_maps_each_broker_separately() {
+        // v12 = compact string/array + tagged fields
+        let mut p = Vec::new();
+        p.extend_from_slice(&9i32.to_be_bytes()); // correlation id
+        p.push(0x00); // header tagged fields
+        p.extend_from_slice(&0i32.to_be_bytes()); // throttle_time_ms
+        write_uvarint(&mut p, 3); // compact array: 2 brokers
+        for (id, host, port) in [(1i32, "b1", 9092i32), (2, "b2", 9093)] {
+            p.extend_from_slice(&id.to_be_bytes());
+            write_uvarint(&mut p, host.len() as u64 + 1);
+            p.extend_from_slice(host.as_bytes());
+            p.extend_from_slice(&port.to_be_bytes());
+            write_uvarint(&mut p, 0); // rack = null (compact)
+            p.push(0x00); // broker tagged fields
+        }
+        p.push(0x77); // tail
+
+        let mut map = BrokerMap::new();
+        map.insert(("b1".into(), 9092), ("127.0.0.1".into(), 6001));
+        map.insert(("b2".into(), 9093), ("127.0.0.1".into(), 6002));
+        let (out, seen) = rewrite_metadata_response(&p, 12, &map, "127.0.0.1", 6000).unwrap();
+        assert_eq!(seen, vec![("b1".to_string(), 9092), ("b2".to_string(), 9093)]);
+        assert_eq!(
+            read_brokers(&out, 12),
+            vec![("127.0.0.1".to_string(), 6001), ("127.0.0.1".to_string(), 6002)]
+        );
+        assert_eq!(out[out.len() - 1], 0x77);
+    }
+
 }

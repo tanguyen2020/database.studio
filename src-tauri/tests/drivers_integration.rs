@@ -6881,3 +6881,657 @@ async fn mysql_session_id(registry: &database_studio_lib::connections::registry:
     let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
     result.rows[0]["id"].to_string()
 }
+
+// ---------------------------------------------------------------------------
+// BENCH (ignored) — Kafka topic list: do chi phi lay watermark offsets.
+// `topics()` hien goi fetch_watermarks TUAN TU cho MOI partition cua MOI topic
+// (ke ca topic internal `__*` ma UI loc bo). Moi call = 2 ListOffsets round-trip
+// (low + high) -> N partition = 2N round-trip noi duoi nhau.
+// cargo test --test drivers_integration bench_kafka_topic_list -- --ignored --nocapture --test-threads=1
+// ---------------------------------------------------------------------------
+#[tokio::test]
+#[ignore]
+async fn bench_kafka_topic_list_watermarks() {
+    use database_studio_lib::drivers::kafka::{KafkaConnParams, KafkaDriver};
+    use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
+    use rdkafka::client::DefaultClientContext;
+    use rdkafka::consumer::Consumer;
+    use rdkafka::{Offset, TopicPartitionList};
+    use std::collections::BTreeMap;
+    use testcontainers_modules::kafka::{Kafka, KAFKA_PORT};
+
+    let node = Kafka::default().start().await.expect("start kafka container");
+    let port = node.get_host_port_ipv4(KAFKA_PORT).await.unwrap();
+    let params = KafkaConnParams {
+        bootstrap: format!("127.0.0.1:{port}"),
+        sasl_mechanism: String::new(),
+        user: String::new(),
+        password: String::new(),
+        ssl: false,
+    };
+    let drv = retry("kafka", || KafkaDriver::connect(&params)).await;
+
+    const TOPICS: usize = 40;
+    const PARTS: i32 = 3;
+    let admin: AdminClient<DefaultClientContext> = drv.config().create().unwrap();
+    let names: Vec<String> = (0..TOPICS).map(|i| format!("bench_topic_{i:03}")).collect();
+    let new_topics: Vec<NewTopic> = names
+        .iter()
+        .map(|n| NewTopic::new(n, PARTS, TopicReplication::Fixed(1)))
+        .collect();
+    let opts = AdminOptions::new().operation_timeout(Some(Duration::from_secs(60)));
+    admin.create_topics(new_topics.iter(), &opts).await.unwrap();
+
+    // ep Kafka tao __consumer_offsets (50 partition) - dung thuc te cluster dang dung
+    drv.reset_group_offset("bench_group".into(), names[0].clone(), 0, "offset".into(), 0)
+        .await
+        .ok();
+    for i in 0..10 {
+        drv.produce(&names[i % TOPICS], "k", "v", Some(0)).await.ok();
+    }
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    let consumer = drv.consumer();
+    let _ = drv.topics().await.unwrap(); // warm-up metadata
+
+    // --- A) DUONG HIEN TAI ---
+    let t0 = Instant::now();
+    let listed = drv.topics().await.unwrap();
+    let current_ms = t0.elapsed().as_millis();
+    let all_parts: usize = listed.iter().map(|t| t.partitions.len()).sum();
+    let user_parts: usize = listed.iter().filter(|t| !t.internal).map(|t| t.partitions.len()).sum();
+    let internal_parts = all_parts - user_parts;
+
+    let mut expect: BTreeMap<(String, i32), (i64, i64)> = BTreeMap::new();
+    for t in &listed {
+        for p in &t.partitions {
+            expect.insert((t.name.clone(), p.id), (p.low, p.high));
+        }
+    }
+
+    // --- B) DUONG CU: fetch_watermarks TUAN TU cho MOI partition (ke ca internal) ---
+    let md_pairs = {
+        let c = consumer.clone();
+        tokio::task::spawn_blocking(move || {
+            let md = c.fetch_metadata(None, Duration::from_secs(10)).unwrap();
+            let mut user = Vec::new();
+            let mut all = Vec::new();
+            for t in md.topics() {
+                for p in t.partitions() {
+                    all.push((t.name().to_string(), p.id()));
+                    if !t.name().starts_with("__") {
+                        user.push((t.name().to_string(), p.id()));
+                    }
+                }
+            }
+            (user, all)
+        })
+        .await
+        .unwrap()
+    };
+    let targets = md_pairs.0;
+    let all_targets = md_pairs.1;
+
+    let c = consumer.clone();
+    let tg = all_targets.clone();
+    let t0 = Instant::now();
+    let seq_user = tokio::task::spawn_blocking(move || {
+        let mut out = BTreeMap::new();
+        for (t, p) in &tg {
+            let w = c.fetch_watermarks(t, *p, Duration::from_secs(2)).unwrap_or((0, 0));
+            out.insert((t.clone(), *p), w);
+        }
+        out
+    })
+    .await
+    .unwrap();
+    let skip_internal_ms = t0.elapsed().as_millis();
+
+    // --- C) SONG SONG (16 luong) ---
+    let t0 = Instant::now();
+    let par_user: BTreeMap<(String, i32), (i64, i64)> = {
+        let mut chunks: Vec<Vec<(String, i32)>> = (0..16).map(|_| Vec::new()).collect();
+        for (i, item) in targets.iter().enumerate() {
+            chunks[i % 16].push(item.clone());
+        }
+        let mut handles = Vec::new();
+        for ch in chunks {
+            let c = consumer.clone();
+            handles.push(tokio::task::spawn_blocking(move || {
+                let mut out = Vec::new();
+                for (t, p) in ch {
+                    let w = c.fetch_watermarks(&t, p, Duration::from_secs(2)).unwrap_or((0, 0));
+                    out.push(((t, p), w));
+                }
+                out
+            }));
+        }
+        let mut merged = BTreeMap::new();
+        for h in handles {
+            for (k, v) in h.await.unwrap() {
+                merged.insert(k, v);
+            }
+        }
+        merged
+    };
+    let parallel_ms = t0.elapsed().as_millis();
+
+    // --- D) BATCH offsets_for_times(-2 earliest, -1 latest) ---
+    let c = consumer.clone();
+    let tg = targets.clone();
+    let t0 = Instant::now();
+    let batched: Option<BTreeMap<(String, i32), (i64, i64)>> = tokio::task::spawn_blocking(move || {
+        let mk = |sentinel: Offset| -> Option<TopicPartitionList> {
+            let mut tpl = TopicPartitionList::new();
+            for (t, p) in &tg {
+                if let Err(e) = tpl.add_partition_offset(t, *p, sentinel) {
+                    eprintln!("  D add_partition_offset({sentinel:?}) loi: {e}");
+                    return None;
+                }
+            }
+            match c.offsets_for_times(tpl, Duration::from_secs(10)) {
+                Ok(v) => Some(v),
+                Err(e) => {
+                    eprintln!("  D offsets_for_times({sentinel:?}) loi: {e}");
+                    None
+                }
+            }
+        };
+        let low = mk(Offset::Beginning)?;
+        let high = mk(Offset::End)?;
+        let mut out = BTreeMap::new();
+        for e in low.elements() {
+            let o = match e.offset() {
+                Offset::Offset(o) => o,
+                _ => -1,
+            };
+            out.insert((e.topic().to_string(), e.partition()), (o, 0));
+        }
+        for e in high.elements() {
+            let o = match e.offset() {
+                Offset::Offset(o) => o,
+                _ => -1,
+            };
+            if let Some(v) = out.get_mut(&(e.topic().to_string(), e.partition())) {
+                v.1 = o;
+            }
+        }
+        Some(out)
+    })
+    .await
+    .unwrap();
+    let batched_ms = t0.elapsed().as_millis();
+
+    for (k, v) in &seq_user {
+        assert_eq!(expect.get(k), Some(v), "sequential-skip-internal lech tai {k:?}");
+    }
+    for (k, v) in &par_user {
+        assert_eq!(expect.get(k), Some(v), "parallel lech tai {k:?}");
+    }
+    let batched_ok = match &batched {
+        None => "N/A (offsets_for_times loi)".to_string(),
+        Some(b) => {
+            let mut wrong = 0usize;
+            for (k, v) in b {
+                if expect.get(k) != Some(v) {
+                    if wrong < 3 {
+                        eprintln!("  batched lech {k:?}: batched={v:?} expect={:?}", expect.get(k));
+                    }
+                    wrong += 1;
+                }
+            }
+            format!("{} sai / {} partition", wrong, b.len())
+        }
+    };
+
+    eprintln!(
+        "BENCH kafka topic list: topics={} partitions_total={} (user={} internal={})",
+        listed.len(),
+        all_parts,
+        user_parts,
+        internal_parts
+    );
+    eprintln!("BENCH   A topics() SAU khi sua          = {current_ms} ms  [2 request ListOffsets]");
+    eprintln!(
+        "BENCH   B duong CU (seq per-partition)   = {skip_internal_ms} ms  [{} watermark call = {} round-trip]",
+        all_targets.len(),
+        all_targets.len() * 2
+    );
+    eprintln!("BENCH   C parallel x16 (du phong)       = {parallel_ms} ms  [{} call]", targets.len());
+    eprintln!("BENCH   D batched offsets_for_times     = {batched_ms} ms  [2 request] · dung: {batched_ok}");
+    eprintln!("BENCH   internal partition trong list   = {internal_parts}");
+}
+
+// ---------------------------------------------------------------------------
+// BENCH (ignored) — Kafka browse message: mo 1 topic lon.
+// Duong hien tai auto-start tu "earliest" -> doc TOAN BO log (va backend emit 1
+// event Tauri / message) du UI chi giu 500 dong moi nhat.
+// cargo test --test drivers_integration bench_kafka_browse -- --ignored --nocapture --test-threads=1
+// ---------------------------------------------------------------------------
+#[tokio::test]
+#[ignore]
+async fn bench_kafka_browse_large_topic() {
+    use database_studio_lib::drivers::kafka::{KafkaConnParams, KafkaDriver};
+    use rdkafka::consumer::{Consumer, DefaultConsumerContext};
+    use rdkafka::error::KafkaError;
+    use rdkafka::producer::{FutureProducer, FutureRecord};
+    use testcontainers_modules::kafka::{Kafka, KAFKA_PORT};
+
+    let node = Kafka::default().start().await.expect("start kafka container");
+    let port = node.get_host_port_ipv4(KAFKA_PORT).await.unwrap();
+    let params = KafkaConnParams {
+        bootstrap: format!("127.0.0.1:{port}"),
+        sasl_mechanism: String::new(),
+        user: String::new(),
+        password: String::new(),
+        ssl: false,
+    };
+    let drv = retry("kafka", || KafkaDriver::connect(&params)).await;
+
+    const TOPIC: &str = "bench_big";
+    const PARTS: i32 = 3;
+    const N: usize = 200_000;
+    drv.create_topic(TOPIC, PARTS, 1).await.unwrap();
+    tokio::time::sleep(Duration::from_secs(1)).await;
+
+    let producer: FutureProducer = drv.config().clone().set("queue.buffering.max.messages", "1000000").create().unwrap();
+    let payload = format!("{{\"id\":0,\"name\":\"row\",\"blob\":\"{}\"}}", "x".repeat(80));
+    let t0 = Instant::now();
+    let mut futs = Vec::with_capacity(N);
+    for i in 0..N {
+        let key = format!("k{i}");
+        futs.push(producer.send_result(FutureRecord::to(TOPIC).key(&key).payload(&payload)).map_err(|(e, _)| e));
+    }
+    let mut sent = 0usize;
+    for f in futs {
+        if let Ok(f) = f {
+            if f.await.is_ok() {
+                sent += 1;
+            }
+        }
+    }
+    eprintln!("BENCH seed {sent} messages in {} ms", t0.elapsed().as_millis());
+
+    // helper: poll cho toi khi moi partition bao EOF (hoac het deadline)
+    fn drain(consumer: rdkafka::consumer::BaseConsumer<DefaultConsumerContext>, parts: usize, budget: Duration) -> (usize, u128) {
+        let t0 = Instant::now();
+        let mut count = 0usize;
+        let mut eof = std::collections::HashSet::new();
+        let deadline = t0 + budget;
+        while Instant::now() < deadline && eof.len() < parts {
+            match consumer.poll(Duration::from_millis(200)) {
+                Some(Ok(_m)) => count += 1,
+                Some(Err(KafkaError::PartitionEOF(p))) => {
+                    eof.insert(p);
+                }
+                _ => {}
+            }
+        }
+        let ms = t0.elapsed().as_millis();
+        drop(consumer);
+        (count, ms)
+    }
+
+    // --- E) DUONG HIEN TAI: tu "earliest" ---
+    let c = drv.browse_consumer(TOPIC, "earliest", 0, None, DefaultConsumerContext).unwrap();
+    let (n_e, ms_e) = tokio::task::spawn_blocking(move || drain(c, PARTS as usize, Duration::from_secs(180)))
+        .await
+        .unwrap();
+
+    // --- F) chi lay ~500 message moi nhat (high - 500/parts moi partition) ---
+    let consumer = drv.consumer();
+    let per = (500 / PARTS as i64).max(1);
+    let mut starts = Vec::new();
+    for p in 0..PARTS {
+        let (low, high) = {
+            let c = consumer.clone();
+            tokio::task::spawn_blocking(move || c.fetch_watermarks(TOPIC, p, Duration::from_secs(5)))
+                .await
+                .unwrap()
+                .unwrap()
+        };
+        starts.push((p, (high - per).max(low)));
+    }
+    let t0 = Instant::now();
+    let mut n_f = 0usize;
+    for (p, off) in starts {
+        let c = drv.browse_consumer(TOPIC, "offset", off, Some(p), DefaultConsumerContext).unwrap();
+        let (n, _) = tokio::task::spawn_blocking(move || drain(c, 1, Duration::from_secs(30))).await.unwrap();
+        n_f += n;
+    }
+    let ms_f = t0.elapsed().as_millis();
+
+    eprintln!("BENCH kafka browse topic {N} messages / {PARTS} partitions");
+    eprintln!("BENCH   E from=earliest (hien tai) = {ms_e} ms · {n_e} message doc ve · {n_e} event Tauri");
+    eprintln!("BENCH   F chi 500 moi nhat         = {ms_f} ms · {n_f} message doc ve");
+    eprintln!("BENCH   UI chi hien MAX=500 dong -> E doc thua {} message", n_e.saturating_sub(500));
+}
+
+// ---------------------------------------------------------------------------
+// Kafka perf fix (container that): (1) topics() lay watermark GOP phai ra dung
+// y het duong hoi tung partition; (2) browse "recent" chi doc N message moi nhat
+// thay vi doc lai ca log.
+// ---------------------------------------------------------------------------
+#[tokio::test]
+async fn kafka_topic_watermarks_match_per_partition_and_recent_browse_reads_only_the_tail() {
+    use database_studio_lib::drivers::kafka::{KafkaConnParams, KafkaDriver};
+    use rdkafka::consumer::{Consumer, DefaultConsumerContext};
+    use rdkafka::error::KafkaError;
+    use std::collections::BTreeSet;
+    use testcontainers_modules::kafka::{Kafka, KAFKA_PORT};
+
+    let node = Kafka::default().start().await.expect("start kafka container");
+    let port = node.get_host_port_ipv4(KAFKA_PORT).await.unwrap();
+    let params = KafkaConnParams {
+        bootstrap: format!("127.0.0.1:{port}"),
+        sasl_mechanism: String::new(),
+        user: String::new(),
+        password: String::new(),
+        ssl: false,
+    };
+    let drv = retry("kafka", || KafkaDriver::connect(&params)).await;
+
+    const TOPIC: &str = "wm_itest";
+    drv.create_topic(TOPIC, 3, 1).await.unwrap();
+    // p0 = 30 message, p1 = 20, p2 = 0 (rong) -> phu ca partition co va khong co data
+    for i in 0..30 {
+        drv.produce(TOPIC, "k", &format!("p0-{i}"), Some(0)).await.unwrap();
+    }
+    for i in 0..20 {
+        drv.produce(TOPIC, "k", &format!("p1-{i}"), Some(1)).await.unwrap();
+    }
+
+    // --- (1) topics() (duong GOP moi) phai trung fetch_watermarks tung partition ---
+    let mut listed = None;
+    for _ in 0..20 {
+        let all = drv.topics().await.unwrap();
+        if let Some(t) = all.into_iter().find(|t| t.name == TOPIC) {
+            if t.partitions.len() == 3 && t.partitions.iter().any(|p| p.high > 0) {
+                listed = Some(t);
+                break;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    let topic = listed.expect("phai thay topic wm_itest");
+    let consumer = drv.consumer();
+    for p in &topic.partitions {
+        let c = consumer.clone();
+        let id = p.id;
+        let truth = tokio::task::spawn_blocking(move || {
+            c.fetch_watermarks(TOPIC, id, Duration::from_secs(10)).unwrap()
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            (p.low, p.high),
+            truth,
+            "partition {id}: watermark gop phai trung watermark hoi rieng tung partition"
+        );
+        assert_eq!(p.lag, (p.high - p.low).max(0), "lag phai = high - low");
+    }
+    assert!(
+        topic.offsets_known,
+        "broker khoe manh thi phai doc duoc watermark; offsets_error = {:?}",
+        topic.offsets_error
+    );
+    assert!(topic.offsets_error.is_none());
+    let total: i64 = topic.partitions.iter().map(|p| (p.high - p.low).max(0)).sum();
+    assert_eq!(total, 50, "tong message giu lai phai dung 50 (30 + 20 + 0)");
+    // partition rong van phai ra 0/0 (khong bi mat khoi ket qua gop)
+    let empty = topic.partitions.iter().find(|p| p.id == 2).expect("partition 2");
+    assert_eq!((empty.low, empty.high), (0, 0), "partition rong phai la 0/0");
+    eprintln!("CHK topics(): watermark gop == watermark tung partition (50 message)");
+
+    // helper: doc toi khi moi partition bao EOF
+    fn drain(
+        consumer: rdkafka::consumer::BaseConsumer<DefaultConsumerContext>,
+        parts: usize,
+        budget: Duration,
+    ) -> Vec<String> {
+        let t0 = Instant::now();
+        let mut out = Vec::new();
+        let mut eof = std::collections::HashSet::new();
+        while t0.elapsed() < budget && eof.len() < parts {
+            match consumer.poll(Duration::from_millis(200)) {
+                Some(Ok(m)) => out.push(
+                    database_studio_lib::drivers::kafka::borrowed_to_message(&m).value,
+                ),
+                Some(Err(KafkaError::PartitionEOF(p))) => {
+                    eof.insert(p);
+                }
+                _ => {}
+            }
+        }
+        drop(consumer);
+        out
+    }
+
+    // --- (2) browse "recent" 6 -> 6 message moi nhat MOI partition (khong chia deu:
+    // du lieu Kafka thuong don theo key vao vai partition), KHONG doc ca log ---
+    let c = drv.browse_consumer(TOPIC, "recent", 6, None, DefaultConsumerContext).unwrap();
+    let got = tokio::task::spawn_blocking(move || drain(c, 3, Duration::from_secs(30)))
+        .await
+        .unwrap();
+    let got: BTreeSet<String> = got.into_iter().collect();
+    let want: BTreeSet<String> = (24..30)
+        .map(|i| format!("p0-{i}"))
+        .chain((14..20).map(|i| format!("p1-{i}")))
+        .collect();
+    assert_eq!(got, want, "recent phai doc DUNG duoi moi partition, khong doc lai tu dau");
+    eprintln!("CHK browse recent: chi 12/50 message (duoi log) duoc doc ve");
+
+    // --- (3) khong pha hanh vi cu: earliest van doc du 50 ---
+    let c = drv.browse_consumer(TOPIC, "earliest", 0, None, DefaultConsumerContext).unwrap();
+    let all = tokio::task::spawn_blocking(move || drain(c, 3, Duration::from_secs(60)))
+        .await
+        .unwrap();
+    assert_eq!(all.len(), 50, "earliest van phai doc du ca log");
+    eprintln!("CHK browse earliest: van doc du 50 message (khong regress)");
+
+    // --- (4) topic RONG: moi partition phai bao PartitionEOF (tin hieu ma
+    // kafka_consume dung de emit "kafka-eof" -> UI noi "khong co message" thay vi
+    // "Waiting for messages..." mai mai) ---
+    const EMPTY: &str = "wm_itest_empty";
+    drv.create_topic(EMPTY, 2, 1).await.unwrap();
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let c = drv.browse_consumer(EMPTY, "recent", 500, None, DefaultConsumerContext).unwrap();
+    let (msgs, eofs) = tokio::task::spawn_blocking(move || {
+        let t0 = Instant::now();
+        let mut msgs = 0usize;
+        let mut eof = std::collections::HashSet::new();
+        while t0.elapsed() < Duration::from_secs(30) && eof.len() < 2 {
+            match c.poll(Duration::from_millis(200)) {
+                Some(Ok(_)) => msgs += 1,
+                Some(Err(KafkaError::PartitionEOF(p))) => {
+                    eof.insert(p);
+                }
+                _ => {}
+            }
+        }
+        drop(c);
+        (msgs, eof.len())
+    })
+    .await
+    .unwrap();
+    assert_eq!(msgs, 0, "topic rong khong duoc tra ve message nao");
+    assert_eq!(eofs, 2, "CA 2 partition cua topic rong phai bao PartitionEOF");
+    eprintln!("CHK topic rong: 0 message + EOF du 2/2 partition (co tin hieu de bao 'no messages')");
+}
+
+// ---------------------------------------------------------------------------
+// Kafka: topic CON message thi khong bao gio duoc bao la rong.
+//
+// Tai hien dung trieu chung user gap: doc ve 0 message KHONG co nghia topic rong.
+// Transaction cua Kafka ghi them "control record" chiem offset nhung KHONG bao gio
+// duoc tra ve cho consumer -> high watermark > offset cua message doc duoc cuoi
+// cung, nen mot cua so doc ngan o duoi log co the khong chua message nao trong khi
+// topic van con day du lieu. (Log compaction cho ket qua tuong tu.)
+// ---------------------------------------------------------------------------
+#[tokio::test]
+async fn kafka_topic_with_records_is_never_reported_empty() {
+    use database_studio_lib::drivers::kafka::{KafkaConnParams, KafkaDriver};
+    use rdkafka::consumer::DefaultConsumerContext;
+    use rdkafka::error::KafkaError;
+    use rdkafka::producer::{FutureProducer, FutureRecord, Producer};
+    use testcontainers_modules::kafka::{Kafka, KAFKA_PORT};
+
+    // transaction can transaction-state topic RF=1 tren cluster 1 broker
+    let node = Kafka::default()
+        .with_env_var("KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR", "1")
+        .with_env_var("KAFKA_TRANSACTION_STATE_LOG_MIN_ISR", "1")
+        .start()
+        .await
+        .expect("start kafka container");
+    let port = node.get_host_port_ipv4(KAFKA_PORT).await.unwrap();
+    let params = KafkaConnParams {
+        bootstrap: format!("127.0.0.1:{port}"),
+        sasl_mechanism: String::new(),
+        user: String::new(),
+        password: String::new(),
+        ssl: false,
+    };
+    let drv = retry("kafka", || KafkaDriver::connect(&params)).await;
+
+    const TOPIC: &str = "txn_tail";
+    drv.create_topic(TOPIC, 1, 1).await.unwrap();
+    tokio::time::sleep(Duration::from_secs(1)).await;
+
+    // 1 message trong 1 transaction da commit -> log co [msg@0, control@1]
+    let mut cfg = drv.config();
+    cfg.set("transactional.id", "itest-txn");
+    let producer: FutureProducer = cfg.create().unwrap();
+    producer.init_transactions(Duration::from_secs(30)).unwrap();
+    producer.begin_transaction().unwrap();
+    producer
+        .send(FutureRecord::to(TOPIC).key("k").payload("committed-record"), Duration::from_secs(15))
+        .await
+        .unwrap();
+    producer.commit_transaction(Duration::from_secs(30)).unwrap();
+
+    // high phai vuot qua offset cua message doc duoc (control record chiem 1 offset)
+    let mut listed = None;
+    for _ in 0..20 {
+        if let Some(t) = drv.topics().await.unwrap().into_iter().find(|t| t.name == TOPIC) {
+            if t.partitions.first().map(|p| p.high).unwrap_or(0) > 0 {
+                listed = Some(t);
+                break;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    let topic = listed.expect("phai thay topic txn_tail");
+    let p0 = &topic.partitions[0];
+    assert!(p0.high >= 2, "control record phai day high len >= 2, nhan {}", p0.high);
+    eprintln!("CHK log co control record: low={} high={}", p0.low, p0.high);
+
+    fn drain(
+        consumer: rdkafka::consumer::BaseConsumer<DefaultConsumerContext>,
+        budget: Duration,
+    ) -> Vec<String> {
+        let t0 = Instant::now();
+        let mut out = Vec::new();
+        let mut eof = false;
+        while t0.elapsed() < budget && !eof {
+            match consumer.poll(Duration::from_millis(200)) {
+                Some(Ok(m)) => out.push(
+                    database_studio_lib::drivers::kafka::borrowed_to_message(&m).value,
+                ),
+                Some(Err(KafkaError::PartitionEOF(_))) => eof = true,
+                _ => {}
+            }
+        }
+        drop(consumer);
+        out
+    }
+
+    // (a) cua so duoi log CHI 1 offset = dung control record -> doc ve 0 message,
+    //     day chinh la luc giao dien tuong "topic rong"
+    let c = drv.browse_consumer(TOPIC, "recent", 1, None, DefaultConsumerContext).unwrap();
+    let tail = tokio::task::spawn_blocking(move || drain(c, Duration::from_secs(30))).await.unwrap();
+    assert!(tail.is_empty(), "cua so 1 offset chi chua control record, phai doc ve 0 message");
+
+    // (b) NHUNG watermark cua broker van bao topic con du lieu -> khong duoc noi "rong"
+    let (retained, wm_err) = drv.retained_messages(TOPIC, &[0]);
+    assert!(
+        retained > 0,
+        "topic con message thi retained_messages phai > 0 (nhan {retained}, loi watermark: \
+         {wm_err:?}) — day la thu duy nhat duoc phep ket luan 'topic khong co message'"
+    );
+    eprintln!("CHK doc ve 0 message NHUNG retained={retained} > 0 → khong bao 'rong'");
+
+    // (c) mac dinh that (Recent 500): moi partition lui 500 offset → phai thay message
+    let c = drv.browse_consumer(TOPIC, "recent", 500, None, DefaultConsumerContext).unwrap();
+    let got = tokio::task::spawn_blocking(move || drain(c, Duration::from_secs(30))).await.unwrap();
+    assert_eq!(got, vec!["committed-record".to_string()], "Recent mac dinh phai doc duoc message");
+    eprintln!("CHK Recent(500) doc duoc message that");
+}
+
+// ---------------------------------------------------------------------------
+// Kafka phan trang: fetch_page doc DUNG mot cua so co bien, di lui/tien duoc,
+// va khong bao gio keo ca log ve.
+// ---------------------------------------------------------------------------
+#[tokio::test]
+async fn kafka_fetch_page_reads_one_bounded_window_and_walks_the_log() {
+    use database_studio_lib::drivers::kafka::{KafkaConnParams, KafkaDriver};
+    use testcontainers_modules::kafka::{Kafka, KAFKA_PORT};
+
+    let node = Kafka::default().start().await.expect("start kafka container");
+    let port = node.get_host_port_ipv4(KAFKA_PORT).await.unwrap();
+    let params = KafkaConnParams {
+        bootstrap: format!("127.0.0.1:{port}"),
+        sasl_mechanism: String::new(),
+        user: String::new(),
+        password: String::new(),
+        ssl: false,
+    };
+    let drv = retry("kafka", || KafkaDriver::connect(&params)).await;
+
+    const TOPIC: &str = "page_itest";
+    const N: i64 = 250;
+    drv.create_topic(TOPIC, 1, 1).await.unwrap();
+    for i in 0..N {
+        drv.produce(TOPIC, "k", &format!("m-{i}"), Some(0)).await.unwrap();
+    }
+
+    // trang moi nhat: 100/250 message, moi nhat len dau
+    let p1 = drv.fetch_page(TOPIC, None, -1, 100).await.unwrap();
+    assert_eq!(p1.msgs.len(), 100, "phai doc DUNG 100, khong keo ca 250 ve");
+    assert_eq!(p1.msgs[0].offset, 249, "moi nhat len dau");
+    assert_eq!(p1.msgs[99].offset, 150);
+    assert_eq!(p1.window_start, 150);
+    assert_eq!(p1.retained, N, "retained = so message con giu");
+    assert!(p1.has_older, "con message cu hon");
+    assert!(p1.at_newest, "dang o cuoi log");
+
+    // trang cu hon
+    let p2 = drv.fetch_page(TOPIC, None, p1.window_start, 100).await.unwrap();
+    assert_eq!(p2.msgs.len(), 100);
+    assert_eq!(p2.msgs[0].offset, 149);
+    assert_eq!(p2.msgs[99].offset, 50);
+    assert!(p2.has_older);
+    assert!(!p2.at_newest, "khong con o cuoi log nua");
+
+    // trang cuoi cung (dau log): het message cu hon
+    let p3 = drv.fetch_page(TOPIC, None, p2.window_start, 100).await.unwrap();
+    assert_eq!(p3.msgs.len(), 50, "chi con 50 message dau log");
+    assert_eq!(p3.msgs[49].offset, 0);
+    assert!(!p3.has_older, "da toi dau log");
+
+    // khong chong lap / khong sot: 3 trang ghep lai = du 250 offset khac nhau
+    let mut all: Vec<i64> =
+        p1.msgs.iter().chain(&p2.msgs).chain(&p3.msgs).map(|m| m.offset).collect();
+    all.sort_unstable();
+    all.dedup();
+    assert_eq!(all.len(), N as usize, "3 trang phai phu kin ca log, khong trung khong sot");
+
+    // topic rong: trang rong nhung retained = 0 (KHONG phai -1/khong biet)
+    const EMPTY: &str = "page_itest_empty";
+    drv.create_topic(EMPTY, 1, 1).await.unwrap();
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let pe = drv.fetch_page(EMPTY, None, -1, 100).await.unwrap();
+    assert!(pe.msgs.is_empty());
+    assert_eq!(pe.retained, 0, "topic rong that su -> retained = 0");
+    assert!(!pe.has_older);
+    eprintln!("CHK fetch_page: 3 trang phu kin 250 message, moi lan chi doc <= 100");
+}

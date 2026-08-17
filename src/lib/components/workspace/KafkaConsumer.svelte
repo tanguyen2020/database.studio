@@ -8,6 +8,7 @@
   import { toasts } from '$lib/stores/toast.svelte'
   import { explorer } from '$lib/stores/explorer.svelte'
   import { highlightJson, jsonTokenColor } from '$lib/format/json'
+  import { consumerEmptyText } from '$lib/stream/explorer'
   import { autofocus } from '$lib/actions/autofocus'
   import type { TabState } from '$lib/types'
 
@@ -17,10 +18,6 @@
   let { tab }: Props = $props()
   const topic = $derived((tab.state as { topic?: string }).topic ?? '')
 
-  // Default to Earliest so opening a topic shows its existing messages (Latest
-  // would only stream records produced after Consume, i.e. usually nothing).
-  let from = $state<'earliest' | 'latest' | 'offset'>('earliest')
-  let offset = $state(0)
   let partition = $state<string>('') // '' = all
   let consuming = $state(false)
   let paused = $state(false)
@@ -44,6 +41,23 @@
   }
   let unlisten: (() => void) | null = null
   let unlistenStatus: (() => void) | null = null
+  let unlistenEof: (() => void) | null = null
+  // Set when the backend reports every assigned partition reached the end of its log
+  // (`kafka-eof`) — lets the empty grid say "no messages" instead of "waiting" forever.
+  let atEnd = $state(false)
+  let receivedAny = $state(false)
+  // Σ(high − low) reported with `kafka-eof` — the ONLY thing allowed to conclude the
+  // topic is empty (reading nothing does not prove it).
+  let retained = $state(0)
+  // ---- paging (bounded reads) ---------------------------------------------
+  // A topic can hold millions of records; the grid reads ONE window at a time.
+  // `until` is the window's exclusive upper offset (−1 = newest page).
+  let pageSize = $state(100)
+  let until = $state(-1)
+  let windowStart = $state(0)
+  let hasOlder = $state(false)
+  let atNewest = $state(true)
+  let loadingPage = $state(false)
   // Last librdkafka error/warning surfaced from the backend (connection refused,
   // fetch failure, unknown partition, …) so failures aren't silent.
   let statusMsg = $state('')
@@ -126,6 +140,8 @@
           await ipc.kafkaPurgeTopic(tab.connectionId, topic)
           messages = []
           pending = []
+          receivedAny = false // the topic really is empty now
+          retained = 0
           toasts.success(`Cleared messages of ${topic}`, 'kafka')
           explorer.refreshStreaming(tab.connectionId)
         } catch (e) {
@@ -134,6 +150,17 @@
       },
     )
   }
+
+  const emptyText = $derived(
+    consumerEmptyText({
+      loading: loadingPage,
+      tailing: consuming,
+      atEnd,
+      receivedAny,
+      retained,
+      hasError: statusLevel === 'error',
+    }),
+  )
 
   const filtered = $derived(
     messages.filter((m) => {
@@ -161,14 +188,31 @@
     void tick
     messages = []
     pending = []
+    receivedAny = false // sidebar purged the topic — it is empty now
+    retained = 0
   })
 
   onMount(async () => {
     if (!IS_TAURI) return
     const { listen } = await import('@tauri-apps/api/event')
-    unlisten = await listen<ipc.KafkaMsg>('kafka-msg', (e) => {
+    // One event carries a BATCH of records (the backend groups them; a per-record
+    // event made large topics freeze the webview — see kafka.rs KafkaMsgBatchEvent).
+    unlisten = await listen<{ conn_id: string; msgs: ipc.KafkaMsg[] }>('kafka-msgs', (e) => {
       if (e.payload.conn_id !== tab.connectionId || paused) return
-      pending.push(e.payload) // buffered; flushed on the tick below
+      // only the newest MAX can ever be shown — drop the rest before they reach the DOM
+      const batch = e.payload.msgs
+      pending.push(...(batch.length > MAX ? batch.slice(-MAX) : batch))
+      if (pending.length > MAX) pending = pending.slice(-MAX)
+      if (batch.length > 0) {
+        receivedAny = true
+        atEnd = false // more data arrived — no longer at the end of the log
+      }
+    })
+    unlistenEof = await listen<{ conn_id: string; retained: number }>('kafka-eof', (e) => {
+      if (e.payload.conn_id !== tab.connectionId) return
+      flushPending() // show what already arrived before claiming there is nothing
+      retained = e.payload.retained
+      atEnd = true
     })
     flushTimer = setInterval(flushPending, 120)
     unlistenStatus = await listen<{ conn_id: string; level: 'error' | 'warn'; message: string }>(
@@ -179,16 +223,62 @@
         statusMsg = e.payload.message
       },
     )
-    // Auto-start browsing from Earliest so clicking a topic shows its messages.
-    if (tab.connectionId && !consuming) void toggle()
+  })
+
+  // Opening a topic loads ONE page (bounded read) instead of streaming the log —
+  // works in the browser demo too, so it is outside the IS_TAURI guard above.
+  onMount(() => {
+    if (tab.connectionId) void loadPage(-1)
   })
 
   onDestroy(() => {
     if (flushTimer) clearInterval(flushTimer)
     unlisten?.()
     unlistenStatus?.()
+    unlistenEof?.()
     if (consuming && tab.connectionId) void ipc.kafkaStopConsume(tab.connectionId)
   })
+
+  async function loadPage(nextUntil: number) {
+    if (!tab.connectionId || loadingPage) return
+    if (consuming) await toggle() // live tail and paging cannot both own the grid
+    loadingPage = true
+    statusMsg = ''
+    statusLevel = ''
+    try {
+      const part = partition.trim() === '' ? null : parseInt(partition, 10)
+      const page = await ipc.kafkaFetchPage(
+        tab.connectionId,
+        topic,
+        Number.isNaN(part as number) ? null : part,
+        nextUntil,
+        pageSize,
+      )
+      messages = page.msgs
+      pending = []
+      until = nextUntil
+      windowStart = page.window_start
+      hasOlder = page.has_older
+      atNewest = page.at_newest
+      retained = page.retained
+      receivedAny = page.msgs.length > 0
+      // never stay silent about a broker that would not report offsets — that is
+      // exactly how a full topic ends up looking empty
+      if (page.offsets_error) {
+        statusLevel = 'warn'
+        statusMsg = `Could not read offsets — ${page.offsets_error}`
+      }
+      atEnd = true // a page read is bounded: it always finishes
+    } catch (e) {
+      statusLevel = 'error'
+      statusMsg = String(e)
+    } finally {
+      loadingPage = false
+    }
+  }
+
+  const olderPage = () => loadPage(windowStart)
+  const newerPage = () => loadPage(until < 0 ? -1 : until + pageSize)
 
   async function toggle() {
     if (!tab.connectionId) return
@@ -200,8 +290,14 @@
     const part = partition.trim() === '' ? null : parseInt(partition, 10)
     statusMsg = ''
     statusLevel = ''
+    atEnd = false // a fresh browse: nothing read yet, end not reached
+    receivedAny = false
+    retained = 0
     try {
-      await ipc.kafkaConsume(tab.connectionId, topic, from, offset, Number.isNaN(part as number) ? null : part)
+      // Live tail: stream records produced from now on. Reading existing records is
+      // the pager's job (bounded windows) — streaming the whole log is what made big
+      // topics unusable.
+      await ipc.kafkaConsume(tab.connectionId, topic, 'latest', 0, Number.isNaN(part as number) ? null : part)
       consuming = true
       if (!IS_TAURI) toasts.show('Streaming only works in the Tauri app (not the browser demo)')
     } catch (e) {
@@ -215,17 +311,17 @@
   <div style="flex:none;display:flex;align-items:center;gap:var(--px-10);padding:var(--px-10) var(--px-14);border-bottom:var(--px-1) solid var(--border);background:var(--surface);flex-wrap:wrap">
     <span style="width:var(--px-3);height:var(--px-20);border-radius:var(--px-2);background:var(--hex-8b5cf6)"></span>
     <span class="mono" style="font-size:var(--px-13);font-weight:600">{topic}</span>
-    <span style="font-size:var(--px-11);color:var(--text2)">From</span>
-    <select bind:value={from} class="cm-mini">
-      <option value="latest">Latest</option>
-      <option value="earliest">Earliest</option>
-      <option value="offset">Offset</option>
+    <span style="font-size:var(--px-11);color:var(--text2)">Rows</span>
+    <select
+      bind:value={pageSize}
+      onchange={() => loadPage(-1)}
+      class="cm-mini"
+      title="How many records to read per page. A topic can hold millions — the grid reads one bounded window at a time."
+    >
+      {#each [50, 100, 200, 500, 1000] as n (n)}<option value={n}>{n}</option>{/each}
     </select>
-    {#if from === 'offset'}
-      <input type="number" bind:value={offset} class="cm-mini mono" style="width:var(--px-96)" />
-    {/if}
     <span style="font-size:var(--px-11);color:var(--text2)">Partition</span>
-    <input bind:value={partition} placeholder="all" class="cm-mini mono" style="width:var(--px-60)" />
+    <input bind:value={partition} onchange={() => loadPage(-1)} placeholder="all" class="cm-mini mono" style="width:var(--px-60)" />
     <span style="font-size:var(--px-11);color:var(--text2)">Decode</span>
     <select bind:value={decode} class="cm-mini">
       <option value="utf8">UTF-8</option>
@@ -241,9 +337,52 @@
     </div>
   </div>
 
-  <!-- filters -->
-  <div style="flex:none;display:flex;gap:var(--px-8);padding:var(--px-6) var(--px-14)">
-    <input bind:value={keyFilter} placeholder="filter key (regex)" class="cm-mini mono" style="flex:1" />
+  <!-- pager: one bounded window of the log at a time -->
+  <div style="flex:none;display:flex;gap:var(--px-8);align-items:center;padding:var(--px-6) var(--px-14);border-bottom:var(--px-1) solid var(--border)">
+    <span
+      onclick={() => loadPage(-1)}
+      onkeydown={(e) => e.key === 'Enter' && loadPage(-1)}
+      role="button"
+      tabindex="0"
+      aria-disabled={loadingPage}
+      title="Jump to the newest records"
+      class="pg-btn"
+      style="opacity:{loadingPage ? 0.5 : 1}">⏮ Newest</span
+    >
+    <!--
+      Records are listed newest-first, so paging follows the LIST, not the offsets:
+      Previous walks back toward the newest page, Next walks on to older records.
+    -->
+    <span
+      onclick={newerPage}
+      onkeydown={(e) => e.key === 'Enter' && newerPage()}
+      role="button"
+      tabindex="0"
+      aria-disabled={loadingPage || atNewest}
+      title="Previous page (back toward the newest records)"
+      class="pg-btn"
+      style="opacity:{loadingPage || atNewest ? 0.5 : 1}">◀ Previous</span
+    >
+    <span
+      onclick={olderPage}
+      onkeydown={(e) => e.key === 'Enter' && olderPage()}
+      role="button"
+      tabindex="0"
+      aria-disabled={loadingPage || !hasOlder}
+      title="Next page (on to older records)"
+      class="pg-btn"
+      style="opacity:{loadingPage || !hasOlder ? 0.5 : 1}">Next ▶</span
+    >
+    <span class="mono" style="font-size:var(--px-11);color:var(--muted)">
+      {#if loadingPage}
+        Reading…
+      {:else if messages.length > 0}
+        from offset {windowStart} · {messages.length} read{retained >= 0 ? ` · topic holds ${retained.toLocaleString()}` : ''}
+      {:else if retained > 0}
+        topic holds {retained.toLocaleString()}
+      {/if}
+    </span>
+    <input bind:value={keyFilter} placeholder="filter key (regex)" class="cm-mini mono" style="flex:1;margin-left:var(--px-8)" />
     <input bind:value={valFilter} placeholder="filter value (text)" class="cm-mini mono" style="flex:1" />
   </div>
 
@@ -260,11 +399,7 @@
   <div style="flex:1;overflow:auto;min-height:0">
     {#if messages.length === 0}
       <div style="padding:var(--px-16);text-align:center;font-size:var(--px-12);color:var(--muted)">
-        {#if statusLevel === 'error'}
-          Could not read messages — see the error above.
-        {:else}
-          {consuming ? 'Waiting for messages…' : 'Pick a start position then Consume.'}
-        {/if}
+        {emptyText}
       </div>
     {:else}
       <table class="mono" style="border-collapse:collapse;width:100%;font-size:var(--px-12);{GRID_FONT}">
@@ -364,6 +499,19 @@
     font-size: var(--px-12);
     color: var(--text);
     outline: none;
+  }
+  .pg-btn {
+    background: var(--panel);
+    border: var(--px-1) solid var(--border);
+    border-radius: var(--px-6);
+    padding: var(--px-4) var(--px-10);
+    font-size: var(--px-11_5);
+    color: var(--text);
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .pg-btn[aria-disabled='true'] {
+    cursor: default;
   }
   .cm-mini.danger {
     color: var(--hex-fff);

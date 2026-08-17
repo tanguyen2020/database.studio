@@ -1304,6 +1304,8 @@
     nameColor?: string
     name: string
     meta?: string
+    /** tooltip on the meta text — e.g. WHY a Kafka message count is unknown */
+    metaTitle?: string
     head?: boolean
     expandable?: boolean
     locked?: boolean
@@ -1366,7 +1368,7 @@
       <span class="mono" style="flex:none;width:var(--px-15);display:flex;align-items:center;justify-content:center;font-size:var(--px-12);color:{p.color}">{#if p.svg}{@html p.svg}{:else}{p.glyph}{/if}</span>
       <span class="mono" style="font-size:var(--px-12_5);font-weight:{p.head ? 700 : 500};color:{p.nameColor ?? (sel || p.head ? 'var(--text)' : 'var(--text2)')};overflow:hidden;text-overflow:ellipsis">{p.name}</span>
       {#if p.locked}<span style="font-size:var(--px-9)" title="System table — read-only">🔒</span>{/if}
-      <span class="mono" style="font-size:var(--px-10);color:var(--muted);margin-left:auto">{p.meta ?? ''}</span>
+      <span class="mono" title={p.metaTitle ?? ''} style="font-size:var(--px-10);color:{p.metaTitle ? 'var(--sacc-amber)' : 'var(--muted)'};margin-left:auto">{p.meta ?? ''}</span>
       {#if p.filterable}
         {@const active = hasFolderFilter(p.key) || folderFilterOpen[p.key]}
         <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
@@ -1792,7 +1794,7 @@
             </ContextMenu.Content>
           {/snippet}
           {@render row(
-            { key: `kafka:t:${t.name}`, depth: 0, glyph: '', svg: KAFKA_LOGO, color: C.kafka, nameColor: 'var(--sacc-cyan)', head: true, name: t.name, meta: t.meta, openOnSingleClick: true, onClick: () => selected && tabs.openKafkaTool(selected.id, 'kafka-consumer', t.name) },
+            { key: `kafka:t:${t.name}`, depth: 0, glyph: '', svg: KAFKA_LOGO, color: C.kafka, nameColor: 'var(--sacc-cyan)', head: true, name: t.name, meta: t.meta, metaTitle: t.offsetsError && `Message count unknown — ${t.offsetsError}`, openOnSingleClick: true, onClick: () => selected && tabs.openKafkaTool(selected.id, 'kafka-consumer', t.name) },
             topicMenu,
           )}
         {/each}

@@ -4,7 +4,7 @@
 use tauri::{AppHandle, Emitter, State};
 
 use crate::drivers::kafka::{
-    borrowed_to_message, KafkaCluster, KafkaGroup, KafkaLag, KafkaMessage, KafkaTopic,
+    borrowed_to_message, KafkaCluster, KafkaGroup, KafkaLag, KafkaMessage, KafkaPage, KafkaTopic,
 };
 use crate::drivers::LiveConnection;
 use crate::error::{AppError, QueryError};
@@ -14,13 +14,38 @@ fn not_kafka() -> QueryError {
     QueryError::new("kafka", "Connection is not Kafka", "not a kafka connection")
 }
 
-/// Event "kafka-msg" gửi ra frontend (1 message consume được).
+/// Event "kafka-msgs" gửi ra frontend: MỘT LÔ message consume được.
+///
+/// Trước đây mỗi message là một event Tauri riêng. Mỗi event phải đi qua ranh giới
+/// IPC rồi chạy một callback JS trên đúng luồng UI của webview, nên duyệt một topic
+/// lớn (bench: 200.000 message ⇒ 200.000 event) làm treo giao diện trong khi lưới
+/// chỉ hiển thị được vài trăm dòng mới nhất. Gộp lô giữ nguyên dữ liệu nhưng giảm
+/// số event khoảng `EMIT_BATCH` lần.
 #[derive(serde::Serialize, Clone)]
-struct KafkaMsgEvent {
+struct KafkaMsgBatchEvent {
     conn_id: String,
-    #[serde(flatten)]
-    msg: KafkaMessage,
+    msgs: Vec<KafkaMessage>,
 }
+
+/// Event "kafka-eof": MỌI partition được assign đã đọc tới cuối log. Nhờ nó giao diện
+/// phân biệt được "topic không có message / đã đọc hết" với "đang chờ dữ liệu về" —
+/// trước đây tín hiệu PartitionEOF của librdkafka bị nuốt trong poll loop nên lưới
+/// rỗng lúc nào cũng hiện "Waiting for messages…".
+///
+/// `retained` = Σ(high − low) của các partition đang duyệt, đọc từ watermark của
+/// broker. Bắt buộc phải có: "duyệt xong mà không nhận được message nào" KHÔNG đồng
+/// nghĩa "topic rỗng" (khoảng đang xem có thể không chứa message hiển thị được),
+/// nên giao diện chỉ được nói "topic không có message" khi `retained == 0`.
+#[derive(serde::Serialize, Clone)]
+struct KafkaEofEvent {
+    conn_id: String,
+    retained: i64,
+}
+
+/// Số message tối đa mỗi lô (bằng số dòng lưới consumer giữ lại).
+const EMIT_BATCH: usize = 500;
+/// Lô chưa đầy vẫn được đẩy sau khoảng này để chế độ tail vẫn "chạy realtime".
+const EMIT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(120);
 
 /// Event "kafka-status": librdkafka errors/warnings + consume lifecycle, so the
 /// consumer UI can show WHY a browse produced no messages instead of failing
@@ -202,6 +227,30 @@ pub async fn kafka_delete_records(
     inner.map_err(|e| AppError::Driver(e.message))
 }
 
+/// Đọc MỘT TRANG message (có biên) thay vì stream cả log.
+/// `until` < 0 = trang mới nhất; ngược lại là biên trên (exclusive) của cửa sổ.
+#[tauri::command]
+pub async fn kafka_fetch_page(
+    state: State<'_, AppState>,
+    conn_id: String,
+    topic: String,
+    partition: Option<i32>,
+    until: i64,
+    limit: i64,
+) -> Result<KafkaPage, AppError> {
+    let inner = state
+        .registry
+        .with_driver(&conn_id, move |driver| async move {
+            let d = driver.lock().await;
+            match &*d {
+                LiveConnection::Kafka(k) => k.fetch_page(&topic, partition, until, limit).await,
+                _ => Err(not_kafka()),
+            }
+        })
+        .await?;
+    inner.map_err(|e| AppError::Driver(e.message))
+}
+
 /// List consumer groups + members.
 #[tauri::command]
 pub async fn kafka_consumer_groups(
@@ -283,12 +332,30 @@ pub async fn kafka_consume(
     use std::time::Duration;
 
     let ctx = BrowseContext { app: app.clone(), conn_id: conn_id.clone() };
-    let consumer = state
+    // Kèm theo consumer: số partition được assign (biết khi nào "đã đọc hết mọi
+    // partition") và tổng message topic CÒN GIỮ (nói đúng "rỗng" hay "không có gì
+    // trong khoảng đang xem" — xem KafkaEofEvent).
+    let (consumer, assigned, retained) = state
         .registry
         .with_driver(&conn_id, move |driver| async move {
+            use rdkafka::consumer::Consumer;
             let d = driver.lock().await;
             match &*d {
-                LiveConnection::Kafka(k) => k.browse_consumer(&topic, &from, offset, partition, ctx),
+                LiveConnection::Kafka(k) => {
+                    let c = k.browse_consumer(&topic, &from, offset, partition, ctx)?;
+                    let parts: Vec<i32> = c
+                        .assignment()
+                        .map(|t| t.elements().iter().map(|e| e.partition()).collect())
+                        .unwrap_or_default();
+                    // Không đọc được assignment / không đọc được watermark → KHÔNG được
+                    // trả 0 (giao diện sẽ bảo "topic rỗng" oan). −1 = không biết.
+                    let retained = if parts.is_empty() {
+                        -1
+                    } else {
+                        k.retained_messages(&topic, &parts).0
+                    };
+                    Ok((c, parts.len().max(1), retained))
+                }
                 _ => Err(not_kafka()),
             }
         })
@@ -301,16 +368,44 @@ pub async fn kafka_consume(
     std::thread::spawn(move || {
         use rdkafka::error::KafkaError;
         let mut last_err = String::new();
+        let mut drained: std::collections::HashSet<i32> = std::collections::HashSet::new();
+        let mut announced_eof = false;
+        let mut buf: Vec<KafkaMessage> = Vec::with_capacity(EMIT_BATCH);
+        let mut last_flush = std::time::Instant::now();
+        let mut flush = |buf: &mut Vec<KafkaMessage>, last_flush: &mut std::time::Instant| {
+            if buf.is_empty() {
+                return;
+            }
+            let _ = app.emit(
+                "kafka-msgs",
+                KafkaMsgBatchEvent { conn_id: cid.clone(), msgs: std::mem::take(buf) },
+            );
+            *last_flush = std::time::Instant::now();
+        };
         while !stop.load(Ordering::Relaxed) {
-            match consumer.poll(Duration::from_millis(400)) {
+            // poll ngắn hơn (100ms) để lô chưa đầy vẫn được đẩy đúng nhịp EMIT_INTERVAL
+            match consumer.poll(Duration::from_millis(100)) {
                 Some(Ok(m)) => {
-                    let _ = app.emit(
-                        "kafka-msg",
-                        KafkaMsgEvent { conn_id: cid.clone(), msg: borrowed_to_message(&m) },
-                    );
+                    buf.push(borrowed_to_message(&m));
+                    if buf.len() >= EMIT_BATCH {
+                        flush(&mut buf, &mut last_flush);
+                    }
+                    // có dữ liệu mới → không còn "đã đọc hết" cho tới lần EOF kế
+                    drained.clear();
+                    announced_eof = false;
                 }
                 // Reached the end of a partition — normal, means "all read / empty".
-                Some(Err(KafkaError::PartitionEOF(_))) => {}
+                Some(Err(KafkaError::PartitionEOF(p))) => {
+                    drained.insert(p);
+                    if !announced_eof && drained.len() >= assigned {
+                        announced_eof = true;
+                        // đẩy nốt message đang đệm TRƯỚC khi báo hết, để giao diện không
+                        // chớp "không có message" rồi mới thấy dữ liệu
+                        flush(&mut buf, &mut last_flush);
+                        let _ = app
+                            .emit("kafka-eof", KafkaEofEvent { conn_id: cid.clone(), retained });
+                    }
+                }
                 // Real fetch/partition error — surface it (dedup consecutive repeats).
                 Some(Err(e)) => {
                     let msg = e.to_string();
@@ -328,7 +423,11 @@ pub async fn kafka_consume(
                 }
                 None => {}
             }
+            if last_flush.elapsed() >= EMIT_INTERVAL {
+                flush(&mut buf, &mut last_flush);
+            }
         }
+        flush(&mut buf, &mut last_flush); // đừng nuốt lô cuối khi bấm Stop
         // consumer drop TRONG thread poll này → close sạch, không deadlock.
         drop(consumer);
     });

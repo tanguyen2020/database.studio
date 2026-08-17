@@ -1032,6 +1032,35 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
       demoKafkaTopics = demoKafkaTopics.filter((t) => t.name !== name) // real removal
       return ok(null)
     }
+    case 'kafka_fetch_page': {
+      // one bounded window of the (fake) log, mirroring the driver's paging contract
+      const t = demoKafkaTopics.find((x) => x.name === String(args?.topic ?? ''))
+      const limit = Math.max(1, Number(args?.limit ?? 100))
+      const until = Number(args?.until ?? -1)
+      const low = t ? Math.min(...t.partitions.map((p) => p.low)) : 0
+      const high = t ? Math.max(...t.partitions.map((p) => p.high)) : 0
+      const end = until < 0 ? high : Math.min(until, high)
+      const start = Math.max(low, end - limit)
+      const msgs = []
+      for (let o = end - 1; o >= start; o--) {
+        msgs.push({
+          conn_id: String(args?.connId ?? ''),
+          partition: 0,
+          offset: o,
+          timestamp: 1_760_000_000_000 - (high - o) * 1000,
+          key: `019fd5ea-6d1a-729c-8bf2-${String(o).padStart(12, '0')}`,
+          value: JSON.stringify({ messageId: `019fd5ea-${o}`, seq: o }),
+          headers: [],
+        })
+      }
+      return ok({
+        msgs,
+        retained: Math.max(0, high - low),
+        window_start: start,
+        has_older: start > low,
+        at_newest: end >= high,
+      })
+    }
     case 'kafka_purge_topic':
     case 'kafka_delete_records':
     case 'kafka_consume':

@@ -4,6 +4,7 @@
 //!
 //! Các lệnh metadata/admin của rdkafka là blocking → bọc spawn_blocking.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -19,6 +20,110 @@ use crate::drivers::types::TestResult;
 use crate::error::QueryError;
 
 const META_TIMEOUT: Duration = Duration::from_secs(10);
+/// Trần cho MỘT lần hỏi watermark của một partition. Rộng rãi hơn 2s của bản cũ vì
+/// giờ các lượt hỏi chạy song song (một partition chậm không còn cộng dồn vào tổng),
+/// và 2s là quá ngắn cho broker ở xa / đi qua SSH tunnel — hết giờ là mất số đếm.
+const WATERMARK_TIMEOUT: Duration = Duration::from_secs(15);
+/// Số luồng hỏi watermark song song.
+const WATERMARK_THREADS: usize = 16;
+/// Mặc định "Recent": số message mới nhất lấy về khi mở một topic.
+pub const RECENT_DEFAULT: i64 = 500;
+
+/// Watermark (low, high) cho nhiều partition + **lỗi đầu tiên gặp phải** (nếu có).
+///
+/// Dùng `fetch_watermarks` (rd_kafka_query_watermark_offsets) — API DUY NHẤT có ngữ
+/// nghĩa không mập mờ — nhưng chạy **song song nhiều luồng** thay vì nối đuôi, nên vẫn
+/// nhanh hơn hẳn đường cũ. Cách gộp bằng `offsets_for_times` với sentinel timestamp
+/// (−2 earliest / −1 latest) tuy nhanh hơn nữa nhưng **KHÔNG đáng tin giữa các broker**:
+/// broker nào không đặc-biệt-hoá sentinel sẽ hiểu chúng là mốc thời gian thật, trả về
+/// "message đầu tiên có ts ≥ mốc" cho CẢ HAI đầu ⇒ `low == high` ⇒ mọi topic đếm ra
+/// **0 message** dù còn đầy dữ liệu, mà cả hai giá trị đều là offset hợp lệ nên không
+/// một guard nào bắt được. Đã đổi lấy độ đúng.
+///
+/// Lỗi KHÔNG bị nuốt: partition nào không đọc được watermark sẽ vắng mặt trong map và
+/// lý do được trả về để giao diện hiện "? msg + vì sao", thay vì im lặng ra 0.
+fn watermarks<C: ConsumerContext + 'static>(
+    consumer: &Arc<BaseConsumer<C>>,
+    parts: &[(String, i32)],
+) -> (HashMap<(String, i32), (i64, i64)>, Option<String>) {
+    let mut out = HashMap::new();
+    if parts.is_empty() {
+        return (out, None);
+    }
+    let lanes = WATERMARK_THREADS.min(parts.len());
+    let mut chunks: Vec<Vec<&(String, i32)>> = (0..lanes).map(|_| Vec::new()).collect();
+    for (i, item) in parts.iter().enumerate() {
+        chunks[i % lanes].push(item);
+    }
+    let mut first_err: Option<String> = None;
+    std::thread::scope(|scope| {
+        let mut handles = Vec::new();
+        for chunk in chunks {
+            let c = Arc::clone(consumer);
+            handles.push(scope.spawn(move || {
+                let mut acc = Vec::with_capacity(chunk.len());
+                let mut err = None;
+                for (t, p) in chunk {
+                    match c.fetch_watermarks(t, *p, WATERMARK_TIMEOUT) {
+                        Ok(w) => acc.push(((t.clone(), *p), w)),
+                        Err(e) if err.is_none() => err = Some(format!("{t}[{p}]: {e}")),
+                        Err(_) => {}
+                    }
+                }
+                (acc, err)
+            }));
+        }
+        for h in handles {
+            if let Ok((acc, err)) = h.join() {
+                out.extend(acc);
+                if first_err.is_none() {
+                    first_err = err;
+                }
+            }
+        }
+    });
+    (out, first_err)
+}
+
+/// Giải thích vì sao không đọc được watermark, dựa trên metadata của chính cluster.
+///
+/// `NotLeaderForPartition` gần như luôn có nghĩa: yêu cầu ListOffsets đi tới broker
+/// KHÔNG phải leader của partition đó — tức máy này chỉ với tới được một phần cluster.
+/// Có đúng hai kiểu, và metadata phân biệt được:
+///
+/// 1. **Mọi broker cùng một địa chỉ** nhưng khác `node_id` — dấu hiệu của cluster nhiều
+///    broker đi qua MỘT SSH tunnel: proxy ghi đè mọi broker thành `127.0.0.1:<cổng tunnel>`
+///    nên request nào cũng rơi vào đúng một broker (giới hạn đã ghi trong `tunnel.rs`).
+/// 2. **Các broker có địa chỉ khác nhau** — leader nằm ở địa chỉ máy này không kết nối tới
+///    được (advertised.listeners nội bộ / firewall).
+pub fn diagnose_offsets_failure(
+    brokers: &[(i32, String, i32)],
+    leader: Option<i32>,
+    raw: &str,
+) -> String {
+    let collapsed = brokers.len() > 1
+        && brokers.windows(2).all(|w| w[0].1 == w[1].1 && w[0].2 == w[1].2);
+    if collapsed {
+        let (_, host, port) = &brokers[0];
+        return format!(
+            "{raw} · This cluster reports {} brokers but metadata advertises the same address \
+             {host}:{port} for all of them, so only one broker is actually reachable — partitions \
+             led by the others cannot be read. (A multi-broker cluster behind a single SSH tunnel \
+             hits exactly this; the tunnel needs one local port per broker.)",
+            brokers.len()
+        );
+    }
+    match leader.and_then(|l| brokers.iter().find(|b| b.0 == l).map(|b| (l, &b.1, b.2))) {
+        Some((id, host, port)) => format!(
+            "{raw} · The partition leader is broker {id} at {host}:{port} — that address must be \
+             reachable from this machine."
+        ),
+        None => match leader {
+            Some(id) => format!("{raw} · The partition leader (broker {id}) is not in the cluster metadata."),
+            None => raw.to_string(),
+        },
+    }
+}
 
 pub struct KafkaDriver {
     /// Consumer dùng cho metadata + (sau) consume. Arc để clone vào spawn_blocking.
@@ -144,19 +249,39 @@ impl KafkaDriver {
         let c = self.consumer.clone();
         let out = tokio::task::spawn_blocking(move || -> Result<Vec<KafkaTopic>, String> {
             let md = c.fetch_metadata(None, META_TIMEOUT).map_err(|e| e.to_string())?;
+            // Watermark offsets (earliest/latest) → lag. Hỏi song song (xem `watermarks`).
+            let targets: Vec<(String, i32)> = md
+                .topics()
+                .iter()
+                .filter(|t| t.error().is_none())
+                .flat_map(|t| t.partitions().iter().map(move |p| (t.name().to_string(), p.id())))
+                .collect();
+            let (marks, offsets_error) = watermarks(&c, &targets);
+            // đủ dữ liệu để giải thích thất bại thay vì ném nguyên lỗi librdkafka ra
+            let broker_list: Vec<(i32, String, i32)> = md
+                .brokers()
+                .iter()
+                .map(|b| (b.id(), b.host().to_string(), b.port()))
+                .collect();
             let mut topics = Vec::new();
             for t in md.topics() {
                 if t.error().is_some() {
                     continue;
                 }
                 let mut parts = Vec::new();
+                // partition nào KHÔNG đọc được watermark thì đánh dấu "không biết"
+                // (offsets_known = false) chứ không được lặng lẽ đếm thành 0 message
+                let mut offsets_known = true;
+                let mut failed_leader = None;
                 for p in t.partitions() {
-                    // watermark offsets (earliest/latest) → lag. Bounded (2s) so a
-                    // slow/unreachable partition can't stall the whole topic list —
-                    // watermarks are best-effort (fall back to 0/0 on timeout).
-                    let (low, high) = c
-                        .fetch_watermarks(t.name(), p.id(), Duration::from_secs(2))
-                        .unwrap_or((0, 0));
+                    let (low, high) = match marks.get(&(t.name().to_string(), p.id())).copied() {
+                        Some(w) => w,
+                        None => {
+                            offsets_known = false;
+                            failed_leader.get_or_insert(p.leader());
+                            (0, 0)
+                        }
+                    };
                     parts.push(KafkaPartition {
                         id: p.id(),
                         leader: p.leader(),
@@ -171,6 +296,16 @@ impl KafkaDriver {
                 topics.push(KafkaTopic {
                     name: t.name().to_string(),
                     partitions: parts,
+                    offsets_known,
+                    offsets_error: if offsets_known {
+                        None
+                    } else {
+                        Some(diagnose_offsets_failure(
+                            &broker_list,
+                            failed_leader,
+                            offsets_error.as_deref().unwrap_or("the broker did not report offsets"),
+                        ))
+                    },
                     internal,
                 });
             }
@@ -219,17 +354,195 @@ impl KafkaDriver {
                     .unwrap_or_default()
             }
         };
-        let off = match from {
-            "offset" => Offset::Offset(offset),
-            "latest" => Offset::End,
-            _ => Offset::Beginning,
-        };
         let mut tpl = TopicPartitionList::new();
-        for p in partitions {
-            tpl.add_partition_offset(topic, p, off).map_err(|e| err("TPL error", e))?;
+        if from == "recent" {
+            // "N message mới nhất": bắt đầu ở high − N/số-partition thay vì đọc lại từ
+            // đầu log. Mở một topic vài triệu message vì thế không phải kéo cả log về
+            // (UI chỉ giữ được vài trăm dòng gần nhất). Watermark lấy gộp 1 lượt.
+            // MỖI partition lùi lại `want` message (không chia đều): dữ liệu Kafka
+            // thường dồn theo key vào vài partition, chia đều thì partition đông dữ
+            // liệu chỉ hiện được một phần nhỏ — tệ hơn nữa là cửa sổ đuôi có thể
+            // KHÔNG chứa message hiển thị được nào (log compaction, control record
+            // của transaction chiếm offset) và giao diện tưởng topic rỗng.
+            let per = if offset > 0 { offset } else { RECENT_DEFAULT };
+            let targets: Vec<(String, i32)> =
+                partitions.iter().map(|p| (topic.to_string(), *p)).collect();
+            let (marks, _) = watermarks(&self.consumer, &targets);
+            for p in partitions {
+                let start = match marks.get(&(topic.to_string(), p)) {
+                    Some((low, high)) => Offset::Offset((high - per).max(*low)),
+                    // Không đọc nổi watermark kể cả sau khi hỏi riêng: đọc từ ĐẦU log.
+                    // Tuyệt đối không dùng Offset::End ở đây — nó đọc về 0 message và
+                    // topic có dữ liệu sẽ bị báo là rỗng.
+                    None => Offset::Beginning,
+                };
+                tpl.add_partition_offset(topic, p, start).map_err(|e| err("TPL error", e))?;
+            }
+        } else {
+            let off = match from {
+                "offset" => Offset::Offset(offset),
+                "latest" => Offset::End,
+                _ => Offset::Beginning,
+            };
+            for p in partitions {
+                tpl.add_partition_offset(topic, p, off).map_err(|e| err("TPL error", e))?;
+            }
         }
         consumer.assign(&tpl).map_err(|e| err("assign error", e))?;
         Ok(consumer)
+    }
+
+    /// Tổng message CÒN GIỮ LẠI trên các partition đang duyệt (Σ high − low).
+    ///
+    /// Dùng để nói đúng "topic không có message" thay vì suy ra từ "duyệt xong mà
+    /// không nhận được gì" — hai chuyện đó khác nhau: cửa sổ đuôi log có thể không
+    /// chứa message hiển thị được (compaction, control record) trong khi topic vẫn
+    /// còn đầy dữ liệu ở offset thấp hơn.
+    pub fn retained_messages(&self, topic: &str, partitions: &[i32]) -> (i64, Option<String>) {
+        let targets: Vec<(String, i32)> =
+            partitions.iter().map(|p| (topic.to_string(), *p)).collect();
+        let (marks, err) = watermarks(&self.consumer, &targets);
+        // thiếu bất kỳ partition nào ⇒ tổng KHÔNG đáng tin ⇒ trả -1 (không biết)
+        if marks.len() < targets.len() {
+            return (-1, err);
+        }
+        (marks.values().map(|(l, h)| (h - l).max(0)).sum(), None)
+    }
+
+    /// Đọc MỘT TRANG message: cửa sổ `[start, end)` của mỗi partition, với
+    /// `end = until` (hoặc high watermark khi `until < 0` = trang mới nhất) và
+    /// `start = max(low, end − limit)`.
+    ///
+    /// Khác `browse_consumer` (stream không giới hạn): đọc đúng một cửa sổ có biên rồi
+    /// dừng, nên mở một topic khổng lồ không kéo cả log về. Consumer tạo riêng cho lần
+    /// đọc này và được drop ngay trong thread blocking (rdkafka phải drop trong đúng
+    /// thread poll của nó).
+    pub async fn fetch_page(
+        &self,
+        topic: &str,
+        partition: Option<i32>,
+        until: i64,
+        limit: i64,
+    ) -> Result<KafkaPage, QueryError> {
+        let meta = self.consumer.clone();
+        let cfg = self.config.clone();
+        let topic = topic.to_string();
+        let limit = limit.clamp(1, 5_000);
+        let page = tokio::task::spawn_blocking(move || -> Result<KafkaPage, String> {
+            // Metadata luôn được đọc (không chỉ khi partition = None) để còn giải thích
+            // được thất bại: cần danh sách broker + leader của partition hỏng.
+            let md = meta.fetch_metadata(Some(&topic), META_TIMEOUT).map_err(|e| e.to_string())?;
+            let md_topic = md.topics().iter().find(|t| t.name() == topic);
+            let parts: Vec<i32> = match partition {
+                Some(p) => vec![p],
+                None => md_topic
+                    .map(|t| t.partitions().iter().map(|p| p.id()).collect())
+                    .unwrap_or_default(),
+            };
+            let broker_list: Vec<(i32, String, i32)> =
+                md.brokers().iter().map(|b| (b.id(), b.host().to_string(), b.port())).collect();
+            let leader_of = |id: i32| -> Option<i32> {
+                md_topic
+                    .and_then(|t| t.partitions().iter().find(|p| p.id() == id))
+                    .map(|p| p.leader())
+            };
+            let targets: Vec<(String, i32)> =
+                parts.iter().map(|p| (topic.clone(), *p)).collect();
+            let (marks, offsets_error) = watermarks(&meta, &targets);
+
+            let mut tpl = TopicPartitionList::new();
+            let mut window: HashMap<i32, (i64, i64)> = HashMap::new();
+            let mut retained = 0i64;
+            let mut window_start = i64::MAX;
+            let mut has_older = false;
+            let mut at_newest = true;
+            let mut known = false;
+            for p in &parts {
+                let Some((low, high)) = marks.get(&(topic.clone(), *p)).copied() else {
+                    continue; // không biết watermark → bỏ qua partition này, không đoán
+                };
+                known = true;
+                retained += (high - low).max(0);
+                let end = if until < 0 { high } else { until.min(high) };
+                let start = (end - limit).max(low);
+                if start > low {
+                    has_older = true;
+                }
+                if end < high {
+                    at_newest = false;
+                }
+                window_start = window_start.min(start);
+                if end > start {
+                    window.insert(*p, (start, end));
+                    tpl.add_partition_offset(&topic, *p, Offset::Offset(start))
+                        .map_err(|e| e.to_string())?;
+                }
+            }
+            // thiếu watermark của bất kỳ partition nào ⇒ tổng KHÔNG đáng tin
+            let all_known = known && marks.len() == parts.len();
+            let mut page = KafkaPage {
+                msgs: Vec::new(),
+                retained: if all_known { retained } else { -1 },
+                window_start: if window_start == i64::MAX { 0 } else { window_start },
+                has_older,
+                at_newest,
+                offsets_error: if all_known {
+                    None
+                } else {
+                    let failed = parts.iter().find(|p| !marks.contains_key(&(topic.clone(), **p)));
+                    Some(diagnose_offsets_failure(
+                        &broker_list,
+                        failed.and_then(|p| leader_of(*p)),
+                        offsets_error.as_deref().unwrap_or("the broker did not report offsets"),
+                    ))
+                },
+            };
+            if tpl.count() == 0 {
+                return Ok(page); // cửa sổ rỗng (topic rỗng, hoặc đã ở đầu log)
+            }
+
+            let mut cfg = cfg;
+            cfg.set("group.id", format!("dbstudio-page-{}", uuid::Uuid::new_v4()));
+            cfg.set("enable.auto.commit", "false");
+            cfg.set("enable.partition.eof", "true");
+            let consumer: BaseConsumer = cfg.create().map_err(|e| e.to_string())?;
+            consumer.assign(&tpl).map_err(|e| e.to_string())?;
+
+            let deadline = Instant::now() + Duration::from_secs(30);
+            let mut done: std::collections::HashSet<i32> = std::collections::HashSet::new();
+            while Instant::now() < deadline && done.len() < window.len() {
+                match consumer.poll(Duration::from_millis(300)) {
+                    Some(Ok(m)) => {
+                        let p = m.partition();
+                        let off = m.offset();
+                        if let Some((_s, end)) = window.get(&p) {
+                            if off < *end {
+                                page.msgs.push(borrowed_to_message(&m));
+                            }
+                            if off + 1 >= *end {
+                                done.insert(p);
+                            }
+                        }
+                    }
+                    Some(Err(rdkafka::error::KafkaError::PartitionEOF(p))) => {
+                        done.insert(p);
+                    }
+                    _ => {}
+                }
+            }
+            drop(consumer); // drop trong đúng thread poll
+
+            // mới nhất lên đầu, đúng thứ tự lưới đang hiển thị
+            page.msgs.sort_by(|a, b| {
+                b.timestamp.cmp(&a.timestamp).then(b.offset.cmp(&a.offset))
+            });
+            page.msgs.truncate(limit as usize);
+            Ok(page)
+        })
+        .await
+        .map_err(|e| err("spawn_blocking error", e))?
+        .map_err(|e| err("Failed to read messages", e))?;
+        Ok(page)
     }
 
     /// Produce 1 message → (partition, offset) đã land.
@@ -311,15 +624,29 @@ impl KafkaDriver {
             gcfg.set("group.id", &group);
             let gc: BaseConsumer = gcfg.create().map_err(|e| e.to_string())?;
             let committed = gc.committed_offsets(tpl, META_TIMEOUT).map_err(|e| e.to_string())?;
+            // high watermark của các partition group đã commit — lấy GỘP (2 request)
+            // thay vì hỏi tuần tự từng partition như trước.
+            let need: Vec<(String, i32)> = committed
+                .elements()
+                .iter()
+                .filter(|e| matches!(e.offset(), rdkafka::Offset::Offset(_)))
+                .map(|e| (e.topic().to_string(), e.partition()))
+                .collect();
+            let gc = Arc::new(gc);
+            let (marks, _) = watermarks(&gc, &need);
             let mut out = Vec::new();
             for elem in committed.elements() {
                 let off = match elem.offset() {
                     rdkafka::Offset::Offset(o) => o,
                     _ => continue, // group chưa commit partition này
                 };
-                let (_low, high) = gc
-                    .fetch_watermarks(elem.topic(), elem.partition(), Duration::from_secs(5))
-                    .unwrap_or((0, off));
+                let (_low, high) = match marks.get(&(elem.topic().to_string(), elem.partition())) {
+                    Some(w) => *w,
+                    // gộp không ra số → hỏi riêng partition đó (giữ hành vi cũ)
+                    None => gc
+                        .fetch_watermarks(elem.topic(), elem.partition(), Duration::from_secs(5))
+                        .unwrap_or((0, off)),
+                };
                 out.push(KafkaLag {
                     topic: elem.topic().to_string(),
                     partition: elem.partition(),
@@ -500,6 +827,23 @@ pub fn borrowed_to_message(m: &rdkafka::message::BorrowedMessage) -> KafkaMessag
     }
 }
 
+/// Một TRANG message + đủ thông tin để giao diện phân trang và nói đúng sự thật.
+#[derive(Debug, serde::Serialize)]
+pub struct KafkaPage {
+    pub msgs: Vec<KafkaMessage>,
+    /// Σ(high − low) của các partition đang xem; **−1 = không đọc được watermark**
+    /// (KHÔNG được hiểu là topic rỗng).
+    pub retained: i64,
+    /// Offset đầu cửa sổ — dùng làm `until` để lấy trang cũ hơn.
+    pub window_start: i64,
+    /// Còn message cũ hơn cửa sổ này.
+    pub has_older: bool,
+    /// Cửa sổ đã chạm cuối log (không có trang mới hơn).
+    pub at_newest: bool,
+    /// Lý do không đọc được watermark (nếu có) — hiện ra thay vì im lặng ra 0.
+    pub offsets_error: Option<String>,
+}
+
 #[derive(Debug, serde::Serialize)]
 pub struct KafkaMember {
     pub member_id: String,
@@ -554,5 +898,64 @@ pub struct KafkaPartition {
 pub struct KafkaTopic {
     pub name: String,
     pub partitions: Vec<KafkaPartition>,
+    /// `false` = KHÔNG đọc được watermark của ít nhất một partition ⇒ số message là
+    /// **không biết**, giao diện phải hiện "? msg" chứ không được hiện "0 msg".
+    pub offsets_known: bool,
+    /// Lý do broker/librdkafka không trả watermark (hiện trong tooltip).
+    pub offsets_error: Option<String>,
     pub internal: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const RAW: &str = "onesis-class-student-enrollment[0]: Meta data fetch error: NotLeaderForPartition";
+
+    #[test]
+    fn diagnoses_a_multi_broker_cluster_collapsed_onto_one_address() {
+        // dau hieu cua cluster nhieu broker di qua MOT SSH tunnel: khac node_id nhung
+        // metadata bao cung mot dia chi -> chi mot broker thuc su ket noi duoc
+        let brokers = vec![
+            (1, "127.0.0.1".to_string(), 54321),
+            (2, "127.0.0.1".to_string(), 54321),
+            (3, "127.0.0.1".to_string(), 54321),
+        ];
+        let out = diagnose_offsets_failure(&brokers, Some(3), RAW);
+        assert!(out.starts_with(RAW), "phai giu nguyen loi goc");
+        assert!(out.contains("3 brokers"), "phai noi ro co bao nhieu broker: {out}");
+        assert!(out.contains("127.0.0.1:54321"));
+        assert!(out.contains("single SSH tunnel"), "phai chi ra nguyen nhan that: {out}");
+    }
+
+    #[test]
+    fn names_the_unreachable_leader_when_brokers_have_distinct_addresses() {
+        let brokers = vec![
+            (1, "kafka-1.internal".to_string(), 9092),
+            (2, "kafka-2.internal".to_string(), 9092),
+        ];
+        let out = diagnose_offsets_failure(&brokers, Some(2), RAW);
+        assert!(out.contains("broker 2 at kafka-2.internal:9092"), "{out}");
+        assert!(!out.contains("SSH tunnel"), "day khong phai kieu tunnel collapse: {out}");
+    }
+
+    #[test]
+    fn single_broker_cluster_is_not_reported_as_collapsed() {
+        let brokers = vec![(1, "127.0.0.1".to_string(), 54321)];
+        let out = diagnose_offsets_failure(&brokers, Some(1), RAW);
+        assert!(!out.contains("brokers but metadata"), "1 broker thi khong phai collapse: {out}");
+        assert!(out.contains("broker 1 at 127.0.0.1:54321"));
+    }
+
+    #[test]
+    fn falls_back_to_the_raw_error_when_metadata_says_nothing() {
+        assert_eq!(diagnose_offsets_failure(&[], None, RAW), RAW);
+    }
+
+    #[test]
+    fn reports_a_leader_missing_from_metadata() {
+        let brokers = vec![(1, "h".to_string(), 9092)];
+        let out = diagnose_offsets_failure(&brokers, Some(7), RAW);
+        assert!(out.contains("broker 7) is not in the cluster metadata"), "{out}");
+    }
 }

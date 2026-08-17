@@ -131,6 +131,7 @@ pub fn run() {
             commands::kafka::kafka_purge_topic,
             commands::kafka::kafka_delete_records,
             commands::kafka::kafka_consume,
+            commands::kafka::kafka_fetch_page,
             commands::kafka::kafka_stop_consume,
             commands::kafka::kafka_produce,
             commands::kafka::kafka_consumer_groups,

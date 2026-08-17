@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { kafkaTopicRows, natsStreamRows, topicMessageCount, filterStreamRows, filterTopicRows } from './explorer'
+import {
+  kafkaTopicRows,
+  natsStreamRows,
+  topicMessageCount,
+  filterStreamRows,
+  filterTopicRows,
+  consumerEmptyText,
+} from './explorer'
 import type { KafkaTopic, NatsJsStream } from '$lib/ipc'
 
 const topic = (name: string, internal: boolean, parts: [number, number][]): KafkaTopic => ({
@@ -102,5 +109,78 @@ describe('filterStreamRows', () => {
 
   it('drops streams with no name match', () => {
     expect(filterStreamRows('nomatch', rows)).toEqual([])
+  })
+})
+
+describe('consumerEmptyText', () => {
+  const base = { loading: false, tailing: false, atEnd: false, receivedAny: false, hasError: false, retained: 0 }
+
+  it('says the topic is empty only when the broker watermarks agree it is', () => {
+    expect(consumerEmptyText({ ...base, atEnd: true })).toBe('This topic has no messages.')
+  })
+
+  it('NEVER claims "no messages" while the broker still reports retained records', () => {
+    // reading nothing ≠ empty: the browsed window may hold no readable record
+    // (compaction / transaction control records) on a topic that is still full
+    const out = consumerEmptyText({ ...base, atEnd: true, retained: 12345 })
+    expect(out).not.toContain('no messages')
+    expect(out).toContain('12,345')
+    expect(out).toContain('Older')
+  })
+
+  it('does not claim "no messages" when the retained count is unknown (−1)', () => {
+    expect(consumerEmptyText({ ...base, atEnd: true, retained: -1 })).toBe(
+      'No messages to show — reached the end of the topic.',
+    )
+  })
+
+  it('keeps waiting while a live tail has not reached the end yet', () => {
+    expect(consumerEmptyText({ ...base, tailing: true })).toBe('Waiting for messages…')
+  })
+
+  it('distinguishes "read it all, view cleared" from an empty topic', () => {
+    expect(consumerEmptyText({ ...base, atEnd: true, receivedAny: true, retained: 50 })).toBe(
+      'No messages to show — reached the end of the topic.',
+    )
+  })
+
+  it('says it is still reading while a page fetch is in flight', () => {
+    expect(consumerEmptyText({ ...base, loading: true, atEnd: true })).toBe('Reading messages…')
+  })
+
+  it('an error wins over every other state', () => {
+    expect(
+      consumerEmptyText({ ...base, atEnd: true, hasError: true, retained: 7 }),
+    ).toBe(
+      'Could not read messages — see the error above.',
+    )
+  })
+})
+
+describe('kafkaTopicRows — unknown offsets', () => {
+  const t = (over: Partial<KafkaTopic>): KafkaTopic => ({
+    name: 'onesis-class-student-enrollment',
+    internal: false,
+    partitions: [{ id: 0, leader: 1, replicas: [1], isr: [1], low: 0, high: 0, lag: 0 }],
+    ...over,
+  })
+
+  it('shows "? msg" (never "0 msg") when the broker did not report offsets', () => {
+    const [row] = kafkaTopicRows([t({ offsets_known: false, offsets_error: 'Broker: Not available' })])
+    expect(row.meta).toBe('1 part · ? msg')
+    expect(row.meta).not.toContain('0 msg')
+    expect(row.messages).toBe(-1)
+    expect(row.offsetsError).toBe('Broker: Not available')
+  })
+
+  it('still says 0 msg for a topic the broker confirms is empty', () => {
+    const [row] = kafkaTopicRows([t({ offsets_known: true })])
+    expect(row.meta).toBe('1 part · 0 msg')
+    expect(row.offsetsError).toBeUndefined()
+  })
+
+  it('falls back to a readable reason when the broker gave none', () => {
+    const [row] = kafkaTopicRows([t({ offsets_known: false })])
+    expect(row.offsetsError).toBe('the broker did not report offsets')
   })
 })

@@ -39,3 +39,47 @@ test('kafka: connect opens no cluster tab; topics in explorer → consumer', asy
 
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
+
+// Paging: a topic can hold millions of records — the consumer reads ONE bounded
+// window at a time instead of streaming the whole log.
+test('kafka: topic messages are paged (Newest / Previous / Next)', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(String(e)))
+  await blockRemoteFonts(page)
+  await page.goto(APP_URL)
+  await page.waitForSelector('#app > *', { timeout: 15_000 })
+  await page.getByRole('button', { name: /Events Kafka/ }).dblclick()
+  await page.getByText('payments', { exact: true }).first().click()
+  await page.waitForTimeout(400)
+
+  // the newest page loaded on open — rows are visible, no "no messages" claim
+  const rows = page.locator('tbody tr')
+  await expect(rows.first()).toBeVisible({ timeout: 8000 })
+  const firstCount = await rows.count()
+  expect(firstCount).toBeGreaterThan(0)
+  await expect(page.getByText('This topic has no messages.')).toHaveCount(0)
+
+  // demo topic 'payments' holds 15200+ records; the page must read far fewer
+  expect(firstCount).toBeLessThanOrEqual(100)
+  await expect(page.getByText(/topic holds/)).toBeVisible()
+
+  // Next moves on to older records: the top offset must decrease
+  const topOffset = async () => Number(await rows.first().locator('td').nth(1).innerText())
+  const before = await topOffset()
+  await page.getByRole('button', { name: 'Next ▶' }).click()
+  await page.waitForTimeout(500)
+  const after = await topOffset()
+  expect(after).toBeLessThan(before)
+
+  // Previous walks back toward the newest records
+  await page.getByRole('button', { name: '◀ Previous' }).click()
+  await page.waitForTimeout(500)
+  expect(await topOffset()).toBeGreaterThan(after)
+
+  // page size is honoured
+  await page.getByTitle(/How many records to read per page/).selectOption('50')
+  await page.waitForTimeout(500)
+  expect(await rows.count()).toBeLessThanOrEqual(50)
+
+  expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
+})
