@@ -195,6 +195,44 @@
     return i > 0 ? [list[i], ...list.slice(0, i), ...list.slice(i + 1)] : list
   }
 
+  /** Keep a pane's scroll positions across hide/show. The browser drops the
+   *  scroll offset of a box it isn't rendering, but the virtualized result grid
+   *  keeps the offset it last saw — so the tab came back with a tall empty
+   *  spacer above rows that had scrolled out of reach, and looked blank until
+   *  the wheel nudged it. Remember every scroller the user moves, and put it
+   *  back when the tab returns (which also lands them where they left off). */
+  function paneScroll(node: HTMLElement, active: boolean) {
+    const seen = new Map<HTMLElement, { top: number; left: number }>()
+    // 'scroll' doesn't bubble — listen in the capture phase
+    const record = (e: Event) => {
+      const el = e.target as HTMLElement
+      if (el && el.nodeType === 1) seen.set(el, { top: el.scrollTop, left: el.scrollLeft })
+    }
+    node.addEventListener('scroll', record, true)
+    const restore = () => {
+      for (const [el, pos] of seen) {
+        if (!el.isConnected) {
+          seen.delete(el)
+          continue
+        }
+        // setting these fires 'scroll', which is what re-syncs the virtualizer
+        if (el.scrollTop !== pos.top) el.scrollTop = pos.top
+        if (el.scrollLeft !== pos.left) el.scrollLeft = pos.left
+      }
+    }
+    let was = active
+    return {
+      update(next: boolean) {
+        if (next && !was) requestAnimationFrame(restore)
+        was = next
+      },
+      destroy() {
+        node.removeEventListener('scroll', record, true)
+      },
+    }
+  }
+
+
   $effect(() => {
     const live = [tabs.activeTabId, tabs.activeTabId1].filter(Boolean) as string[]
     const open = new Set(tabs.tabs.map((t) => t.id))
@@ -354,6 +392,7 @@
             {@const on = t.id === activeId}
             <div
               data-tab-pane={t.id}
+              use:paneScroll={on}
               data-active={on}
               style="display:flex;flex-direction:column;min-width:0;min-height:0;{on
                 ? 'position:relative;flex:1'

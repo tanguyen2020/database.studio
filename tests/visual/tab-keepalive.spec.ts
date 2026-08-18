@@ -166,3 +166,57 @@ test('a background tab keeps a real box while hidden', async ({ page }) => {
   // laid out, yet not visible to the user (and not clickable)
   await expect(hidden.first()).toBeHidden()
 })
+
+// The reported bug, exactly: run a query, scroll the grid, look at another tab,
+// come back — the grid was blank until the wheel nudged it. A hidden box loses
+// its scroll offset in the browser while the virtualized grid keeps the offset
+// it last saw, so it painted a tall empty spacer above rows that were no longer
+// reachable. Coming back must show rows, at the same place you left them.
+test('a scrolled grid comes back painted, at the same scroll position', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(String(e)))
+  await blockRemoteFonts(page)
+  await page.goto(APP_URL)
+  await page.waitForSelector('#app > *', { timeout: 15_000 })
+  await page.waitForTimeout(300)
+
+  await page.getByRole('button', { name: /Postgres/ }).first().click()
+  await page.waitForTimeout(200)
+  await openDatabaseNode(page)
+  await page.getByTitle('New SQL tab (Ctrl+T)').first().click()
+  await page.waitForTimeout(200)
+  await page.locator('.cm-content:visible').first().click()
+  await page.keyboard.type('SELECT * FROM perf_rows_1000')
+  await page.getByRole('button', { name: 'Run' }).first().click()
+  await page.waitForTimeout(800)
+
+  const gridState = () =>
+    page.evaluate(() => {
+      const el = Array.from(document.querySelectorAll('div')).find(
+        (d) => d.scrollHeight > d.clientHeight + 50 && !!d.querySelector('table') && !!d.closest('[data-active="true"]'),
+      ) as HTMLElement | undefined
+      const painted = Array.from(document.querySelectorAll('[data-active="true"] tbody tr')).filter((r) => {
+        const b = r.getBoundingClientRect()
+        return b.height > 0 && b.bottom > 0 && b.top < window.innerHeight
+      }).length
+      return { scrollTop: el?.scrollTop ?? -1, painted }
+    })
+
+  await page.mouse.move(600, 600)
+  await page.mouse.wheel(0, 1200)
+  await page.waitForTimeout(400)
+  const before = await gridState()
+  expect(before.scrollTop, 'the grid actually scrolled').toBeGreaterThan(200)
+  expect(before.painted, 'rows are on screen before switching').toBeGreaterThan(5)
+
+  await page.getByTitle('New SQL tab (Ctrl+T)').first().click()
+  await page.waitForTimeout(500)
+  await page.getByRole('tab').filter({ hasText: /Untitled/ }).first().click()
+  await page.waitForTimeout(600)
+
+  const after = await gridState()
+  expect(after.scrollTop, 'scroll position is where the user left it').toBe(before.scrollTop)
+  expect(after.painted, 'rows are painted without touching the wheel').toBeGreaterThan(5)
+
+  expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
+})
