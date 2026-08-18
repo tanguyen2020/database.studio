@@ -178,7 +178,7 @@
 
   // ---- tab keep-alive -------------------------------------------------------
   // Switching tabs must never re-run a tab's work: a tab mounts the first time it
-  // is activated and then STAYS mounted, hidden with display:none, so its query,
+  // is activated and then STAYS mounted — hidden, but still laid out — so its query,
   // its results, scroll position, editor content and in-flight streams survive
   // clicking away and back. Tabs that were never activated are not mounted at
   // all (so restoring a session doesn't fire every tab's queries at once), and
@@ -186,7 +186,7 @@
   let mountedTabs = $state<string[]>([])
 
   /** The pane's mounted tabs, active one FIRST. Order is invisible on screen (the
-   *  others are display:none) but keeps the tab the user is looking at first in
+   *  others are hidden) but keeps the tab the user is looking at first in
    *  the DOM, so anything reading the document — assistive tech, "the editor",
    *  the first result grid — lands on the visible tab, not a background one. */
   function mountedInPane(p: 0 | 1, activeId: string | null) {
@@ -341,17 +341,30 @@
 
       {#snippet paneView(p: 0 | 1)}
         <!-- Every tab this pane has shown stays mounted; only the active one is
-             visible. Keeps state (results, scroll, editor) across tab switches. -->
+             visible. Keeps state (results, scroll, editor) across tab switches.
+             A background tab is hidden with visibility (and lifted out of flow),
+             NOT display:none — it has to keep a real box: the result grid is
+             virtualized and measures its viewport to decide which rows to
+             render, so a zero-height viewport renders none (the grid came back
+             empty until the scroll wheel nudged it). A hidden box is not painted
+             and cannot take focus. -->
         {@const activeId = p === 1 ? tabs.activeTabId1 : tabs.activeTabId}
-        {#each mountedInPane(p, activeId) as t (t.id)}
-          <div
-            style="flex:1;flex-direction:column;min-width:0;min-height:0;display:{t.id === activeId ? 'flex' : 'none'}"
-            aria-hidden={t.id === activeId ? undefined : 'true'}
-          >
-            {@render paneBody(t)}
-          </div>
-        {/each}
-        {#if !tabs.activeInPane(p)}{@render emptyPane()}{/if}
+        <div style="position:relative;flex:1;display:flex;flex-direction:column;min-width:0;min-height:0">
+          {#each mountedInPane(p, activeId) as t (t.id)}
+            {@const on = t.id === activeId}
+            <div
+              data-tab-pane={t.id}
+              data-active={on}
+              style="display:flex;flex-direction:column;min-width:0;min-height:0;{on
+                ? 'position:relative;flex:1'
+                : 'position:absolute;inset:0;visibility:hidden;pointer-events:none'}"
+              aria-hidden={on ? undefined : 'true'}
+            >
+              {@render paneBody(t)}
+            </div>
+          {/each}
+          {#if !tabs.activeInPane(p)}{@render emptyPane()}{/if}
+        </div>
       {/snippet}
 
       {#snippet emptyPane()}

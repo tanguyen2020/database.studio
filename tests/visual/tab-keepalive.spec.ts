@@ -45,6 +45,10 @@ test('switching tabs keeps results and never re-runs the query', async ({ page }
   await page.getByRole('tab').filter({ hasText: tabA! }).first().click()
   await page.waitForTimeout(400)
   await expect(page.getByText(/Rows 1–3 of 3/).first()).toBeVisible()
+  // …and the ROWS are painted, not just the footer: a hidden tab must keep a real
+  // box so the virtualized grid still has a viewport to render into (the reported
+  // bug was an empty grid until you nudged the scroll wheel).
+  await expect(page.getByText('Binh', { exact: true }).first()).toBeVisible()
   const afterSwitch = await calls(page)
   expect(afterSwitch['exec_statement'] ?? 0).toBe(afterRun['exec_statement'] ?? 0)
 
@@ -85,4 +89,80 @@ test('switching to a Table Viewer tab and back does not re-fetch its rows', asyn
   expect(back['exec_filtered']).toBe(loaded['exec_filtered'])
 
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
+})
+
+// The reported bug: after switching away and back, the grid came up EMPTY — the
+// header and the row count were there, but no rows, until a nudge of the scroll
+// wheel painted them. A hidden tab must keep a real box: the grid is virtualized,
+// and a zero-height viewport means "render no rows".
+test('a big result is still painted after switching tabs (no scroll nudge)', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(String(e)))
+  await blockRemoteFonts(page)
+  await page.goto(APP_URL)
+  await page.waitForSelector('#app > *', { timeout: 15_000 })
+  await page.waitForTimeout(300)
+
+  await page.getByRole('button', { name: /Postgres/ }).first().click()
+  await page.waitForTimeout(200)
+  await openDatabaseNode(page)
+
+  await page.getByTitle('New SQL tab (Ctrl+T)').first().click()
+  await page.waitForTimeout(200)
+  await page.locator('.cm-content:visible').first().click()
+  await page.keyboard.type('SELECT * FROM perf_rows_1000')
+  await page.getByRole('button', { name: 'Run' }).first().click()
+  await page.waitForTimeout(800)
+  const firstCell = page.getByText('42261', { exact: true })
+  await expect(firstCell.first()).toBeVisible()
+  const rowsBefore = await page.locator('tr:visible').count()
+  expect(rowsBefore).toBeGreaterThan(5)
+
+  // Away…
+  await page.getByTitle('New SQL tab (Ctrl+T)').first().click()
+  await page.waitForTimeout(400)
+  // …and back: the rows are on screen immediately, no scrolling involved.
+  await page.getByRole('tab').filter({ hasText: /Untitled/ }).first().click()
+  await page.waitForTimeout(500)
+  await expect(firstCell.first()).toBeVisible()
+  expect(await page.locator('tr:visible').count()).toBeGreaterThan(5)
+
+  expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
+})
+
+// Root cause of that empty grid: a background tab kept in the DOM with
+// display:none has NO box, so anything that measures its viewport (the
+// virtualized grid, CodeMirror) computes "nothing fits" while hidden and only
+// recovers on the next scroll/resize. A hidden tab must stay laid out.
+test('a background tab keeps a real box while hidden', async ({ page }) => {
+  await blockRemoteFonts(page)
+  await page.goto(APP_URL)
+  await page.waitForSelector('#app > *', { timeout: 15_000 })
+  await page.waitForTimeout(300)
+
+  await page.getByRole('button', { name: /Postgres/ }).first().click()
+  await page.waitForTimeout(200)
+  await openDatabaseNode(page)
+  await page.getByTitle('New SQL tab (Ctrl+T)').first().click()
+  await page.waitForTimeout(200)
+  await page.locator('.cm-content:visible').first().click()
+  await page.keyboard.type('SELECT * FROM perf_rows_1000')
+  await page.getByRole('button', { name: 'Run' }).first().click()
+  await page.waitForTimeout(700)
+
+  const active = page.locator('[data-tab-pane][data-active="true"]')
+  const activeBox = await active.first().boundingBox()
+
+  // switch away — the tab we just ran is now a background tab
+  await page.getByTitle('New SQL tab (Ctrl+T)').first().click()
+  await page.waitForTimeout(400)
+
+  const hidden = page.locator('[data-tab-pane][data-active="false"]')
+  expect(await hidden.count()).toBeGreaterThan(0)
+  const hiddenBox = await hidden.first().boundingBox()
+  expect(hiddenBox, 'a hidden tab must still be laid out').not.toBeNull()
+  expect(hiddenBox!.height).toBeGreaterThan(100)
+  expect(Math.round(hiddenBox!.height)).toBe(Math.round(activeBox!.height))
+  // laid out, yet not visible to the user (and not clickable)
+  await expect(hidden.first()).toBeHidden()
 })
