@@ -610,13 +610,27 @@
           <!-- nhóm theo hệ (prototype-faithful) — mặc định -->
           {#each groups as group (group.system)}
             {#if group.showCategory}
-              <div style="font-size:var(--px-9_5);font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);padding:var(--px-9) var(--px-12) var(--px-2) var(--px-4)">{group.category}</div>
+              <!-- outermost level (RELATIONAL / DOCUMENT / CACHE / STREAMING): a small
+                   caption + a hairline rule so it reads as a section divider, staying
+                   quieter than the engine band below it (category > engine > row). -->
+              <div class="cat-head"><span>{group.category}</span><span class="cat-rule"></span></div>
             {/if}
-            <div class="hoverable" onclick={() => toggleGroup(group.system)} onkeydown={(e) => e.key === 'Enter' && toggleGroup(group.system)} role="button" tabindex="0" style="display:flex;align-items:center;gap:var(--px-7);padding:var(--px-8) var(--px-8) var(--px-4) var(--px-4);cursor:pointer">
-              <span class="mono" style="width:var(--px-16);text-align:center;font-size:var(--px-16);color:var(--text2)">{collapsed.has(group.system) ? '▸' : '▾'}</span>
+            <!-- engine band: own background + a left bar in the engine's brand colour
+                 + a bold label + a count pill, so each engine group is unmistakable. -->
+            <div
+              class="grp-head"
+              class:collapsed={collapsed.has(group.system)}
+              onclick={() => toggleGroup(group.system)}
+              onkeydown={(e) => e.key === 'Enter' && toggleGroup(group.system)}
+              role="button"
+              tabindex="0"
+              aria-expanded={!collapsed.has(group.system)}
+              style="box-shadow:inset var(--px-3) 0 0 {systemMeta(group.system).accent}"
+            >
+              <span class="mono grp-chev">{collapsed.has(group.system) ? '▸' : '▾'}</span>
               <span style="display:flex;align-items:center;flex:none"><SystemIcon system={group.system} size={16} /></span>
-              <span style="font-size:var(--px-10);font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--muted)">{systemMeta(group.system).label}</span>
-              <span class="mono" style="margin-left:auto;font-size:var(--px-10);color:var(--muted)">{group.items.length}</span>
+              <span class="grp-label">{systemMeta(group.system).label}</span>
+              <span class="mono grp-count">{group.items.length}</span>
             </div>
             {#if !collapsed.has(group.system)}
               {#each group.items as p (p.id)}
@@ -678,5 +692,70 @@
   .conn-row.selected .conn-name {
     color: var(--primary);
     font-weight: 700;
+  }
+  /* Category caption (RELATIONAL / DOCUMENT / …) — the quiet outer level. */
+  .cat-head {
+    display: flex;
+    align-items: center;
+    gap: var(--px-8);
+    padding: var(--px-10) var(--px-10) var(--px-4) var(--px-8);
+    font-size: var(--px-9);
+    font-weight: 800;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--text2);
+  }
+  .cat-rule {
+    flex: 1;
+    height: var(--px-1);
+    background: var(--border);
+  }
+  /* Engine band (POSTGRESQL / MYSQL / …) — reads as a header, not as a row: own
+     background, hairline top/bottom, and a left bar in the engine's brand colour
+     (set inline from SYS_GEN). Label is --text, not --muted: at this small uppercase
+     size the muted grey was barely readable on the light sidebar. */
+  .grp-head {
+    display: flex;
+    align-items: center;
+    gap: var(--px-7);
+    padding: var(--px-6) var(--px-8) var(--px-6) var(--px-8);
+    margin: var(--px-2) 0 var(--px-2) 0;
+    cursor: pointer;
+    background: var(--header);
+    border-top: var(--px-1) solid var(--border);
+    border-bottom: var(--px-1) solid var(--border);
+  }
+  .grp-head:hover {
+    background: color-mix(in srgb, var(--primary) 10%, var(--header));
+  }
+  .grp-head:focus-visible {
+    outline: var(--px-2) solid var(--primary);
+    outline-offset: calc(-1 * var(--px-2));
+  }
+  .grp-chev {
+    width: var(--px-14);
+    text-align: center;
+    font-size: var(--px-13);
+    color: var(--text2);
+  }
+  .grp-label {
+    font-size: var(--px-10_5);
+    font-weight: 800;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: var(--text);
+  }
+  /* count as a pill — a bare number next to the label read as part of it */
+  .grp-count {
+    margin-left: auto;
+    min-width: var(--px-18);
+    text-align: center;
+    font-size: var(--px-9_5);
+    font-weight: 700;
+    color: var(--text2);
+    background: var(--raised);
+    border: var(--px-1) solid var(--border2);
+    border-radius: var(--px-10);
+    padding: 0 var(--px-6);
   }
 </style>

@@ -13,8 +13,11 @@
 
   interface Props {
     connId: string
+    /** called when a scan finished, so the sidebar header's Refresh spinner can span
+     *  the real work instead of flashing off the instant the tick is bumped */
+    onReloaded?: () => void
   }
-  let { connId }: Props = $props()
+  let { connId, onReloaded }: Props = $props()
 
   let curDb = $state(0)
   let dbCount = $state(16)
@@ -108,7 +111,10 @@
     } catch (e) {
       if (mine === gen) error = String(e)
     } finally {
-      if (mine === gen) loading = false
+      if (mine === gen) {
+        loading = false
+        onReloaded?.()
+      }
     }
   }
 

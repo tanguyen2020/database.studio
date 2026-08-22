@@ -106,9 +106,12 @@ export function genAlterTable(system: string, schema: string, table: string): st
  * `<old>_new`). MySQL/MariaDB have no RENAME DATABASE and SQLite is a file — those
  * return an explanatory comment instead of DDL.
  */
-export function genRenameDatabase(system: string, database: string): string {
+/** `newName` is optional so the old call sites keep producing the `<db>_new`
+ *  placeholder statement; the Rename dialog passes the name the user typed.
+ *  Identifiers go through quoteIdent, which escapes the quote char. */
+export function genRenameDatabase(system: string, database: string, newName?: string): string {
   const from = quoteIdent(system, database)
-  const to = quoteIdent(system, database + '_new')
+  const to = quoteIdent(system, newName ?? database + '_new')
   switch (system) {
     case 'postgres':
       // Must be run while not connected TO that database (connect to another first).

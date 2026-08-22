@@ -63,6 +63,23 @@ export function schemaOfTreeKey(key: string, schemas: string[] = []): string | n
   return rest ? schemaPrefixOf(rest, schemas) : null
 }
 
+/** Schema + name of a table-like object row (`t:<schema>.<name>` table,
+ *  `v:<schema>.<name>` view) — the rows that own a lazily-loaded DETAIL
+ *  (columns / indexes / constraints / partitions), so a tree refresh has to
+ *  re-read exactly these. Any other row shape returns null. */
+export function tableOfTreeKey(key: string, schemas: string[] = []): { schema: string; table: string } | null {
+  const cut = key.indexOf(':')
+  if (cut < 0) return null
+  const prefix = key.slice(0, cut)
+  if (prefix !== 't' && prefix !== 'v') return null
+  const rest = key.slice(cut + 1)
+  if (!rest) return null
+  const schema = schemaPrefixOf(rest, schemas)
+  if (rest === schema) return null // schema only — no object name
+  const table = rest.slice(schema.length + 1)
+  return table ? { schema, table } : null
+}
+
 /** Database (+ schema, when the key reaches that deep) of a foreign-database row.
  *  Foreign keys are `fdb:<db>` / `fdb:<db>:s:<schema>[:…]`. */
 export function foreignOfTreeKey(key: string): { database: string; schema?: string } | null {

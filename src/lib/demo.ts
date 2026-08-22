@@ -220,6 +220,24 @@ interface DemoNatsStream {
   bytes: number
   consumers: number
 }
+/** Databases dropped through the explorer this session — the demo backend is
+ *  stateful so a drop really disappears from list_databases/list_schemas after
+ *  the tree reloads (a no-op mock would look like the drop did nothing). */
+const demoDroppedDbs = new Set<string>()
+/** …and databases renamed through it (old name → new name), same reason. */
+const demoRenamedDbs = new Map<string, string>()
+/** Applies the session's drops + renames to a catalog listing. */
+function demoDbState<T extends { name: string }>(xs: T[]): T[] {
+  return xs
+    .filter((x) => !demoDroppedDbs.has(x.name))
+    .map((x) => (demoRenamedDbs.has(x.name) ? { ...x, name: demoRenamedDbs.get(x.name) as string } : x))
+}
+/** Unquotes an identifier the app emitted ("a" / `a` / [a]). */
+const IDENT_PUNCT = new Set(['"', '`', '[', ']', ';'])
+function demoIdent(raw: string): string {
+  return [...raw.trim()].filter((c) => !IDENT_PUNCT.has(c)).join('')
+}
+
 let demoNatsStreams: DemoNatsStream[] = [
   { name: 'ORDERS', subjects: ['orders.eu', 'orders.us'], retention: 'Limits', storage: 'File', messages: 1240, bytes: 98304, consumers: 2 },
   { name: 'EVENTS', subjects: ['events.>'], retention: 'WorkQueue', storage: 'Memory', messages: 57, bytes: 8192, consumers: 1 },
@@ -333,9 +351,22 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
   // Test observability (demo/browser only): count IPC calls per command so e2e can
   // assert that actions like Refresh actually re-hit the backend. No effect in Tauri.
   if (typeof window !== 'undefined') {
-    const w = window as unknown as { __ipcCalls?: Record<string, number>; __ipcAttach?: string[] }
+    const w = window as unknown as {
+      __ipcCalls?: Record<string, number>
+      __ipcAttach?: string[]
+      __ipcConns?: Record<string, string[]>
+      __ipcLastSql?: string
+    }
     w.__ipcCalls = w.__ipcCalls ?? {}
     w.__ipcCalls[cmd] = (w.__ipcCalls[cmd] ?? 0) + 1
+    // …plus WHICH connection each introspection call ran on, so a test can tell a
+    // refresh of the base tree from a refresh of an attached database ({id}::db).
+    if (typeof args?.connId === 'string') {
+      w.__ipcConns = w.__ipcConns ?? {}
+      w.__ipcConns[cmd] = [...(w.__ipcConns[cmd] ?? []), args.connId as string]
+    }
+    // …and the last statement text, so a test can assert WHAT was executed.
+    if (cmd === 'exec_statement' && typeof args?.sql === 'string') w.__ipcLastSql = args.sql as string
     // attach_database also records WHICH connection+database was attached: a
     // sub-connection is only correct when it derives from the selected connection.
     if (cmd === 'attach_database') {
@@ -382,11 +413,13 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
     case 'duplicate_connection':
       return ok({ ...DEMO_PROFILES[0], id: 'copy', name: 'Copy' })
     case 'list_databases':
-      return ok([
-        { name: 'app', current: true },
-        { name: 'analytics', current: false },
-        { name: 'postgres', current: false },
-      ])
+      return ok(
+        demoDbState([
+          { name: 'app', current: true },
+          { name: 'analytics', current: false },
+          { name: 'postgres', current: false },
+        ]),
+      )
     case 'open_database': {
       const db = String(args?.database ?? 'db')
       const base = DEMO_PROFILES[0]
@@ -406,12 +439,14 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
     case 'close_tab_connection':
       return ok(null)
     case 'list_schemas': {
+      // A dropped database is gone for schema-as-database engines too (their
+      // "schemas" ARE databases), so the tree must stop listing it after a drop.
       // Per-database schemas differ: a sub-connection to another database
       // ({cid}::{db}) exposes that database's own schemas. Used by the PG Grant
       // wizard to load schemas for the selected databases.
       const schemaConn = String(args?.connId ?? '')
-      if (schemaConn.endsWith('::analytics')) return ok([{ name: 'public', is_default: true }, { name: 'reporting', is_default: false }])
-      return ok([{ name: 'public', is_default: true }])
+      if (schemaConn.endsWith('::analytics')) return ok(demoDbState([{ name: 'public', is_default: true }, { name: 'reporting', is_default: false }]))
+      return ok(demoDbState([{ name: 'public', is_default: true }]))
     }
     case 'list_tables': {
       // perf-gate seam (see the bigSchema comment above): a production-sized table list
@@ -758,6 +793,20 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
     case 'exec_statement': {
       // Collation unification (MySQL/MariaDB) — feed the audit dialog demo data.
       const stmtSql = String(args?.sql ?? '')
+      // ALTER/RENAME DATABASE — recorded, so the tree shows the new name on reload.
+      const renDbM = stmtSql.match(
+        /^\s*(?:ALTER\s+DATABASE\s+(\S+)\s+(?:RENAME\s+TO|MODIFY\s+NAME\s*=)\s*(\S+)|RENAME\s+DATABASE\s+(\S+)\s+TO\s+(\S+))/i,
+      )
+      if (renDbM) {
+        demoRenamedDbs.set(demoIdent(renDbM[1] ?? renDbM[3]), demoIdent(renDbM[2] ?? renDbM[4]))
+        return ok({ ok: true, duration_ms: 9 })
+      }
+      // DROP DATABASE — recorded, so the tree really loses that database on reload.
+      const dropDbM = stmtSql.match(/^\s*DROP\s+DATABASE\s+(?:IF\s+EXISTS\s+)?(\S+)/i)
+      if (dropDbM) {
+        demoDroppedDbs.add(dropDbM[1].replace(/[`"\[\];]/g, '').trim())
+        return ok({ ok: true, duration_ms: 12 })
+      }
       // Not on the session-setup `SET search_path` the PG editor sends before a
       // run — the seam has to hit the user's statement.
       if (!/^\s*SET\s/i.test(stmtSql) && takeConnLost()) {

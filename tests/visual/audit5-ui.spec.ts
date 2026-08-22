@@ -109,7 +109,8 @@ test('table designer header shows connection and database', async ({ page }) => 
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
 
-// User request — Rename in the context menu for database and table names.
+// User request — Rename in the context menu for database and table names. It opens
+// a popup (focused input + live statement), not a SQL tab; see rename-database.spec.
 test('rename database from the current-db header context menu', async ({ page }) => {
   const errors: string[] = []
   page.on('pageerror', (e) => errors.push(String(e)))
@@ -125,8 +126,12 @@ test('rename database from the current-db header context menu', async ({ page })
   await page.waitForTimeout(200)
   await page.getByText('Rename…', { exact: true }).first().click()
   await page.waitForTimeout(300)
-  // opens a SQL tab with the ALTER DATABASE … RENAME statement to review
-  await expect(page.locator('.cm-content').first()).toContainText('ALTER DATABASE')
+  // a popup with the new name focused, showing the exact ALTER it will run
+  const dialog = page.getByRole('dialog', { name: 'Rename database' })
+  await expect(dialog).toBeVisible()
+  await expect(dialog.locator('#rn-db')).toBeFocused()
+  await expect(dialog).toContainText('ALTER DATABASE')
+  await dialog.getByRole('button', { name: 'Cancel' }).click()
 
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })

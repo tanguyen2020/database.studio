@@ -67,6 +67,7 @@
   import { toAlterStatement, type AlterKind } from '$lib/sql/alter'
   import { objectFilterMatch } from '$lib/explorer/filter'
   import { foreignOfTreeKey, schemaOfTreeKey } from '$lib/explorer/target'
+  import { foreignReloadPlan, mainReloadPlan, type ReloadPlan } from '$lib/explorer/reload'
   import {
     cassandraExpandKeys,
     natsExpandKeys,
@@ -694,6 +695,8 @@
   // reload path (relational/ClickHouse schema cache, Kafka/NATS streaming, Redis key
   // browser, Cassandra keyspace tree). Guarded + spinning indicator (Refresh rule chung).
   let refreshingTree = $state(false)
+  /** safety net for a child tree that never reports its reload back (see withChildReload) */
+  const CHILD_RELOAD_TIMEOUT_MS = 8000
   // The Connections toolbar Refresh reconnects, then bumps this tick so the tree
   // is re-read from the freshly opened connection (no stale catalog).
   // Per connection: seeing a connection for the first time is not a reload
@@ -742,21 +745,91 @@
     if (!s || refreshingTree) return
     refreshingTree = true
     try {
+      // Security rows (roles/users/logins) sit in their own cache: drop the OPEN
+      // folders' rows and the self-heal effect above re-reads them from the server.
+      const openSec = secFolders.filter((f) => expanded.has(f.key) && secRows[f.key])
+      if (openSec.length) {
+        const nextSec = { ...secRows }
+        for (const f of openSec) delete nextSec[f.key]
+        secRows = nextSec
+      }
       if (s.system === 'kafka' || s.system === 'nats') {
         await explorer.loadStreaming(s.id, s.system, true)
       } else if (s.system === 'redis') {
-        explorer.bumpRedis(s.id) // RedisExplorer reloads its key list on the tick
+        // RedisExplorer reloads its key list on the tick; wait for it to report back
+        await withChildReload(() => explorer.bumpRedis(s.id))
       } else if (s.system === 'cassandra') {
-        await loadCass(s.id)
+        await reloadCassandra(s.id)
       } else if (s.system === 'mongodb') {
-        mongoRefresh++ // MongoExplorer reloads its tree when the key changes
+        await withChildReload(() => mongoRefresh++) // MongoExplorer watches the key
       } else {
-        // relational + ClickHouse: rebuild the schema cache; PG/MSSQL also re-list DBs
-        await explorer.refresh(s.id, { kind: 'connection' })
-        if (s.system === 'postgres' || s.system === 'mssql' || s.system === 'oracle') await explorer.loadDatabases(s.id)
+        await reloadRelational(s)
       }
     } finally {
       refreshingTree = false
+    }
+  }
+
+  /** Relational + ClickHouse: re-read EVERYTHING the tree is showing for this
+   *  connection, not just the schema list — otherwise Refresh empties the folders
+   *  the user had open (their object lists are dropped and only re-fetched on the
+   *  next click, which reads as "Refresh lost my data"). Order: schema list →
+   *  database list → children of every open schema → detail of every open table,
+   *  then the same for each foreign database attached in the tree. */
+  async function reloadRelational(s: { id: string; system: string }) {
+    await explorer.refresh(s.id, { kind: 'connection' }) // schema list, forced
+    // force: `refresh(connection)` does not clear `databases`, so without this the
+    // server's database list would never be re-read (a new database never showed up).
+    if (s.system === 'postgres' || s.system === 'mssql' || s.system === 'oracle') {
+      await explorer.loadDatabases(s.id, true)
+    }
+    await applyReloadPlan(s.id, mainReloadPlan(expanded, (explorer.cache[s.id]?.schemas ?? []).map((x) => x.name)))
+    // Foreign databases (PG/MSSQL/Oracle) are read over their own sub-connection,
+    // so they need their own reload — the base refresh above never touches them.
+    for (const [db, sub] of Object.entries(dbSubIds[s.id] ?? {})) {
+      if (!expanded.has(`fdb:${db}`)) continue // collapsed → nothing on screen to reload
+      await explorer.refresh(sub, { kind: 'connection' })
+      await applyReloadPlan(sub, foreignReloadPlan(expanded, db, (explorer.cache[sub]?.schemas ?? []).map((x) => x.name)))
+    }
+  }
+
+  async function applyReloadPlan(connId: string, plan: ReloadPlan) {
+    for (const schema of plan.schemas) await explorer.loadSchemaChildren(connId, schema, true)
+    for (const t of plan.tables) await explorer.loadTableDetail(connId, t.schema, t.table, true)
+    // ClickHouse Dictionaries live in their own cache (not the schema cache), so
+    // they need re-reading too — otherwise a new dictionary never appears.
+    for (const schema of plan.schemas) {
+      if (chDicts[dictKey(connId, schema)]) await loadChDicts(connId, schema, true)
+    }
+  }
+
+  /** Redis and Mongo own their own tree inside a child component, so Refresh asks
+   *  them to reload through a tick. The header spinner has to wait for the CHILD to
+   *  finish — otherwise it flashes off the instant the tick is bumped and the button
+   *  looks dead (neither child shows a spinner of its own once its list is filled).
+   *  The timeout is a safety net: a child that never reports back must not leave the
+   *  header stuck on "Refreshing…". */
+  let childReloadDone: (() => void) | null = null
+  function withChildReload(trigger: () => void): Promise<void> {
+    return new Promise((resolve) => {
+      const timer = setTimeout(finish, CHILD_RELOAD_TIMEOUT_MS)
+      function finish() {
+        clearTimeout(timer)
+        childReloadDone = null
+        resolve()
+      }
+      childReloadDone = finish
+      trigger()
+    })
+  }
+
+  /** Cassandra: `loadCass` wipes every keyspace subtree, so re-read the keyspaces
+   *  that were open (a plain reload would leave them blank until re-clicked). */
+  async function reloadCassandra(id: string) {
+    const open = cassKeyspaces.filter((ks) => cassTrees[ks])
+    await loadCass(id)
+    for (const ks of open) {
+      if (cassKeyspaces.includes(ks)) await loadCassKeyspace(id, ks)
     }
   }
   // NATS mark (blue tile + white "N" + chat-bubble tail) served from an asset
@@ -807,9 +880,11 @@
 
   // In-app confirm popup (window.confirm isn't reliable inside the Tauri webview);
   // clicking the backdrop does NOT confirm — only the Confirm button runs the action.
-  let confirmState = $state<{ title: string; body: string; run: () => void } | null>(null)
-  function askConfirm(title: string, body: string, run: () => void) {
-    confirmState = { title, body, run }
+  let confirmState = $state<{ title: string; body: string; sql?: string; run: () => void } | null>(null)
+  /** `sql` (optional) is shown verbatim in the dialog so a destructive confirm can
+   *  state exactly what will run without opening a script tab first. */
+  function askConfirm(title: string, body: string, run: () => void, sql?: string) {
+    confirmState = { title, body, sql, run }
   }
   function runConfirm() {
     const c = confirmState
@@ -909,9 +984,9 @@
   // by-schema-only cache would show (and act on) the previous connection's list.
   let chDicts = $state<Record<string, string[]>>({})
   const dictKey = (connId: string, schema: string) => `${connId}:${schema}`
-  async function loadChDicts(connId: string, schema: string) {
+  async function loadChDicts(connId: string, schema: string, force = false) {
     const k = dictKey(connId, schema)
-    if (chDicts[k]) return
+    if (chDicts[k] && !force) return
     try {
       chDicts = { ...chDicts, [k]: await ipc.chDictionaries(connId, schema) }
     } catch {
@@ -1114,6 +1189,126 @@
   // CREATE DATABASE on the connection.
   function newDatabase() {
     if (selected) newDatabaseWizard.show(selected.id, selected.system)
+  }
+
+  // Drop Database — an in-app confirm (backdrop does NOT close it) that shows the
+  // exact statement, then RUNS it and re-reads the tree, instead of parking the DDL
+  // in a SQL tab for the user to execute by hand.
+  function dropDatabase(dbName: string) {
+    const s = selected
+    if (!s || !dbName) return
+    const sql = genDropDatabase(s.system, dbName)
+    // SQLite has no DROP DATABASE (the database IS the file), so genDropDatabase
+    // returns an explanatory comment — nothing to confirm; keep it in a SQL tab.
+    if (sql.trimStart().startsWith('--')) {
+      stmtTab(`Drop database ${dbName}`, sql)
+      return
+    }
+    askConfirm(
+      'Drop database',
+      `Drop database "${dbName}"? Every schema, table and row it holds is deleted. This cannot be undone.`,
+      () => void runDropDatabase(dbName, sql),
+      sql,
+    )
+  }
+
+  /** Runs the DROP on the BASE connection — PostgreSQL/MSSQL refuse to drop a
+   *  database you are connected to, and our own attached sub-connection (`{id}::db`,
+   *  opened when the user expanded that database in the tree) counts as a session,
+   *  so it is closed first. Afterwards the connection's tree is re-read from the
+   *  server so the sidebar shows what actually remains. */
+  // Rename Database — a popup with an input (focused on open) instead of parking a
+  // placeholder statement in a SQL tab. Confirm runs the ALTER and reloads the tree.
+  // Engines that cannot rename a database (MySQL/MariaDB, Oracle, SQLite) have no
+  // statement to run: the popup explains what to do and only offers the SQL tab.
+  let renameState = $state<{ db: string; to: string; running: boolean; error: string | null } | null>(null)
+  const renameSupported = $derived(
+    !!renameState && !!selected && !genRenameDatabase(selected.system, renameState.db).trimStart().startsWith('--'),
+  )
+  const renameTarget = $derived(renameState?.to.trim() ?? '')
+  const renameSql = $derived(
+    renameState && selected
+      ? genRenameDatabase(selected.system, renameState.db, renameTarget || `${renameState.db}_new`)
+      : '',
+  )
+  /** Confirm stays disabled until the name is usable: non-empty, different from the
+   *  current one, and not already taken by another database on this server. */
+  const renameTaken = $derived(
+    !!renameTarget &&
+      (cache?.databases ?? []).some((d) => d.name.toLowerCase() === renameTarget.toLowerCase()) 
+  )
+  const canRename = $derived(
+    renameSupported && !!renameTarget && renameTarget !== renameState?.db && !renameTaken && !renameState?.running,
+  )
+
+  function renameDatabase(dbName: string) {
+    if (!selected || !dbName) return
+    renameState = { db: dbName, to: dbName, running: false, error: null }
+  }
+
+  async function runRename() {
+    const st = renameState
+    const s = selected
+    if (!st || !s || !canRename) return
+    const to = st.to.trim()
+    const sql = genRenameDatabase(s.system, st.db, to)
+    renameState = { ...st, running: true, error: null }
+    try {
+      await closeOurSessionsTo(s.id, st.db)
+      const r = await ipc.execStatement(s.id, sql)
+      if (r.error) {
+        renameState = { ...st, running: false, error: r.error.message }
+        return
+      }
+      renameState = null
+      toasts.success(`Database "${st.db}" renamed to "${to}"`, s.system)
+      explorer.invalidate(s.id)
+      await refreshConnection()
+    } catch (e) {
+      renameState = { ...st, running: false, error: String(e) }
+    }
+  }
+
+  /** Closes every session THIS APP holds on `dbName`, so a DROP/RENAME is not
+   *  blocked by us: the sub-connection the tree opened when that database was
+   *  expanded (`{base}::db`), plus any Query Editor tab bound to it
+   *  (`{base}#tab-N`). PostgreSQL/MSSQL refuse both operations while sessions
+   *  remain, and the resulting "is being accessed by other users" reads as an
+   *  app bug. Reuses the existing close_tab_connection command. */
+  async function closeOurSessionsTo(baseId: string, dbName: string) {
+    const sub = dbSubIds[baseId]?.[dbName]
+    if (sub) {
+      await ipc.closeTabConnection(sub).catch(() => {})
+      explorer.invalidate(sub)
+      const { [dbName]: _gone, ...restSubs } = dbSubIds[baseId] ?? {}
+      dbSubIds = { ...dbSubIds, [baseId]: restSubs }
+      expanded = new Set([...expanded].filter((k) => k !== `fdb:${dbName}` && !k.startsWith(`fdb:${dbName}:`)))
+    }
+    for (const t of tabs.tabs) {
+      if (t.contentType !== 'sql-editor' || t.connectionId !== baseId) continue
+      if (t.state?.database !== dbName) continue
+      await ipc.closeTabConnection(`${baseId}#tab-${t.id}`).catch(() => {})
+    }
+  }
+
+  async function runDropDatabase(dbName: string, sql: string) {
+    const s = selected
+    if (!s) return
+    try {
+      await closeOurSessionsTo(s.id, dbName)
+      const r = await ipc.execStatement(s.id, sql)
+      if (r.error) {
+        toasts.error(r.error.message)
+        return
+      }
+      toasts.success(`Database "${dbName}" dropped`, s.system)
+      // Schema-as-database engines (MySQL/MariaDB/ClickHouse) list databases as
+      // schemas, so a dropped one only disappears once the schema cache is rebuilt.
+      explorer.invalidate(s.id)
+      await refreshConnection()
+    } catch (e) {
+      toasts.error(String(e))
+    }
   }
 
   // T18 — Show Definition: lấy text định nghĩa THẬT từ server (view/trigger/proc/func).
@@ -1926,10 +2121,10 @@
       {/if}
     {:else if isRedis}
       <!-- Redis: key browser (DB selector + SCAN + pattern + tree + Add key). -->
-      <RedisExplorer connId={selected.id} />
+      <RedisExplorer connId={selected.id} onReloaded={() => childReloadDone?.()} />
     {:else if isMongo}
       <!-- MongoDB: database → collection → (fields, indexes) tree. -->
-      <MongoExplorer connId={selected.id} defaultDb={selected.database} refreshKey={mongoRefresh} />
+      <MongoExplorer connId={selected.id} defaultDb={selected.database} refreshKey={mongoRefresh} onReloaded={() => childReloadDone?.()} />
     {:else}
       {#if pgMssqlMultiDb}
         <!-- current database header (PG/MSSQL bind one DB per connection); its -->
@@ -1946,12 +2141,13 @@
             <ContextMenu.Item onclick={() => selected && tabs.openSchemaCompare(selected.id)}>Compare Schemas…</ContextMenu.Item>
             <ContextMenu.Item onclick={() => selected && tabs.openSchemaCompare(selected.id, { tgtConnId: selected.id })}>Compare Databases…</ContextMenu.Item>
             <ContextMenu.Separator />
-            <ContextMenu.Item onclick={() => selected && stmtTab(`Rename database ${curDb?.name ?? selected.database}`, genRenameDatabase(selected.system, curDb?.name ?? selected.database ?? ''))}>Rename…</ContextMenu.Item>
+            <ContextMenu.Item onclick={() => renameDatabase(curDb?.name ?? selected?.database ?? '')}>Rename…</ContextMenu.Item>
             <ContextMenu.Item onclick={() => copyName(curDb?.name ?? selected.database ?? '')}>Copy Name</ContextMenu.Item>
             <ContextMenu.Item onclick={() => selected && explorer.refresh(selected.id, { kind: 'connection' })}>Refresh</ContextMenu.Item>
             <ContextMenu.Separator />
-            <!-- current DB: PG can't drop the database you're connected to — connect elsewhere first -->
-            <ContextMenu.Item variant="destructive" onclick={() => selected && stmtTab(`Drop database ${curDb?.name ?? selected.database}`, genDropDatabase(selected.system, curDb?.name ?? selected.database ?? ''))}>Drop Database…</ContextMenu.Item>
+            <!-- confirm, then run. PG/MSSQL still refuse to drop the database this
+                 connection sits in; that server error is surfaced as-is. -->
+            <ContextMenu.Item variant="destructive" onclick={() => dropDatabase(curDb?.name ?? selected?.database ?? '')}>Drop Database…</ContextMenu.Item>
           </ContextMenu.Content>
         {/snippet}
         {#if !dbFiltering || matchDb(curDbName)}
@@ -1998,8 +2194,8 @@
               {#if schemaIsDatabase}
                 <ContextMenu.Item onclick={() => selected && collationWizard.show(selected.id, schema.name)}>Unify Collation…</ContextMenu.Item>
               {/if}
-              <ContextMenu.Item onclick={() => selected && stmtTab(`Rename database ${schema.name}`, genRenameDatabase(selected.system, schema.name))}>Rename…</ContextMenu.Item>
-              <ContextMenu.Item variant="destructive" onclick={() => selected && stmtTab(`Drop database ${schema.name}`, genDropDatabase(selected.system, schema.name))}>Drop Database…</ContextMenu.Item>
+              <ContextMenu.Item onclick={() => renameDatabase(schema.name)}>Rename…</ContextMenu.Item>
+              <ContextMenu.Item variant="destructive" onclick={() => dropDatabase(schema.name)}>Drop Database…</ContextMenu.Item>
             {/if}
             <ContextMenu.Item onclick={() => selected && explorer.refresh(selected.id, { kind: 'schema', schema: schema.name })}>Refresh</ContextMenu.Item>
           </ContextMenu.Content>
@@ -2650,11 +2846,11 @@
               <ContextMenu.Separator />
               <ContextMenu.Item onclick={() => selected && tabs.openSchemaCompare(selected.id, { tgtConnId: selected.id, srcDb: db.name })}>Compare Databases…</ContextMenu.Item>
               <!-- rename/drop run on the base connection (not attached to db.name), which PG requires -->
-              <ContextMenu.Item onclick={() => selected && stmtTab(`Rename database ${db.name}`, genRenameDatabase(selected.system, db.name))}>Rename…</ContextMenu.Item>
+              <ContextMenu.Item onclick={() => renameDatabase(db.name)}>Rename…</ContextMenu.Item>
               <ContextMenu.Item onclick={() => copyName(db.name)}>Copy Name</ContextMenu.Item>
               <ContextMenu.Item onclick={() => sub && explorer.refresh(sub, { kind: 'connection' })}>Refresh</ContextMenu.Item>
               <ContextMenu.Separator />
-              <ContextMenu.Item variant="destructive" onclick={() => selected && stmtTab(`Drop database ${db.name}`, genDropDatabase(selected.system, db.name))}>Drop Database…</ContextMenu.Item>
+              <ContextMenu.Item variant="destructive" onclick={() => dropDatabase(db.name)}>Drop Database…</ContextMenu.Item>
             </ContextMenu.Content>
           {/snippet}
           {@render row({ key: fkey, depth: 0, glyph: '', svg: DB_FOLDER_SVG, color: C.folder, name: db.name, meta: attaching === db.name ? 'attaching…' : 'database', head: true, expandable: true, onClick: () => toggleForeignDb(db.name) }, dbMenu)}
@@ -2931,6 +3127,84 @@
   </div>
 </div>
 
+{#if renameState}
+  <!-- Rename database: backdrop click does NOT close (rule chung for form popups);
+       the input takes focus on open so the user can type straight away. -->
+  <div
+    onkeydown={(e) => {
+      if (e.key === 'Escape') renameState = null
+      if (e.key === 'Enter' && canRename) void runRename()
+    }}
+    role="presentation"
+    style="position:fixed;inset:0;background:var(--rgba-0-0-0-_5);display:flex;align-items:center;justify-content:center;z-index:90"
+  >
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Rename database"
+      tabindex="-1"
+      style="background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-14);padding:var(--px-18);min-width:var(--px-340);max-width:var(--px-480);box-shadow:0 var(--px-24) var(--px-60) var(--rgba-0-0-0-_55)"
+    >
+      <div style="font-size:var(--px-14);font-weight:600;color:var(--text);margin-bottom:var(--px-8)">Rename database</div>
+      {#if renameSupported}
+        <div style="font-size:var(--px-12_5);color:var(--text2);line-height:1.45;margin-bottom:var(--px-12)">
+          Rename <span class="mono" style="color:var(--text)">{renameState.db}</span> on this server. Objects inside it are untouched;
+          anything referring to it by name (connections, scripts) has to be updated.
+        </div>
+        <label for="rn-db" style="display:block;font-size:var(--px-11);color:var(--muted);margin-bottom:var(--px-4)">New name</label>
+        <input
+          id="rn-db"
+          class="mono"
+          use:autofocus
+          bind:value={renameState.to}
+          disabled={renameState.running}
+          spellcheck="false"
+          autocomplete="off"
+          style="width:100%;box-sizing:border-box;font-size:var(--px-12_5);padding:var(--px-6) var(--px-8);border-radius:var(--px-6);background:var(--raised);border:var(--px-1) solid var(--border2);color:var(--text)"
+        />
+        {#if renameTaken}
+          <div style="font-size:var(--px-11_5);color:var(--error);margin-top:var(--px-6)">A database named “{renameTarget}” already exists on this server.</div>
+        {/if}
+        <div
+          class="mono"
+          style="font-size:var(--px-11_5);color:var(--text);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-8);margin:var(--px-12) 0;white-space:pre-wrap;word-break:break-word"
+        >{renameSql}</div>
+      {:else}
+        <div
+          class="mono"
+          style="font-size:var(--px-11_5);color:var(--text2);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-8);margin-bottom:var(--px-12);white-space:pre-wrap;word-break:break-word"
+        >{renameSql}</div>
+      {/if}
+      {#if renameState.error}
+        <div style="font-size:var(--px-11_5);color:var(--error);margin-bottom:var(--px-12);white-space:pre-wrap">{renameState.error}</div>
+      {/if}
+      <div style="display:flex;gap:var(--px-8);justify-content:flex-end">
+        <span onclick={() => (renameState = null)} onkeydown={(e) => e.key === 'Enter' && (renameState = null)} role="button" tabindex="0" class="cfm-btn">Cancel</span>
+        {#if renameSupported}
+          <span
+            onclick={() => void runRename()}
+            onkeydown={(e) => e.key === 'Enter' && void runRename()}
+            role="button"
+            tabindex="0"
+            aria-disabled={!canRename}
+            aria-busy={renameState.running}
+            class="cfm-btn primary"
+            style={canRename ? '' : 'opacity:.5;pointer-events:none'}
+          >{renameState.running ? 'Renaming…' : 'Confirm'}</span>
+        {:else}
+          <span
+            onclick={() => { const st = renameState; renameState = null; if (st) stmtTab(`Rename database ${st.db}`, genRenameDatabase(selected!.system, st.db)) }}
+            onkeydown={(e) => e.key === 'Enter' && (() => { const st = renameState; renameState = null; if (st) stmtTab(`Rename database ${st.db}`, genRenameDatabase(selected!.system, st.db)) })()}
+            role="button"
+            tabindex="0"
+            class="cfm-btn"
+          >Open in SQL tab</span>
+        {/if}
+      </div>
+    </div>
+  </div>
+{/if}
+
 {#if confirmState}
   <!-- backdrop click does NOT confirm/close; use Cancel / Confirm / Escape -->
   <div
@@ -2946,6 +3220,13 @@
     >
       <div style="font-size:var(--px-14);font-weight:600;color:var(--text);margin-bottom:var(--px-8)">{confirmState.title}</div>
       <div style="font-size:var(--px-12_5);color:var(--text2);line-height:1.45;margin-bottom:var(--px-16)">{confirmState.body}</div>
+      {#if confirmState.sql}
+        <!-- the exact statement this confirm will run (no script tab needed) -->
+        <div
+          class="mono"
+          style="font-size:var(--px-11_5);color:var(--text);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-8);margin-bottom:var(--px-16);white-space:pre-wrap;word-break:break-word"
+        >{confirmState.sql}</div>
+      {/if}
       <div style="display:flex;gap:var(--px-8);justify-content:flex-end">
         <span use:autofocus onclick={() => (confirmState = null)} onkeydown={(e) => e.key === 'Enter' && (confirmState = null)} role="button" tabindex="0" class="cfm-btn">Cancel</span>
         <span onclick={runConfirm} onkeydown={(e) => e.key === 'Enter' && runConfirm()} role="button" tabindex="0" class="cfm-btn danger">Confirm</span>
@@ -3052,6 +3333,11 @@
   }
   .cfm-btn:hover {
     background: var(--hover);
+  }
+  .cfm-btn.primary {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: var(--hex-fff);
   }
   .cfm-btn.danger {
     color: var(--hex-fff);
