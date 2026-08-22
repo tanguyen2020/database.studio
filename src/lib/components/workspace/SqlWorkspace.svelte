@@ -20,6 +20,7 @@
   import * as ipc from '$lib/ipc'
   import { IS_TAURI } from '$lib/demo'
   import { formatSql } from '$lib/sql/format'
+  import { expectsColumnHere } from '$lib/sql/column-context'
   import { mapErrorToDocument } from '$lib/sql/errors'
   import { lintSql, schemaLints, toCmDiagnostics } from '$lib/sql/lint-client'
   import { splitStatements, statementAtOffset, offsetToLineCol } from '$lib/sql/statements'
@@ -467,11 +468,18 @@
     }
 
     // Case 2 — a bare identifier (no qualifier) → columns of EVERY table referenced
-    // by the statement (SELECT/WHERE/ORDER BY … suggest the FROM tables' columns, the
-    // way DataGrip does). Only fires once there is at least one FROM/JOIN table.
+    // by the statement (SELECT/WHERE/ORDER BY, and UPDATE … SET / INSERT INTO, whose
+    // target parseTableRefs also reads — the way DataGrip does). Only fires once the
+    // statement references at least one table.
     if (refs.length === 0) return null
     const word = ctx.matchBefore(/[\w$]*$/)
-    if (!word || (word.from === word.to && !ctx.explicit)) return null
+    if (!word) return null
+    if (word.from === word.to && !ctx.explicit) {
+      // nothing typed: only offer where a column is the only sensible next token
+      // (right after WHERE / SET / AND / ON / ORDER BY / a comma…)
+      const before = ctx.state.sliceDoc(Math.max(0, ctx.pos - 60), ctx.pos)
+      if (!expectsColumnHere(before)) return null
+    }
     // don't fire right after a dot (handled by case 1) or a digit-only token
     if (word.from > 0 && ctx.state.sliceDoc(word.from - 1, word.from) === '.') return null
     const seen = new Set<string>()
@@ -1075,7 +1083,7 @@
         {/each}
       </select>
       <!-- Ring (prototype dòng 257-259) — mở Ring Topology, màu accent Cassandra -->
-      <div class="wk-tbtn" style="color:#1287B1" onclick={() => tab.connectionId && tabs.openCassandraRing(tab.connectionId)} onkeydown={(e) => e.key === 'Enter' && tab.connectionId && tabs.openCassandraRing(tab.connectionId)} role="button" tabindex="0" title="Ring Topology">
+      <div class="wk-tbtn" style="color:var(--sacc-cyan)" onclick={() => tab.connectionId && tabs.openCassandraRing(tab.connectionId)} onkeydown={(e) => e.key === 'Enter' && tab.connectionId && tabs.openCassandraRing(tab.connectionId)} role="button" tabindex="0" title="Ring Topology">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9" stroke-dasharray="3 3"></circle><circle cx="12" cy="3" r="2" fill="currentColor" stroke="none"></circle><circle cx="20" cy="17" r="2" fill="currentColor" stroke="none"></circle><circle cx="4" cy="17" r="2" fill="currentColor" stroke="none"></circle></svg>Ring
       </div>
     {/if}

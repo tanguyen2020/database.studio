@@ -31,7 +31,7 @@
       <span style="font-size:12.5px;font-weight:700;color:{node.is_hotspot ? '#e0803a' : 'var(--text)'}">{node.operation}</span>
       {#if node.is_hotspot}<span style="font-size:9px;font-weight:700;background:#e0803a;color:#0f1219;border-radius:3px;padding:1px 5px">HOTSPOT</span>{/if}
       {#if node.extra['Relation Name']}<span class="mono" style="font-size:10.5px;color:var(--muted)">{node.extra['Relation Name']}</span>{/if}
-      {#if node.extra['Index Name']}<span class="mono" style="font-size:10.5px;color:#56b6c2">{node.extra['Index Name']}</span>{/if}
+      {#if node.extra['Index Name']}<span class="mono" style="font-size:10.5px;color:var(--sacc-cyan)">{node.extra['Index Name']}</span>{/if}
     </div>
     <div style="display:flex;align-items:center;gap:10px;font-size:10px;color:var(--muted)" class="mono">
       {#if node.cost_pct != null}<span style="font-weight:700;color:{node.is_hotspot ? '#e0803a' : 'var(--text2)'}">Cost {node.cost_pct}%</span>{/if}

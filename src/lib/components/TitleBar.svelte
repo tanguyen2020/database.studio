@@ -7,6 +7,10 @@
   import { ui } from '$lib/stores/ui.svelte'
   import { connections } from '$lib/stores/connections.svelte'
 
+  // Version shown next to the product name — same value Settings → Updates reports
+  // (injected from package.json by vite).
+  const APP_VERSION = __APP_VERSION__
+
   const themeIcon = $derived(ui.theme === 'dark' ? '☾' : '☀')
   const themeLabel = $derived(ui.theme === 'dark' ? 'Dark' : 'Light')
 
@@ -24,6 +28,15 @@
     fontMenuOpen = false
   }
 
+  // Sidebar layout — three buttons, like an editor layout picker: Connections
+  // left of the Explorer, one stacked column, or Connections right of it. The
+  // choice is remembered and re-applied on the next start (ui.setSidebarLayout).
+  const LAYOUTS: { mode: import('$lib/stores/ui.svelte').SidebarLayout; label: string; title: string }[] = [
+    { mode: 'left', label: 'Connections left', title: 'Two panels — Connections on the left, Explorer on the right' },
+    { mode: 'stacked', label: 'One sidebar', title: 'One sidebar — Connections above the Explorer' },
+    { mode: 'right', label: 'Connections right', title: 'Two panels — Explorer on the left, Connections on the right' },
+  ]
+
   // Session Monitor (T23) — mở Admin view cho connection đang chọn.
   function openSessions() {
     const id = connections.selectedId
@@ -39,8 +52,40 @@
   <div style="display:flex;align-items:center;gap:var(--px-8)">
     <div style="width:var(--px-20);height:var(--px-20);border-radius:var(--px-6);background:linear-gradient(135deg,var(--hex-5b7cff),var(--hex-27ae60) 60%,var(--hex-f29111));display:flex;align-items:center;justify-content:center;font-weight:800;font-size:var(--px-11);color:var(--hex-fff)">D</div>
     <span style="font-weight:700;letter-spacing:-.01em">Database Studio</span>
+    <span class="mono" style="font-size:var(--px-10);color:var(--muted)" title="Installed version">v{APP_VERSION}</span>
   </div>
   <div style="margin-left:auto;display:flex;align-items:center;gap:var(--px-8)">
+    <!-- sidebar layout picker (3 modes) — sits next to Sessions -->
+    <div role="radiogroup" aria-label="Sidebar layout" style="display:flex;align-items:center;gap:var(--px-2)">
+      {#each LAYOUTS as l (l.mode)}
+        {@const on = ui.sidebarLayout === l.mode}
+        <span
+          class="tb-lay"
+          class:on
+          onclick={() => ui.setSidebarLayout(l.mode)}
+          onkeydown={(e) => e.key === 'Enter' && ui.setSidebarLayout(l.mode)}
+          role="radio"
+          aria-checked={on}
+          aria-label={l.label}
+          tabindex="0"
+          title={l.title}
+        >
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round">
+            <rect x="3" y="4.5" width="18" height="15" rx="2"></rect>
+            {#if l.mode === 'left'}
+              <line x1="10" y1="4.5" x2="10" y2="19.5"></line>
+              <rect x="3" y="4.5" width="7" height="15" fill="currentColor" stroke="none" opacity="0.55"></rect>
+            {:else if l.mode === 'stacked'}
+              <line x1="3" y1="13" x2="21" y2="13"></line>
+              <rect x="3" y="13" width="18" height="6.5" fill="currentColor" stroke="none" opacity="0.55"></rect>
+            {:else}
+              <line x1="14" y1="4.5" x2="14" y2="19.5"></line>
+              <rect x="14" y="4.5" width="7" height="15" fill="currentColor" stroke="none" opacity="0.55"></rect>
+            {/if}
+          </svg>
+        </span>
+      {/each}
+    </div>
     <div class="tb-btn" onclick={openSessions} onkeydown={(e) => e.key === 'Enter' && openSessions()} role="button" tabindex="0" title="Session Monitor">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l2 6 4-14 2 8h6"></path></svg><span>Sessions</span>
     </div>
@@ -96,6 +141,28 @@
 
 <style>
   /* nút title bar — dòng 52 */
+  /* sidebar layout picker: same chrome as .tb-btn but icon-only and grouped;
+     the active mode is tinted with --primary so the current layout is obvious. */
+  .tb-lay {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: var(--px-26);
+    height: var(--px-24);
+    color: var(--text2);
+    background: var(--surface);
+    border: var(--px-1) solid var(--border);
+    border-radius: var(--px-6);
+    cursor: pointer;
+  }
+  .tb-lay:hover {
+    background: color-mix(in srgb, var(--primary) 14%, transparent);
+  }
+  .tb-lay.on {
+    color: var(--primary);
+    border-color: var(--primary);
+    background: color-mix(in srgb, var(--primary) 18%, transparent);
+  }
   .tb-btn {
     display: flex;
     align-items: center;

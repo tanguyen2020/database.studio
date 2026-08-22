@@ -17,8 +17,15 @@
     legible?: boolean
     /** called when the user picks an option (for one-way / optional-field usage) */
     onChange?: (v: string | null) => void
+    /** stretch to the container width instead of the default min-width (for form
+     *  fields whose value can be long, e.g. a collation name). */
+    wide?: boolean
+    /** cap how many options are RENDERED at once (undefined = all, the default).
+     *  Only needed for very long server lists — SQL Server ships ~5,500 collations
+     *  and painting them all would stall the menu; the rest surface as you type. */
+    limit?: number
   }
-  let { value = $bindable(), options, placeholder = 'Select…', title = '', disabled = false, legible = false, onChange }: Props = $props()
+  let { value = $bindable(), options, placeholder = 'Select…', title = '', disabled = false, legible = false, onChange, limit, wide = false }: Props = $props()
 
   const textFont = $derived(legible ? 'font-size:var(--px-13);font-weight:500' : 'font-size:var(--px-12)')
 
@@ -30,9 +37,11 @@
   let menu = $state({ top: 0, left: 0, width: 0 })
 
   const selectedLabel = $derived(options.find((o) => o.value === value)?.label ?? '')
-  const filtered = $derived(
+  const matching = $derived(
     query.trim() === '' ? options : options.filter((o) => o.label.toLowerCase().includes(query.trim().toLowerCase())),
   )
+  const filtered = $derived(limit != null && matching.length > limit ? matching.slice(0, limit) : matching)
+  const hiddenCount = $derived(matching.length - filtered.length)
 
   function anchor() {
     const r = inputEl.getBoundingClientRect()
@@ -102,7 +111,7 @@
   })
 </script>
 
-<span style="position:relative;display:inline-flex;align-items:center">
+<span style="position:relative;display:inline-flex;align-items:center;{wide ? 'width:100%' : ''}">
   <input
     bind:this={inputEl}
     class={legible ? '' : 'mono'}
@@ -115,7 +124,7 @@
     onclick={openMenu}
     onkeydown={onKey}
     spellcheck="false"
-    style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-7);padding:var(--px-5) var(--px-22) var(--px-5) var(--px-10);{textFont};color:var(--text);outline:none;cursor:pointer;min-width:var(--px-150)"
+    style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-7);padding:var(--px-5) var(--px-22) var(--px-5) var(--px-10);{textFont};color:var(--text);outline:none;cursor:pointer;{wide ? 'width:100%' : 'min-width:var(--px-150)'}"
   />
   <span class="mono" style="position:absolute;right:var(--px-7);color:var(--muted);font-size:var(--px-9);pointer-events:none">▾</span>
   {#if open && filtered.length}
@@ -137,6 +146,9 @@
           style="padding:var(--px-5) var(--px-12);{textFont};cursor:pointer;white-space:nowrap;color:var(--text);background:{i === active ? 'var(--hover)' : o.value === value ? 'var(--panel)' : 'transparent'}"
         >{o.label}</div>
       {/each}
+      {#if hiddenCount > 0}
+        <div class={legible ? '' : 'mono'} style="padding:var(--px-5) var(--px-12);{textFont};color:var(--muted);white-space:nowrap">…{hiddenCount} more — keep typing</div>
+      {/if}
     </div>
   {/if}
 </span>

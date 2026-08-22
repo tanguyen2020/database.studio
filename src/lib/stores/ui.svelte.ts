@@ -3,6 +3,12 @@
 import * as ipc from '$lib/ipc'
 import type { ProfileDraft, ProfilePublic } from '$lib/types'
 
+/** Sidebar layout: where the Connections panel sits relative to the Explorer.
+ *  'stacked' = one column (Connections above Explorer — the prototype layout),
+ *  'left'    = two panels side by side, Connections on the left,
+ *  'right'   = two panels side by side, Connections on the right. */
+export type SidebarLayout = 'left' | 'stacked' | 'right'
+
 export interface EditConnectedRequest {
   draft: ProfileDraft
   tabCount: number
@@ -32,6 +38,14 @@ class UiStore {
   // Layout sizes (px) — all resizers persist their size
   sidebarWidth = $state(278)
   connListHeight = $state(200)
+  /** Chosen by the three layout buttons in the title bar; persisted. */
+  sidebarLayout = $state<SidebarLayout>('stacked')
+  /** Width of the Connections panel while the sidebar is split (px). */
+  connPanelWidth = $state(240)
+  /** true when Connections and Explorer are two side-by-side panels. */
+  get sidebarSplit() {
+    return this.sidebarLayout !== 'stacked'
+  }
   editorHeight = $state(320)
   // Object Properties (right panel) — hidden on startup; reopen via the edge
   // handle / title-bar button. Width 264px when shown.
@@ -79,6 +93,29 @@ class UiStore {
   /** Connect / disconnect the selected connection (Ctrl/Cmd+Shift+O). */
   requestConnectionToggle() {
     this.connToggleTick++
+  }
+  /** Remembers which side Connections was on, so merge → split comes back the same. */
+  private lastSplitSide: SidebarLayout = 'left'
+
+  /** Pick the sidebar layout (the three title-bar buttons). */
+  setSidebarLayout(mode: SidebarLayout) {
+    this.sidebarLayout = mode
+    if (mode !== 'stacked') this.lastSplitSide = mode
+    // localStorage as well as app_state: the layout is picked deliberately, so it
+    // must survive a restart even where app_state isn't available (browser build),
+    // and it applies at boot without waiting on the backend.
+    try {
+      localStorage.setItem('sidebar_layout', mode)
+    } catch {
+      /* private mode / storage disabled — app_state still persists */
+    }
+    this.persistSizes()
+  }
+
+  /** Split ⇄ merge shortcut (the button in the panel headers); splitting returns
+   *  to the side last picked. */
+  toggleSidebarSplit() {
+    this.setSidebarLayout(this.sidebarSplit ? 'stacked' : this.lastSplitSide)
   }
   toggleResultPanel() {
     this.resultPanelHidden = !this.resultPanelHidden
@@ -164,6 +201,19 @@ class UiStore {
       }
       this.applyFontScale()
       document.documentElement.classList.toggle('dark', this.theme === 'dark')
+      try {
+        const stored = localStorage.getItem('sidebar_layout')
+        if (stored === 'left' || stored === 'right' || stored === 'stacked') {
+          this.sidebarLayout = stored
+          if (stored !== 'stacked') this.lastSplitSide = stored
+        } else {
+          const split = localStorage.getItem('sidebar_split') // pre-3-mode key
+          if (split === '1') this.sidebarLayout = 'left'
+          else if (split === '0') this.sidebarLayout = 'stacked'
+        }
+      } catch {
+        /* fall back to app_state below */
+      }
       if (sizes) {
         const parsed = JSON.parse(sizes)
         if (parsed.sidebarWidth > 150) this.sidebarWidth = parsed.sidebarWidth
@@ -171,6 +221,23 @@ class UiStore {
         if (parsed.editorHeight > 100) this.editorHeight = parsed.editorHeight
         if (parsed.rightPanelWidth > 150) this.rightPanelWidth = parsed.rightPanelWidth
         if (typeof parsed.resultPanelHidden === 'boolean') this.resultPanelHidden = parsed.resultPanelHidden
+        let hasLocalLayout = false
+        try {
+          hasLocalLayout =
+            localStorage.getItem('sidebar_layout') !== null ||
+            localStorage.getItem('sidebar_split') !== null
+        } catch {
+          hasLocalLayout = false
+        }
+        if (!hasLocalLayout) {
+          const m = parsed.sidebarLayout
+          if (m === 'left' || m === 'right' || m === 'stacked') this.sidebarLayout = m
+          else if (typeof parsed.sidebarSplit === 'boolean') {
+            this.sidebarLayout = parsed.sidebarSplit ? 'left' : 'stacked' // pre-3-mode installs
+          }
+          if (this.sidebarLayout !== 'stacked') this.lastSplitSide = this.sidebarLayout
+        }
+        if (parsed.connPanelWidth > 150) this.connPanelWidth = parsed.connPanelWidth
         // rightPanelOpen intentionally NOT restored — the Properties panel always
         // starts hidden on app open; the user reopens it via the edge handle.
       }
@@ -195,6 +262,8 @@ class UiStore {
           rightPanelWidth: this.rightPanelWidth,
           rightPanelOpen: this.rightPanelOpen,
           resultPanelHidden: this.resultPanelHidden,
+          sidebarLayout: this.sidebarLayout,
+          connPanelWidth: this.connPanelWidth,
         }),
       )
     }, 500)

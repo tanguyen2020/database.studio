@@ -24,17 +24,18 @@ test('nats subject messages: per-message copy + clear (delete by seq)', async ({
   await page.getByText('orders.eu', { exact: true }).first().click()
   await page.waitForTimeout(400)
 
-  // server-paginated newest-first: 250 total, page 1 = the newest 100 (seq 151..250)
+  // cursor-paginated newest-first: 250 total, page 1 = the newest 100 (the subject is
+  // sparse in the stream: one message every 4th sequence, so seq 604..1000)
   await expect(page.getByText('250 records').first()).toBeVisible()
   const copyBtns = page.locator('[title="Copy full payload"]')
   const clearBtns = page.locator('[title="Delete this message (by sequence)"]')
   await expect(copyBtns).toHaveCount(100)
   await expect(clearBtns).toHaveCount(100)
 
-  // newest first: top row is seq 250; Time is localized (America/New_York = UTC-4)
+  // newest first: top row is the subject's last seq (1000); Time is localized (UTC-4)
   const firstRow = page.locator('tbody tr').first()
-  await expect(firstRow.locator('td').first()).toHaveText('250')
-  await expect(firstRow.locator('td').nth(1)).toHaveText('2026-06-30 06:04:10')
+  await expect(firstRow.locator('td').first()).toHaveText('1000')
+  await expect(firstRow.locator('td').nth(1)).toHaveText('2026-06-30 06:16:40')
 
   // copy first message → clipboard holds its payload
   await copyBtns.first().click()

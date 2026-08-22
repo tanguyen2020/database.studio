@@ -252,3 +252,29 @@ test('suggests the FROM table columns for a bare identifier (no qualifier)', asy
   const list = await columnPopup(page, 'SELECT * FROM students WHERE fi', 'r')
   expect(list).toContain('first_name')
 })
+
+// UPDATE … SET has no FROM clause, so the column suggestions have to come from the
+// UPDATE target itself — before this, typing a column name in SET offered nothing.
+test('columns are suggested in UPDATE … SET (no FROM clause)', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(String(e)))
+  await openSqlTab(page)
+
+  // bare column in the SET clause
+  const set = await columnPopup(page, 'UPDATE students SET fi', 'r')
+  expect(set).toContain('first_name')
+
+  // qualified by the UPDATE target's alias
+  const aliased = await columnPopup(page, 'UPDATE students s SET s.stat', 'u')
+  expect(aliased).toContain('status')
+
+  // and in the WHERE of an UPDATE
+  const where = await columnPopup(page, 'UPDATE students SET status = 1 WHERE is_ac', 't')
+  expect(where).toContain('is_active')
+
+  // INSERT INTO's column list too
+  const insert = await columnPopup(page, 'INSERT INTO students (fir', 's')
+  expect(insert).toContain('first_name')
+
+  expect(errors, `page errors: ${errors.join(String.fromCharCode(10))}`).toEqual([])
+})

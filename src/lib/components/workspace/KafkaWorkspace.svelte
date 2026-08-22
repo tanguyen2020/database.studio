@@ -159,7 +159,7 @@
         {:else}
           {#each groups as g (g.name)}
             <div onclick={() => selectGroup(g.name)} onkeydown={(e) => e.key === 'Enter' && selectGroup(g.name)} role="button" tabindex="0" style="padding:var(--px-7) var(--px-9);border-radius:var(--px-6);cursor:pointer;background:{selGroup === g.name ? 'var(--hover)' : 'transparent'}">
-              <div class="mono" style="font-size:var(--px-12_5);font-weight:600;color:#8B5CF6">{g.name}</div>
+              <div class="mono" style="font-size:var(--px-12_5);font-weight:600;color:var(--sacc-purple)">{g.name}</div>
               <div class="mono" style="font-size:var(--px-10);color:var(--muted)">{g.state} · {g.members.length} members · {g.protocol || '—'}</div>
             </div>
           {/each}
@@ -186,7 +186,7 @@
             <tbody>
               {#each lag as l (l.topic + ':' + l.partition)}
                 <tr>
-                  <td style="padding:var(--px-5) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:#8B5CF6">{l.topic}</td>
+                  <td style="padding:var(--px-5) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:var(--sacc-purple)">{l.topic}</td>
                   <td style="padding:var(--px-5) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:var(--muted)">{l.partition}</td>
                   <td style="padding:var(--px-5) var(--px-10);border-bottom:var(--px-1) solid var(--border)">{l.committed.toLocaleString()}</td>
                   <td style="padding:var(--px-5) var(--px-10);border-bottom:var(--px-1) solid var(--border)">{l.high.toLocaleString()}</td>
@@ -280,7 +280,7 @@
             <tbody>
               {#each t.partitions as p (p.id)}
                 <tr>
-                  <td style="padding:var(--px-4) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:#d19a66">{p.id}</td>
+                  <td style="padding:var(--px-4) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:var(--syntax-number)">{p.id}</td>
                   <td style="padding:var(--px-4) var(--px-10);border-bottom:var(--px-1) solid var(--border)">{p.leader}</td>
                   <td style="padding:var(--px-4) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:var(--muted)">{p.replicas.join(',')}</td>
                   <td style="padding:var(--px-4) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:var(--muted)">{p.isr.join(',')}</td>

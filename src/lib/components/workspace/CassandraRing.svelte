@@ -65,7 +65,7 @@
   <div style="flex:1;min-width:0;display:flex;flex-direction:column;min-height:0">
     <div style="flex:none;display:flex;align-items:center;gap:var(--px-10);padding:var(--px-10) var(--px-14);border-bottom:var(--px-1) solid var(--border);background:var(--surface)">
       <span style="font-weight:700;font-size:var(--px-13)">Ring Topology</span>
-      <span style="font-size:var(--px-11_5);color:#6ee7a0;font-weight:600">● {up} nodes UP</span>
+      <span style="font-size:var(--px-11_5);color:var(--sacc-green);font-weight:600">● {up} nodes UP</span>
       <span style="font-size:var(--px-11_5);color:var(--muted)">{dcs}</span>
       <span onclick={load} onkeydown={(e) => e.key === 'Enter' && load()} role="button" tabindex="0" style="margin-left:auto;font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-12);cursor:pointer">⟳ Refresh</span>
     </div>
@@ -96,7 +96,7 @@
         <div style="display:flex;align-items:center;gap:var(--px-7)">
           <span style="width:var(--px-8);height:var(--px-8);border-radius:50%;background:#6ee7a0"></span>
           <span class="mono" style="font-size:var(--px-12);font-weight:600">{n.host}</span>
-          <span class="mono" style="margin-left:auto;font-size:var(--px-10);font-weight:700;color:#6ee7a0">{n.state}</span>
+          <span class="mono" style="margin-left:auto;font-size:var(--px-10);font-weight:700;color:var(--sacc-green)">{n.state}</span>
         </div>
         <div class="mono" style="font-size:var(--px-10_5);color:var(--muted);margin-top:var(--px-5);line-height:1.7">{n.dc} · {n.rack}<br />load {n.load} · owns {n.owns}</div>
       </div>

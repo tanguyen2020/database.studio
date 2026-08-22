@@ -5,7 +5,7 @@
 use futures::StreamExt;
 use tauri::{AppHandle, Emitter, State};
 
-use crate::drivers::nats::{JsConsumer, JsMessage, JsStream, ObjInfo, SubjectStats};
+use crate::drivers::nats::{JsConsumer, JsMessage, JsPage, JsStream, ObjInfo, SubjectStats, StreamSubjects};
 use crate::drivers::LiveConnection;
 use crate::error::{AppError, QueryError};
 use crate::state::AppState;
@@ -336,6 +336,59 @@ pub async fn nats_js_subject_messages(
             let d = driver.lock().await;
             match &*d {
                 LiveConnection::Nats(n) => n.js_subject_messages(&stream, &subject, limit, start_seq).await,
+                _ => Err(not_nats()),
+            }
+        })
+        .await?;
+    inner.map_err(|e| AppError::Driver(e.message))
+}
+
+/// JetStream: ONE page of a subject's messages, newest-first. `end_seq` is the
+/// cursor (omit for the newest page; pass `first seq of the current page - 1` for
+/// the next, older page). Always returns up to `page_size` real messages of the
+/// subject — no matter how sparsely it is spread across the stream.
+#[tauri::command]
+pub async fn nats_js_subject_page(
+    state: State<'_, AppState>,
+    conn_id: String,
+    stream: String,
+    subject: String,
+    page_size: usize,
+    end_seq: Option<u64>,
+) -> Result<JsPage, AppError> {
+    let inner = state
+        .registry
+        .with_driver(&conn_id, move |driver| async move {
+            let d = driver.lock().await;
+            match &*d {
+                LiveConnection::Nats(n) => n.js_subject_page(&stream, &subject, page_size, end_seq).await,
+                _ => Err(not_nats()),
+            }
+        })
+        .await?;
+    inner.map_err(|e| AppError::Driver(e.message))
+}
+
+/// JetStream: subject NAMES under `filter` that start with `prefix`
+/// (case-insensitive), with each one's message count. Reads the server's
+/// per-subject index — a subject search that costs one API call, not a walk of
+/// the messages. NATS filters are per token and case-sensitive, so this is the
+/// only way a partial token (`_inbox.opjxo`) can find its subject.
+#[tauri::command]
+pub async fn nats_js_stream_subjects(
+    state: State<'_, AppState>,
+    conn_id: String,
+    stream: String,
+    filter: String,
+    prefix: String,
+    limit: usize,
+) -> Result<StreamSubjects, AppError> {
+    let inner = state
+        .registry
+        .with_driver(&conn_id, move |driver| async move {
+            let d = driver.lock().await;
+            match &*d {
+                LiveConnection::Nats(n) => n.js_stream_subjects(&stream, &filter, &prefix, limit).await,
                 _ => Err(not_nats()),
             }
         })

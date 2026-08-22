@@ -67,18 +67,33 @@
    * pixel-diff baseline) is untouched. Light literals are non-prototype (the
    * prototype ships no light streaming palette) — same justified pattern as
    * --grid-select / --sidebar above. */
-  --sacc-blue: #1f5c9e; /* token-exempt: light-mode streaming accent */
-  --sacc-cyan: #0e7490; /* token-exempt: light-mode streaming accent */
-  --sacc-green: #157f3c; /* token-exempt: light-mode streaming accent */
-  --sacc-amber: #92640a; /* token-exempt: light-mode streaming accent */
-  --sacc-yellow: #8a6d00; /* token-exempt: light-mode streaming accent */
-  --sacc-orange: #b1500f; /* token-exempt: light-mode streaming accent */
-  --sacc-purple: #6d3fc4; /* token-exempt: light-mode streaming accent */
-  --sacc-mauve: #8a4f85; /* token-exempt: light-mode streaming accent */
-  --sacc-red: #c0392b; /* token-exempt: light-mode streaming accent */
+  --sacc-blue: #1e40af; /* token-exempt: light-mode streaming accent */
+  --sacc-cyan: #0f766e; /* token-exempt: light-mode streaming accent */
+  --sacc-green: #15803d; /* token-exempt: light-mode streaming accent */
+  --sacc-amber: #92400e; /* token-exempt: light-mode streaming accent */
+  --sacc-yellow: #a16207; /* token-exempt: light-mode streaming accent */
+  --sacc-orange: #c2410c; /* token-exempt: light-mode streaming accent */
+  --sacc-purple: #6d28d9; /* token-exempt: light-mode streaming accent */
+  --sacc-mauve: #a21caf; /* token-exempt: light-mode streaming accent */
+  --sacc-red: #b91c1c; /* token-exempt: light-mode streaming accent */
   /* MongoDB brand green (#00ED64) is a neon that washes out on the light sidebar —
      use MongoDB's darker "forest green" for light; dark keeps the brand accent. */
   --sacc-mongo: #00684a; /* token-exempt: legible MongoDB green for light mode */
+
+  /* Data tables (JetStream streams/consumers and the like). Chosen so colour
+   * carries meaning without shouting: one link colour for the identifier, grey for
+   * enum/meta columns, a warm monospace tone for subjects, and a number that only
+   * turns red when there IS a backlog. LIGHT = GitHub Primer light; the .dark block
+   * below swaps in Primer dark. Token-exempt literals, same pattern as --sacc-*. */
+  --tbl-link: #0550ae; /* token-exempt: data-table identifier (link) */
+  --tbl-head: #1f2328; /* token-exempt: data-table header text */
+  --tbl-meta: #57606a; /* token-exempt: data-table enum/meta column */
+  --tbl-subject: #953800; /* token-exempt: data-table subject/monospace value */
+  --tbl-quiet: #8c959f; /* token-exempt: zero / em-dash placeholder */
+  --tbl-alert: #a40e26; /* token-exempt: non-zero backlog */
+  --tbl-zebra: #f6f8fa; /* token-exempt: even-row banding */
+  --tbl-hover: #eaeef2; /* token-exempt: data-row hover */
+  --tbl-sel: #dde3ea; /* token-exempt: selected data row */
 
   /* Environment badge (PROD/STG/DEV/LOCAL pills in the connection list). The
    * generated ENV_GEN tokens are dark-only (near-black bg + neon fg) → unreadable
@@ -117,6 +132,16 @@
   --sacc-purple: var(--hex-c4b5fd);
   --sacc-mauve: var(--hex-b48ead);
   --sacc-red: var(--hex-e06c75);
+  /* data tables — Primer dark counterparts of the light values above */
+  --tbl-link: #4493f8; /* token-exempt: data-table identifier (link) */
+  --tbl-head: #e6edf3; /* token-exempt: data-table header text */
+  --tbl-meta: #8b949e; /* token-exempt: data-table enum/meta column */
+  --tbl-subject: #ffa657; /* token-exempt: data-table subject/monospace value */
+  --tbl-quiet: #6e7681; /* token-exempt: zero / em-dash placeholder */
+  --tbl-alert: #ff7b72; /* token-exempt: non-zero backlog */
+  --tbl-zebra: #161b22; /* token-exempt: even-row banding */
+  --tbl-hover: #1c2128; /* token-exempt: data-row hover */
+  --tbl-sel: #23293180; /* token-exempt: selected data row */
   --sacc-mongo: var(--sys-mongodb-accent);
 
   /* Environment badge — dark mode keeps the exact ENV_GEN hex (prototype baseline). */

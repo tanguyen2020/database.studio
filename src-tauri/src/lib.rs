@@ -50,6 +50,19 @@ pub fn run() {
                 test_cancels: Default::default(),
                 export_cancels: Default::default(),
             });
+
+            // Keep every open connection warm. Without this, an idle connection is
+            // reaped by the server (wait_timeout / idle_session_timeout), by a NAT
+            // or load-balancer idle rule, or with the SSH session behind a tunnel —
+            // and the user only finds out minutes later, when the next query fails
+            // with a raw socket error on a connection the UI still shows as open.
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                loop {
+                    tokio::time::sleep(crate::connections::registry::keepalive_interval()).await;
+                    handle.state::<AppState>().registry.keepalive_sweep().await;
+                }
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -105,7 +118,9 @@ pub fn run() {
             commands::nats::nats_js_delete_consumer,
             commands::nats::nats_js_delete_message,
             commands::nats::nats_js_subject_messages,
+            commands::nats::nats_js_subject_page,
             commands::nats::nats_js_subject_stats,
+            commands::nats::nats_js_stream_subjects,
             commands::nats::nats_js_purge_subject,
             commands::nats::nats_js_remove_subject,
             commands::nats::nats_js_add_subject,

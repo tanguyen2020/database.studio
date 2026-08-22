@@ -59,6 +59,45 @@ fn api_key_name(k: i16) -> &'static str {
     }
 }
 
+/// SSH-level keepalive. russh's default config sends **nothing** while the
+/// session is idle (`keepalive_interval: None`), so a tunnel that carries no
+/// traffic for a couple of minutes gets dropped by whatever sits in between — a
+/// NAT/firewall idle rule, or sshd's own `ClientAliveInterval` — and every
+/// forwarded socket then dies with WSAECONNRESET (os error 10054). The database
+/// connection on top of it fails on the next statement with "An existing
+/// connection was forcibly closed by the remote host", which is exactly the
+/// "worked, left it for 2-3 minutes, now it is broken" report.
+///
+/// A `keepalive@openssh.com` global request every 20s keeps the session (and the
+/// NAT mapping) alive; `keepalive_max` only declares it dead after 6 unanswered
+/// ones — ~120s of real silence — so a brief hiccup does not tear down a tunnel
+/// that is still fine.
+const SSH_KEEPALIVE_SECS: u64 = 20;
+const SSH_KEEPALIVE_MAX: usize = 6;
+
+/// Keepalive period, overridable with `DBSTUDIO_SSH_KEEPALIVE_SECS` for servers
+/// with an unusually aggressive idle policy (and for the tests, which need a
+/// timer they can outlive in seconds rather than minutes).
+fn ssh_keepalive_interval() -> std::time::Duration {
+    let secs = std::env::var("DBSTUDIO_SSH_KEEPALIVE_SECS")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .map(|v| v.clamp(1, 3600))
+        .unwrap_or(SSH_KEEPALIVE_SECS);
+    std::time::Duration::from_secs(secs)
+}
+
+fn client_config() -> client::Config {
+    client::Config {
+        keepalive_interval: Some(ssh_keepalive_interval()),
+        keepalive_max: SSH_KEEPALIVE_MAX,
+        // Never close the session just because it is idle: the tunnel stays open
+        // for as long as the connection is open.
+        inactivity_timeout: None,
+        ..Default::default()
+    }
+}
+
 struct AcceptAllHandler;
 
 impl client::Handler for AcceptAllHandler {
@@ -179,6 +218,14 @@ pub struct TunnelHandle {
 }
 
 impl TunnelHandle {
+    /// False once the SSH session itself is gone. The local listener keeps
+    /// accepting either way, so without this check a dead tunnel looks healthy
+    /// until a forwarded socket fails; the registry uses it to decide whether a
+    /// reconnect can reuse this tunnel or has to rebuild it.
+    pub fn is_alive(&self) -> bool {
+        !self.session.is_closed()
+    }
+
     pub async fn shutdown(self) {
         self.accept_task.abort();
         if let Some(f) = &self.forwards {
@@ -198,7 +245,7 @@ pub async fn open_tunnel(
     target_port: u16,
     rewrite_kafka_metadata: bool,
 ) -> AppResult<TunnelHandle> {
-    let config = Arc::new(client::Config::default());
+    let config = Arc::new(client_config());
     let addr = (ssh.host.as_str(), if ssh.port == 0 { 22 } else { ssh.port });
     let mut session = client::connect(config, addr, AcceptAllHandler)
         .await

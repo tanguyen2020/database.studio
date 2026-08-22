@@ -110,7 +110,7 @@
 
   {#if plan?.missing_index && !notApplicable && !showRaw}
     <div style="flex:none;display:flex;align-items:center;gap:var(--px-10);padding:var(--px-8) var(--px-14);background:rgba(39,174,96,.12);border-bottom:var(--px-1) solid #27AE60">
-      <span style="font-size:var(--px-11_5);color:#27AE60;font-weight:700">Missing index (Impact ~{plan.missing_index.impact_pct}%)</span>
+      <span style="font-size:var(--px-11_5);color:var(--sacc-green);font-weight:700">Missing index (Impact ~{plan.missing_index.impact_pct}%)</span>
       <span class="mono" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--px-11);color:var(--text2)" title={plan.missing_index.ddl}>{plan.missing_index.ddl}</span>
       <span onclick={copyDdl} onkeydown={(e) => e.key === 'Enter' && copyDdl()} role="button" tabindex="0" style="flex:none;font-size:var(--px-11);background:#27AE60;color:var(--hex-fff);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer;font-weight:600">Copy DDL</span>
     </div>
@@ -149,7 +149,7 @@
             <div style="font-size:var(--px-11_5);color:#e0803a;background:rgba(224,128,58,.1);border:var(--px-1) solid #e0803a;border-radius:var(--px-6);padding:var(--px-6) var(--px-9)">⚠ {w}</div>
           {/each}
         {:else}
-          <div style="font-size:var(--px-11_5);color:#27AE60">✓ No warnings</div>
+          <div style="font-size:var(--px-11_5);color:var(--sacc-green)">✓ No warnings</div>
         {/if}
       </div>
     {/if}

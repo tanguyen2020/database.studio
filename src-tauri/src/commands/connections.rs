@@ -176,8 +176,8 @@ fn resolve_credentials(
             Ok((p, pw, sshpw))
         }
         Err(_) => {
-            let (p, pw) = state.registry.live_credentials(conn_id)?;
-            Ok((p, pw, String::new()))
+            let (p, pw, sshpw) = state.registry.live_credentials(conn_id)?;
+            Ok((p, pw, sshpw))
         }
     }
 }
@@ -261,7 +261,7 @@ pub async fn open_tab_connection(
         let current_db = state
             .registry
             .live_credentials(&tab_conn_id)
-            .map(|(p, _)| p.database)
+            .map(|(p, _, _)| p.database)
             .unwrap_or_default();
         if current_db == effective_db {
             return Ok(tab_conn_id);

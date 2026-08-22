@@ -175,6 +175,42 @@
 
   let fileInput = $state<HTMLInputElement | null>(null)
 
+  // ---- toolbar Refresh -------------------------------------------------------
+  // "Refresh" means: really reopen the connection. A long-lived session can be
+  // holding an old catalog snapshot (and its cached tree), so re-reading the
+  // saved profiles is not enough — disconnect, connect again, drop the cached
+  // introspection, then ask the Explorer to re-read the tree from the server.
+  let resyncing = $state(false)
+  /** id being refreshed — the row shows it, so a context-menu Refresh is visible too */
+  let refreshingId = $state<string | null>(null)
+
+  async function refreshConnection(target?: ProfilePublic) {
+    const c = target ?? selConn
+    if (!c || resyncing) return
+    resyncing = true
+    refreshingId = c.id
+    try {
+      // Read the state BEFORE re-listing: reopening is about the session the user
+      // has open right now, and load() replaces the profile objects.
+      const wasConnected = !!c.connected
+      // a peer (or another window) may have edited the saved profiles
+      await connections.load()
+      if (!wasConnected || !connections.byId(c.id)) {
+        // nothing to reopen — the list itself is now up to date
+        return
+      }
+      const ok = await connections.reconnect(c.id) // backend: disconnect + connect
+      explorer.invalidate(c.id) // cached schemas/tables belong to the old session
+      if (ok) {
+        explorer.bumpReload(c.id) // Explorer re-reads the tree over the new connection
+        toasts.show(`${c.name}: reconnected`, { system: c.system })
+      }
+    } finally {
+      resyncing = false
+      refreshingId = null
+    }
+  }
+
   function exportConnections() {
     if (connections.profiles.filter((p) => !p.ephemeral).length === 0) {
       toasts.show('No connections to export')
@@ -385,16 +421,18 @@
         style="display:flex;align-items:center;gap:var(--px-9);padding:var(--px-6) var(--px-6) var(--px-6) 0;border-radius:var(--px-7);cursor:pointer;position:relative;margin-bottom:var(--px-1)"
       >
         <ConnectionIndicator system={p.system} />
-        {#if connections.connecting.has(p.id)}
+        {#if refreshingId === p.id}
+          <span class="conn-refresh-glyph spinning" style="display:inline-flex;flex:none;color:var(--primary);font-size:var(--px-11)" title="Refreshing — reconnecting and reloading the tree">⟳</span>
+        {:else if connections.connecting.has(p.id)}
           <span style="width:var(--px-7);height:var(--px-7);border-radius:50%;flex:none;background:var(--warn)" title="Connecting…"></span>
         {:else if connections.connectErrors[p.id] && !p.connected}
           <span style="width:var(--px-7);height:var(--px-7);border-radius:50%;flex:none;background:var(--error)" title="Not connected — {connections.connectErrors[p.id]}"></span>
         {:else}
           <span style="width:var(--px-7);height:var(--px-7);border-radius:50%;flex:none;background:{p.connected ? systemMeta(p.system).accent : 'var(--sys-orphan-accent)'}" title={p.connected ? `Connected · ${p.latency_ms ?? '–'} ms` : 'Disconnected'}></span>
         {/if}
-        <div style="flex:1;min-width:0">
+        <div style="flex:1;min-width:0" aria-busy={refreshingId === p.id}>
           <div class="conn-name mono" style="font-weight:600;font-size:var(--px-12_5);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{p.name}</div>
-          <div class="mono" style="font-size:var(--px-10);color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{p.system === 'sqlite' ? p.sqlite_path || ':memory:' : `${p.host}:${p.port}`}</div>
+          <div class="mono" style="font-size:var(--px-10);color:{refreshingId === p.id ? 'var(--primary)' : 'var(--muted)'};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{refreshingId === p.id ? 'Refreshing…' : p.system === 'sqlite' ? p.sqlite_path || ':memory:' : `${p.host}:${p.port}`}</div>
         </div>
         {#if p.ephemeral}
           <span style="flex:none;margin-right:var(--px-6);font-size:var(--px-8_5);font-weight:700;letter-spacing:.04em;padding:var(--px-1) var(--px-5);border-radius:var(--px-4);background:var(--panel);color:var(--muted);border:var(--px-1) solid var(--border)" title="One-off · not saved">1×</span>
@@ -432,7 +470,7 @@
           Close (one-off)
         </ContextMenu.Item>
       {:else}
-        <ContextMenu.Item onclick={() => connections.load()}>Refresh</ContextMenu.Item>
+        <ContextMenu.Item onclick={() => refreshConnection(p)}>Refresh</ContextMenu.Item>
         <ContextMenu.Separator />
         <ContextMenu.Item class="text-error data-highlighted:text-error" onclick={() => (ui.deleteTarget = p)}>
           Delete Connection
@@ -442,9 +480,17 @@
   </ContextMenu.Root>
 {/snippet}
 
-<div style="flex:none;border-bottom:var(--px-1) solid var(--border)">
+<div
+  style={ui.sidebarSplit
+    ? 'flex:1;min-height:0;display:flex;flex-direction:column'
+    : 'flex:none;border-bottom:var(--px-1) solid var(--border)'}
+>
   <!-- header — dòng 74-76 -->
-  <div style="padding:var(--px-9) var(--px-12) var(--px-5)">
+  <div
+    style={ui.sidebarSplit
+      ? 'flex:none;display:flex;align-items:center;gap:var(--px-8);padding:var(--px-9) var(--px-12) var(--px-5)'
+      : 'padding:var(--px-9) var(--px-12) var(--px-5)'}
+  >
     <span
       style="font-size:var(--px-10_5);font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--muted)"
       title="Ctrl+Shift+B focus list · ↑/↓ move · Enter open · F2 edit · Delete remove · ←/→ collapse/expand&#10;Ctrl+Shift+N new · Ctrl+Shift+K filter · Ctrl+Shift+O connect/disconnect"
@@ -452,15 +498,29 @@
   </div>
 
   <!-- toolbar — dòng 77-87 -->
-  <div style="display:flex;align-items:center;gap:var(--px-1);padding:0 var(--px-8) var(--px-7);color:var(--text2)">
+  <div style="flex:none;display:flex;align-items:center;gap:var(--px-1);padding:0 var(--px-8) var(--px-7);color:var(--text2)">
     <span class="tbtn" onclick={() => (ui.pickerOpen = true)} onkeydown={(e) => e.key === 'Enter' && (ui.pickerOpen = true)} role="button" tabindex="0" title="New connection (Ctrl+Shift+N)" style="cursor:pointer">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
     </span>
     <span class="tbtn" onclick={() => selConn && (ui.formProfile = { ...selConn })} onkeydown={(e) => e.key === 'Enter' && selConn && (ui.formProfile = { ...selConn })} role="button" tabindex="0" title="Properties / Edit connection" style="cursor:{selConn ? 'pointer' : 'not-allowed'};opacity:{selConn ? 1 : 0.35}">
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M5 19l2-2"></path></svg>
     </span>
-    <span class="tbtn" onclick={() => selConn && connections.load()} onkeydown={(e) => e.key === 'Enter' && selConn && connections.load()} role="button" tabindex="0" title="Synchronize" style="cursor:{selConn ? 'pointer' : 'not-allowed'};opacity:{selConn ? 1 : 0.35}">
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-2.3 6.1"></path><path d="M20 4v5h-5"></path></svg>
+    <span
+      class="tbtn"
+      onclick={() => refreshConnection()}
+      onkeydown={(e) => e.key === 'Enter' && refreshConnection()}
+      role="button"
+      tabindex="0"
+      aria-label="Refresh connection"
+      aria-busy={resyncing}
+      title={selConn?.connected
+        ? `Refresh ${selConn.name} — disconnect, connect again, then reload its tree`
+        : 'Refresh — re-read the saved connections (select a connected one to reconnect it)'}
+      style="cursor:{selConn && !resyncing ? 'pointer' : 'not-allowed'};opacity:{selConn ? (resyncing ? 0.5 : 1) : 0.35}"
+    >
+      <span class="conn-refresh-glyph" class:spinning={resyncing} style="display:inline-flex">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-2.3 6.1"></path><path d="M20 4v5h-5"></path></svg>
+      </span>
     </span>
     <span style="width:var(--px-1);height:var(--px-16);background:var(--border);margin:0 var(--px-3)"></span>
     <span class="tbtn" onclick={() => selRel && newQueryConsole()} onkeydown={(e) => e.key === 'Enter' && selRel && newQueryConsole()} role="button" tabindex="0" title="New query console" style="cursor:{selRel ? 'pointer' : 'not-allowed'};opacity:{selRel ? 1 : 0.35}">
@@ -480,7 +540,7 @@
 
   <!-- filter box — dòng 88-96 -->
   {#if filterOpen}
-    <div style="padding:0 var(--px-10) var(--px-7)">
+    <div style="flex:none;padding:0 var(--px-10) var(--px-7)">
       <div style="display:flex;align-items:center;gap:var(--px-6);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-7);padding:var(--px-5) var(--px-8)">
         <span style="color:var(--muted);font-size:var(--px-12)">⌕</span>
         <input
@@ -502,7 +562,9 @@
     role="tree"
     aria-label="Connections"
     onkeydown={onListKeydown}
-    style="padding:0 var(--px-6) var(--px-8);height:{ui.connListHeight}px;overflow:auto;outline:none"
+    style="padding:0 var(--px-6) var(--px-8);{ui.sidebarSplit
+      ? 'flex:1;min-height:0'
+      : `height:${ui.connListHeight}px`};overflow:auto;outline:none"
   >
     <ContextMenu.Root>
       <ContextMenu.Trigger>
@@ -586,6 +648,14 @@
     align-items: center;
     justify-content: center;
     border-radius: var(--px-5);
+  }
+  .conn-refresh-glyph.spinning {
+    animation: conn-refresh-spin 900ms linear infinite;
+  }
+  @keyframes conn-refresh-spin {
+    to {
+      transform: rotate(360deg);
+    }
   }
   .tbtn:hover,
   .hoverable:hover {

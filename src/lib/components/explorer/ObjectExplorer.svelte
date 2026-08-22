@@ -694,6 +694,49 @@
   // reload path (relational/ClickHouse schema cache, Kafka/NATS streaming, Redis key
   // browser, Cassandra keyspace tree). Guarded + spinning indicator (Refresh rule chung).
   let refreshingTree = $state(false)
+  // The Connections toolbar Refresh reconnects, then bumps this tick so the tree
+  // is re-read from the freshly opened connection (no stale catalog).
+  // Per connection: seeing a connection for the first time is not a reload
+  // request (otherwise switching to a connection refreshed earlier would re-query
+  // it for nothing) — only a tick that MOVED while we were on it reloads.
+  const seenReloadTick = new Map<string, number>()
+  $effect(() => {
+    const s = selected
+    const tick = s ? (explorer.reloadTick[s.id] ?? 0) : 0
+    untrack(() => {
+      if (!s) return
+      const prev = seenReloadTick.get(s.id)
+      seenReloadTick.set(s.id, tick)
+      if (prev !== undefined && prev !== tick) void refreshConnection()
+    })
+  })
+
+  // "Retry" / "Connect" in the empty-tree state. A connection that OPENED and then
+  // died (idle reap, server restart, dropped SSH tunnel) has to be REBUILT, not
+  // merely "connected" again: `connect` is idempotent, so when the base socket still
+  // answers a ping it hands back the existing registry entry and does nothing —
+  // leaving the per-tab / per-database connections opened off it dead, so the next
+  // Execute fails exactly as before and this button looks like it did nothing.
+  // `reconnect` closes it first (which drops those derived connections) and opens a
+  // fresh one, rebuilding the SSH tunnel when the tunnel is what died.
+  let retrying = $state(false)
+  async function retryConnect() {
+    const s = selected
+    if (!s || retrying) return
+    const rebuild = !!connections.connectErrors[s.id]
+    retrying = true
+    try {
+      const ok = rebuild ? await connections.reconnect(s.id) : await connections.connect(s.id)
+      if (!ok) return // connect/reconnect already surfaced the reason (toast + inline message)
+      // Anything cached was read over the session that just died.
+      explorer.invalidate(s.id)
+      await refreshConnection()
+      toasts.success(`"${s.name}" reconnected`, s.system)
+    } finally {
+      retrying = false
+    }
+  }
+
   async function refreshConnection() {
     const s = selected
     if (!s || refreshingTree) return
@@ -1622,13 +1665,25 @@
         {:else}
           <p>Not connected.</p>
         {/if}
-        <div
-          onclick={() => selected && connections.connect(selected.id)}
-          onkeydown={(e) => e.key === 'Enter' && selected && connections.connect(selected.id)}
-          role="button"
-          tabindex="0"
-          style="margin-top:var(--px-6);color:var(--primary);cursor:pointer"
-        >{connections.connectErrors[selected.id] ? 'Retry' : 'Connect'}</div>
+        <button
+          type="button"
+          class="conn-retry"
+          onclick={retryConnect}
+          disabled={retrying}
+          aria-busy={retrying}
+          title={connections.connectErrors[selected.id]
+            ? 'Close this connection and open a fresh one (drops the dead session, rebuilds the SSH tunnel)'
+            : 'Open this connection'}
+        >
+          {#if retrying || connections.connectErrors[selected.id]}
+            <span class="conn-retry-glyph" class:spinning={retrying}>⟳</span>
+          {/if}
+          {retrying
+            ? 'Reconnecting…'
+            : connections.connectErrors[selected.id]
+              ? 'Retry connection'
+              : 'Connect'}
+        </button>
       </div>
     {:else if cache?.error}
       <div style="padding:var(--px-12);font-size:var(--px-11_5);color:var(--error)">{cache.error}</div>
@@ -2913,6 +2968,46 @@
   }
   .tree-row.selected:hover {
     background: color-mix(in srgb, var(--primary) 22%, transparent);
+  }
+  /* "Retry connection" / "Connect" in the empty-tree state. This used to be a bare
+     blue word (a div with role=button) that read as a label, so it was not obvious it
+     could be clicked — it is a real <button> now, with a frame, hover/active states and
+     a focus ring, matching the Reconnect button in the query editor banner. */
+  .conn-retry {
+    margin-top: var(--px-10);
+    display: inline-flex;
+    align-items: center;
+    gap: var(--px-6);
+    padding: var(--px-5) var(--px-14);
+    border: var(--px-1) solid var(--border2);
+    border-radius: var(--px-6);
+    background: var(--raised);
+    color: var(--primary);
+    font-family: inherit;
+    font-size: var(--px-12);
+    font-weight: 700;
+    cursor: pointer;
+  }
+  .conn-retry:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--primary) 14%, var(--raised));
+  }
+  .conn-retry:active:not(:disabled) {
+    background: color-mix(in srgb, var(--primary) 24%, var(--raised));
+  }
+  .conn-retry:focus-visible {
+    outline: var(--px-2) solid var(--primary);
+    outline-offset: var(--px-2);
+  }
+  .conn-retry:disabled {
+    cursor: default;
+    opacity: 0.6;
+  }
+  .conn-retry-glyph {
+    display: inline-block;
+    line-height: 1;
+  }
+  .conn-retry-glyph.spinning {
+    animation: tree-refresh-spin 0.7s linear infinite;
   }
   .tree-refresh-glyph {
     display: inline-block;

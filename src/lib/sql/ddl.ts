@@ -3,6 +3,7 @@
 // UPDATE/DELETE là ALTER TABLE … (mutation async — CLICKHOUSE_SPEC_ADDENDUM).
 import { qualified as q, quoteIdent } from './dialect'
 import { dataTypes } from './datatypes'
+import { databaseOptionClause, type DatabaseOptions } from './database-options'
 import type { ColumnInfo } from '$lib/types'
 
 function target(system: string, schema: string, table: string): string {
@@ -131,7 +132,10 @@ export function genRenameDatabase(system: string, database: string): string {
 
 /** CREATE a database (DataGrip-style "New Database"), per dialect. SQLite databases
  *  are files, so it returns a comment instead of DDL. */
-export function genCreateDatabase(system: string, database: string): string {
+export function genCreateDatabase(system: string, database: string, opts?: DatabaseOptions): string {
+  // charset/collation clause — empty unless the New Database dialog picked one, so
+  // the default output stays the plain statement it has always been.
+  const cl = databaseOptionClause(system, opts)
   const d = quoteIdent(system, database)
   switch (system) {
     case 'postgres':
@@ -139,7 +143,7 @@ export function genCreateDatabase(system: string, database: string): string {
     case 'mysql':
     case 'mariadb':
     case 'clickhouse':
-      return `CREATE DATABASE ${d};`
+      return `CREATE DATABASE ${d}${cl};`
     case 'oracle':
       // A "database" in Oracle is an instance; the user-facing analogue is a schema = user.
       return `CREATE USER ${d} IDENTIFIED BY "change_me";\nGRANT CONNECT, RESOURCE TO ${d};\nALTER USER ${d} QUOTA UNLIMITED ON USERS;`

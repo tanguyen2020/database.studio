@@ -418,14 +418,29 @@ impl NatsDriver {
         limit: usize,
         start_seq: Option<u64>,
     ) -> Result<Vec<JsMessage>, QueryError> {
+        self.fetch_window(stream, subject, start_seq.unwrap_or(0), u64::MAX, limit).await
+    }
+
+    /// Read the messages of `subject` whose stream sequence falls in `[start, end]`,
+    /// at most `cap` of them, oldest first. JetStream only reads FORWARD, so this is
+    /// the single primitive every paging step is built on: the server filters by
+    /// subject and we stop as soon as a message past `end` shows up.
+    async fn fetch_window(
+        &self,
+        stream: &str,
+        subject: &str,
+        start: u64,
+        end: u64,
+        cap: usize,
+    ) -> Result<Vec<JsMessage>, QueryError> {
         use async_nats::jetstream::consumer::{pull::Config as PullConfig, AckPolicy, DeliverPolicy};
         use futures::StreamExt;
         let js = async_nats::jetstream::new(self.client.clone());
         let s = js.get_stream(stream).await.map_err(|e| err("Failed to get stream", e))?;
         // Server-side pagination: start at a given stream sequence (Next fetches the
         // next page from the server, never loading the whole subject at once).
-        let deliver_policy = match start_seq {
-            Some(seq) if seq > 1 => DeliverPolicy::ByStartSequence { start_sequence: seq },
+        let deliver_policy = match start {
+            seq if seq > 1 => DeliverPolicy::ByStartSequence { start_sequence: seq },
             _ => DeliverPolicy::All,
         };
         let consumer = s
@@ -439,7 +454,7 @@ impl NatsDriver {
             .map_err(|e| err("Failed to create browse consumer", e))?;
         let mut batch = consumer
             .fetch()
-            .max_messages(limit.max(1))
+            .max_messages(cap.max(1))
             .messages()
             .await
             .map_err(|e| err("Failed to fetch messages", e))?;
@@ -447,9 +462,14 @@ impl NatsDriver {
         while let Some(item) = batch.next().await {
             let m = item.map_err(|e| err("Message read error", e))?;
             let info = m.info().ok();
+            let seq = info.as_ref().map(|i| i.stream_sequence).unwrap_or(0);
+            // past the window: everything from here on belongs to a newer page
+            if seq > end {
+                break;
+            }
             let key = header_key(m.headers.as_ref());
             out.push(JsMessage {
-                seq: info.as_ref().map(|i| i.stream_sequence).unwrap_or(0),
+                seq,
                 subject: m.subject.to_string(),
                 payload: String::from_utf8_lossy(&m.payload).into_owned(),
                 key,
@@ -461,27 +481,236 @@ impl NatsDriver {
         Ok(out)
     }
 
-    /// Total retained messages + last stream sequence for a subject. Powers the
-    /// message browser's pagination footer (total records + page count) and lets
-    /// the client page newest-first from the last sequence backwards.
-    pub async fn js_subject_stats(&self, stream: &str, subject: &str) -> Result<SubjectStats, QueryError> {
+    /// ONE page of a subject's messages, newest-first, ending at `end_seq`
+    /// (default: the newest message of the subject). Returns at most `page_size`
+    /// messages — the NEWEST ones at or before the cursor — plus how many server
+    /// round-trips the search needed.
+    ///
+    /// Why a search is needed: a subject is usually a sparse slice of a busy stream
+    /// and JetStream cannot read backwards, so "where do the last N messages of this
+    /// subject start" is not something the server can answer. We probe a sequence
+    /// window: double it while it holds too few messages, halve it when it is so
+    /// dense that one fetch cannot cover it. A window that IS covered (fewer rows
+    /// than the cap) is authoritative — its last `page_size` rows are exactly the
+    /// page. Cost is a couple of fetches, independent of stream size.
+    ///
+    /// RULE: counting must never block reading. The per-subject total needs
+    /// `STREAM.INFO` with a subjects filter, which the server pages over EVERY
+    /// matching subject — on a stream with many distinct subjects that is slow and
+    /// can time out. So the page is read first, from the stream's own last sequence,
+    /// and the total is a best-effort extra (0 = unknown) fetched with a deadline.
+    pub async fn js_subject_page(
+        &self,
+        stream: &str,
+        subject: &str,
+        page_size: usize,
+        end_seq: Option<u64>,
+    ) -> Result<JsPage, QueryError> {
+        let page_size = page_size.clamp(1, 5_000);
+        let js = async_nats::jetstream::new(self.client.clone());
+        let mut st = js.get_stream(stream).await.map_err(|e| err("Failed to get stream", e))?;
+        // cheap and always available: the stream's own sequence range
+        // Copy what we need out of the cached info: `info()` borrows the stream
+        // mutably, and the stream is still needed for the last-by-subject lookup.
+        let (stream_first, stream_last, stream_messages, stream_subjects) = {
+            let info = st.info().await.map_err(|e| err("Failed to get stream info", e))?;
+            (
+                info.state.first_sequence,
+                info.state.last_sequence,
+                info.state.messages,
+                info.state.subjects_count,
+            )
+        };
+        trace(|| {
+            format!("page {stream}/{subject}: stream_first={stream_first} stream_last={stream_last} messages={stream_messages} subjects={stream_subjects}")
+        });
+
+        // Cursor: caller's end, else the subject's own newest message (one cheap
+        // request) and if even that is unavailable the stream's last sequence.
+        let end = match end_seq {
+            Some(e) => e.min(stream_last),
+            None => match st.get_last_raw_message_by_subject(subject).await {
+                Ok(m) => m.sequence,
+                Err(e) => {
+                    trace(|| format!("page {stream}/{subject}: last-by-subject unavailable ({e}) — starting from stream_last={stream_last}"));
+                    stream_last
+                }
+            },
+        };
+        // Counting is only attempted for the newest page (the one that labels the
+        // pager); later pages reuse the total the UI already holds.
+        let want_count = end_seq.is_none() && should_count(subject, stream_subjects);
+        if !want_count && end_seq.is_none() {
+            trace(|| format!("count {stream}/{subject}: skipped — wildcard over {stream_subjects} subjects"));
+        }
+        if end == 0 || end < stream_first {
+            trace(|| format!("page {stream}/{subject}: nothing at or before end={end} (stream starts at {stream_first})"));
+            let total = if want_count { self.subject_total_best_effort(stream, subject).await } else { 0 };
+            return Ok(JsPage { msgs: Vec::new(), probes: 0, total, last_seq: stream_last });
+        }
+
+        let cap = page_size.saturating_mul(2).saturating_add(1);
+        // window estimate needs a density; without a known total assume dense and
+        // let the doubling find the right width (a wrong guess costs one probe).
+        let est_total = stream_messages.max(1);
+        let mut w = initial_window(page_size, est_total, stream_last.max(1));
+        let mut probes = 0u32;
+        let mut widest: Vec<JsMessage> = Vec::new();
+        let mut msgs: Option<Vec<JsMessage>> = None;
+        for _ in 0..MAX_PAGE_PROBES {
+            let start = end.saturating_sub(w.saturating_sub(1)).max(stream_first.max(1));
+            let mut rows = self.fetch_window(stream, subject, start, end, cap).await?;
+            probes += 1;
+            let step = window_step(rows.len(), page_size, cap, start.min(stream_first.max(1)));
+            trace(|| format!("page {stream}/{subject}: probe {probes} window=[{start},{end}] w={w} rows={} → {step:?}", rows.len()));
+            match step {
+                WindowStep::Done => {
+                    let keep = rows.len().saturating_sub(page_size);
+                    msgs = Some(rows.split_off(keep));
+                    break;
+                }
+                WindowStep::Wider => {
+                    widest = rows;
+                    w = w.saturating_mul(2);
+                }
+                WindowStep::Narrower => {
+                    w = (w / 2).max(page_size as u64);
+                }
+            }
+        }
+        let msgs = msgs.unwrap_or_else(|| {
+            // Probe budget exhausted (pathological distribution): return the widest
+            // window actually read rather than claiming the subject is empty.
+            let keep = widest.len().saturating_sub(page_size);
+            widest.split_off(keep)
+        });
+        let total = if want_count { self.subject_total_best_effort(stream, subject).await } else { 0 };
+        trace(|| format!("page {stream}/{subject}: returning {} rows (probes={probes}, total={total})", msgs.len()));
+        Ok(JsPage { msgs, probes, total, last_seq: stream_last })
+    }
+
+    /// Per-subject message count, best effort: 0 means "unknown", never an error.
+    /// `STREAM.INFO` with a subjects filter makes the server page over every matching
+    /// subject, so on a stream with many distinct subjects this is slow — it gets a
+    /// deadline and its failure must never keep messages off the screen.
+    async fn subject_total_best_effort(&self, stream: &str, subject: &str) -> u64 {
+        let fut = self.subject_total(stream, subject);
+        match tokio::time::timeout(SUBJECT_COUNT_DEADLINE, fut).await {
+            Ok(Ok(n)) => n,
+            Ok(Err(e)) => {
+                trace(|| format!("count {stream}/{subject}: failed ({}) — total unknown", e.message));
+                0
+            }
+            Err(_) => {
+                trace(|| format!("count {stream}/{subject}: timed out after {:?} — total unknown", SUBJECT_COUNT_DEADLINE));
+                0
+            }
+        }
+    }
+
+    /// Sum of the server's per-subject counts for `subject` (may be a wildcard).
+    async fn subject_total(&self, stream: &str, subject: &str) -> Result<u64, QueryError> {
         use futures::TryStreamExt;
         let js = async_nats::jetstream::new(self.client.clone());
         let s = js.get_stream(stream).await.map_err(|e| err("Failed to get stream", e))?;
-        // Per-subject message count (server aggregates it; no full scan).
-        let mut total: u64 = 0;
+        // STREAM.INFO returns the subject index in pages and the SAME subject can
+        // appear in more than one page (observed against nats 2.10) — summing every
+        // entry counted those subjects twice, so the totals were wrong. Keep one
+        // count per subject name.
+        let mut seen: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
         let mut subjects = s
             .info_with_subjects(subject)
             .await
             .map_err(|e| err("Failed to get subject counts", e))?;
-        while let Some((_subj, count)) = subjects.try_next().await.map_err(|e| err("Failed to read subject counts", e))? {
-            total += count as u64;
+        while let Some((subj, count)) = subjects
+            .try_next()
+            .await
+            .map_err(|e| err("Failed to read subject counts", e))?
+        {
+            seen.insert(subj, count as u64);
         }
-        // Last stream sequence carrying this subject (0 when the subject is empty).
+        Ok(seen.values().sum())
+    }
+
+    /// Subjects of `stream` under `filter` whose name STARTS WITH `prefix`
+    /// (case-insensitive), newest-irrelevant: this reads the server's per-subject
+    /// index (STREAM.INFO with a subjects filter), not the messages — so "find the
+    /// subject I half-remember" costs one API call instead of walking the log.
+    ///
+    /// NATS filters match whole tokens and are case-sensitive, which is why a
+    /// partial token like `_inbox.opjxo` can never be a filter: the prefix has to
+    /// be applied to the subject NAMES, which is what this does. Capped at `limit`
+    /// names (the caller shows the count it could not list).
+    pub async fn js_stream_subjects(
+        &self,
+        stream: &str,
+        filter: &str,
+        prefix: &str,
+        limit: usize,
+    ) -> Result<StreamSubjects, QueryError> {
+        use futures::TryStreamExt;
+        let js = async_nats::jetstream::new(self.client.clone());
+        let s = js.get_stream(stream).await.map_err(|e| err("Failed to get stream", e))?;
+        let want = prefix.to_lowercase();
+        // The index is paged and repeats subjects across pages (nats 2.10), so both
+        // the counts and the matches are kept per NAME — otherwise a subject is
+        // listed twice and "how many matched" is inflated.
+        let mut all: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+        let mut hits: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+        let mut subjects = s
+            .info_with_subjects(if filter.is_empty() { ">" } else { filter })
+            .await
+            .map_err(|e| err("Failed to list subjects", e))?;
+        while let Some((subject, count)) = subjects
+            .try_next()
+            .await
+            .map_err(|e| err("Failed to read subjects", e))?
+        {
+            if want.is_empty() || subject.to_lowercase().starts_with(&want) {
+                hits.insert(subject.clone(), count as u64);
+            }
+            all.insert(subject, count as u64);
+        }
+        let matched = hits.len() as u64;
+        let scanned = all.len() as u64;
+        let mut out: Vec<SubjectCount> = hits
+            .into_iter()
+            .map(|(subject, messages)| SubjectCount { subject, messages })
+            .collect();
+        out.sort_by(|a, b| b.messages.cmp(&a.messages).then_with(|| a.subject.cmp(&b.subject)));
+        out.truncate(limit);
+        Ok(StreamSubjects { subjects: out, matched, scanned })
+    }
+
+    /// Total retained messages + last stream sequence for a subject. Both parts are
+    /// best effort: a failed/slow count reports 0 ("unknown") and a missing
+    /// last-by-subject falls back to the stream's last sequence, because neither is
+    /// allowed to stop the message browser from showing messages.
+    pub async fn js_subject_stats(&self, stream: &str, subject: &str) -> Result<SubjectStats, QueryError> {
+        let js = async_nats::jetstream::new(self.client.clone());
+        let mut s = js.get_stream(stream).await.map_err(|e| err("Failed to get stream", e))?;
+        let stream_last = match s.info().await {
+            Ok(i) => i.state.last_sequence,
+            Err(e) => {
+                trace(|| format!("stats {stream}/{subject}: stream info failed ({e})"));
+                0
+            }
+        };
+        let subjects_count = s.info().await.map(|i| i.state.subjects_count).unwrap_or(0);
+        let total = if should_count(subject, subjects_count) {
+            self.subject_total_best_effort(stream, subject).await
+        } else {
+            trace(|| format!("stats {stream}/{subject}: count skipped — wildcard over {subjects_count} subjects"));
+            0
+        };
         let last_seq = match s.get_last_raw_message_by_subject(subject).await {
             Ok(m) => m.sequence,
-            Err(_) => 0,
+            Err(e) => {
+                trace(|| format!("stats {stream}/{subject}: last-by-subject unavailable ({e}) — using stream_last={stream_last}"));
+                stream_last
+            }
         };
+        trace(|| format!("stats {stream}/{subject}: total={total} last_seq={last_seq}"));
         Ok(SubjectStats { total, last_seq })
     }
 
@@ -568,6 +797,21 @@ pub struct JsConsumer {
 }
 
 #[derive(Debug, serde::Serialize)]
+pub struct SubjectCount {
+    pub subject: String,
+    pub messages: u64,
+}
+
+/// Result of a subject-name search: the matches we list, how many matched in
+/// total (the list is capped), and how many subject names the stream holds.
+#[derive(Debug, serde::Serialize)]
+pub struct StreamSubjects {
+    pub subjects: Vec<SubjectCount>,
+    pub matched: u64,
+    pub scanned: u64,
+}
+
+#[derive(Debug, serde::Serialize)]
 pub struct SubjectStats {
     pub total: u64,
     pub last_seq: u64,
@@ -581,6 +825,91 @@ pub struct JsMessage {
     pub time: String,
     /// Message key = the `Nats-Msg-Id` header if the publisher set one (empty otherwise).
     pub key: String,
+}
+
+/// One page of a subject's messages (newest-first cursor paging), plus the
+/// subject's server-side totals so the UI can label pages without a second call.
+#[derive(Debug, serde::Serialize)]
+pub struct JsPage {
+    /// Ascending by sequence, at most `page_size` items: the newest messages
+    /// at or before the requested end cursor.
+    pub msgs: Vec<JsMessage>,
+    /// Server round-trips the window search needed (diagnostics / tests).
+    pub probes: u32,
+    pub total: u64,
+    pub last_seq: u64,
+}
+
+/// Deadline for the best-effort per-subject count (see `subject_total_best_effort`).
+pub(crate) const SUBJECT_COUNT_DEADLINE: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// Above this many distinct subjects in the stream, a WILDCARD subject's count is
+/// not even attempted: `STREAM.INFO` with a subjects filter pages over every
+/// matching subject, so it would cost far more than the page itself is worth. The UI
+/// renders an unknown total instead (messages matter, a page count does not).
+pub(crate) const SUBJECT_COUNT_SKIP_ABOVE: u64 = 10_000;
+
+/// Does this subject contain NATS wildcards (`*` token, `>` tail)?
+pub(crate) fn is_wildcard(subject: &str) -> bool {
+    subject.split('.').any(|t| t == "*" || t == ">")
+}
+
+/// Should we try to count this subject at all? Exact subjects are cheap (one entry);
+/// a wildcard over a stream with a huge subject space is not worth the wait.
+pub(crate) fn should_count(subject: &str, stream_subjects: u64) -> bool {
+    !is_wildcard(subject) || stream_subjects <= SUBJECT_COUNT_SKIP_ABOVE
+}
+
+/// Diagnostics for the JetStream browse path, off unless `DBSTUDIO_NATS_TRACE=1`
+/// (same shape as the Kafka proxy trace). Prints to stderr, so `tauri dev` shows it.
+pub(crate) fn trace(msg: impl FnOnce() -> String) {
+    if std::env::var("DBSTUDIO_NATS_TRACE").is_ok_and(|v| v == "1") {
+        eprintln!("nats-browse: {}", msg());
+    }
+}
+
+/// Upper bound on window-search fetches for one page. Each step doubles or halves
+/// the window, so this covers a stream sequence range of 2^24 pages worth.
+pub(crate) const MAX_PAGE_PROBES: usize = 24;
+
+/// What to do after probing a sequence window (pure — unit tested).
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum WindowStep {
+    /// The window is fully covered and holds enough rows (or we hit sequence 1):
+    /// its last `page_size` rows are the page.
+    Done,
+    /// The window holds too few messages of this subject — widen it.
+    Wider,
+    /// The window is so dense that one capped fetch could not cover it — narrow it.
+    Narrower,
+}
+
+/// Decide the next search step from what a probe returned. `found` is the number of
+/// rows read, `cap` the fetch limit: `found == cap` means the fetch was truncated,
+/// so the rows do NOT necessarily reach the end of the window and cannot be trusted
+/// as "the newest ones".
+pub(crate) fn window_step(found: usize, page_size: usize, cap: usize, start: u64) -> WindowStep {
+    if found >= cap {
+        WindowStep::Narrower
+    } else if found >= page_size || start <= 1 {
+        WindowStep::Done
+    } else {
+        WindowStep::Wider
+    }
+}
+
+/// First window to probe: `page_size` messages worth of stream sequences, scaled by
+/// how sparse the subject is inside the stream (total messages vs last sequence),
+/// with 50% headroom. Never smaller than `page_size` (a window of N sequences can
+/// hold at most N messages).
+pub(crate) fn initial_window(page_size: usize, total: u64, last_seq: u64) -> u64 {
+    let page = page_size.max(1) as u128;
+    if total == 0 {
+        return last_seq.max(page_size as u64);
+    }
+    // sequences per message = last_seq / total  →  window = page * that * 1.5
+    let est = page * (last_seq as u128).max(1) * 3 / ((total as u128) * 2);
+    est.clamp(page, u64::MAX as u128) as u64
 }
 
 /// Format a server timestamp as ISO-8601 keeping the server's own UTC offset
@@ -622,4 +951,75 @@ pub struct ObjInfo {
     pub name: String,
     pub size: u64,
     pub chunks: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn window_step_trusts_only_a_covered_window() {
+        let (page, cap) = (100usize, 201usize);
+        // truncated fetch: the rows may not reach the window end → narrow
+        assert_eq!(window_step(cap, page, cap, 5_000), WindowStep::Narrower);
+        // covered and full enough → done (the last page_size rows are the page)
+        assert_eq!(window_step(page, page, cap, 5_000), WindowStep::Done);
+        assert_eq!(window_step(page + 40, page, cap, 5_000), WindowStep::Done);
+        // covered but short → widen
+        assert_eq!(window_step(page - 1, page, cap, 5_000), WindowStep::Wider);
+        assert_eq!(window_step(0, page, cap, 5_000), WindowStep::Wider);
+        // reached the start of the stream: a short page is the real answer
+        assert_eq!(window_step(7, page, cap, 1), WindowStep::Done);
+        assert_eq!(window_step(0, page, cap, 1), WindowStep::Done);
+    }
+
+    #[test]
+    fn narrowing_always_terminates() {
+        // A window of page_size sequences can hold at most page_size messages, which
+        // is below the cap — so Narrower can never be returned at the floor.
+        let (page, cap) = (100usize, 201usize);
+        assert_eq!(window_step(page, page, cap, 900_001), WindowStep::Done);
+    }
+
+    #[test]
+    fn wildcard_detection_and_count_policy() {
+        assert!(is_wildcard("evt.>"));
+        assert!(is_wildcard("evt.*.created"));
+        assert!(is_wildcard(">"));
+        assert!(!is_wildcard("evt.created"));
+        // a literal star inside a token is NOT a wildcard token
+        assert!(!is_wildcard("evt.a*b"));
+        // exact subjects are always cheap enough to count
+        assert!(should_count("evt.created", 5_000_000));
+        // wildcards are counted on small subject spaces, skipped on huge ones
+        assert!(should_count("evt.>", SUBJECT_COUNT_SKIP_ABOVE));
+        assert!(!should_count("evt.>", SUBJECT_COUNT_SKIP_ABOVE + 1));
+    }
+
+    #[test]
+    fn initial_window_scales_with_sparsity() {
+        // dense subject (every sequence): ~page_size * 1.5
+        assert_eq!(initial_window(100, 1_000_000, 1_000_000), 150);
+        // 10% of the stream: ~10x more sequences to cover one page
+        assert_eq!(initial_window(100, 100_000, 1_000_000), 1_500);
+        // 0.1% of the stream: ~1000x
+        assert_eq!(initial_window(100, 1_000, 1_000_000), 150_000);
+        // never smaller than the page itself
+        assert_eq!(initial_window(100, 1_000_000, 100), 100);
+        // empty subject → no division by zero
+        assert_eq!(initial_window(100, 0, 4_242), 4_242);
+    }
+
+    #[test]
+    fn probe_budget_covers_a_million_sequence_stream() {
+        // doubling from the page floor must reach a 1M-sequence stream well inside
+        // the budget (this is what bounds the search cost)
+        let mut w = initial_window(100, 1_000, 1_000_000);
+        let mut steps = 0;
+        while w < 1_000_000 {
+            w = w.saturating_mul(2);
+            steps += 1;
+        }
+        assert!(steps < MAX_PAGE_PROBES, "{steps} doublings must stay under the probe budget");
+    }
 }

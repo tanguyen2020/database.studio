@@ -273,6 +273,51 @@ export const natsJsSubjectMessages = (
   limit: number,
   startSeq?: number,
 ) => invoke<NatsJsMessage[]>('nats_js_subject_messages', { connId, stream, subject, limit, startSeq: startSeq ?? null })
+export interface NatsJsPage {
+  msgs: NatsJsMessage[]
+  /** server round-trips the page search needed (diagnostics) */
+  probes: number
+  total: number
+  last_seq: number
+}
+/**
+ * One page of a subject's messages, newest-first. `endSeq` is the paging cursor:
+ * omit it for the newest page, pass `(first seq of the current page) - 1` for the
+ * next (older) page. The backend searches the sequence window, so every page holds
+ * up to `pageSize` real messages even when the subject is a sparse slice of a
+ * busy stream.
+ */
+export const natsJsSubjectPage = (
+  connId: string,
+  stream: string,
+  subject: string,
+  pageSize: number,
+  endSeq?: number,
+) => invoke<NatsJsPage>('nats_js_subject_page', { connId, stream, subject, pageSize, endSeq: endSeq ?? null })
+export interface NatsSubjectCount {
+  subject: string
+  messages: number
+}
+export interface NatsStreamSubjects {
+  subjects: NatsSubjectCount[]
+  /** how many subject names matched in total (the list is capped) */
+  matched: number
+  /** how many subject names the stream holds under the filter */
+  scanned: number
+}
+
+/** Subject NAMES under `filter` starting with `prefix` (case-insensitive), with
+ *  their message counts. Reads the server's per-subject index — one API call, no
+ *  walking of messages: the only way a partial token can find its subject, since
+ *  NATS filters match whole tokens and are case-sensitive. */
+export const natsJsStreamSubjects = (
+  connId: string,
+  stream: string,
+  filter: string,
+  prefix: string,
+  limit = 200,
+) => invoke<NatsStreamSubjects>('nats_js_stream_subjects', { connId, stream, filter, prefix, limit })
+
 export const natsJsSubjectStats = (connId: string, stream: string, subject: string) =>
   invoke<{ total: number; last_seq: number }>('nats_js_subject_stats', { connId, stream, subject })
 export const natsJsPurgeSubject = (connId: string, stream: string, subject: string) =>

@@ -214,6 +214,9 @@ class ConnectionsStore {
     const profile = this.byId(id)
     if (!profile) return false
     this.connecting = new Set([...this.connecting, id])
+    // A retry starts from a clean slate: drop the previous failure so the sidebar
+    // dot and the Explorer stop showing a stale reason while this attempt runs.
+    delete this.connectErrors[id]
     // The backend reconnect *disconnects first* — which also drops every derived
     // connection ({id}::db, {id}#tab-…). Reflect that here instead of claiming the
     // connection stayed up, so anything caching a derived id (e.g. the Explorer's
@@ -228,6 +231,10 @@ class ConnectionsStore {
     } catch (e) {
       profile.connected = false
       profile.latency_ms = undefined
+      // Remember why, exactly as `connect` does: the sidebar dot tooltip and the
+      // Explorer's inline message read this, so a failed retry shows the NEW
+      // reason instead of the one left by the run that found the socket dead.
+      this.connectErrors[id] = String(e)
       toasts.error(`${profile.name}: reconnect failed — ${e}`, profile.system)
       return false
     } finally {

@@ -88,7 +88,7 @@
       </label>
 
       <label style="display:flex;flex-direction:column;gap:var(--px-4)">
-        <span style="font-size:var(--px-11_5);color:#98c379">Payload</span>
+        <span style="font-size:var(--px-11_5);color:var(--syntax-string)">Payload</span>
         <textarea
           bind:value={payload}
           placeholder={'{"id":1001,"total":42.5}'}

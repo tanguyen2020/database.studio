@@ -15,7 +15,7 @@
     observeElementRect,
     type VirtualItem,
   } from '@tanstack/virtual-core'
-  import { untrack, tick } from 'svelte'
+  import { untrack, tick, onDestroy } from 'svelte'
   import { pageWindow } from '$lib/grid/paging'
   import { buildGroups, type AggFn, type GroupNode } from '$lib/grid/groupby'
   import { save as saveFileDialog } from '@tauri-apps/plugin-dialog'
@@ -80,6 +80,7 @@
       const dropped = lastData !== null && pendingCount > 0
       lastData = d
       discard()
+      colW = null
       if (dropped) toasts.show('Pending grid changes were discarded — the result was refreshed.')
     })
   })
@@ -403,6 +404,80 @@
 
   const columns = $derived(data.cols.map(([name]) => name))
   const colTypes = $derived(Object.fromEntries(data.cols.map(([name, type]) => [name, type])))
+
+  // ---- resizable columns (drag the header edge, DataGrip-style) ------------
+  // Widths start as the browser's own auto layout, which sizes each column to its
+  // content — that default is what makes a fresh result readable, so it stays.
+  // The FIRST drag measures every column as rendered and freezes the table into
+  // fixed layout (`colW`), so from then on a drag moves only the column being
+  // dragged instead of reflowing all of them. A new result set drops the widths
+  // (see the data-identity effect above): its columns are different ones.
+  const MIN_COL_W = 48
+  const MIN_GUTTER_W = 26
+  let headRow = $state<HTMLTableRowElement | null>(null)
+  /** [gutter, ...one per column] in px once frozen; null = auto layout. */
+  let colW = $state<number[] | null>(null)
+  let resizingCol = $state<number | null>(null)
+  let stopDrag: (() => void) | null = null
+
+  const frozenWidth = $derived(colW ? colW.reduce((a, b) => a + b, 0) : 0)
+
+  function freezeWidths(): boolean {
+    if (colW) return true
+    const ths = headRow ? Array.from(headRow.querySelectorAll('th')) : []
+    if (ths.length !== columns.length + 1) return false
+    colW = ths.map((th, i) =>
+      Math.max(i === 0 ? MIN_GUTTER_W : MIN_COL_W, Math.round(th.getBoundingClientRect().width)),
+    )
+    return true
+  }
+
+  function endResize() {
+    stopDrag?.()
+    stopDrag = null
+    resizingCol = null
+  }
+
+  /** ci = column index (0-based); its colW slot is ci + 1 (0 is the No. gutter). */
+  function startResize(ev: PointerEvent, ci: number) {
+    if (ev.button !== 0) return
+    ev.preventDefault()
+    ev.stopPropagation()
+    if (!freezeWidths()) return
+    endResize()
+    const idx = ci + 1
+    const startX = ev.clientX
+    const startW = colW![idx]
+    resizingCol = idx
+    // Window listeners rather than pointer capture: the grip lives in a sticky
+    // header that the virtualizer can re-render mid-drag, and a captured element
+    // that unmounts drops the drag silently (same trap as the TableDesigner row
+    // reorder, which is why this is pointer events and not HTML5 drag).
+    const move = (e: PointerEvent) => {
+      const w = Math.max(MIN_COL_W, Math.round(startW + (e.clientX - startX)))
+      const next = [...colW!]
+      next[idx] = w
+      colW = next
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', endResize)
+    window.addEventListener('pointercancel', endResize)
+    document.body.style.cursor = 'col-resize'
+    stopDrag = () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', endResize)
+      window.removeEventListener('pointercancel', endResize)
+      document.body.style.cursor = ''
+    }
+  }
+
+  /** Double-click a grip → back to content-sized columns. */
+  function resetWidths() {
+    endResize()
+    colW = null
+  }
+
+  onDestroy(endResize)
 
   // Numeric-column coloring — relational engines only (per request). Detect number
   // families (int/bigint/float/decimal — covers int/smallint/integer/bigint,
@@ -902,15 +977,38 @@
   <!-- table — port dòng 421-452: mono 12px, th sticky header 6px 12px/600/text2 -->
   <!-- DataGrip-style data grid: JetBrains Mono (via .mono) + tabular figures so
        columns of ids/timestamps line up crisply. -->
-  <table class="mono" style="border-collapse:separate;border-spacing:0;width:100%;font-size:var(--px-12);font-variant-numeric:tabular-nums;font-feature-settings:'tnum' 1,'zero' 1">
+  <table class="mono" style="border-collapse:separate;border-spacing:0;font-size:var(--px-12);font-variant-numeric:tabular-nums;font-feature-settings:'tnum' 1,'zero' 1;{colW ? `table-layout:fixed;width:${frozenWidth}px;` : 'width:100%;'}">
+    {#if colW}
+      <!-- Frozen widths: fixed layout reads them from here, so a drag resizes ONE
+           column instead of reflowing every one of them. -->
+      <colgroup>
+        {#each colW as w, i (i)}<col style="width:{w}px" />{/each}
+      </colgroup>
+    {/if}
     <thead style="position:sticky;top:0;z-index:10">
-      <tr>
+      <tr bind:this={headRow}>
         <!-- No. gutter (AUDIT-5 item 2): row number + click to select (shift/ctrl multi) -->
         <th style="width:1%;background:var(--header);border-bottom:var(--px-1) solid var(--border2);border-right:var(--px-1) solid var(--border);padding:var(--px-6) var(--px-8);text-align:right;font-weight:600;color:var(--muted);white-space:nowrap;position:sticky;left:0;z-index:11">#</th>
         {#each data.cols as [name, type], ci (ci)}
-          <th style="background:var(--header);border-bottom:var(--px-1) solid var(--border2);border-right:var(--px-1) solid var(--border);padding:var(--px-6) var(--px-12);text-align:{numericCols.has(name) ? 'right' : 'left'};font-weight:600;color:var(--text2);white-space:nowrap">
-            {name}
-            <span style="color:var(--muted);font-weight:400;font-size:var(--px-10)">{type}</span>
+          <th style="position:relative;background:var(--header);border-bottom:var(--px-1) solid var(--border2);border-right:var(--px-1) solid var(--border);padding:var(--px-6) var(--px-12);text-align:{numericCols.has(name) ? 'right' : 'left'};font-weight:600;color:var(--text2);white-space:nowrap">
+            <!-- clip the label so a narrowed column cannot spill over its neighbour
+                 (fixed layout lets cell content overflow) -->
+            <span style="display:block;overflow:hidden;text-overflow:ellipsis">
+              {name}
+              <span style="color:var(--muted);font-weight:400;font-size:var(--px-10)">{type}</span>
+            </span>
+            <!-- resize grip: drag to size this column, double-click to go back to
+                 content-sized columns -->
+            <span
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="Resize column {name}"
+              title="Drag to resize this column · double-click to reset all widths"
+              class="col-grip"
+              class:dragging={resizingCol === ci + 1}
+              onpointerdown={(e) => startResize(e, ci)}
+              ondblclick={(e) => { e.stopPropagation(); resetWidths() }}
+            ></span>
           </th>
         {/each}
       </tr>
@@ -1241,5 +1339,23 @@
   }
   .eg-btn:hover {
     background: var(--hover);
+  }
+  /* column resize grip: sits on the header's right edge, invisible until it is
+     hovered or dragged so the header keeps the prototype's look. */
+  .col-grip {
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: var(--px-6);
+    height: 100%;
+    cursor: col-resize;
+    z-index: 12;
+    background: transparent;
+    touch-action: none;
+    user-select: none;
+  }
+  .col-grip:hover,
+  .col-grip.dragging {
+    background: var(--primary);
   }
 </style>

@@ -222,7 +222,8 @@ interface DemoNatsStream {
 }
 let demoNatsStreams: DemoNatsStream[] = [
   { name: 'ORDERS', subjects: ['orders.eu', 'orders.us'], retention: 'Limits', storage: 'File', messages: 1240, bytes: 98304, consumers: 2 },
-  { name: 'EVENTS', subjects: ['events.*'], retention: 'WorkQueue', storage: 'Memory', messages: 57, bytes: 8192, consumers: 1 },
+  { name: 'EVENTS', subjects: ['events.>'], retention: 'WorkQueue', storage: 'Memory', messages: 57, bytes: 8192, consumers: 1 },
+  { name: 'INBOX', subjects: ['_INBOX.>'], retention: 'Limits', storage: 'Memory', messages: 240, bytes: 24576, consumers: 0 },
 ]
 
 interface DemoKafkaPartition {
@@ -294,6 +295,11 @@ function takeConnLost(): boolean {
  *  them so tests see what a real server looks like: columns arrive AFTER the
  *  keystroke that asked for them (the demo answers in a microtask otherwise, which
  *  hid the missing "refresh the popup once they land" step). */
+/** `?slowConnect=<ms>` delays opening a connection, so tests can observe the
+ *  "reconnecting / refreshing" indicators that a real handshake makes visible for
+ *  hundreds of ms but the demo would otherwise resolve in a microtask. */
+const SLOW_CONNECT = new Set(['connect', 'reconnect', 'list_connections'])
+
 const SLOW_INTROSPECT = new Set([
   'list_columns',
   'list_indexes',
@@ -341,7 +347,9 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
     ? redisLagMs()
     : SLOW_INTROSPECT.has(cmd)
       ? lagFor('slowIntrospect')
-      : 0
+      : SLOW_CONNECT.has(cmd)
+        ? lagFor('slowConnect')
+        : 0
   const ok = (v: unknown): Promise<T> =>
     lag > 0 ? new Promise<T>((r) => setTimeout(() => r(v as T), lag)) : Promise.resolve(v as T)
   switch (cmd) {
@@ -794,6 +802,46 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
       if (/^\s*SELECT\s+COUNT\(\*\)/i.test(stmtSql)) {
         return ok({ ok: true, result: { cols: [['c', 'int8']], rows: [{ c: 3842 }], total: 1 }, duration_ms: 4 })
       }
+      // New Database dialog — charset/collation lists read from the server. Each
+      // branch mirrors the shape of the real catalog query in sql/database-options.ts.
+      if (/information_schema[.]CHARACTER_SETS/i.test(stmtSql)) {
+        return ok({ ok: true, result: { cols: [['name', 'text'], ['default_collation', 'text']], rows: [
+          { name: 'latin1', default_collation: 'latin1_swedish_ci' },
+          { name: 'utf8mb3', default_collation: 'utf8mb3_general_ci' },
+          { name: 'utf8mb4', default_collation: 'utf8mb4_0900_ai_ci' },
+        ], total: 3 }, duration_ms: 3 })
+      }
+      if (/@@character_set_server/i.test(stmtSql)) {
+        return ok({ ok: true, result: { cols: [['charset', 'text'], ['collation', 'text']], rows: [{ charset: 'utf8mb4', collation: 'utf8mb4_0900_ai_ci' }], total: 1 }, duration_ms: 2 })
+      }
+      if (/information_schema[.]COLLATIONS/i.test(stmtSql) && /AS charset/i.test(stmtSql)) {
+        return ok({ ok: true, result: { cols: [['name', 'text'], ['charset', 'text'], ['is_default', 'text']], rows: [
+          { name: 'latin1_swedish_ci', charset: 'latin1', is_default: 'Yes' },
+          { name: 'utf8mb4_0900_ai_ci', charset: 'utf8mb4', is_default: 'Yes' },
+          { name: 'utf8mb4_general_ci', charset: 'utf8mb4', is_default: '' },
+          { name: 'utf8mb4_unicode_ci', charset: 'utf8mb4', is_default: '' },
+        ], total: 4 }, duration_ms: 3 })
+      }
+      if (/fn_helpcollations/i.test(stmtSql)) {
+        return ok({ ok: true, result: { cols: [['name', 'text']], rows: [
+          { name: 'Latin1_General_CI_AS' }, { name: 'Latin1_General_CS_AS' }, { name: 'SQL_Latin1_General_CP1_CI_AS' }, { name: 'Vietnamese_CI_AS' },
+        ], total: 4 }, duration_ms: 4 })
+      }
+      if (/SERVERPROPERTY[(]'Collation'[)]/i.test(stmtSql)) {
+        return ok({ ok: true, result: { cols: [['collation', 'text']], rows: [{ collation: 'SQL_Latin1_General_CP1_CI_AS' }], total: 1 }, duration_ms: 2 })
+      }
+      if (/pg_encoding_to_char[(]i[)]/i.test(stmtSql)) {
+        return ok({ ok: true, result: { cols: [['name', 'text']], rows: [{ name: 'SQL_ASCII' }, { name: 'LATIN1' }, { name: 'UTF8' }, { name: 'WIN1258' }], total: 4 }, duration_ms: 3 })
+      }
+      if (/AS locale/i.test(stmtSql) && /datcollate/i.test(stmtSql)) {
+        return ok({ ok: true, result: { cols: [['locale', 'text']], rows: [{ locale: 'C' }, { locale: 'en_US.utf8' }, { locale: 'POSIX' }, { locale: 'vi_VN.utf8' }], total: 4 }, duration_ms: 3 })
+      }
+      if (/datname = 'template1'/i.test(stmtSql)) {
+        return ok({ ok: true, result: { cols: [['encoding', 'text'], ['lc_collate', 'text'], ['lc_ctype', 'text']], rows: [{ encoding: 'UTF8', lc_collate: 'en_US.utf8', lc_ctype: 'en_US.utf8' }], total: 1 }, duration_ms: 2 })
+      }
+      if (/nls_database_parameters/i.test(stmtSql)) {
+        return ok({ ok: true, result: { cols: [['parameter', 'text'], ['value', 'text']], rows: [{ parameter: 'NLS_CHARACTERSET', value: 'AL32UTF8' }, { parameter: 'NLS_NCHAR_CHARACTERSET', value: 'AL16UTF16' }], total: 2 }, duration_ms: 3 })
+      }
       if (/information_schema\.SCHEMATA/i.test(stmtSql) && /DEFAULT_COLLATION_NAME/i.test(stmtSql)) {
         return ok({ ok: true, result: { cols: [['charset', 'text'], ['collation', 'text']], rows: [{ charset: 'utf8mb4', collation: 'utf8mb4_0900_ai_ci' }], total: 1 }, duration_ms: 3 })
       }
@@ -927,31 +975,104 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
       return ok('{"ok":true,"demo":"reply"}')
     case 'nats_js_streams':
       return ok(demoNatsStreams.map((s) => ({ ...s, subjects: [...s.subjects] })))
-    case 'nats_js_subject_messages': {
-      // Simulate server-side pagination: a subject with 250 retained messages;
-      // return only the page starting at `startSeq` (ascending), bounded by `limit`.
-      // Time increases monotonically with sequence (1s apart) so newest-by-time
-      // equals highest-sequence.
+    case 'nats_js_subject_messages':
+    case 'nats_js_subject_page': {
+      // Demo subject: 250 retained messages, SPARSE inside the stream (one every
+      // 4th sequence — a subject is normally just a slice of a busy stream). Time
+      // increases with sequence so newest-by-time == highest sequence.
       const TOTAL = 250
+      const SPACING = 4
+      const LAST_SEQ = TOTAL * SPACING
       const base = Date.UTC(2026, 5, 30, 10, 0, 0)
+      const subj = (args?.subject as string) ?? 'orders.eu'
+      // The "events" stream carries a small set of REAL subjects, and the mock
+      // applies the NATS matching rules (tokens, `*` = one token, `>` = the rest)
+      // to whatever filter it is asked for — that is what makes the grid's subject
+      // search testable: a filter narrows the messages AND the total, exactly as a
+      // server would. Any other subject keeps the old shape (every message is it).
+      const SUBJECTS = ['events.alpha', 'events.beta', 'events.gamma', 'events.alpha.1', 'events.alpha.2']
+      const natsMatch = (filter: string, s: string): boolean => {
+        const f = filter.split('.')
+        const t = s.split('.')
+        for (let i = 0; i < f.length; i++) {
+          if (f[i] === '>') return t.length > i
+          if (i >= t.length) return false
+          if (f[i] === '*') continue
+          if (f[i] !== t[i]) return false
+        }
+        return f.length === t.length
+      }
+      const known = subj.startsWith('events.')
+      const subjectOf = (seq: number) => SUBJECTS[(seq / SPACING - 1) % SUBJECTS.length]
+      const keep = (seq: number) => (known ? natsMatch(subj, subjectOf(seq)) : true)
+      const totalFor = known
+        ? Array.from({ length: TOTAL }, (_, i) => (i + 1) * SPACING).filter(keep).length
+        : TOTAL
+      const msg = (seq: number) => ({
+        seq,
+        subject: known ? subjectOf(seq) : subj,
+        payload: `{"id":${1000 + seq / SPACING - 1}}`,
+        time: new Date(base + seq * 1000).toISOString(),
+        key: `msg-${1000 + seq / SPACING - 1}`,
+      })
+      if (cmd === 'nats_js_subject_page') {
+        // Newest-first cursor paging: the newest pageSize messages at or before endSeq.
+        const pageSize = Math.max(1, Number(args?.pageSize ?? 100))
+        const end = Math.min(LAST_SEQ, Number(args?.endSeq ?? LAST_SEQ) || LAST_SEQ)
+        const out = []
+        for (let seq = Math.floor(end / SPACING) * SPACING; seq >= SPACING && out.length < pageSize; seq -= SPACING) {
+          if (keep(seq)) out.unshift(msg(seq))
+        }
+        return ok({ msgs: out, probes: 1, total: totalFor, last_seq: LAST_SEQ })
+      }
+      // legacy forward browse: messages from startSeq onwards, bounded by limit
       const limit = Math.max(1, Number(args?.limit ?? 100))
       const startSeq = Math.max(1, Number(args?.startSeq ?? 1))
-      const subj = (args?.subject as string) ?? 'orders.eu'
       const out = []
-      for (let seq = startSeq; seq < startSeq + limit && seq <= TOTAL; seq++) {
-        const i = seq - 1
-        out.push({
-          seq,
-          subject: subj,
-          payload: `{"id":${1000 + i}}`,
-          time: new Date(base + seq * 1000).toISOString(),
-          key: `msg-${1000 + i}`,
-        })
+      for (let seq = Math.ceil(startSeq / SPACING) * SPACING; seq <= LAST_SEQ && out.length < limit; seq += SPACING) {
+        if (keep(seq)) out.push(msg(seq))
       }
       return ok(out)
     }
+    case 'nats_js_stream_subjects': {
+      // The server's per-subject index. The mock mirrors the demo stream's subjects
+      // (including mixed case, like real _INBOX names) and applies the same
+      // case-insensitive prefix match the driver does.
+      const all = [
+        { subject: 'events.alpha', messages: 50 },
+        { subject: 'events.alpha.1', messages: 50 },
+        { subject: 'events.alpha.2', messages: 50 },
+        { subject: 'events.beta', messages: 50 },
+        { subject: 'events.gamma', messages: 50 },
+        { subject: '_INBOX.opJXokMoF2', messages: 128 },
+        { subject: '_INBOX.opJXokMoF2.1', messages: 64 },
+        { subject: '_INBOX.SIhRBL845v', messages: 32 },
+        { subject: '_INBOX.4iJnssqTsA', messages: 16 },
+      ]
+      const want = String(args?.prefix ?? '').toLowerCase()
+      const limit = Math.max(1, Number(args?.limit ?? 200))
+      const filt = String(args?.filter ?? '>')
+      const inFilter = (s: string) => {
+        const f = filt.split('.')
+        const t = s.split('.')
+        for (let i = 0; i < f.length; i++) {
+          if (f[i] === '>') return t.length > i
+          if (i >= t.length) return false
+          if (f[i] === '*') continue
+          if (f[i] !== t[i]) return false
+        }
+        return f.length === t.length
+      }
+      const scoped = all.filter((x) => inFilter(x.subject))
+      const hits = scoped.filter((x) => !want || x.subject.toLowerCase().startsWith(want))
+      return ok({
+        subjects: hits.slice(0, limit).sort((a, b) => b.messages - a.messages || a.subject.localeCompare(b.subject)),
+        matched: hits.length,
+        scanned: scoped.length,
+      })
+    }
     case 'nats_js_subject_stats':
-      return ok({ total: 250, last_seq: 250 })
+      return ok({ total: 250, last_seq: 1000 })
     case 'nats_js_purge_subject':
     case 'nats_js_remove_subject':
     case 'nats_js_add_subject':

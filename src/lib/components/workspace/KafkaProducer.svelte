@@ -76,9 +76,9 @@
         {#each sent as m, i (i)}
           <tr onclick={() => reuse(m)} onkeydown={(e) => e.key === 'Enter' && reuse(m)} role="button" tabindex="0" style="cursor:pointer">
             <td style="padding:var(--px-5) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:var(--muted)">{m.partition}</td>
-            <td style="padding:var(--px-5) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:#d19a66">{m.offset}</td>
-            <td style="padding:var(--px-5) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:#61afef">{m.key}</td>
-            <td style="padding:var(--px-5) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:#98c379;max-width:var(--px-420);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{m.value}</td>
+            <td style="padding:var(--px-5) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:var(--syntax-number)">{m.offset}</td>
+            <td style="padding:var(--px-5) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:var(--syntax-function)">{m.key}</td>
+            <td style="padding:var(--px-5) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:var(--syntax-string);max-width:var(--px-420);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{m.value}</td>
           </tr>
         {/each}
       </tbody>

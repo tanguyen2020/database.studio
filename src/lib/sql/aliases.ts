@@ -1,5 +1,5 @@
-// Parse table references (with optional schema qualifier + alias) from the
-// FROM / JOIN clauses of a SQL statement, so the editor can offer column
+// Parse table references (with optional schema qualifier + alias) from a
+// statement's FROM / JOIN / UPDATE / INSERT INTO clauses, so the editor can offer column
 // completions for `alias.` and `table.` — the built-in lang-sql completion only
 // resolves aliases when every table's columns are already loaded, which they
 // aren't (the Explorer loads columns lazily). This drives a completion source
@@ -120,7 +120,9 @@ function readTableList(words: Tok[], start: number, out: TableRef[]): number {
 }
 
 /**
- * Extract every table reference in a statement's FROM / JOIN clauses.
+ * Extract every table reference a statement gives columns for: FROM / JOIN, and the
+ * target of UPDATE / INSERT INTO / MERGE INTO — an `UPDATE t SET …` has no FROM at
+ * all, so without those the SET clause could not suggest t's columns.
  * Comments and string literals are stripped first; subqueries (parenthesised) are
  * skipped. Quoted identifiers keep their real name (see tokenize).
  */
@@ -136,6 +138,16 @@ export function parseTableRefs(sql: string): TableRef[] {
       continue
     }
     if (w === 'join') {
+      i = readOneTable(words, i + 1, refs)
+      continue
+    }
+    // UPDATE t [alias] SET … / UPDATE a, b SET … (MySQL multi-table update)
+    if (w === 'update') {
+      i = readTableList(words, i + 1, refs)
+      continue
+    }
+    // INSERT INTO t (…) / MERGE INTO t AS x / SELECT … INTO t
+    if (w === 'into') {
       i = readOneTable(words, i + 1, refs)
       continue
     }

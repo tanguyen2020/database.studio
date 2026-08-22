@@ -230,6 +230,12 @@
     }
   }
 
+  /** The consumer name is what you paste into a CLI next — one click copies it. */
+  async function copyConsumer(name: string) {
+    await navigator.clipboard.writeText(name)
+    toasts.success('Copied ' + name, 'nats')
+  }
+
   async function peek() {
     if (!tab.connectionId || !jsSel) return
     try {
@@ -268,18 +274,18 @@
       <table class="mono" style="border-collapse:collapse;width:100%;font-size:var(--px-12)">
         <thead><tr>
           {#each ['Stream', 'Subjects', 'Retention', 'Storage', 'Messages', 'Consumers'] as h (h)}
-            <th style="text-align:left;padding:var(--px-6) var(--px-10);border-bottom:var(--px-1) solid var(--border2);color:var(--text2);font-weight:600">{h}</th>
+            <th style="text-align:left;padding:var(--px-6) var(--px-10);border-bottom:var(--px-1) solid var(--border2);color:var(--tbl-head);font-weight:600">{h}</th>
           {/each}
         </tr></thead>
         <tbody>
-          {#each jsStreams as s (s.name)}
-            <tr onclick={() => selectStream(s.name)} onkeydown={(e) => e.key === 'Enter' && selectStream(s.name)} role="button" tabindex="0" style="cursor:pointer;background:{jsSel === s.name ? 'var(--hover)' : 'transparent'}">
-              <td style="padding:var(--px-6) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:#27AE60;font-weight:600">{s.name}</td>
-              <td style="padding:var(--px-6) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:var(--warn2)">{s.subjects.join(', ')}</td>
-              <td style="padding:var(--px-6) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:var(--muted)">{s.retention}</td>
-              <td style="padding:var(--px-6) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:var(--muted)">{s.storage}</td>
-              <td style="padding:var(--px-6) var(--px-10);border-bottom:var(--px-1) solid var(--border)">{s.messages.toLocaleString()}</td>
-              <td style="padding:var(--px-6) var(--px-10);border-bottom:var(--px-1) solid var(--border)">{s.consumers}</td>
+          {#each jsStreams as s, si (s.name)}
+            <tr class="js-row" class:zebra={si % 2 === 1} class:sel={jsSel === s.name} onclick={() => selectStream(s.name)} onkeydown={(e) => e.key === 'Enter' && selectStream(s.name)} role="button" tabindex="0" style="cursor:pointer">
+              <td style="padding:var(--px-6) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:var(--sacc-green);font-weight:700">{s.name}</td>
+              <td style="padding:var(--px-6) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:var(--sacc-amber)">{s.subjects.join(', ')}</td>
+              <td style="padding:var(--px-6) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:var(--text2)">{s.retention}</td>
+              <td style="padding:var(--px-6) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:var(--text2)">{s.storage}</td>
+              <td style="padding:var(--px-6) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:var(--syntax-number)">{s.messages.toLocaleString()}</td>
+              <td style="padding:var(--px-6) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:var(--syntax-number)">{s.consumers}</td>
             </tr>
           {/each}
         </tbody>
@@ -290,17 +296,35 @@
         <table class="mono" style="border-collapse:collapse;width:100%;font-size:var(--px-12)">
           <thead><tr>
             {#each ['Consumer', 'Deliver', 'Ack', 'Filter', 'Pending'] as h (h)}
-              <th style="text-align:left;padding:var(--px-6) var(--px-10);border-bottom:var(--px-1) solid var(--border2);color:var(--text2);font-weight:600">{h}</th>
+              <th style="text-align:left;padding:var(--px-6) var(--px-10);border-bottom:var(--px-1) solid var(--border2);color:var(--tbl-head);font-weight:600">{h}</th>
             {/each}
           </tr></thead>
           <tbody>
-            {#each jsConsumers as c (c.name)}
-              <tr>
-                <td style="padding:var(--px-6) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:#e8c547">{c.name}</td>
-                <td style="padding:var(--px-6) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:var(--muted)">{c.deliver_policy}</td>
-                <td style="padding:var(--px-6) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:var(--muted)">{c.ack_policy}</td>
-                <td style="padding:var(--px-6) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:var(--text2)">{c.filter_subject || '—'}</td>
-                <td style="padding:var(--px-6) var(--px-10);border-bottom:var(--px-1) solid var(--border)">{c.num_pending}</td>
+            {#each jsConsumers as c, ci (c.name)}
+              {@const pending = Number(c.num_pending ?? 0)}
+              <tr class="js-row" class:zebra={ci % 2 === 1}>
+                <!-- the identifier stays a link: hover underlines, focus is visible,
+                     and clicking copies the name (what you do with it next) -->
+                <td style="padding:var(--px-6) var(--px-10);border-bottom:var(--px-1) solid var(--border)">
+                  <span
+                    class="tbl-link"
+                    onclick={() => copyConsumer(c.name)}
+                    onkeydown={(e) => e.key === 'Enter' && copyConsumer(c.name)}
+                    role="button"
+                    tabindex="0"
+                    title="Copy consumer name"
+                  >{c.name}</span>
+                </td>
+                <!-- enum/meta columns: grey, so they do not compete with the data -->
+                <td style="padding:var(--px-6) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:var(--tbl-meta)">{c.deliver_policy}</td>
+                <td style="padding:var(--px-6) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:var(--tbl-meta)">{c.ack_policy}</td>
+                <!-- subject value: warm monospace tone; "—" stays quiet -->
+                <td style="padding:var(--px-6) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:{c.filter_subject ? 'var(--tbl-subject)' : 'var(--tbl-quiet)'}">{c.filter_subject || '—'}</td>
+                <!-- pending MEANS something: 0 is quiet, a backlog is not -->
+                <td
+                  style="padding:var(--px-6) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:{pending > 0 ? 'var(--tbl-alert)' : 'var(--tbl-quiet)'};font-weight:{pending > 0 ? 600 : 400}"
+                  title={pending > 0 ? pending + ' message(s) waiting to be acked' : 'nothing pending'}
+                >{c.num_pending}</td>
               </tr>
             {/each}
           </tbody>
@@ -313,7 +337,7 @@
         </div>
         {#if peekResult}
           <div class="mono" style="font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-8) var(--px-10)">
-            <div style="color:var(--muted)">#{peekResult.seq} · <span style="color:var(--warn2);font-weight:600">{peekResult.subject}</span> · {peekResult.time}</div>
+            <div style="color:var(--muted)">#{peekResult.seq} · <span style="color:var(--sacc-amber);font-weight:600">{peekResult.subject}</span> · {peekResult.time}</div>
             <div style="color:var(--text2);white-space:pre-wrap;word-break:break-word;margin-top:var(--px-4)">{peekResult.payload}</div>
           </div>
         {/if}
@@ -330,7 +354,7 @@
       </div>
       <div style="flex:1;overflow:auto;min-width:0;padding:var(--px-8) var(--px-12)">
         {#if kvSel}
-          <div style="display:flex;align-items:center;gap:var(--px-8);margin-bottom:var(--px-8)"><span class="mono" style="font-size:var(--px-12_5);font-weight:600;color:#27AE60">{kvSel}</span><span onclick={kvPutNew} onkeydown={(e) => e.key === 'Enter' && kvPutNew()} role="button" tabindex="0" style="font-size:var(--px-11);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">＋ Key</span></div>
+          <div style="display:flex;align-items:center;gap:var(--px-8);margin-bottom:var(--px-8)"><span class="mono" style="font-size:var(--px-12_5);font-weight:600;color:var(--sacc-green)">{kvSel}</span><span onclick={kvPutNew} onkeydown={(e) => e.key === 'Enter' && kvPutNew()} role="button" tabindex="0" style="font-size:var(--px-11);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">＋ Key</span></div>
           {#each kvKeys as k (k)}
             <div class="mono" style="display:flex;align-items:center;gap:var(--px-8);padding:var(--px-4) var(--px-6);font-size:var(--px-12)">
               <span onclick={() => kvGet(k)} onkeydown={(e) => e.key === 'Enter' && kvGet(k)} role="button" tabindex="0" style="cursor:pointer;color:var(--text2)">{k}</span>
@@ -356,9 +380,9 @@
       </div>
       <div style="flex:1;overflow:auto;min-width:0;padding:var(--px-8) var(--px-12)">
         {#if objSel}
-          <div style="display:flex;align-items:center;gap:var(--px-8);margin-bottom:var(--px-8)"><span class="mono" style="font-size:var(--px-12_5);font-weight:600;color:#27AE60">{objSel}</span><span onclick={objUpload} onkeydown={(e) => e.key === 'Enter' && objUpload()} role="button" tabindex="0" style="font-size:var(--px-11);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">⬆ Upload</span></div>
+          <div style="display:flex;align-items:center;gap:var(--px-8);margin-bottom:var(--px-8)"><span class="mono" style="font-size:var(--px-12_5);font-weight:600;color:var(--sacc-green)">{objSel}</span><span onclick={objUpload} onkeydown={(e) => e.key === 'Enter' && objUpload()} role="button" tabindex="0" style="font-size:var(--px-11);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">⬆ Upload</span></div>
           <table class="mono" style="border-collapse:collapse;width:100%;font-size:var(--px-12)">
-            <thead><tr>{#each ['Name', 'Size', 'Chunks', ''] as h (h)}<th style="text-align:left;padding:var(--px-5) var(--px-10);border-bottom:var(--px-1) solid var(--border2);color:var(--text2);font-weight:600">{h}</th>{/each}</tr></thead>
+            <thead><tr>{#each ['Name', 'Size', 'Chunks', ''] as h (h)}<th style="text-align:left;padding:var(--px-5) var(--px-10);border-bottom:var(--px-1) solid var(--border2);color:var(--tbl-head);font-weight:600">{h}</th>{/each}</tr></thead>
             <tbody>
               {#each objList as o (o.name)}
                 <tr>
@@ -386,7 +410,7 @@
       {#each messages as m, i (i)}
         <div style="display:flex;gap:var(--px-12);padding:var(--px-7) var(--px-16);border-bottom:var(--px-1) solid var(--border);align-items:baseline">
           <span class="mono" style="flex:none;font-size:var(--px-10_5);color:var(--muted);width:var(--px-84)">{m.ts}</span>
-          <span class="mono" style="flex:none;font-size:var(--px-11_5);color:var(--warn2);font-weight:600;width:var(--px-150);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{m.subject}</span>
+          <span class="mono" style="flex:none;font-size:var(--px-11_5);color:var(--sacc-amber);font-weight:600;width:var(--px-150);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{m.subject}</span>
           <span class="mono" style="flex:1;min-width:0;font-size:var(--px-11_5);color:var(--text2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{m.payload}</span>
         </div>
       {/each}
@@ -415,3 +439,30 @@
   </div>
   {/if}
 </div>
+
+<style>
+  .js-row.zebra {
+    background: var(--tbl-zebra);
+  }
+  /* the identifier reads as a link: colour + underline on hover, visible focus */
+  .tbl-link {
+    color: var(--tbl-link);
+    font-weight: 600;
+    cursor: pointer;
+    text-decoration: none;
+    border-radius: var(--px-3);
+  }
+  .tbl-link:hover {
+    text-decoration: underline;
+  }
+  .tbl-link:focus-visible {
+    outline: var(--px-2) solid var(--tbl-link);
+    outline-offset: var(--px-1);
+  }
+  .js-row:hover {
+    background: var(--tbl-hover);
+  }
+  .js-row.sel {
+    background: var(--tbl-sel);
+  }
+</style>

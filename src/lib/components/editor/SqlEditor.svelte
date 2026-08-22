@@ -41,6 +41,7 @@
     type Completion,
   } from '@codemirror/autocomplete'
   import { functionCatalog, type FnHint } from '$lib/sql/functions'
+  import { expectsColumnHere } from '$lib/sql/column-context'
   import { highlightSelectionMatches, searchKeymap } from '@codemirror/search'
   import { linter, setDiagnostics, type Diagnostic } from '@codemirror/lint'
   import {
@@ -460,7 +461,11 @@
   export function refreshCompletion() {
     if (!view?.hasFocus || completionDismissed) return
     const pos = view.state.selection.main.head
-    if (!/[\w$.]/.test(view.state.sliceDoc(Math.max(0, pos - 1), pos))) return
+    const prev = view.state.sliceDoc(Math.max(0, pos - 1), pos)
+    // an identifier/dot context, or a position that expects a column with nothing
+    // typed yet (after WHERE / SET / AND …) — the same positions the completion
+    // source offers from, so late-arriving columns show up there too.
+    if (!/[\w$.]/.test(prev) && !expectsColumnHere(view.state.sliceDoc(Math.max(0, pos - 60), pos))) return
     startCompletion(view)
   }
 

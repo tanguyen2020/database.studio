@@ -18,16 +18,52 @@
   const subject = $derived((tab.state as { subject?: string }).subject ?? '')
   const accent = $derived(systemMeta('nats').accent)
 
+  // Subject search. Typing does NOT search: the query runs on Enter (or the button).
+  //  * a NATS filter subject narrower than this tab's subject → the SERVER filters
+  //    (streamFilter): exact, free, and it covers every message of the stream.
+  //  * anything else → filters the messages already fetched (pageQuery). NATS cannot
+  //    match substrings, and walking the stream to do it client-side was far too slow
+  //    on a busy subject, so free text stays page-scoped — and the UI says so.
+  let search = $state('')
+  let streamFilter = $state('')
+  /** the query the current results came from */
+  let applied = $state('')
+  const query = $derived(search.trim())
+  /** what the server is currently filtering on */
+  const activeSubject = $derived(streamFilter || subject)
+  /** something to search → Enter/the button runs it (re-running the same query is
+   *  allowed: it re-reads the subject index, which may have changed) */
+  const canRun = $derived(query.length > 0)
+  /** set when a subject search matched no subject name */
+  let searchMiss = $state('')
+  /** subject-name search results (server's per-subject index) */
+  let subjHits = $state<ipc.NatsSubjectCount[]>([])
+  let subjMatched = $state(0)
+  let subjScanned = $state(0)
+  let searching = $state(false)
+  /** showing the list of matching subjects instead of messages */
+  const picking = $derived(subjHits.length > 1 && !streamFilter)
+
   let messages = $state<ipc.NatsJsMessage[]>([])
-  // Server-side pagination (items 2 + 4): each page is a separate fetch. We page
-  // NEWEST-first — the server tells us the total count + last sequence, and each
-  // page fetches a bounded sequence window (never the whole subject at once).
+  // Server-side pagination by CURSOR (newest-first). A subject is normally a sparse
+  // slice of a busy stream, so a page can NOT be cut out of a fixed sequence window:
+  // 100 sequences may hold 10 messages of this subject, or none at all. Instead the
+  // backend searches for the window that ends at our cursor and holds a full page,
+  // and every page hands us the cursor of the next (older) one: firstSeq - 1.
+  // `pageEnds[i]` is the end cursor of page i+1, so Prev is a lookup, not a re-search.
   const PAGE_SIZES = [50, 100, 200, 500]
   let pageSize = $state(100)
-  let page = $state(1) // 1 = newest page
-  let total = $state(0) // total retained messages for this subject (from server)
+  let page = $state(1) // 1 = newest
+  let total = $state(0) // total retained messages for this subject (from the server)
   let lastSeq = $state(0) // last stream sequence carrying this subject
+  let pageEnds = $state<number[]>([]) // cursor per page; [0] = lastSeq (newest page)
+  // total = 0 means the server could not count this subject in time (a stream with
+  // very many distinct subjects makes STREAM.INFO-with-subjects slow). Counting must
+  // never hide messages, so the page still renders and paging keeps working — we just
+  // stop claiming a page count.
+  const totalKnown = $derived(total > 0)
   const totalPages = $derived(Math.max(1, Math.ceil(total / pageSize)))
+  const hasOlder = $derived(totalKnown ? page < totalPages : messages.length === pageSize)
   // Display newest-first: sort descending by time, tie-break on sequence desc.
   const timeKey = (m: ipc.NatsJsMessage) => {
     const t = new Date(m.time).getTime()
@@ -66,22 +102,29 @@
     confirmState = { title, body, danger: true, run }
   }
 
-  // Fetch page `p` (1 = newest) as a bounded sequence window from the server.
-  // Newest-first: page 1 covers the highest sequences, page N the oldest.
+  // Fetch page `p` (1 = newest) from the server using its cursor. Only pages whose
+  // cursor is known are reachable — page 1 (lastSeq) plus every page already walked
+  // to, which is exactly what Prev/Next need.
   async function load(p = page) {
     if (!tab.connectionId) return
+    // page 1 has no cursor: the server starts at the subject's newest message
+    const end = p === 1 ? undefined : pageEnds[p - 1]
+    if (p > 1 && end === undefined) return
     loading = true
     error = ''
     try {
-      if (total === 0 || lastSeq === 0) {
-        messages = []
-      } else {
-        const firstSeq = Math.max(1, lastSeq - total + 1)
-        const high = lastSeq - (p - 1) * pageSize
-        const low = Math.max(firstSeq, high - pageSize + 1)
-        const limit = Math.max(1, high - low + 1)
-        const rowsIn = await ipc.natsJsSubjectMessages(tab.connectionId, stream, subject, limit, low)
-        messages = rowsIn.filter((m) => m.seq <= high)
+      const res = await ipc.natsJsSubjectPage(tab.connectionId, stream, activeSubject, pageSize, end)
+      messages = res.msgs
+      // The server only counts the subject for the newest page (and skips it when a
+      // wildcard spans a huge subject space): total = 0 means "unknown", so keep the
+      // count we already have instead of blanking the pager. An empty page IS
+      // authoritative though — the subject really has nothing left.
+      if (res.total > 0 || res.msgs.length === 0) total = res.total
+      lastSeq = res.last_seq
+      // cursor for the NEXT (older) page: the sequence just before this page starts
+      if (res.msgs.length > 0) {
+        const first = Math.min(...res.msgs.map((m) => m.seq))
+        pageEnds[p] = first - 1
       }
       page = p
       loaded = true
@@ -92,35 +135,96 @@
     }
   }
 
-  // Re-read the subject's total/last-seq, then load the newest page. Used on open,
-  // refresh, purge, and page-size change.
+  // Re-read the subject from the newest page, dropping every cursor we held. Used on
+  // open, refresh, purge, delete and page-size change. The page response carries the
+  // subject's totals, so this is ONE round-trip set, and a failed count never stops
+  // the messages from loading.
   async function reload() {
-    if (!tab.connectionId) return
-    loading = true
-    error = ''
-    try {
-      const stats = await ipc.natsJsSubjectStats(tab.connectionId, stream, subject)
-      total = stats.total
-      lastSeq = stats.last_seq
-    } catch (e) {
-      error = String(e)
-      total = 0
-      lastSeq = 0
-    } finally {
-      loading = false
-    }
+    pageEnds = []
     await load(1)
   }
 
+  /** Run what is in the box (Enter / the button). Empty query = clear. */
+  function runSearch() {
+    if (!query) {
+      clearSearch()
+      return
+    }
+    void applyStreamSearch(query)
+  }
+
+  /**
+   * Search by subject NAME, matched as a prefix and case-insensitively — "show me
+   * subjects starting with what I typed". NATS filters cannot do that (they match
+   * whole tokens, case-sensitively), so this reads the server's per-subject index
+   * instead: one API call, no walking of messages. One match → browse it straight
+   * away; several → list them so the user picks; none → say so plainly.
+   */
+  async function applyStreamSearch(q: string) {
+    if (!tab.connectionId) return
+    applied = q
+    streamFilter = ''
+    searchMiss = ''
+    searching = true
+    subjHits = []
+    subjMatched = 0
+    subjScanned = 0
+    try {
+      const res = await ipc.natsJsStreamSubjects(tab.connectionId, stream, subject, q, 200)
+      subjHits = res.subjects
+      subjMatched = res.matched
+      subjScanned = res.scanned
+      if (res.subjects.length === 0) {
+        searchMiss = q
+        return
+      }
+      if (res.subjects.length === 1) {
+        streamFilter = res.subjects[0].subject
+        await reload()
+      }
+      // several: the picking view renders the list; choosing one calls pickSubject()
+    } catch (e) {
+      error = String(e)
+    } finally {
+      searching = false
+    }
+  }
+
+  /** Browse one subject from the search results. */
+  async function pickSubject(s: string) {
+    streamFilter = s
+    await reload()
+  }
+
+  /** Back to the list of subjects the search found. */
+  function backToMatches() {
+    streamFilter = ''
+    messages = []
+    pageEnds = []
+    page = 1
+  }
+
+  /** Back to the tab's own subject, with nothing applied. */
+  function clearSearch() {
+    search = ''
+    applied = ''
+    searchMiss = ''
+    subjHits = []
+    subjMatched = 0
+    subjScanned = 0
+    streamFilter = ''
+    void reload() // always: the browse view may have been replaced or emptied
+  }
+
   function nextPage() {
-    if (page < totalPages) void load(page + 1)
+    if (hasOlder && pageEnds[page] !== undefined) void load(page + 1)
   }
   function prevPage() {
     if (page > 1) void load(page - 1)
   }
   function changePageSize(n: number) {
     pageSize = n
-    void load(1)
+    void reload()
   }
 
   $effect(() => {
@@ -197,11 +301,59 @@
   <div style="flex:none;display:flex;align-items:center;gap:var(--px-12);padding:var(--px-9) var(--px-14);border-bottom:var(--px-1) solid var(--border);background:var(--surface)">
     <span style="width:var(--px-3);height:var(--px-20);border-radius:var(--px-2);background:{accent}"></span>
     <div style="display:flex;flex-direction:column;line-height:1.15">
-      <span class="mono" style="font-size:var(--px-13);font-weight:600;color:var(--sacc-amber)">{subject}</span>
-      <span class="mono" style="font-size:var(--px-10);color:{accent}">stream <span style="font-weight:600">{stream}</span></span>
+      <span class="mono" style="font-size:var(--px-13);font-weight:700;color:var(--text)">{subject}</span>
+      <span class="mono" style="font-size:var(--px-10);color:var(--sacc-green)">stream <span style="font-weight:600">{stream}</span></span>
     </div>
     <div style="margin-left:auto;display:flex;gap:var(--px-8);align-items:center">
-      <span style="font-size:var(--px-11);color:var(--muted)">{total} record{total === 1 ? '' : 's'}</span>
+      <!-- Subject search. Typing filters the fetched rows; a query that is a NATS
+           filter narrower than this tab's subject offers "Search stream", which
+           makes the SERVER filter and so covers every message, not just this page. -->
+      <div style="position:relative;display:flex;align-items:center">
+        <span style="position:absolute;left:var(--px-8);color:var(--muted);font-size:var(--px-11);pointer-events:none">⌕</span>
+        <input
+          class="mono"
+          bind:value={search}
+          onkeydown={(e) => {
+            if (e.key === 'Enter') runSearch()
+            else if (e.key === 'Escape') clearSearch()
+          }}
+          placeholder="Search subject… (Enter)"
+          aria-label="Search subject"
+          spellcheck="false"
+          style="width:var(--px-300);background:var(--raised);border:var(--px-1) solid var(--border2);border-radius:var(--px-6);padding:var(--px-4) var(--px-22);color:var(--text);font-size:var(--px-11_5);outline:none"
+        />
+        {#if query || streamFilter || applied}
+          <span onclick={clearSearch} onkeydown={(e) => e.key === 'Enter' && clearSearch()} role="button" tabindex="0" title="Clear search" style="position:absolute;right:var(--px-7);color:var(--muted);font-size:var(--px-13);cursor:pointer">×</span>
+        {/if}
+      </div>
+      {#if canRun}
+        <span
+          onclick={runSearch}
+          onkeydown={(e) => e.key === 'Enter' && runSearch()}
+          role="button"
+          tabindex="0"
+          class="eg-btn"
+          title="Press Enter — finds the subjects of this stream whose name starts with what you typed (case-insensitive)"
+        >Search</span>
+      {/if}
+      {#if streamFilter}
+        <span class="mono" style="font-size:var(--px-10_5);font-weight:700;color:var(--primary);background:color-mix(in srgb, var(--primary) 16%, transparent);border-radius:var(--px-5);padding:var(--px-2) var(--px-7)" title={streamFilter.endsWith('.>') ? `Everything under ${streamFilter.slice(0, -2)} — the server is filtering` : 'The server is filtering on this subject'}>filter {streamFilter}</span>
+      {/if}
+      {#if searching}
+        <span style="font-size:var(--px-11);color:var(--muted)" aria-live="polite">Searching subjects…</span>
+      {:else if searchMiss}
+        <span style="font-size:var(--px-11);color:var(--warn2)" title="Matched against subject names, as a prefix and case-insensitively. Nothing in this stream starts with that.">no subject starts with <span class="mono">{searchMiss}</span></span>
+      {:else if subjMatched > 1}
+        <span
+          onclick={backToMatches}
+          onkeydown={(e) => e.key === 'Enter' && backToMatches()}
+          role="button"
+          tabindex="0"
+          class="eg-btn"
+          title="Back to the subjects this search found"
+        >{subjMatched} subject{subjMatched === 1 ? '' : 's'} match</span>
+      {/if}
+      <span style="font-size:var(--px-11);color:var(--muted)" title={totalKnown ? '' : 'The server could not count this subject in time — paging still works'}>{totalKnown ? `${total} record${total === 1 ? '' : 's'}` : `${messages.length}+ records`}</span>
       <span onclick={addMessage} onkeydown={(e) => e.key === 'Enter' && addMessage()} role="button" tabindex="0" class="eg-btn">＋ Add</span>
       <span onclick={() => reload()} onkeydown={(e) => e.key === 'Enter' && reload()} role="button" tabindex="0" class="eg-btn">⟳ Refresh</span>
       <span onclick={clearMessages} onkeydown={(e) => e.key === 'Enter' && clearMessages()} role="button" tabindex="0" class="eg-btn" style="color:var(--error)">Clear messages</span>
@@ -209,11 +361,41 @@
   </div>
 
   <div style="flex:1;overflow:auto;min-height:0">
-    {#if loading}
+    {#if searching}
+      <div style="padding:var(--px-20);color:var(--muted);font-size:var(--px-12)">Searching subject names…</div>
+    {:else if searchMiss}
+      <!-- a search that found nothing must not leave the previous list on screen:
+           that reads as "search did nothing" -->
+      <div style="padding:var(--px-20);color:var(--muted);font-size:var(--px-12);line-height:1.6">
+        No subject in this stream starts with <span class="mono" style="color:var(--text2)">{searchMiss}</span>.
+        <br />Matching is on subject names, as a prefix, ignoring case — {subjScanned.toLocaleString()} subject{subjScanned === 1 ? '' : 's'} checked.
+        <br /><span onclick={clearSearch} onkeydown={(e) => e.key === 'Enter' && clearSearch()} role="button" tabindex="0" style="color:var(--primary);cursor:pointer">Clear the search</span> to go back to browsing.
+      </div>
+    {:else if picking}
+      <!-- several subjects start with the query: pick which one to browse -->
+      <div style="padding:var(--px-10) var(--px-14)">
+        <div style="font-size:var(--px-11_5);color:var(--muted);padding:var(--px-4) 0 var(--px-8)">
+          {subjMatched} subject{subjMatched === 1 ? '' : 's'} start with <span class="mono" style="color:var(--text2)">{search.trim()}</span>{subjMatched > subjHits.length ? ', showing the first ' + subjHits.length : ''}
+        </div>
+        {#each subjHits as h (h.subject)}
+          <div
+            onclick={() => pickSubject(h.subject)}
+            onkeydown={(e) => e.key === 'Enter' && pickSubject(h.subject)}
+            role="button"
+            tabindex="0"
+            class="subj-hit"
+            style="display:flex;align-items:center;gap:var(--px-10);padding:var(--px-6) var(--px-8);border-radius:var(--px-6);cursor:pointer"
+          >
+            <span class="mono" style="flex:1;min-width:0;font-size:var(--px-12);font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title={h.subject}>{h.subject}</span>
+            <span class="mono" style="flex:none;font-size:var(--px-11);color:var(--text2)">{h.messages.toLocaleString()} msg</span>
+          </div>
+        {/each}
+      </div>
+    {:else if loading}
       <div style="padding:var(--px-20);color:var(--muted);font-size:var(--px-12)">Loading…</div>
     {:else if error}
       <div style="padding:var(--px-20);color:var(--error);font-size:var(--px-12)">{error}</div>
-    {:else if messages.length === 0}
+    {:else if rows.length === 0}
       <div style="padding:var(--px-20);color:var(--muted);font-size:var(--px-12)">No messages retained for this subject.</div>
     {:else}
       <table class="mono" style="border-collapse:collapse;width:100%;font-size:var(--px-12);table-layout:fixed;{GRID_FONT}">
@@ -258,7 +440,7 @@
   <!-- pagination footer: Prev/Next each fetch a fresh page from the server -->
   {#if !error && (loaded || loading)}
     <div style="flex:none;display:flex;align-items:center;gap:var(--px-10);padding:var(--px-6) var(--px-14);border-top:var(--px-1) solid var(--border);background:var(--surface);font-size:var(--px-11_5)">
-      <span style="color:var(--text2)">Page {page} / {totalPages}</span>
+      <span style="color:var(--text2)">{totalKnown ? `Page ${page} / ${totalPages}` : `Page ${page}`}</span>
       <span style="color:var(--muted)">·</span>
       <span style="color:var(--muted)">{total} record{total === 1 ? '' : 's'}</span>
       <span style="color:var(--muted)">·</span>
@@ -289,7 +471,7 @@
           role="button"
           tabindex="0"
           class="eg-btn"
-          style="opacity:{page >= totalPages || loading ? 0.45 : 1};cursor:{page >= totalPages || loading ? 'not-allowed' : 'pointer'}"
+          style="opacity:{!hasOlder || loading ? 0.45 : 1};cursor:{!hasOlder || loading ? 'not-allowed' : 'pointer'}"
         >Next ▶</span>
       </div>
     </div>
@@ -347,6 +529,9 @@
 </div>
 
 <style>
+  .subj-hit:hover {
+    background: color-mix(in srgb, var(--primary) 14%, transparent);
+  }
   .eg-btn {
     font-size: var(--px-11_5);
     color: var(--text2);

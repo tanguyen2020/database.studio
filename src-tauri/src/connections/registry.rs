@@ -21,6 +21,9 @@ struct LiveEntry {
     profile: ConnectionProfile,
     /// Plaintext kept in memory only, for reconnect after cancel/save-reconnect.
     password: String,
+    /// Same, for the SSH tunnel: rebuilding a tunnel whose session died needs to
+    /// authenticate again, and the draft (quick connect) may not be in storage.
+    ssh_password: String,
     endpoint: Endpoint,
     running: Option<AbortHandle>,
     /// Cooperative cancel signal for the statement (and its chunked delivery)
@@ -33,6 +36,9 @@ struct LiveEntry {
     session_id: Option<String>,
     poisoned: bool,
     latency_ms: Option<u64>,
+    /// Last moment this connection was known to be usable (a statement or a
+    /// ping succeeded). Drives the keepalive sweep and the pre-flight check.
+    last_ok: std::time::Instant,
 }
 
 /// Statement that cancels the *currently running query* of `session_id` on the
@@ -79,6 +85,42 @@ async fn probe_session_id(driver: &mut LiveConnection, system: &str) -> Option<S
     } else {
         None
     }
+}
+
+/// How often [`Registry::keepalive_sweep`] touches idle connections.
+///
+/// A connection left alone gets reaped from underneath us — MySQL/MariaDB
+/// `wait_timeout`, PostgreSQL `idle_session_timeout`, a load balancer or NAT idle
+/// rule, or an SSH tunnel whose session was dropped — and the *next* statement is
+/// the one that fails, minutes after everything looked fine. Sending a cheap
+/// ping every 20s keeps those timers from ever expiring, which is what makes
+/// "the connection is still open, so a query must work" true instead of hopeful.
+pub const KEEPALIVE_INTERVAL_SECS: u64 = 20;
+
+/// The sweep period, overridable with `DBSTUDIO_KEEPALIVE_SECS`. A server with a
+/// `wait_timeout` shorter than the default needs a shorter period (and the tests
+/// need one they can drive in seconds).
+///
+/// Doubles as the idle age past which a statement checks the socket before using
+/// it: anything younger was just proven alive by the sweep (or by the previous
+/// statement), so the common path costs nothing.
+pub fn keepalive_interval() -> std::time::Duration {
+    let secs = std::env::var("DBSTUDIO_KEEPALIVE_SECS")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .map(|v| v.clamp(2, 3600))
+        .unwrap_or(KEEPALIVE_INTERVAL_SECS);
+    std::time::Duration::from_secs(secs)
+}
+
+/// Engines whose live connection is one long-lived socket that a server or a
+/// firewall can silently reap while idle, and which therefore need keeping warm.
+///
+/// Left out on purpose: SQLite (local file), ClickHouse (stateless HTTP), and
+/// Kafka / NATS / MongoDB / Cassandra, whose clients own a pool and reconnect by
+/// themselves — pinging those means an expensive metadata round trip for nothing.
+fn needs_keepalive(system: &str) -> bool {
+    matches!(system, "postgres" | "mysql" | "mariadb" | "mssql" | "oracle" | "redis")
 }
 
 #[derive(Default)]
@@ -263,14 +305,18 @@ impl Registry {
             .map(|e| e.profile.system.as_str().to_string())
     }
 
-    /// Profile + plaintext password of a live connection (for "open database" on
-    /// ephemeral connections that aren't in storage). SSH password isn't retained.
-    pub fn live_credentials(&self, id: &str) -> Result<(ConnectionProfile, String), AppError> {
+    /// Profile + plaintext password + SSH password of a live connection (for
+    /// "open database" on ephemeral connections that aren't in storage). The SSH
+    /// password is kept so a derived connection can open its own tunnel.
+    pub fn live_credentials(
+        &self,
+        id: &str,
+    ) -> Result<(ConnectionProfile, String, String), AppError> {
         let entries = self.entries.lock().unwrap();
         let e = entries
             .get(id)
             .ok_or_else(|| AppError::Driver("Connection is not open".into()))?;
-        Ok((e.profile.clone(), e.password.clone()))
+        Ok((e.profile.clone(), e.password.clone(), e.ssh_password.clone()))
     }
 
     /// Opens tunnel (if configured) + driver connection and registers it.
@@ -286,7 +332,15 @@ impl Registry {
         // a silent no-op that reported success while every statement kept
         // failing. Ping first; a dead entry is rebuilt in place.
         if self.is_connected(&profile.id) {
+            // Refresh the stored credentials first: a reconnect (here or later,
+            // from the keepalive sweep) authenticates again, and the user may
+            // have edited the password since this entry was created.
+            if let Some(e) = self.entries.lock().unwrap().get_mut(&profile.id) {
+                e.password = password.clone();
+                e.ssh_password = ssh_password.clone();
+            }
             if self.ping(&profile.id).await {
+                self.touch(&profile.id);
                 return Ok(self.latency(&profile.id).unwrap_or(0));
             }
             let started = std::time::Instant::now();
@@ -345,12 +399,14 @@ impl Registry {
             tunnel,
             profile: profile.clone(),
             password,
+            ssh_password,
             endpoint,
             running: None,
             cancel: None,
             session_id,
             poisoned: false,
             latency_ms: Some(latency),
+            last_ok: std::time::Instant::now(),
         };
         self.entries.lock().unwrap().insert(profile.id.clone(), entry);
         Ok(latency)
@@ -402,18 +458,81 @@ impl Registry {
             .ok_or_else(|| AppError::NotConnected(id.to_string()))
     }
 
-    /// Reconnects the driver in place (same profile/endpoint/password) and
-    /// clears the poisoned flag. Used to heal a connection that a cancel left
-    /// mid-protocol, or that the server closed underneath us.
+    /// Reconnects the driver in place (same profile/password) and clears the
+    /// poisoned flag. Used to heal a connection that a cancel left mid-protocol,
+    /// or that the server closed underneath us.
+    ///
+    /// Over SSH this has to go one level deeper. The endpoint is a local port
+    /// served by the tunnel, so reconnecting through a tunnel whose SSH session
+    /// is gone fails forever: the local listener still accepts, but every
+    /// forwarded socket is closed immediately (WSAECONNRESET / os error 10054),
+    /// and no amount of retrying or pressing Reconnect can fix it. So: reuse the
+    /// tunnel while its session is alive — a live tunnel is never torn down, per
+    /// the rule that a working SSH session must not be disconnected — and only
+    /// build a new one when the old session is dead or unusable.
     async fn reconnect(&self, id: &str) -> AppResult<()> {
-        let (driver_arc, profile, endpoint, password) = {
+        let (driver_arc, profile, endpoint, password, ssh_password, tunnel_alive) = {
             let map = self.entries.lock().unwrap();
             let e = map.get(id).ok_or_else(|| AppError::NotConnected(id.to_string()))?;
-            (Arc::clone(&e.driver), e.profile.clone(), e.endpoint.clone(), e.password.clone())
+            (
+                Arc::clone(&e.driver),
+                e.profile.clone(),
+                e.endpoint.clone(),
+                e.password.clone(),
+                e.ssh_password.clone(),
+                // No tunnel (plain TCP) → nothing to rebuild.
+                e.tunnel.as_ref().map(|t| t.is_alive()).unwrap_or(true),
+            )
         };
-        let mut fresh = LiveConnection::connect(&profile, &endpoint, &password)
-            .await
-            .map_err(|e| AppError::Driver(e.message))?;
+
+        let mut fresh: Option<LiveConnection> = None;
+        let mut last_err: Option<String> = None;
+        if tunnel_alive {
+            match LiveConnection::connect(&profile, &endpoint, &password).await {
+                Ok(c) => fresh = Some(c),
+                Err(e) => last_err = Some(e.message),
+            }
+        }
+        if fresh.is_none() && profile.ssh.enabled {
+            let rebuild = !tunnel_alive
+                || last_err.as_deref().map(is_connection_lost).unwrap_or(false);
+            if rebuild {
+                let kafka = profile.system.as_str() == "kafka";
+                let tunnel =
+                    open_tunnel(&profile.ssh, &ssh_password, &profile.host, profile.port, kafka)
+                        .await?;
+                let new_endpoint =
+                    Endpoint { host: "127.0.0.1".into(), port: tunnel.local_port };
+                match LiveConnection::connect(&profile, &new_endpoint, &password).await {
+                    Ok(c) => {
+                        fresh = Some(c);
+                        let old = {
+                            let mut map = self.entries.lock().unwrap();
+                            match map.get_mut(id) {
+                                Some(e) => {
+                                    e.endpoint = new_endpoint;
+                                    e.tunnel.replace(tunnel)
+                                }
+                                // Disconnected while we were rebuilding.
+                                None => Some(tunnel),
+                            }
+                        };
+                        if let Some(t) = old {
+                            t.shutdown().await;
+                        }
+                    }
+                    Err(e) => {
+                        last_err = Some(e.message);
+                        tunnel.shutdown().await;
+                    }
+                }
+            }
+        }
+        let Some(mut fresh) = fresh else {
+            return Err(AppError::Driver(
+                last_err.unwrap_or_else(|| "reconnect failed".into()),
+            ));
+        };
         let session_id = probe_session_id(&mut fresh, profile.system.as_str()).await;
         // Replacing the driver drops the old connection, which closes its socket.
         // That is also what makes the server abandon whatever it was still doing
@@ -422,6 +541,7 @@ impl Registry {
         if let Some(e) = self.entries.lock().unwrap().get_mut(id) {
             e.poisoned = false;
             e.session_id = session_id;
+            e.last_ok = std::time::Instant::now();
         }
         Ok(())
     }
@@ -436,6 +556,91 @@ impl Registry {
             return Ok(());
         }
         self.reconnect(id).await
+    }
+
+    /// Records that the connection was just proven usable.
+    fn touch(&self, id: &str) {
+        if let Some(e) = self.entries.lock().unwrap().get_mut(id) {
+            e.last_ok = std::time::Instant::now();
+        }
+    }
+
+    /// Prepares a connection for use: heal a cancel-poisoned socket, then make
+    /// sure the socket is actually alive before a statement is sent down it.
+    async fn prepare(&self, id: &str) -> AppResult<()> {
+        self.heal_if_poisoned(id).await?;
+        self.ensure_alive(id).await;
+        Ok(())
+    }
+
+    /// Pre-flight liveness check. Only runs when the connection has been idle
+    /// long enough to have been reaped (`PREFLIGHT_IDLE_SECS`); a ping is one
+    /// cheap round trip, and reconnecting *here* is what turns "the server
+    /// closed it while I was reading the results of the last query" from a
+    /// visible error into something the user never sees.
+    ///
+    /// Best effort on purpose: if the check itself cannot heal the connection,
+    /// the statement still runs and the normal loss handling in
+    /// [`Self::exec_statement`] reports it.
+    async fn ensure_alive(&self, id: &str) {
+        let stale = {
+            let map = self.entries.lock().unwrap();
+            match map.get(id) {
+                Some(e) if needs_keepalive(e.profile.system.as_str()) => {
+                    e.last_ok.elapsed() >= keepalive_interval()
+                }
+                _ => false,
+            }
+        };
+        if !stale {
+            return;
+        }
+        if self.ping(id).await {
+            self.touch(id);
+            return;
+        }
+        if self.reconnect(id).await.is_ok() {
+            self.touch(id);
+        }
+    }
+
+    /// Keeps every idle connection warm, and heals the ones that died — called
+    /// on a timer from the app setup (see [`KEEPALIVE_INTERVAL_SECS`]).
+    ///
+    /// Busy connections are skipped rather than waited on: a connection running
+    /// a statement is alive by definition, and blocking here would stall the
+    /// sweep for every other connection behind a long query.
+    pub async fn keepalive_sweep(&self) {
+        let due: Vec<String> = {
+            let map = self.entries.lock().unwrap();
+            map.iter()
+                .filter(|(_, e)| {
+                    needs_keepalive(e.profile.system.as_str())
+                        && e.last_ok.elapsed() >= keepalive_interval()
+                })
+                .map(|(id, _)| id.clone())
+                .collect()
+        };
+        for id in due {
+            let Ok(driver) = self.driver_handle(&id) else { continue };
+            let alive = match driver.try_lock() {
+                Ok(mut d) => d.ping().await,
+                // In use → alive.
+                Err(_) => {
+                    self.touch(&id);
+                    continue;
+                }
+            };
+            if alive {
+                self.touch(&id);
+                continue;
+            }
+            // Dead: rebuild it now (including its SSH tunnel if that is what
+            // went) so the next statement lands on a live socket.
+            if self.reconnect(&id).await.is_ok() {
+                self.touch(&id);
+            }
+        }
     }
 
     /// Marks a connection for reconnect on its next use.
@@ -467,12 +672,19 @@ impl Registry {
         id: &str,
         sql: String,
     ) -> AppResult<Result<crate::drivers::types::StatementOutcome, QueryError>> {
-        self.heal_if_poisoned(id).await?;
+        self.prepare(id).await?;
         let first = self.run_tracked(id, sql.clone()).await?;
-        let Err(qe) = &first else { return Ok(first) };
+        let Err(qe) = &first else {
+            self.touch(id);
+            return Ok(first);
+        };
         // A user cancellation poisons the connection on purpose (handled above).
         let loss = classify_loss(qe);
         if qe.code.as_deref() == Some("CANCELLED") || loss == Loss::None {
+            // A plain SQL error still proves the socket is fine.
+            if loss == Loss::None {
+                self.touch(id);
+            }
             return Ok(first);
         }
 
@@ -489,7 +701,10 @@ impl Registry {
                     self.poison(id);
                     Ok(Err(connection_lost_error(&system, &raw2, false)))
                 }
-                _ => Ok(second),
+                _ => {
+                    self.touch(id);
+                    Ok(second)
+                }
             };
         }
         // Not retried (a write of unknown outcome), or the reconnect failed:
@@ -653,7 +868,7 @@ impl Registry {
         F: FnOnce(Arc<tokio::sync::Mutex<LiveConnection>>) -> Fut,
         Fut: std::future::Future<Output = Result<T, QueryError>>,
     {
-        self.heal_if_poisoned(id).await?;
+        self.prepare(id).await?;
         let driver = self.driver_handle(id)?;
         let res = f(driver).await;
         // The closure is FnOnce (can't retry in place), but if the socket died
@@ -667,7 +882,10 @@ impl Registry {
                 let system = self.system_of(id).unwrap_or_else(|| qe.system.clone());
                 Ok(Err(connection_lost_error(&system, &qe.message, false)))
             }
-            other => Ok(other),
+            other => {
+                self.touch(id);
+                Ok(other)
+            }
         }
     }
 
@@ -735,9 +953,38 @@ impl Registry {
 #[cfg(test)]
 mod tests {
     use super::{
-        classify_loss, connection_lost_error, is_connection_lost, is_read_only, kill_statement,
-        lost_before_send, session_id_query, Loss,
+        classify_loss, connection_lost_error, is_connection_lost, is_read_only, keepalive_interval,
+        kill_statement, lost_before_send, needs_keepalive, session_id_query, Loss,
+        KEEPALIVE_INTERVAL_SECS,
     };
+
+    /// Only the engines that hold one long-lived socket get pinged. Pinging the
+    /// others is either pointless (SQLite is a file, ClickHouse is HTTP) or
+    /// expensive (Kafka's ping is a metadata round trip).
+    #[test]
+    fn keepalive_covers_the_socket_engines_only() {
+        for sys in ["postgres", "mysql", "mariadb", "mssql", "oracle", "redis"] {
+            assert!(needs_keepalive(sys), "{sys} must be kept warm");
+        }
+        for sys in ["sqlite", "clickhouse", "kafka", "nats", "mongodb", "cassandra", "unknown"] {
+            assert!(!needs_keepalive(sys), "{sys} must not be pinged");
+        }
+    }
+
+    #[test]
+    fn keepalive_interval_defaults_and_is_overridable() {
+        std::env::remove_var("DBSTUDIO_KEEPALIVE_SECS");
+        assert_eq!(keepalive_interval().as_secs(), KEEPALIVE_INTERVAL_SECS);
+        std::env::set_var("DBSTUDIO_KEEPALIVE_SECS", "3");
+        assert_eq!(keepalive_interval().as_secs(), 3);
+        // Nonsense and absurd values fall back / clamp instead of turning the
+        // sweep into a busy loop or disabling it by accident.
+        std::env::set_var("DBSTUDIO_KEEPALIVE_SECS", "0");
+        assert_eq!(keepalive_interval().as_secs(), 2);
+        std::env::set_var("DBSTUDIO_KEEPALIVE_SECS", "nonsense");
+        assert_eq!(keepalive_interval().as_secs(), KEEPALIVE_INTERVAL_SECS);
+        std::env::remove_var("DBSTUDIO_KEEPALIVE_SECS");
+    }
     use crate::error::QueryError;
 
     fn err(code: Option<&str>, message: &str) -> QueryError {

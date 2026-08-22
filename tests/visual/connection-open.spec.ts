@@ -19,7 +19,7 @@ test('explorer: disconnected connection shows Not connected, connecting reveals 
   await expect(page.getByText('Not connected.').first()).toBeVisible()
 
   // Connect → demo connects → Explorer shows the tree (the "Not connected" state clears).
-  await page.getByText('Connect', { exact: true }).first().click()
+  await page.getByRole('button', { name: 'Connect', exact: true }).first().click()
   await page.waitForTimeout(600)
   await expect(page.getByText('Not connected.')).toHaveCount(0)
 

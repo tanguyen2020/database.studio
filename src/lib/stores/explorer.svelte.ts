@@ -58,6 +58,13 @@ class ExplorerStore {
   bumpRedis(connId: string) {
     this.redisTick[connId] = (this.redisTick[connId] ?? 0) + 1
   }
+  // A per-connection tick the Explorer tree watches so another component can ask
+  // it to reload from scratch — used by the Connections toolbar Refresh, which
+  // reconnects the connection and then needs the tree re-read from the server.
+  reloadTick = $state<Record<string, number>>({})
+  bumpReload(connId: string) {
+    this.reloadTick[connId] = (this.reloadTick[connId] ?? 0) + 1
+  }
   // NATS: a per-(conn,stream,subject) tick the open subject-messages tab watches so it
   // reloads (→ shows empty) after the sidebar purges that subject's messages.
   natsMsgTick = $state<Record<string, number>>({})

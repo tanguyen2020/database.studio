@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { APP_URL, blockRemoteFonts } from './helpers'
+import { APP_URL, blockRemoteFonts, openDatabaseNode } from './helpers'
 
 // A tab that ran fine, then sat idle: the server reaps the connection, and the
 // next Execute fails. What used to happen is that the failure surfaced as a raw
@@ -86,4 +86,74 @@ test('connections list: the dot stops claiming "connected" after a lost connecti
 
   // Red dot, and the tooltip says why instead of "Connected · N ms".
   await expect(dot).toHaveAttribute('title', /Not connected — .*Connection lost/i)
+})
+
+// The Explorer shows the same failure when the dead connection is the selected
+// one, and its way back must (a) look like a button and (b) actually rebuild the
+// connection. It used to be a bare blue word calling `connect`, which the backend
+// treats as a no-op whenever the base socket still answers a ping — so the derived
+// per-tab connection stayed dead and the next Execute failed the same way.
+test('explorer: the lost-connection state offers a real Retry button that reconnects', async ({
+  page,
+}) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(String(e)))
+  await blockRemoteFonts(page)
+  await page.goto(`${APP_URL}?connLost=1`)
+  await page.waitForSelector('#app > *', { timeout: 15_000 })
+  await page.waitForTimeout(400)
+
+  // Select the Postgres connection so the Explorer is showing its tree…
+  await page.getByText('10.0.1.5', { exact: false }).first().click()
+  await page.waitForTimeout(400)
+  await openDatabaseNode(page)
+  await expect(page.getByText('public', { exact: true }).first()).toBeVisible()
+
+  // …then let a run discover the connection is gone.
+  await page.getByText('10.0.1.5', { exact: false }).first().click({ button: 'right' })
+  await page.waitForTimeout(200)
+  await page.getByText('New Query Console', { exact: true }).first().click()
+  await page.waitForTimeout(600)
+  await page.locator('.cm-content').first().click()
+  await page.keyboard.type('SELECT 1;')
+  await page.keyboard.press('F5')
+  await page.waitForTimeout(800)
+
+  // A real <button> (not a div playing one), with a frame so it reads as clickable.
+  const retry = page.getByRole('button', { name: /Retry connection/ })
+  await expect(retry).toBeVisible()
+  const framed = await retry.evaluate((el) => {
+    const cs = getComputedStyle(el)
+    return {
+      tag: el.tagName,
+      border: parseFloat(cs.borderTopWidth),
+      bg: cs.backgroundColor !== 'rgba(0, 0, 0, 0)',
+    }
+  })
+  expect(framed.tag).toBe('BUTTON')
+  expect(framed.border).toBeGreaterThan(0)
+  expect(framed.bg).toBe(true)
+
+  // Clicking it REBUILDS the connection (reconnect = disconnect + drop derived +
+  // connect), instead of the no-op `connect` on a base socket that still pings.
+  const before = await page.evaluate(() => ({ ...((window as any).__ipcCalls ?? {}) }))
+  await retry.click()
+  await expect(page.getByRole('button', { name: /Retry connection/ })).toHaveCount(0, {
+    timeout: 5_000,
+  })
+  const after = await page.evaluate(() => ({ ...((window as any).__ipcCalls ?? {}) }))
+  expect((after.reconnect ?? 0) - (before.reconnect ?? 0)).toBe(1)
+
+  // Tree is back (re-read over the fresh session) and the editor runs again.
+  await openDatabaseNode(page)
+  await expect(page.getByText('public', { exact: true }).first()).toBeVisible()
+  expect((after.list_schemas ?? 0)).toBeGreaterThan(before.list_schemas ?? 0)
+  await page.locator('.cm-content').first().click()
+  await page.keyboard.press('Control+A')
+  await page.keyboard.type('SELECT * FROM students;')
+  await page.keyboard.press('F5')
+  await page.waitForTimeout(700)
+  await expect(page.getByText(/Rows 1–\d+ of/).first()).toBeVisible()
+
+  expect(errors, `page errors: ${errors.join(String.fromCharCode(10))}`).toEqual([])
 })

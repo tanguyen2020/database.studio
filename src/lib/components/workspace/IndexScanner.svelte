@@ -102,7 +102,7 @@
       {:else}
         {#if result?.suggestions?.length}
           <div style="margin:var(--px-10) var(--px-12);padding:var(--px-10) var(--px-12);border:var(--px-1) solid var(--border2);border-left:var(--px-3) solid #f0a020;border-radius:var(--px-6);background:var(--surface)">
-            <div style="font-size:var(--px-11_5);font-weight:700;color:#f0a020;margin-bottom:var(--px-6)">Missing-index suggestions ({result.suggestions.length})</div>
+            <div style="font-size:var(--px-11_5);font-weight:700;color:var(--sacc-orange);margin-bottom:var(--px-6)">Missing-index suggestions ({result.suggestions.length})</div>
             {#each result.suggestions as s (s.table + s.reason)}
               <div style="font-size:var(--px-11);color:var(--text2);margin-bottom:var(--px-3)">
                 <span class="mono" style="font-weight:600;color:var(--text)">{s.table}{s.columns.length ? ` (${s.columns.join(', ')})` : ''}</span> — {s.reason}{s.estimated_benefit != null ? ` · impact ~${s.estimated_benefit.toFixed(0)}%` : ''}
@@ -122,7 +122,7 @@
                 <td style="padding:var(--px-5) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:var(--text2)">{r.name}</td>
                 <td style="padding:var(--px-5) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:var(--muted)">{r.table}</td>
                 <td style="padding:var(--px-5) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:var(--muted)">{r.columns.join(', ')}</td>
-                <td style="padding:var(--px-5) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:#56b6c2">{r.index_type}</td>
+                <td style="padding:var(--px-5) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:var(--sacc-cyan)">{r.index_type}</td>
                 <td style="padding:var(--px-5) var(--px-10);border-bottom:var(--px-1) solid var(--border)">{r.unique ? '✓' : ''}</td>
                 <td style="padding:var(--px-5) var(--px-10);border-bottom:var(--px-1) solid var(--border)">{r.primary ? '✓' : ''}</td>
                 <td style="padding:var(--px-5) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:var(--muted)">{fmtSize(r.size_bytes)}</td>
@@ -144,12 +144,12 @@
         <div style="font-size:var(--px-11_5);color:var(--text2)">Type: <span class="mono">{sel.index_type}</span> · {sel.unique ? 'unique' : 'non-unique'}{sel.primary ? ' · primary' : ''}</div>
         {#if sel.usage != null}<div style="font-size:var(--px-11_5);color:var(--text2)">Usage: <span class="mono">{sel.usage}</span> scans</div>{/if}
         {#if sel.flags.length}
-          <div style="font-size:var(--px-11_5);color:#f0a020;font-weight:600;margin-top:var(--px-4)">Suggestion</div>
+          <div style="font-size:var(--px-11_5);color:var(--sacc-orange);font-weight:600;margin-top:var(--px-4)">Suggestion</div>
           {#if sel.flags.includes('unused')}<div style="font-size:var(--px-11);color:var(--text2)">Unused — consider DROP (self-confirm).</div>{/if}
           {#if sel.flags.includes('redundant')}<div style="font-size:var(--px-11);color:var(--text2)">Prefix-redundant with another index — likely superfluous.</div>{/if}
           {#if sel.flags.includes('fragmented')}<div style="font-size:var(--px-11);color:var(--text2)">Fragmented &gt;30% — consider REBUILD.</div>{/if}
         {:else}
-          <div style="font-size:var(--px-11_5);color:#27AE60">✓ Healthy</div>
+          <div style="font-size:var(--px-11_5);color:var(--sacc-green)">✓ Healthy</div>
         {/if}
       </div>
     {/if}

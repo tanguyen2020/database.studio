@@ -248,11 +248,35 @@
   // ---- resizers (sidebar width + connection-list height) ----
   let draggingSidebar = $state(false)
   let draggingConnList = $state(false)
+  let draggingConnPanel = $state(false)
+  // Measured, not computed: a split sidebar puts one panel after the other, so a
+  // panel's width is pointer − that panel's own left edge.
+  let explorerAside = $state<HTMLElement | null>(null)
+  let connAside = $state<HTMLElement | null>(null)
+
+  function setPanelWidth(target: 'conn' | 'explorer', e: PointerEvent) {
+    const el = target === 'conn' ? connAside : explorerAside
+    const left = el?.getBoundingClientRect().left ?? 0
+    const w = Math.min(Math.max(e.clientX - left, 170), 480)
+    if (target === 'conn') ui.connPanelWidth = w
+    else ui.sidebarWidth = w
+    ui.persistSizes()
+  }
+
+  // Each vertical resizer resizes the panel on its LEFT, so the handle the user
+  // grabs is always the edge of the panel that moves — in either split order.
+  const middlePanel = $derived<'conn' | 'explorer'>(ui.sidebarLayout === 'right' ? 'explorer' : 'conn')
+  const outerPanel = $derived<'conn' | 'explorer'>(ui.sidebarLayout === 'right' ? 'conn' : 'explorer')
 
   function dragSidebar(e: PointerEvent) {
     if (!draggingSidebar) return
-    ui.sidebarWidth = Math.min(Math.max(e.clientX, 170), 480)
-    ui.persistSizes()
+    setPanelWidth(outerPanel, e)
+  }
+
+  /** Middle resizer — only exists while the sidebar is split. */
+  function dragConnPanel(e: PointerEvent) {
+    if (!draggingConnPanel) return
+    setPanelWidth(middlePanel, e)
   }
 
   function dragConnList(e: PointerEvent) {
@@ -271,28 +295,78 @@
 
   <!-- BODY — dòng 68 -->
   <div style="flex:1;display:flex;min-height:0">
-    <!-- LEFT SIDEBAR — dòng 71 -->
-    <aside
-      style="width:{ui.sidebarWidth}px;flex:none;display:flex;flex-direction:column;background:var(--sidebar);border-right:var(--px-1) solid var(--border);min-height:0"
-    >
-      <ConnectionList />
-      <!-- resizer chiều cao connection list (persist) -->
-      <div
-        style="flex:none;height:var(--px-5);cursor:row-resize;background:var(--border)"
-        role="separator"
-        aria-orientation="horizontal"
-        title="Drag to resize"
-        onpointerdown={(e) => {
-          draggingConnList = true
-          ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
-        }}
-        onpointermove={dragConnList}
-        onpointerup={() => (draggingConnList = false)}
-      ></div>
-      <div style="min-height:0;flex:1;overflow:hidden;display:flex;flex-direction:column">
-        <ObjectExplorer />
-      </div>
-    </aside>
+    {#if ui.sidebarSplit}
+      <!-- SPLIT SIDEBAR — Connections and Explorer as two side-by-side panels.
+           ui.sidebarLayout picks the order: 'left' = Connections | Explorer,
+           'right' = Explorer | Connections (title-bar layout buttons). -->
+      {#snippet connectionsPanel()}
+        <aside
+          bind:this={connAside}
+          data-sidebar-panel="connections"
+          style="width:{ui.connPanelWidth}px;flex:none;display:flex;flex-direction:column;background:var(--sidebar);border-right:var(--px-1) solid var(--border);min-height:0;overflow:hidden"
+        >
+          <ConnectionList />
+        </aside>
+      {/snippet}
+      {#snippet connectionsResizer()}
+        <div
+          style="flex:none;width:var(--px-5);cursor:col-resize;background:var(--border);align-self:stretch"
+          role="separator"
+          aria-orientation="vertical"
+          title={ui.sidebarLayout === 'right' ? 'Drag to resize the Explorer panel' : 'Drag to resize the Connections panel'}
+          onpointerdown={(e) => {
+            draggingConnPanel = true
+            ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+          }}
+          onpointermove={dragConnPanel}
+          onpointerup={() => (draggingConnPanel = false)}
+        ></div>
+      {/snippet}
+      {#snippet explorerPanel()}
+        <aside
+          bind:this={explorerAside}
+          data-sidebar-panel="explorer"
+          style="width:{ui.sidebarWidth}px;flex:none;display:flex;flex-direction:column;background:var(--sidebar);border-right:var(--px-1) solid var(--border);min-height:0;overflow:hidden"
+        >
+          <ObjectExplorer />
+        </aside>
+      {/snippet}
+
+      {#if ui.sidebarLayout === 'right'}
+        {@render explorerPanel()}
+        {@render connectionsResizer()}
+        {@render connectionsPanel()}
+      {:else}
+        {@render connectionsPanel()}
+        {@render connectionsResizer()}
+        {@render explorerPanel()}
+      {/if}
+    {:else}
+      <!-- LEFT SIDEBAR — dòng 71 -->
+      <aside
+        bind:this={explorerAside}
+        data-sidebar-panel="stacked"
+        style="width:{ui.sidebarWidth}px;flex:none;display:flex;flex-direction:column;background:var(--sidebar);border-right:var(--px-1) solid var(--border);min-height:0"
+      >
+        <ConnectionList />
+        <!-- resizer chiều cao connection list (persist) -->
+        <div
+          style="flex:none;height:var(--px-5);cursor:row-resize;background:var(--border)"
+          role="separator"
+          aria-orientation="horizontal"
+          title="Drag to resize"
+          onpointerdown={(e) => {
+            draggingConnList = true
+            ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+          }}
+          onpointermove={dragConnList}
+          onpointerup={() => (draggingConnList = false)}
+        ></div>
+        <div style="min-height:0;flex:1;overflow:hidden;display:flex;flex-direction:column">
+          <ObjectExplorer />
+        </div>
+      </aside>
+    {/if}
 
     <!-- sidebar width resizer — dòng 170 -->
     <div

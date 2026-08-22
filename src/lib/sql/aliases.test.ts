@@ -164,3 +164,30 @@ describe('resolveRef', () => {
     expect(resolveRef(r, 'a')).toEqual({ schema: undefined, table: 'x', alias: 'a' })
   })
 })
+
+describe('parseTableRefs — statements without a FROM clause', () => {
+  it('reads the UPDATE target (so SET can suggest its columns)', () => {
+    expect(parseTableRefs('UPDATE students SET first_name =')).toEqual([{ schema: undefined, table: 'students', alias: undefined }])
+    expect(parseTableRefs('update public.students s set s.')).toEqual([{ schema: 'public', table: 'students', alias: 's' }])
+    expect(parseTableRefs('UPDATE students AS s SET ')).toEqual([{ schema: undefined, table: 'students', alias: 's' }])
+  })
+  it('reads a quoted / dotted UPDATE target', () => {
+    expect(parseTableRefs('UPDATE `ismart-eco`.`course_test` SET ')).toEqual([
+      { schema: 'ismart-eco', table: 'course_test', alias: undefined },
+    ])
+  })
+  it('keeps UPDATE … FROM / JOIN targets as well', () => {
+    expect(parseTableRefs('UPDATE a SET x = b.y FROM b WHERE a.id = b.id').map((r) => r.table)).toEqual(['a', 'b'])
+    expect(parseTableRefs('UPDATE a, b SET a.x = b.x').map((r) => r.table)).toEqual(['a', 'b'])
+  })
+  it('reads INSERT INTO / MERGE INTO targets', () => {
+    expect(parseTableRefs('INSERT INTO students (').map((r) => r.table)).toEqual(['students'])
+    expect(parseTableRefs('MERGE INTO students AS t USING x ON').map((r) => ({ t: r.table, a: r.alias }))).toEqual([
+      { t: 'students', a: 't' },
+    ])
+  })
+  it('does not invent a table when there is nothing to read', () => {
+    expect(parseTableRefs('UPDATE SET')).toEqual([])
+    expect(parseTableRefs('INSERT INTO (a, b)')).toEqual([])
+  })
+})

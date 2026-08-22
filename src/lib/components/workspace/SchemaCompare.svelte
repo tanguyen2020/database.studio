@@ -402,7 +402,7 @@
 
   {#if warn}
     <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:var(--px-10);color:var(--muted);padding:var(--px-30)">
-      <span style="font-size:var(--px-26);color:#f0a020">⚠</span>
+      <span style="font-size:var(--px-26);color:var(--sacc-orange)">⚠</span>
       <div style="font-size:var(--px-13);max-width:var(--px-420);text-align:center;line-height:1.5">{warn}</div>
     </div>
   {:else if !srcConn || !tgtConn}

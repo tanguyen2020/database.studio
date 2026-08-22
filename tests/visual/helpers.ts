@@ -2,8 +2,10 @@ import type { Page } from '@playwright/test'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
-export const PROTO_URL = 'http://localhost:4174/Database%20Studio.dc.html'
-export const APP_URL = 'http://localhost:5173/'
+export const PROTO_URL = process.env.DS_PROTO_URL ?? 'http://localhost:4174/Database%20Studio.dc.html'
+// Port 5173 by default (vite.config.ts); DS_APP_URL lets a run point at another port
+// when 5173 is taken by a different project on the machine.
+export const APP_URL = process.env.DS_APP_URL ?? 'http://localhost:5173/'
 
 /**
  * Chặn mọi request font bên ngoài (fonts.googleapis.com / fonts.gstatic.com).

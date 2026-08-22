@@ -2837,6 +2837,13 @@ mod ssh_support {
 
     /// SSH server + echo TCP server, trả (ssh_port, echo_port).
     pub async fn start() -> (u16, u16) {
+        start_with_inactivity(None).await
+    }
+
+    /// Như [`start`], nhưng server tự ĐÓNG phiên khi không có traffic trong
+    /// `inactivity` — đúng cách sshd (`ClientAliveInterval`) hay một NAT/firewall
+    /// bỏ rơi phiên SSH đang rảnh. Dùng để kiểm tunnel im lặng có sống nổi không.
+    pub async fn start_with_inactivity(inactivity: Option<std::time::Duration>) -> (u16, u16) {
         // echo server: viết gì nhận lại nấy
         let echo = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let echo_port = echo.local_addr().unwrap().port();
@@ -2864,6 +2871,7 @@ mod ssh_support {
         .unwrap();
         let config = Arc::new(server::Config {
             keys: vec![key],
+            inactivity_timeout: inactivity.or(Some(std::time::Duration::from_secs(600))),
             ..Default::default()
         });
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
@@ -2905,6 +2913,186 @@ async fn ssh_tunnel_forwards_and_rejects_bad_auth() {
     let n = sock.read(&mut buf).await.unwrap();
     assert_eq!(&buf[..n], b"xin chao qua tunnel");
     tunnel.shutdown().await;
+}
+
+/// Triệu chứng người dùng báo: mọi thứ chạy tốt, để yên 2–3 phút, rồi mọi query
+/// chết với "An existing connection was forcibly closed by the remote host (os
+/// error 10054)". Qua SSH, lỗi đó đến từ tunnel: không có gói nào được gửi nên
+/// thứ nằm giữa (chính sách idle của sshd, một luật NAT/firewall) bỏ rơi phiên
+/// SSH, và mọi socket forward chết theo.
+///
+/// Test này chạy đúng cơ chế đó với một server đóng phiên khi rảnh, và kiểm CẢ
+/// HAI chiều: có keepalive thì tunnel sống qua cửa sổ idle, KHÔNG có thì cùng
+/// tunnel đó chết — nên pass ở đây không thể là pass rỗng.
+#[tokio::test]
+async fn ssh_tunnel_keepalive_outlives_a_server_idle_timeout() {
+    use database_studio_lib::connections::profile::{SshAuthMethod, SshConfig};
+    use database_studio_lib::connections::tunnel::open_tunnel;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    // Server cúp máy sau 3s im lặng; ta ngồi im 8s.
+    let (ssh_port, echo_port) =
+        ssh_support::start_with_inactivity(Some(Duration::from_secs(3))).await;
+    let ssh = SshConfig {
+        enabled: true,
+        host: "127.0.0.1".into(),
+        port: ssh_port,
+        user: "tester".into(),
+        auth: SshAuthMethod::Password,
+        password_enc: String::new(),
+        key_path: String::new(),
+    };
+
+    async fn echo_through(port: u16) -> Option<Vec<u8>> {
+        let mut sock = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.ok()?;
+        sock.write_all(b"still here").await.ok()?;
+        let mut buf = [0u8; 32];
+        let n = tokio::time::timeout(Duration::from_secs(5), sock.read(&mut buf))
+            .await
+            .ok()?
+            .ok()?;
+        if n == 0 {
+            return None;
+        }
+        Some(buf[..n].to_vec())
+    }
+
+    // (a) keepalive mỗi giây → server không bao giờ thấy phiên này rảnh.
+    std::env::set_var("DBSTUDIO_SSH_KEEPALIVE_SECS", "1");
+    let alive = open_tunnel(&ssh, "test123", "127.0.0.1", echo_port, false).await.unwrap();
+    tokio::time::sleep(Duration::from_secs(8)).await;
+    assert!(alive.is_alive(), "keepalive phải giữ phiên SSH sống qua idle timeout");
+    assert_eq!(
+        echo_through(alive.local_port).await.as_deref(),
+        Some(&b"still here"[..]),
+        "tunnel phải còn forward được sau 8s im lặng"
+    );
+    alive.shutdown().await;
+
+    // (b) đối chứng: không keepalive trong cửa sổ đó → server bỏ phiên, đúng như
+    // lỗi cũ (config mặc định của russh không gửi gì cả).
+    std::env::set_var("DBSTUDIO_SSH_KEEPALIVE_SECS", "3600");
+    let dead = open_tunnel(&ssh, "test123", "127.0.0.1", echo_port, false).await.unwrap();
+    tokio::time::sleep(Duration::from_secs(8)).await;
+    assert!(
+        !dead.is_alive(),
+        "không keepalive thì phiên PHẢI chết — nếu không, (a) chẳng chứng minh điều gì"
+    );
+    assert!(
+        echo_through(dead.local_port).await.is_none(),
+        "tunnel đã chết thì forward phải thất bại"
+    );
+    dead.shutdown().await;
+    std::env::remove_var("DBSTUDIO_SSH_KEEPALIVE_SECS");
+}
+
+/// Cùng lỗi đó nhưng cao hơn một tầng, với database thật sau tunnel: phiên SSH
+/// chết trong lúc connection ngồi rảnh, rồi người dùng bấm Execute.
+///
+/// Trước đây đây là ngõ chết: endpoint là cổng cục bộ do tunnel phục vụ, nên
+/// reconnect qua một tunnel đã mất phiên thì thất bại mãi mãi — listener vẫn
+/// accept, nhưng mọi socket forward bị đóng ngay, và bấm Reconnect cũng không
+/// cứu được. Registry phải nhận ra và dựng tunnel MỚI, rồi chạy statement.
+#[tokio::test]
+async fn pg_over_ssh_tunnel_recovers_after_the_ssh_session_dies() {
+    use database_studio_lib::connections::profile::{
+        ConnectionProfile, Environment, SqliteMode, SshAuthMethod, SshConfig,
+    };
+    use database_studio_lib::connections::registry::Registry;
+    use database_studio_lib::drivers::types::SystemType;
+
+    let (_c, pg_port) = start_pg().await;
+    let (ssh_port, _echo) =
+        ssh_support::start_with_inactivity(Some(Duration::from_secs(3))).await;
+    // Cố ý TẮT keepalive: ta MUỐN phiên chết để chứng minh phần sửa chữa.
+    std::env::set_var("DBSTUDIO_SSH_KEEPALIVE_SECS", "3600");
+    // Và tắt luôn pre-flight ping, để chính statement gặp socket đã chết đúng
+    // như cú Execute của người dùng.
+    std::env::set_var("DBSTUDIO_KEEPALIVE_SECS", "3600");
+
+    let profile = ConnectionProfile {
+        id: "pg-ssh".into(),
+        name: "pg over ssh".into(),
+        system: SystemType::Postgres,
+        host: "127.0.0.1".into(),
+        port: pg_port,
+        database: "testdb".into(),
+        user: "postgres".into(),
+        password_enc: String::new(),
+        group: String::new(),
+        env: Environment::Development,
+        ssh: SshConfig {
+            enabled: true,
+            host: "127.0.0.1".into(),
+            port: ssh_port,
+            user: "tester".into(),
+            auth: SshAuthMethod::Password,
+            password_enc: String::new(),
+            key_path: String::new(),
+        },
+        ssl: false,
+        ssl_ca: String::new(),
+        ssl_cert: String::new(),
+        ssl_key: String::new(),
+        sqlite_path: String::new(),
+        sqlite_mode: SqliteMode::ReadWrite,
+        mssql_auth: String::new(),
+        schema_registry_url: String::new(),
+        cassandra_dc: String::new(),
+        cassandra_consistency: String::new(),
+    };
+
+    let registry = Registry::default();
+    let deadline = Instant::now() + Duration::from_secs(240);
+    loop {
+        match registry.connect(profile.clone(), PASS.into(), "test123".into()).await {
+            Ok(_) => break,
+            Err(e) => {
+                assert!(Instant::now() < deadline, "connect qua SSH hết 240s: {e:?}");
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+        }
+    }
+
+    async fn pid(reg: &Registry) -> String {
+        let out = reg
+            .exec_statement("pg-ssh", "SELECT pg_backend_pid() AS pid".into())
+            .await
+            .unwrap()
+            .expect("statement qua tunnel");
+        let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+        result.rows[0]["pid"].to_string()
+    }
+
+    let before = pid(&registry).await;
+    // Bỏ đi lâu hơn giới hạn idle của SSH server.
+    tokio::time::sleep(Duration::from_secs(8)).await;
+
+    // Execute lại — đây đúng là lúc trước kia sinh ra
+    // "error communicating with database: … (os error 10054)" và không bao giờ khỏi.
+    let out = registry
+        .exec_statement("pg-ssh", "SELECT 42 AS n".into())
+        .await
+        .unwrap()
+        .expect("một phiên SSH chết phải được dựng lại, không đẩy lỗi ra người dùng");
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    assert_eq!(result.rows[0]["n"], serde_json::json!(42));
+    let after = pid(&registry).await;
+    assert_ne!(
+        before, after,
+        "phải là backend MỚI (cùng pid = phiên SSH chưa hề chết → test không chứng minh gì)"
+    );
+
+    // Và nó tiếp tục chạy được: tunnel dựng lại là tunnel đầy đủ.
+    tokio::time::sleep(Duration::from_secs(8)).await;
+    registry
+        .exec_statement("pg-ssh", "CREATE TABLE t_ssh(id int)".into())
+        .await
+        .unwrap()
+        .expect("ghi sau cú chết SSH thứ hai");
+    registry.disconnect("pg-ssh").await.unwrap();
+    std::env::remove_var("DBSTUDIO_SSH_KEEPALIVE_SECS");
+    std::env::remove_var("DBSTUDIO_KEEPALIVE_SECS");
 }
 
 // ---------------------------------------------------------------------------
@@ -6870,6 +7058,105 @@ async fn mysql_idle_connection_past_wait_timeout_is_healed() {
     assert_eq!(result.rows[0]["c"], serde_json::json!(1), "the retry must not double-apply the write");
 }
 
+/// The other half of the promise: an open connection must simply keep working,
+/// not "fail once, then heal". The background keepalive sweep pings whatever has
+/// been idle, which stops the server's `wait_timeout` from ever expiring — so the
+/// user's next Execute runs on the SAME server session instead of meeting a dead
+/// socket first.
+///
+/// Both directions are checked on the same container, so a pass cannot be
+/// vacuous: with the sweep the session id is unchanged; without it the very same
+/// idle stretch gets the connection reaped.
+#[tokio::test]
+async fn mysql_keepalive_sweep_keeps_an_idle_connection_alive() {
+    use database_studio_lib::connections::profile::{
+        ConnectionProfile, Environment, SqliteMode, SshConfig,
+    };
+    use database_studio_lib::connections::registry::Registry;
+    use database_studio_lib::drivers::types::SystemType;
+
+    // 5-second idle limit — the real mechanism, just impatient.
+    let c = GenericImage::new("mysql", "8")
+        .with_exposed_port(3306.tcp())
+        .with_env_var("MYSQL_ROOT_PASSWORD", PASS)
+        .with_env_var("MYSQL_DATABASE", "testdb")
+        .with_cmd(vec!["--wait-timeout=5", "--interactive-timeout=5"])
+        .start()
+        .await
+        .expect("start mysql container");
+    let port = c.get_host_port_ipv4(3306).await.unwrap();
+
+    let profile = ConnectionProfile {
+        id: "my-warm".into(),
+        name: "warm".into(),
+        system: SystemType::Mysql,
+        host: "localhost".into(),
+        port,
+        database: "testdb".into(),
+        user: "root".into(),
+        password_enc: String::new(),
+        group: String::new(),
+        env: Environment::Development,
+        ssh: SshConfig::default(),
+        ssl: false,
+        ssl_ca: String::new(),
+        ssl_cert: String::new(),
+        ssl_key: String::new(),
+        sqlite_path: String::new(),
+        sqlite_mode: SqliteMode::ReadWrite,
+        mssql_auth: String::new(),
+        schema_registry_url: String::new(),
+        cassandra_dc: String::new(),
+        cassandra_consistency: String::new(),
+    };
+
+    // Sweep every 2s, i.e. inside the server's 5s idle window.
+    std::env::set_var("DBSTUDIO_KEEPALIVE_SECS", "2");
+    let registry = Registry::default();
+    let deadline = Instant::now() + Duration::from_secs(240);
+    loop {
+        match registry.connect(profile.clone(), PASS.into(), String::new()).await {
+            Ok(_) => break,
+            Err(e) => {
+                assert!(Instant::now() < deadline, "mysql connect hết 240s: {e:?}");
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+        }
+    }
+
+    async fn session_id(reg: &Registry) -> String {
+        let out = reg
+            .exec_statement("my-warm", "SELECT CONNECTION_ID() AS id".into())
+            .await
+            .unwrap()
+            .expect("session id");
+        let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+        result.rows[0]["id"].to_string()
+    }
+
+    let before = session_id(&registry).await;
+    // (a) idle for 12s — well past wait_timeout — while the sweep runs, exactly as
+    // the app's background task does.
+    for _ in 0..6 {
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        registry.keepalive_sweep().await;
+    }
+    let after = session_id(&registry).await;
+    assert_eq!(
+        before, after,
+        "keepalive phải giữ ĐÚNG phiên đó (đổi id = server đã bỏ connection, tức không giữ được)"
+    );
+
+    // (b) đối chứng: cùng khoảng rảnh đó mà không sweep → server bỏ connection.
+    tokio::time::sleep(Duration::from_secs(12)).await;
+    let healed = session_id(&registry).await;
+    assert_ne!(
+        after, healed,
+        "không keepalive thì wait_timeout PHẢI bỏ connection — nếu không, (a) chẳng chứng minh gì"
+    );
+    std::env::remove_var("DBSTUDIO_KEEPALIVE_SECS");
+}
+
 /// Server-side session id of the live MySQL connection (a new id means the
 /// registry rebuilt the connection).
 async fn mysql_session_id(registry: &database_studio_lib::connections::registry::Registry) -> String {
@@ -7534,4 +7821,839 @@ async fn kafka_fetch_page_reads_one_bounded_window_and_walks_the_log() {
     assert_eq!(pe.retained, 0, "topic rong that su -> retained = 0");
     assert!(!pe.has_older);
     eprintln!("CHK fetch_page: 3 trang phu kin 250 message, moi lan chi doc <= 100");
+}
+
+// ---------------------------------------------------------------------------
+// New Database → character set / collation options.
+// Every value the dialog offers is READ FROM THE SERVER; these tests run the exact
+// queries from `src/lib/sql/database-options.ts` and the exact DDL that
+// `genCreateDatabase(system, name, opts)` emits, then verify the catalog.
+// ---------------------------------------------------------------------------
+
+/// Read one column of a rows-returning statement into a Vec<String>.
+async fn pg_col(drv: &mut PgDriver, sql: &str, col: &str) -> Vec<String> {
+    let out = drv.exec(sql).await.unwrap_or_else(|e| panic!("{sql}\n{}", e.message));
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows: {sql}") };
+    result
+        .rows
+        .iter()
+        .map(|r| match &r[col] {
+            serde_json::Value::String(s) => s.clone(),
+            v => v.to_string(),
+        })
+        .collect()
+}
+
+async fn my_col(drv: &mut MySqlDriver, sql: &str, col: &str) -> Vec<String> {
+    let out = drv.exec(sql).await.unwrap_or_else(|e| panic!("{sql}\n{}", e.message));
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows: {sql}") };
+    result
+        .rows
+        .iter()
+        .map(|r| match &r[col] {
+            serde_json::Value::String(s) => s.clone(),
+            v => v.to_string(),
+        })
+        .collect()
+}
+
+async fn ms_col(drv: &mut MssqlDriver, sql: &str, col: &str) -> Vec<String> {
+    let out = drv.exec(sql).await.unwrap_or_else(|e| panic!("{sql}\n{}", e.message));
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows: {sql}") };
+    result
+        .rows
+        .iter()
+        .map(|r| match &r[col] {
+            serde_json::Value::String(s) => s.clone(),
+            v => v.to_string(),
+        })
+        .collect()
+}
+
+/// PostgreSQL: encodings + locales + template1 defaults come from the server, and
+/// `TEMPLATE template0 ENCODING … LC_COLLATE … LC_CTYPE …` (what the dialog emits)
+/// really creates a database with those settings. Also proves WHY template0 is in
+/// the generated DDL: without it PostgreSQL rejects a locale that differs from the
+/// template database.
+#[tokio::test]
+async fn pg_new_database_encoding_and_locale_options_are_real() {
+    let (_c, port) = start_pg().await;
+    let params = PgConnParams {
+        host: "localhost".into(),
+        port,
+        database: "testdb".into(),
+        user: "postgres".into(),
+        password: PASS.into(),
+        ssl: false,
+        ssl_ca: String::new(),
+        ssl_cert: String::new(),
+        ssl_key: String::new(),
+    };
+    let mut drv = retry("postgres", || PgDriver::connect(&params)).await;
+
+    // buildPgEncodingsQuery()
+    let encodings = pg_col(
+        &mut drv,
+        "SELECT pg_encoding_to_char(i) AS name\nFROM generate_series(0, 50) AS i\nWHERE pg_encoding_to_char(i) <> ''\nORDER BY 1",
+        "name",
+    )
+    .await;
+    assert!(encodings.len() > 5, "server phai tra nhieu encoding, got {encodings:?}");
+    assert!(encodings.iter().any(|e| e == "UTF8"), "UTF8 phai co: {encodings:?}");
+    assert!(encodings.iter().any(|e| e == "LATIN1"), "LATIN1 phai co: {encodings:?}");
+
+    // buildPgLocalesQuery() + buildPgLocalesFallbackQuery()
+    let locales = pg_col(
+        &mut drv,
+        "SELECT locale FROM (\n  SELECT DISTINCT collcollate AS locale FROM pg_collation WHERE collcollate IS NOT NULL AND collcollate <> ''\n  UNION SELECT DISTINCT collctype FROM pg_collation WHERE collctype IS NOT NULL AND collctype <> ''\n  UNION SELECT DISTINCT datcollate FROM pg_database\n  UNION SELECT DISTINCT datctype FROM pg_database\n) t\nORDER BY locale",
+        "locale",
+    )
+    .await;
+    assert!(!locales.is_empty(), "locale list khong duoc rong");
+    assert!(locales.iter().any(|l| l == "C"), "locale C phai co: {locales:?}");
+    let fallback = pg_col(
+        &mut drv,
+        "SELECT locale FROM (\n  SELECT DISTINCT datcollate AS locale FROM pg_database\n  UNION SELECT DISTINCT datctype FROM pg_database\n) t\nORDER BY locale",
+        "locale",
+    )
+    .await;
+    assert!(!fallback.is_empty(), "fallback locale list khong duoc rong");
+
+    // buildPgDefaultsQuery() — what a bare CREATE DATABASE copies
+    let out = drv
+        .exec("SELECT pg_encoding_to_char(encoding) AS encoding, datcollate AS lc_collate, datctype AS lc_ctype\nFROM pg_database\nWHERE datname = 'template1'")
+        .await
+        .unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    let def_enc = result.rows[0]["encoding"].as_str().unwrap().to_string();
+    let def_coll = result.rows[0]["lc_collate"].as_str().unwrap().to_string();
+    assert!(!def_enc.is_empty() && !def_coll.is_empty());
+    assert!(
+        encodings.contains(&def_enc),
+        "encoding mac dinh {def_enc} phai nam trong danh sach dropdown"
+    );
+    assert!(
+        locales.contains(&def_coll),
+        "locale mac dinh {def_coll} phai nam trong danh sach dropdown"
+    );
+
+    // Why the generated DDL always carries TEMPLATE template0: a locale different
+    // from the template database is rejected otherwise.
+    if def_coll != "C" {
+        let err = drv
+            .exec("CREATE DATABASE it_newdb_no_template LC_COLLATE 'C' LC_CTYPE 'C'")
+            .await
+            .expect_err("PG phai tu choi locale khac template1 khi khong dung template0");
+        assert!(
+            err.message.to_lowercase().contains("incompatible") || err.message.to_lowercase().contains("template"),
+            "loi phai noi ve template/incompatible: {}",
+            err.message
+        );
+    }
+
+    // Exactly what genCreateDatabase('postgres', 'it_newdb_c', {encoding:'UTF8', lcCollate:'C', lcCtype:'C'}) emits
+    drv.exec("CREATE DATABASE \"it_newdb_c\"\n  TEMPLATE template0\n  ENCODING 'UTF8'\n  LC_COLLATE 'C'\n  LC_CTYPE 'C';")
+        .await
+        .expect("CREATE DATABASE voi ENCODING/LC_* phai chay");
+    let out = drv
+        .exec("SELECT pg_encoding_to_char(encoding) AS encoding, datcollate AS lc_collate, datctype AS lc_ctype FROM pg_database WHERE datname = 'it_newdb_c'")
+        .await
+        .unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    assert_eq!(result.total, 1, "database moi phai ton tai");
+    assert_eq!(result.rows[0]["encoding"], serde_json::json!("UTF8"));
+    assert_eq!(result.rows[0]["lc_collate"], serde_json::json!("C"), "LC_COLLATE phai ap dung that");
+    assert_eq!(result.rows[0]["lc_ctype"], serde_json::json!("C"));
+
+    // And the unchanged default path (no options picked) still works: plain statement.
+    drv.exec("CREATE DATABASE \"it_newdb_plain\";").await.expect("plain CREATE DATABASE");
+    let out = drv
+        .exec("SELECT pg_encoding_to_char(encoding) AS encoding, datcollate AS lc_collate FROM pg_database WHERE datname = 'it_newdb_plain'")
+        .await
+        .unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    assert_eq!(result.rows[0]["encoding"], serde_json::json!(def_enc.clone()), "bare CREATE = default server");
+    assert_eq!(result.rows[0]["lc_collate"], serde_json::json!(def_coll.clone()));
+
+    drv.exec("DROP DATABASE it_newdb_c").await.unwrap();
+    drv.exec("DROP DATABASE it_newdb_plain").await.unwrap();
+}
+
+/// MySQL 8: the charset/collation lists come from information_schema (CAST AS CHAR
+/// so the binary-charset columns decode as text, not hex), the server default comes
+/// from @@character_set_server/@@collation_server, and
+/// `CREATE DATABASE … CHARACTER SET … COLLATE …` really applies them.
+#[tokio::test]
+async fn mysql_new_database_charset_and_collation_options_are_real() {
+    let c = GenericImage::new("mysql", "8")
+        .with_exposed_port(3306.tcp())
+        .with_env_var("MYSQL_ROOT_PASSWORD", PASS)
+        .with_env_var("MYSQL_DATABASE", "testdb")
+        .start()
+        .await
+        .expect("start mysql container");
+    let port = c.get_host_port_ipv4(3306).await.unwrap();
+    let params = MySqlConnParams {
+        host: "localhost".into(),
+        port,
+        database: "testdb".into(),
+        user: "root".into(),
+        password: PASS.into(),
+        ssl: false,
+        ssl_ca: String::new(),
+        ssl_cert: String::new(),
+        ssl_key: String::new(),
+    };
+    let mut drv = retry("mysql", || MySqlDriver::connect(&params, "mysql")).await;
+    assert_new_database_charset_options(&mut drv).await;
+}
+
+/// MariaDB variant — same contract, different server (its catalogs and
+/// @@collation_server values differ from MySQL 8, so it needs its own proof).
+#[tokio::test]
+async fn mariadb_new_database_charset_and_collation_options_are_real() {
+    let c = GenericImage::new("mariadb", "11")
+        .with_exposed_port(3306.tcp())
+        .with_env_var("MARIADB_ROOT_PASSWORD", PASS)
+        .with_env_var("MARIADB_DATABASE", "testdb")
+        .start()
+        .await
+        .expect("start mariadb container");
+    let port = c.get_host_port_ipv4(3306).await.unwrap();
+    let params = MySqlConnParams {
+        host: "localhost".into(),
+        port,
+        database: "testdb".into(),
+        user: "root".into(),
+        password: PASS.into(),
+        ssl: false,
+        ssl_ca: String::new(),
+        ssl_cert: String::new(),
+        ssl_key: String::new(),
+    };
+    let mut drv = retry("mariadb", || MySqlDriver::connect(&params, "mariadb")).await;
+    assert_new_database_charset_options(&mut drv).await;
+}
+
+async fn assert_new_database_charset_options(drv: &mut MySqlDriver) {
+    // buildCharsetsQuery()
+    let charsets = my_col(
+        drv,
+        "SELECT CAST(CHARACTER_SET_NAME AS CHAR) AS name, CAST(DEFAULT_COLLATE_NAME AS CHAR) AS default_collation\nFROM information_schema.CHARACTER_SETS\nORDER BY CHARACTER_SET_NAME",
+        "name",
+    )
+    .await;
+    assert!(charsets.len() > 10, "server phai tra nhieu charset: {}", charsets.len());
+    assert!(charsets.iter().any(|c| c == "utf8mb4"), "utf8mb4 phai co: {charsets:?}");
+    assert!(
+        charsets.iter().all(|c| !c.starts_with("0x")),
+        "CAST AS CHAR phai cho text, khong phai hex: {charsets:?}"
+    );
+
+    // buildAllCollationsQuery()
+    let out = drv
+        .exec("SELECT CAST(COLLATION_NAME AS CHAR) AS name, CAST(CHARACTER_SET_NAME AS CHAR) AS charset, IS_DEFAULT AS is_default\nFROM information_schema.COLLATIONS\nORDER BY CHARACTER_SET_NAME, COLLATION_NAME")
+        .await
+        .unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    assert!(result.rows.len() > 50, "phai co nhieu collation: {}", result.rows.len());
+    let utf8_colls: Vec<String> = result
+        .rows
+        .iter()
+        .filter(|r| r["charset"].as_str() == Some("utf8mb4"))
+        .map(|r| r["name"].as_str().unwrap().to_string())
+        .collect();
+    assert!(utf8_colls.len() > 3, "utf8mb4 phai co nhieu collation: {utf8_colls:?}");
+    // Every collation either belongs to a charset the other query listed (the UI
+    // filters on it) or carries NO charset at all: MariaDB 10.10+ ships contextually
+    // typed unicode collations (uca1400_*) whose CHARACTER_SET_NAME is NULL and which
+    // apply to any charset -> the UI must keep showing them under every charset.
+    let mut charsetless: Vec<String> = Vec::new();
+    for r in &result.rows {
+        let cs = r["charset"].as_str().unwrap_or("").to_string();
+        if cs.is_empty() {
+            charsetless.push(r["name"].as_str().unwrap_or("").to_string());
+            continue;
+        }
+        assert!(charsets.contains(&cs), "charset {cs} cua collation phai nam trong CHARACTER_SETS");
+    }
+    if !charsetless.is_empty() {
+        println!("collation khong gan charset (NULL): {} vi du {:?}", charsetless.len(), &charsetless[..charsetless.len().min(3)]);
+    }
+
+    // buildServerCharsetQuery() — the "Server default (…)" label
+    let out = drv
+        .exec("SELECT CAST(@@character_set_server AS CHAR) AS charset, CAST(@@collation_server AS CHAR) AS collation")
+        .await
+        .unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    let srv_cs = result.rows[0]["charset"].as_str().unwrap().to_string();
+    let srv_coll = result.rows[0]["collation"].as_str().unwrap().to_string();
+    assert!(charsets.contains(&srv_cs), "charset mac dinh {srv_cs} phai trong danh sach");
+    assert!(!srv_coll.is_empty());
+
+    // Pick a real collation from the server list that is NOT the default → prove the
+    // clause is applied (not silently ignored).
+    let pick = utf8_colls
+        .iter()
+        .find(|c| **c != srv_coll)
+        .cloned()
+        .expect("phai co collation utf8mb4 khac default");
+    // exactly what genCreateDatabase('mysql', 'it_newdb_cs', {charset, collation}) emits
+    let ddl = format!("CREATE DATABASE `it_newdb_cs` CHARACTER SET utf8mb4 COLLATE {pick};");
+    drv.exec(&ddl).await.unwrap_or_else(|e| panic!("{ddl}\n{}", e.message));
+    let out = drv
+        .exec("SELECT CAST(DEFAULT_CHARACTER_SET_NAME AS CHAR) AS charset, CAST(DEFAULT_COLLATION_NAME AS CHAR) AS collation FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = 'it_newdb_cs'")
+        .await
+        .unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    assert_eq!(result.total, 1, "database moi phai ton tai");
+    assert_eq!(result.rows[0]["charset"], serde_json::json!("utf8mb4"));
+    assert_eq!(result.rows[0]["collation"], serde_json::json!(pick.clone()), "COLLATE phai ap dung that");
+
+    // COLLATE alone (charset left on server default) is valid too
+    let ddl2 = format!("CREATE DATABASE `it_newdb_conly` COLLATE {pick};");
+    drv.exec(&ddl2).await.unwrap_or_else(|e| panic!("{ddl2}\n{}", e.message));
+    let out = drv
+        .exec("SELECT CAST(DEFAULT_COLLATION_NAME AS CHAR) AS collation FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = 'it_newdb_conly'")
+        .await
+        .unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    assert_eq!(result.rows[0]["collation"], serde_json::json!(pick.clone()));
+
+    // Unchanged default path: bare CREATE DATABASE inherits the server default.
+    drv.exec("CREATE DATABASE `it_newdb_plain`;").await.unwrap();
+    let out = drv
+        .exec("SELECT CAST(DEFAULT_COLLATION_NAME AS CHAR) AS collation FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = 'it_newdb_plain'")
+        .await
+        .unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    assert_eq!(
+        result.rows[0]["collation"],
+        serde_json::json!(srv_coll.clone()),
+        "bare CREATE = collation_server"
+    );
+
+    for db in ["it_newdb_cs", "it_newdb_conly", "it_newdb_plain"] {
+        drv.exec(&format!("DROP DATABASE `{db}`")).await.unwrap();
+    }
+}
+
+/// SQL Server: the collation list comes from sys.fn_helpcollations(), the instance
+/// default from SERVERPROPERTY('Collation'), and `CREATE DATABASE [x] COLLATE y`
+/// really applies it.
+#[tokio::test]
+async fn mssql_new_database_collation_options_are_real() {
+    let c = GenericImage::new("mcr.microsoft.com/mssql/server", "2022-latest")
+        .with_exposed_port(1433.tcp())
+        .with_env_var("ACCEPT_EULA", "Y")
+        .with_env_var("MSSQL_SA_PASSWORD", MSSQL_PASS)
+        .start()
+        .await
+        .expect("start mssql container");
+    let port = c.get_host_port_ipv4(1433).await.unwrap();
+    let params = MssqlConnParams {
+        host: "localhost".into(),
+        port,
+        database: "".into(),
+        user: "sa".into(),
+        password: MSSQL_PASS.into(),
+        ssl: false,
+        ssl_ca: String::new(),
+        auth: "sql".into(),
+    };
+    let mut drv = retry("mssql", || MssqlDriver::connect(&params)).await;
+
+    // buildMssqlCollationsQuery()
+    let colls = ms_col(&mut drv, "SELECT name FROM sys.fn_helpcollations() ORDER BY name", "name").await;
+    assert!(colls.len() > 100, "instance phai tra nhieu collation: {}", colls.len());
+
+    // buildMssqlServerCollationQuery()
+    let srv = ms_col(
+        &mut drv,
+        "SELECT CONVERT(nvarchar(128), SERVERPROPERTY('Collation')) AS collation",
+        "collation",
+    )
+    .await;
+    let srv_coll = srv.first().cloned().unwrap_or_default();
+    assert!(!srv_coll.is_empty(), "SERVERPROPERTY('Collation') phai co gia tri");
+    assert!(
+        colls.contains(&srv_coll),
+        "collation mac dinh {srv_coll} phai nam trong fn_helpcollations()"
+    );
+
+    // pick a real, different collation from the server's own list
+    let pick = colls
+        .iter()
+        .find(|c| **c != srv_coll && c.starts_with("Vietnamese_CI_AS"))
+        .or_else(|| colls.iter().find(|c| **c != srv_coll && c.starts_with("Latin1_General_CS_AS")))
+        .or_else(|| colls.iter().find(|c| **c != srv_coll))
+        .cloned()
+        .expect("phai co collation khac default");
+    // exactly what genCreateDatabase('mssql', 'it_newdb_coll', {collation: pick}) emits
+    let ddl = format!("CREATE DATABASE [it_newdb_coll] COLLATE {pick};");
+    drv.exec(&ddl).await.unwrap_or_else(|e| panic!("{ddl}\n{}", e.message));
+    let out = drv
+        .exec("SELECT collation_name FROM sys.databases WHERE name = 'it_newdb_coll'")
+        .await
+        .unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    assert_eq!(result.total, 1, "database moi phai ton tai");
+    assert_eq!(
+        result.rows[0]["collation_name"],
+        serde_json::json!(pick.clone()),
+        "COLLATE phai ap dung that"
+    );
+
+    // Unchanged default path.
+    drv.exec("CREATE DATABASE [it_newdb_plain];").await.unwrap();
+    let out = drv
+        .exec("SELECT collation_name FROM sys.databases WHERE name = 'it_newdb_plain'")
+        .await
+        .unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    assert_eq!(
+        result.rows[0]["collation_name"],
+        serde_json::json!(srv_coll.clone()),
+        "bare CREATE = instance default"
+    );
+
+    drv.exec("DROP DATABASE it_newdb_coll").await.unwrap();
+    drv.exec("DROP DATABASE it_newdb_plain").await.unwrap();
+}
+
+/// BENCH (ignored) — how the NATS subject-message pager behaves on a stream holding
+/// 1,000,000 messages. Seeds ONE stream with two subjects on purpose:
+///   evt.a = 900k (dense, 90% of the stream)
+///   evt.b = 100k (sparse, every 10th sequence)
+/// so the numbers cover both the easy case and the realistic one (a subject that is
+/// only a slice of a busy stream). Measures js_subject_stats (the footer's total /
+/// last-seq call) and the newest / middle / oldest page fetch using EXACTLY the
+/// window the frontend computes (high/low/limit in NatsSubjectMessages.svelte).
+/// Run: cargo test --test drivers_integration bench_nats_subject_pagination_million -- --ignored --nocapture --test-threads=1
+#[tokio::test(flavor = "multi_thread")]
+#[ignore]
+async fn bench_nats_subject_pagination_million() {
+    use async_nats::jetstream;
+    use database_studio_lib::drivers::nats::{NatsConnParams, NatsDriver};
+
+    let c = GenericImage::new("nats", "2.10-alpine")
+        .with_exposed_port(4222.tcp())
+        .with_cmd(vec!["-js"])
+        .start()
+        .await
+        .expect("start nats -js");
+    let port = c.get_host_port_ipv4(4222).await.unwrap();
+    let params = NatsConnParams { host: "localhost".into(), port, user: String::new(), password: String::new(), ssl: false };
+    let drv = retry("nats-js-bench", || NatsDriver::connect(&params)).await;
+
+    let js = jetstream::new(drv.client());
+    js.create_stream(jetstream::stream::Config {
+        name: "BIG".into(),
+        subjects: vec!["evt.a".into(), "evt.b".into()],
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+
+    // seed 1M messages, acks awaited in batches so publishing is not one round-trip per message
+    const TOTAL: u64 = 1_000_000;
+    let t0 = Instant::now();
+    let mut acks = Vec::with_capacity(4096);
+    for i in 0..TOTAL {
+        let subj = if i % 10 == 9 { "evt.b" } else { "evt.a" };
+        acks.push(js.publish(subj, bytes::Bytes::from(format!("payload-{i}"))).await.unwrap());
+        if acks.len() == 4096 {
+            for a in acks.drain(..) {
+                a.await.unwrap();
+            }
+        }
+    }
+    for a in acks.drain(..) {
+        a.await.unwrap();
+    }
+    eprintln!("BENCH nats seed {} msgs in {} ms", TOTAL, t0.elapsed().as_millis());
+
+    const PAGE: u64 = 100;
+    for subject in ["evt.a", "evt.b"] {
+        let t = Instant::now();
+        let st = drv.js_subject_stats("BIG", subject).await.unwrap();
+        eprintln!(
+            "BENCH nats stats {subject}: total={} last_seq={} in {} ms",
+            st.total,
+            st.last_seq,
+            t.elapsed().as_millis()
+        );
+        let total_pages = ((st.total + PAGE - 1) / PAGE).max(1);
+        // cursor paging: newest page, then walk pages back-to-back with its cursor
+        let mut cursor: Option<u64> = None;
+        for p in 1..=3u64 {
+            let t = Instant::now();
+            let pg = drv.js_subject_page("BIG", subject, PAGE as usize, cursor).await.unwrap();
+            eprintln!(
+                "BENCH nats page {p}/{total_pages} {subject}: rows={} probes={} first_seq={} in {} ms",
+                pg.msgs.len(),
+                pg.probes,
+                pg.msgs.first().map(|m| m.seq).unwrap_or(0),
+                t.elapsed().as_millis()
+            );
+            match pg.msgs.first() {
+                Some(m) if m.seq > 1 => cursor = Some(m.seq - 1),
+                _ => break,
+            }
+        }
+        // deepest cursor: the oldest page of the subject (start of the stream)
+        let t = Instant::now();
+        let oldest = drv
+            .js_subject_page("BIG", subject, PAGE as usize, Some(st.last_seq - st.total + PAGE))
+            .await
+            .unwrap();
+        eprintln!(
+            "BENCH nats oldest page {subject}: rows={} probes={} first_seq={} in {} ms",
+            oldest.msgs.len(),
+            oldest.probes,
+            oldest.msgs.first().map(|m| m.seq).unwrap_or(0),
+            t.elapsed().as_millis()
+        );
+    }
+}
+
+/// Searching for a subject means "find the subject I half-remember": matched on
+/// subject NAMES, as a PREFIX, ignoring case. A NATS filter cannot express that (it
+/// matches whole tokens, case-sensitively), so the driver reads the server's
+/// per-subject index. Proven against a real server on the shape that broke it: an
+/// _INBOX tree, a partial token, and the wrong case.
+///
+/// It also pins the de-duplication: STREAM.INFO returns that index in PAGES and the
+/// same subject shows up in more than one page (observed on nats 2.10), which used
+/// to list a subject twice AND double its message count.
+#[tokio::test(flavor = "multi_thread")]
+async fn nats_stream_subjects_finds_names_by_case_insensitive_prefix() {
+    use async_nats::jetstream;
+    use database_studio_lib::drivers::nats::{NatsConnParams, NatsDriver};
+
+    let c = GenericImage::new("nats", "2.10-alpine")
+        .with_exposed_port(4222.tcp())
+        .with_cmd(vec!["-js"])
+        .start()
+        .await
+        .expect("start nats -js");
+    let port = c.get_host_port_ipv4(4222).await.unwrap();
+    let params = NatsConnParams { host: "localhost".into(), port, user: String::new(), password: String::new(), ssl: false };
+    let drv = retry("nats-subjects", || NatsDriver::connect(&params)).await;
+
+    let js = jetstream::new(drv.client());
+    // `app.>` only: a stream that captured `_INBOX.>` would also capture this
+    // client's own request-reply inboxes, which is noise for the assertions here
+    // (a real _INBOX stream does exactly that — that is why the search exists).
+    js.create_stream(jetstream::stream::Config {
+        name: "SEARCH".into(),
+        subjects: vec!["app.>".into(), "evt.>".into()],
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+
+    // mixed-case names, the way real inbox-style subjects look
+    let seed: [(&str, u64); 4] = [
+        ("app.opJXokMoF2", 5),
+        ("app.opJXokMoF2.1", 3),
+        ("app.SIhRBL845v", 2),
+        ("evt.other", 4),
+    ];
+    for (subj, n) in seed {
+        for i in 0..n {
+            js.publish(subj.to_string(), bytes::Bytes::from(format!("m{i}"))).await.unwrap().await.unwrap();
+        }
+    }
+
+    // (1) the exact case the user hit: a PARTIAL token in the WRONG case
+    let r = drv.js_stream_subjects("SEARCH", "app.>", "app.opjxo", 100).await.unwrap();
+    let names: Vec<&str> = r.subjects.iter().map(|s| s.subject.as_str()).collect();
+    assert_eq!(r.matched, 2, "two subject names start with that prefix, got {names:?}");
+    assert!(
+        names.contains(&"app.opJXokMoF2") && names.contains(&"app.opJXokMoF2.1"),
+        "found with their real casing: {names:?}"
+    );
+    assert!(
+        !names.iter().any(|n| n.contains("SIhRBL845v")),
+        "unrelated subjects must NOT come back: {names:?}"
+    );
+    // no name is listed twice, even though the server pages the index
+    let mut uniq = names.clone();
+    uniq.sort_unstable();
+    uniq.dedup();
+    assert_eq!(uniq.len(), names.len(), "no duplicate subject rows: {names:?}");
+    // counts come from the server's index — and are NOT doubled by paging
+    let by = |n: &str| r.subjects.iter().find(|s| s.subject == n).unwrap().messages;
+    assert_eq!(by("app.opJXokMoF2"), 5);
+    assert_eq!(by("app.opJXokMoF2.1"), 3);
+
+    // (2) the stream filter bounds the search: evt.other is outside app.>
+    let scoped = drv.js_stream_subjects("SEARCH", "app.>", "", 100).await.unwrap();
+    assert_eq!(scoped.matched, 3, "every app.* subject, and only those");
+    assert!(scoped.subjects.iter().all(|s| s.subject.starts_with("app.")));
+
+    // (3) no match is reported as no match (not as "everything")
+    let none = drv.js_stream_subjects("SEARCH", "app.>", "app.zzz", 100).await.unwrap();
+    assert_eq!(none.matched, 0);
+    assert!(none.subjects.is_empty());
+    assert_eq!(none.scanned, 3, "it still says how many subject names it checked");
+
+    // (4) the list is capped but the count is not — the UI needs both
+    let capped = drv.js_stream_subjects("SEARCH", "app.>", "app.", 1).await.unwrap();
+    assert_eq!(capped.subjects.len(), 1);
+    assert_eq!(capped.matched, 3);
+
+    // (5) the same de-duplication fixes the subject TOTAL the pager shows
+    let st = drv.js_subject_stats("SEARCH", "app.opJXokMoF2.1").await.unwrap();
+    assert_eq!(st.total, 3, "3 messages, not 6 — a paged index must not be summed twice");
+    let st_tree = drv.js_subject_stats("SEARCH", "app.>").await.unwrap();
+    assert_eq!(st_tree.total, 10, "5 + 3 + 2 across the tree, each counted once");
+}
+
+/// Cursor pagination of a subject's messages must return FULL pages of real messages
+/// even when the subject is a sparse slice of a busy stream — the case the old
+/// sequence-window paging got wrong (it showed ~1 row per 100 sequences and could
+/// never reach most of the subject). Walks every page and proves the pages tile the
+/// subject exactly: full pages, no gap, no overlap, newest first.
+#[tokio::test(flavor = "multi_thread")]
+async fn nats_subject_page_tiles_a_sparse_subject_with_full_pages() {
+    use async_nats::jetstream;
+    use database_studio_lib::drivers::nats::{NatsConnParams, NatsDriver};
+
+    let c = GenericImage::new("nats", "2.10-alpine")
+        .with_exposed_port(4222.tcp())
+        .with_cmd(vec!["-js"])
+        .start()
+        .await
+        .expect("start nats -js");
+    let port = c.get_host_port_ipv4(4222).await.unwrap();
+    let params = NatsConnParams { host: "localhost".into(), port, user: String::new(), password: String::new(), ssl: false };
+    let drv = retry("nats-js-page", || NatsDriver::connect(&params)).await;
+
+    let js = jetstream::new(drv.client());
+    js.create_stream(jetstream::stream::Config {
+        name: "PAGES".into(),
+        subjects: vec!["evt.rare".into(), "evt.bulk".into()],
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+
+    // 20k messages, of which only 250 (1.25%) belong to evt.rare — one every 80th
+    // sequence. A 100-sequence window would hold at most ONE of them.
+    const BULK: u64 = 20_000;
+    const EVERY: u64 = 80;
+    let mut acks = Vec::with_capacity(4096);
+    for i in 0..BULK {
+        let rare = i % EVERY == EVERY - 1;
+        let subj = if rare { "evt.rare" } else { "evt.bulk" };
+        acks.push(js.publish(subj, bytes::Bytes::from(format!("m{i}"))).await.unwrap());
+        if acks.len() == 4096 {
+            for a in acks.drain(..) {
+                a.await.unwrap();
+            }
+        }
+    }
+    for a in acks.drain(..) {
+        a.await.unwrap();
+    }
+
+    let stats = drv.js_subject_stats("PAGES", "evt.rare").await.unwrap();
+    let rare_total = BULK / EVERY;
+    assert_eq!(stats.total, rare_total, "server reports the subject's own count");
+    // read the subject forward once as ground truth for what paging must cover
+    let want_seqs: Vec<u64> = drv
+        .js_subject_messages("PAGES", "evt.rare", rare_total as usize + 10, None)
+        .await
+        .unwrap()
+        .iter()
+        .map(|m| m.seq)
+        .collect();
+    assert_eq!(want_seqs.len(), rare_total as usize, "ground truth read");
+
+    // walk every page newest-first using ONLY the cursor the previous page hands us
+    const PAGE: usize = 100;
+    let expected_pages = (rare_total as usize + PAGE - 1) / PAGE;
+    let mut cursor: Option<u64> = None;
+    let mut seen: Vec<u64> = Vec::new();
+    let mut pages = 0usize;
+    let mut worst_probes = 0u32;
+    loop {
+        let t = Instant::now();
+        let pg = drv.js_subject_page("PAGES", "evt.rare", PAGE, cursor).await.unwrap();
+        let ms = t.elapsed().as_millis();
+        if pg.msgs.is_empty() {
+            break;
+        }
+        pages += 1;
+        worst_probes = worst_probes.max(pg.probes);
+        assert!(
+            pg.msgs.iter().all(|m| m.subject == "evt.rare"),
+            "page {pages} must hold only this subject's messages"
+        );
+        // every page but the last is FULL (the bug: pages held ~1 row)
+        if pages < expected_pages {
+            assert_eq!(pg.msgs.len(), PAGE, "page {pages} must be a full page of {PAGE}");
+        }
+        // ascending inside the page, and strictly older than everything read so far
+        assert!(pg.msgs.windows(2).all(|w| w[0].seq < w[1].seq), "page {pages} sorted by seq");
+        if let Some(prev_min) = seen.iter().min().copied() {
+            assert!(
+                pg.msgs.iter().all(|m| m.seq < prev_min),
+                "page {pages} must be strictly older than the pages already read"
+            );
+        }
+        eprintln!(
+            "CHK page {pages}: rows={} first_seq={} probes={} in {ms} ms",
+            pg.msgs.len(),
+            pg.msgs[0].seq,
+            pg.probes
+        );
+        let first = pg.msgs[0].seq;
+        seen.extend(pg.msgs.iter().map(|m| m.seq));
+        if first <= 1 || seen.len() as u64 >= stats.total {
+            break;
+        }
+        cursor = Some(first - 1);
+    }
+    assert_eq!(pages, expected_pages, "page count matches ceil(total / page_size)");
+    seen.sort_unstable();
+    let mut want_sorted = want_seqs.clone();
+    want_sorted.sort_unstable();
+    assert_eq!(seen, want_sorted, "pages tile exactly the subject's real sequences");
+    assert!(worst_probes <= 6, "window search stayed cheap (worst {worst_probes} probes)");
+
+    // Control: the sequence-window paging this replaced (window = page_size stream
+    // sequences, first_seq inferred as last_seq - total + 1) reads almost nothing on
+    // the same data — that is the bug, kept here so the contrast cannot be lost.
+    {
+        let high = stats.last_seq;
+        let low = (stats.last_seq - stats.total + 1).max(high.saturating_sub(PAGE as u64 - 1));
+        let limit = (high - low + 1) as usize;
+        let old = drv.js_subject_messages("PAGES", "evt.rare", limit, Some(low)).await.unwrap();
+        let shown = old.iter().filter(|m| m.seq <= high).count();
+        assert!(
+            shown < PAGE / 2,
+            "the old window math showed {shown} of {PAGE} rows — if this ever fills up, the control is no longer meaningful"
+        );
+        eprintln!("CHK control: old sequence-window paging showed {shown}/{PAGE} rows");
+    }
+
+    // an explicit cursor never returns anything newer than itself
+    let mid = want_sorted[want_sorted.len() / 2];
+    let pg = drv.js_subject_page("PAGES", "evt.rare", 10, Some(mid)).await.unwrap();
+    assert_eq!(pg.msgs.len(), 10, "a mid-stream cursor still fills the page");
+    assert!(pg.msgs.iter().all(|m| m.seq <= mid), "nothing newer than the cursor");
+    assert_eq!(pg.msgs.last().unwrap().seq, mid, "the newest row is the cursor itself");
+
+    // purged subject → empty page reported as empty, never stale rows
+    drv.js_purge_subject("PAGES", "evt.rare").await.unwrap();
+    let pg = drv.js_subject_page("PAGES", "evt.rare", PAGE, None).await.unwrap();
+    assert!(pg.msgs.is_empty() && pg.total == 0, "purged subject reports empty");
+    let bulk = drv.js_subject_page("PAGES", "evt.bulk", 10, None).await.unwrap();
+    assert_eq!(bulk.msgs.len(), 10, "the other subject is untouched");
+
+    drv.js_delete_stream("PAGES").await.unwrap();
+    eprintln!("CHK nats_subject_page_tiles_a_sparse_subject_with_full_pages OK");
+}
+
+/// The Explorer lists a stream's CONFIGURED subjects, which are normally wildcards
+/// (`evt.>`), and a busy stream can hold tens of thousands of distinct concrete
+/// subjects underneath. Counting such a subject means STREAM.INFO paging over every
+/// one of them — slow, and it used to run BEFORE the messages were read, so a slow
+/// count meant "no messages" on screen. This proves messages now load regardless:
+/// counting is best effort, skipped when hopeless, and never on the critical path.
+#[tokio::test(flavor = "multi_thread")]
+async fn nats_wildcard_subject_loads_messages_even_when_counting_is_hopeless() {
+    use async_nats::jetstream;
+    use database_studio_lib::drivers::nats::{NatsConnParams, NatsDriver};
+
+    let c = GenericImage::new("nats", "2.10-alpine")
+        .with_exposed_port(4222.tcp())
+        .with_cmd(vec!["-js"])
+        .start()
+        .await
+        .expect("start nats -js");
+    let port = c.get_host_port_ipv4(4222).await.unwrap();
+    let params = NatsConnParams { host: "localhost".into(), port, user: String::new(), password: String::new(), ssl: false };
+    let drv = retry("nats-js-wildcard", || NatsDriver::connect(&params)).await;
+
+    let js = jetstream::new(drv.client());
+    js.create_stream(jetstream::stream::Config {
+        name: "WIDE".into(),
+        subjects: vec!["evt.>".into()],
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+
+    // 30k messages, EVERY ONE on its own concrete subject → 30k distinct subjects
+    // under the single configured wildcard (above SUBJECT_COUNT_SKIP_ABOVE = 10k).
+    const N: u64 = 30_000;
+    let mut acks = Vec::with_capacity(4096);
+    for i in 0..N {
+        acks.push(js.publish(format!("evt.item{i}"), bytes::Bytes::from(format!("m{i}"))).await.unwrap());
+        if acks.len() == 4096 {
+            for a in acks.drain(..) {
+                a.await.unwrap();
+            }
+        }
+    }
+    for a in acks.drain(..) {
+        a.await.unwrap();
+    }
+
+    // The subject the Explorer actually passes: the configured wildcard.
+    const PAGE: usize = 100;
+    let t = Instant::now();
+    let first = drv.js_subject_page("WIDE", "evt.>", PAGE, None).await.unwrap();
+    let first_ms = t.elapsed().as_millis();
+    assert_eq!(first.msgs.len(), PAGE, "newest page must be full — this is what used to come back empty");
+    assert_eq!(first.msgs.last().unwrap().seq, N, "newest row is the stream's last message");
+    assert!(
+        first_ms < 8_000,
+        "reading the newest page took {first_ms} ms — counting must not sit on the critical path"
+    );
+    eprintln!(
+        "CHK wildcard newest page: rows={} probes={} total={} (0 = not counted) in {first_ms} ms",
+        first.msgs.len(),
+        first.probes,
+        first.total
+    );
+
+    // Paging back keeps working, and later pages skip counting entirely (fast).
+    let mut cursor = first.msgs[0].seq - 1;
+    let mut seen: Vec<u64> = first.msgs.iter().map(|m| m.seq).collect();
+    for step in 2..=4u32 {
+        let t = Instant::now();
+        let pg = drv.js_subject_page("WIDE", "evt.>", PAGE, Some(cursor)).await.unwrap();
+        let ms = t.elapsed().as_millis();
+        assert_eq!(pg.msgs.len(), PAGE, "page {step} must be full");
+        assert!(pg.msgs.iter().all(|m| m.seq <= cursor), "page {step} respects the cursor");
+        assert_eq!(pg.total, 0, "later pages do not pay for a count");
+        assert!(ms < 3_000, "page {step} took {ms} ms — later pages must be cheap");
+        eprintln!("CHK wildcard page {step}: rows={} probes={} in {ms} ms", pg.msgs.len(), pg.probes);
+        cursor = pg.msgs[0].seq - 1;
+        seen.extend(pg.msgs.iter().map(|m| m.seq));
+    }
+    seen.sort_unstable();
+    seen.dedup();
+    assert_eq!(seen.len(), 4 * PAGE, "four pages, no overlap");
+
+    // An EXACT subject is still counted (cheap: one entry), so the pager keeps its
+    // page count where it can.
+    let exact = drv.js_subject_page("WIDE", "evt.item42", 10, None).await.unwrap();
+    assert_eq!(exact.msgs.len(), 1, "the exact subject holds one message");
+    assert_eq!(exact.total, 1, "exact subjects are still counted");
+
+    // js_subject_stats must not be a dead end either: it reports an unknown count
+    // rather than failing, and still hands back a usable sequence.
+    let st = drv.js_subject_stats("WIDE", "evt.>").await.unwrap();
+    assert!(st.last_seq >= N, "stats still reports a usable last sequence");
+    eprintln!("CHK wildcard stats: total={} (0 = unknown) last_seq={}", st.total, st.last_seq);
+
+    drv.js_delete_stream("WIDE").await.unwrap();
+    eprintln!("CHK nats_wildcard_subject_loads_messages_even_when_counting_is_hopeless OK");
 }

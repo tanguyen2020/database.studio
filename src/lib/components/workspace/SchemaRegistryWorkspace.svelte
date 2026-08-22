@@ -74,7 +74,7 @@
       <div style="flex:1;overflow:auto;min-height:0">
         {#each subjects as s (s.name)}
           <div onclick={() => select(s.name)} onkeydown={(e) => e.key === 'Enter' && select(s.name)} role="button" tabindex="0" style="display:flex;align-items:center;gap:var(--px-8);padding:var(--px-8) var(--px-14);cursor:pointer;background:{sel === s.name ? 'var(--hover)' : 'transparent'}">
-            <span style="font-size:var(--px-9);font-weight:700;border-radius:var(--px-3);padding:var(--px-1) var(--px-5);background:#1e1a2e;color:#c4b5fd;border:var(--px-1) solid #3d2f6b">{s.fmt}</span>
+            <span style="font-size:var(--px-9);font-weight:700;border-radius:var(--px-3);padding:var(--px-1) var(--px-5);background:#1e1a2e;color:var(--sacc-purple);border:var(--px-1) solid #3d2f6b">{s.fmt}</span>
             <div style="min-width:0">
               <div class="mono" style="font-size:var(--px-12);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{s.name}</div>
               <div class="mono" style="font-size:var(--px-9_5);color:var(--muted)">v{s.latest} · {s.compat}</div>
@@ -92,7 +92,7 @@
         <div style="flex:none;display:flex;align-items:center;gap:var(--px-10);padding:var(--px-10) var(--px-14);border-bottom:var(--px-1) solid var(--border);background:var(--surface)">
           <span style="width:var(--px-3);height:var(--px-18);border-radius:var(--px-2);background:#8B5CF6"></span>
           <span class="mono" style="font-size:var(--px-13);font-weight:600">{sel}</span>
-          <span style="font-size:var(--px-10);font-weight:700;border-radius:var(--px-3);padding:var(--px-1) var(--px-6);background:#1e1a2e;color:#c4b5fd">{schema.fmt}</span>
+          <span style="font-size:var(--px-10);font-weight:700;border-radius:var(--px-3);padding:var(--px-1) var(--px-6);background:#1e1a2e;color:var(--sacc-purple)">{schema.fmt}</span>
           <div style="margin-left:auto;display:flex;gap:var(--px-5)">
             {#each versions as v (v)}
               <span onclick={() => showVersion(v)} onkeydown={(e) => e.key === 'Enter' && showVersion(v)} role="button" tabindex="0" class="mono" style="font-size:var(--px-11);border-radius:var(--px-5);padding:var(--px-3) var(--px-9);cursor:pointer;background:{schema.version === v ? '#8B5CF6' : 'var(--panel)'};color:{schema.version === v ? 'var(--hex-fff)' : 'var(--text2)'};border:var(--px-1) solid var(--border)">v{v}</span>
