@@ -1,3 +1,11 @@
+// The async command bodies nest deeply (with_driver takes an async closure that
+// matches on every LiveConnection variant, and some commands chain several of
+// those), so computing their layout goes past rustc's default query depth of 128.
+// It showed up as "queries overflow the depth limit ... computing layout of
+// {async fn body of commands::admin::admin_view()}" on the aarch64-apple-darwin
+// leg of the release build while x86_64 happened to stay under the limit.
+#![recursion_limit = "512"]
+
 pub mod commands;
 pub mod connections;
 pub mod drivers;
