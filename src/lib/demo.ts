@@ -232,6 +232,24 @@ function demoDbState<T extends { name: string }>(xs: T[]): T[] {
     .filter((x) => !demoDroppedDbs.has(x.name))
     .map((x) => (demoRenamedDbs.has(x.name) ? { ...x, name: demoRenamedDbs.get(x.name) as string } : x))
 }
+/** Schemas dropped / renamed through the explorer this session — same reason as the
+ *  database sets above: the tree must really lose (or re-label) them on reload. */
+const demoDroppedSchemas = new Set<string>()
+const demoRenamedSchemas = new Map<string, string>()
+/** …and schemas created through New Schema, so the tree really gains them. */
+const demoCreatedSchemas = new Set<string>()
+function demoSchemaState<T extends { name: string }>(xs: T[]): T[] {
+  const kept = xs
+    .filter((x) => !demoDroppedSchemas.has(x.name))
+    .map((x) => (demoRenamedSchemas.has(x.name) ? { ...x, name: demoRenamedSchemas.get(x.name) as string } : x))
+  const extra = [...demoCreatedSchemas]
+    .filter((n) => !demoDroppedSchemas.has(n) && !kept.some((k) => k.name === n))
+    .map((n) => ({ ...(xs[0] as T), name: n, is_default: false }))
+  return [...kept, ...extra]
+}
+
+const CREATE_SCHEMA_RE = /^\s*CREATE\s+SCHEMA\s+(?:IF\s+NOT\s+EXISTS\s+)?(\S+)/i
+
 /** Unquotes an identifier the app emitted ("a" / `a` / [a]). */
 const IDENT_PUNCT = new Set(['"', '`', '[', ']', ';'])
 function demoIdent(raw: string): string {
@@ -342,6 +360,15 @@ function bigSchemaSize(): number {
   if (bigSchemaN === null) bigSchemaN = bigParam('bigSchema')
   return bigSchemaN
 }
+/** Test seam (demo/browser only): pretend the SERVER gained an object while the app
+ *  was showing the old tree. `window.__demoExtraTable` / `__demoExtraSchema` are set
+ *  mid-test, so a Refresh has something new to discover — otherwise a re-read is
+ *  indistinguishable from doing nothing. No effect in Tauri (demoInvoke is unused). */
+function extraName(key: '__demoExtraTable' | '__demoExtraSchema' | '__demoExtraIndex'): string {
+  if (typeof window === 'undefined') return ''
+  return String((window as unknown as Record<string, unknown>)[key] ?? '')
+}
+
 function bigFnsSize(): number {
   if (bigFnsN === null) bigFnsN = bigParam('bigFns')
   return bigFnsN
@@ -445,8 +472,12 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
       // ({cid}::{db}) exposes that database's own schemas. Used by the PG Grant
       // wizard to load schemas for the selected databases.
       const schemaConn = String(args?.connId ?? '')
-      if (schemaConn.endsWith('::analytics')) return ok(demoDbState([{ name: 'public', is_default: true }, { name: 'reporting', is_default: false }]))
-      return ok(demoDbState([{ name: 'public', is_default: true }]))
+      if (schemaConn.endsWith('::analytics'))
+        return ok(demoSchemaState(demoDbState([{ name: 'public', is_default: true }, { name: 'reporting', is_default: false }])))
+      const baseSchemas = [{ name: 'public', is_default: true }]
+      const extraSchema = extraName('__demoExtraSchema')
+      if (extraSchema) baseSchemas.push({ name: extraSchema, is_default: false })
+      return ok(demoSchemaState(demoDbState(baseSchemas)))
     }
     case 'list_tables': {
       // perf-gate seam (see the bigSchema comment above): a production-sized table list
@@ -479,6 +510,10 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
         { name: 'order', kind: 'table', row_estimate: 920, locked: false, engine: 'MergeTree', data_length: 327680 },
         { name: 'vw_active_students', kind: 'view', row_estimate: null, locked: false, engine: 'MaterializedView' },
         { name: 'vw_recent_enrollments', kind: 'view', row_estimate: null, locked: false, engine: 'View' },
+        // seam: an object that appeared on the server after the tree was drawn
+        ...(extraName('__demoExtraTable')
+          ? [{ name: extraName('__demoExtraTable'), kind: 'table', row_estimate: 1, locked: false, engine: 'MergeTree', data_length: 8192 }]
+          : []),
       ])
     }
     case 'list_columns': {
@@ -539,6 +574,10 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
         system: 'postgres',
         scope: 'public',
         indexes: [
+          // seam: an index that appeared on the server after the tree was drawn
+          ...(extraName('__demoExtraIndex')
+            ? [{ name: extraName('__demoExtraIndex'), table: 'students', columns: ['email'], index_type: 'BTREE', unique: false, primary: false, size_bytes: 8192, usage: 0, valid: true, flags: [] }]
+            : []),
           { name: 'students_pkey', table: 'students', columns: ['id'], index_type: 'BTREE', unique: true, primary: true, size_bytes: 16384, usage: 89231, valid: true, flags: [] },
           { name: 'idx_students_email', table: 'students', columns: ['email'], index_type: 'BTREE', unique: true, primary: false, size_bytes: 24576, usage: 4210, valid: true, flags: [] },
           { name: 'idx_students_name', table: 'students', columns: ['last_name'], index_type: 'BTREE', unique: false, primary: false, size_bytes: 32768, usage: 0, valid: true, flags: ['unused'] },
@@ -801,6 +840,42 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
         demoRenamedDbs.set(demoIdent(renDbM[1] ?? renDbM[3]), demoIdent(renDbM[2] ?? renDbM[4]))
         return ok({ ok: true, duration_ms: 9 })
       }
+      // CREATE SCHEMA — recorded, so the tree really gains it on reload. (CREATE USER
+      // is NOT recorded here: Users & Privileges runs plenty of those and they are
+      // not schemas on the engines those tests use.)
+      const crScM = stmtSql.match(CREATE_SCHEMA_RE)
+      if (crScM) {
+        demoCreatedSchemas.add(demoIdent(crScM[1]))
+        return ok({ ok: true, duration_ms: 6 })
+      }
+      // ALTER SCHEMA … RENAME TO — recorded, so the tree shows the new name.
+      const renScM = stmtSql.match(/^\s*ALTER\s+SCHEMA\s+(\S+)\s+RENAME\s+TO\s+(\S+)/i)
+      if (renScM) {
+        demoRenamedSchemas.set(demoIdent(renScM[1]), demoIdent(renScM[2]))
+        return ok({ ok: true, duration_ms: 7 })
+      }
+      // DROP SCHEMA — mirrors the server: RESTRICT (the default) is REFUSED while the
+      // schema still holds objects, so the app has to surface that error and let the
+      // user retry with CASCADE. Recorded on success so the tree really loses it.
+      const dropScM = stmtSql.match(/^\s*DROP\s+SCHEMA\s+(?:IF\s+EXISTS\s+)?(\S+)\s*(CASCADE|RESTRICT)?/i)
+      if (dropScM) {
+        const scName = demoIdent(dropScM[1])
+        if (!/CASCADE/i.test(dropScM[2] ?? '')) {
+          return ok({
+            ok: false,
+            error: {
+              system: 'postgres',
+              code: '2BP01',
+              message: `cannot drop schema ${scName} because other objects depend on it`,
+              severity: 'error',
+              raw: `DETAIL: table ${scName}.students depends on schema ${scName}`,
+            },
+            duration_ms: 5,
+          })
+        }
+        demoDroppedSchemas.add(scName)
+        return ok({ ok: true, duration_ms: 11 })
+      }
       // DROP DATABASE — recorded, so the tree really loses that database on reload.
       const dropDbM = stmtSql.match(/^\s*DROP\s+DATABASE\s+(?:IF\s+EXISTS\s+)?(\S+)/i)
       if (dropDbM) {
@@ -846,6 +921,19 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
           }
         }
         return ok({ ok: true, result: { cols, rows, total: n }, duration_ms: 239 })
+      }
+      // A read-only result carrying a JSON column: the grid must offer the JSON
+      // VIEWER there (no Save) — editing needs the Table Viewer's edit target.
+      if (/json_demo/i.test(stmtSql)) {
+        return ok({
+          ok: true,
+          result: {
+            cols: [['id', 'int4'], ['payload', 'jsonb']] as [string, string][],
+            rows: [{ id: 1, payload: { kind: 'read-only', tags: ['x'] } }],
+            total: 1,
+          },
+          duration_ms: 7,
+        })
       }
       // Table Data Viewer footer: a plain COUNT(*) → a fixed demo total.
       if (/^\s*SELECT\s+COUNT\(\*\)/i.test(stmtSql)) {
@@ -954,8 +1042,30 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
     }
     case 'apply_grid_changes':
       return ok(((args?.changes as unknown[]) ?? []).length)
-    case 'exec_filtered':
-      return demoInvoke('exec_statement', args)
+    case 'exec_filtered': {
+      // Table Data Viewer (editable grid). Carries the two shapes a JSON cell can
+      // arrive in, so the JSON editor is exercised on the real path: a decoded
+      // document in a json column, and a document stored in a text column.
+      return ok({
+        ok: true,
+        result: {
+          cols: [
+            ['id', 'int4'],
+            ['first_name', 'varchar'],
+            ['gpa', 'numeric'],
+            ['config', 'jsonb'],
+            ['prefs_text', 'nvarchar'],
+          ] as [string, string][],
+          rows: [
+            { id: 1, first_name: 'An', gpa: 3.9, config: { theme: 'dark', tags: ['a', 'b'] }, prefs_text: '{"lang":"vi"}' },
+            { id: 2, first_name: 'Binh', gpa: 3.7, config: { theme: 'light', tags: [] }, prefs_text: '{"lang":"en"}' },
+            { id: 3, first_name: 'Chi', gpa: null, config: null, prefs_text: null },
+          ],
+          total: 3,
+        },
+        duration_ms: 12,
+      })
+    }
     case 'redis_scan': {
       // A keyspace too large to finish in one capped walk: SCAN keeps handing back a
       // non-zero cursor (MATCH is applied after the buckets are read), so the explorer

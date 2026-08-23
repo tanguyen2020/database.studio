@@ -2,7 +2,7 @@
 // dialect, MSSQL dùng TOP, ClickHouse UPDATE/DELETE là ALTER TABLE … mutation.
 
 import { describe, expect, it } from 'vitest'
-import { genAlterTable, genCreate, genCreateDatabase, genDelete, genDrop, genDropDatabase, genForeignKey, genInsert, genRename, genRenameDatabase, genSelect, genTruncate, genUpdate } from './ddl'
+import { genAlterTable, genCreate, genCreateDatabase, genCreateSchema, genDelete, genDrop, genDropDatabase, genDropSchema, genForeignKey, genInsert, genRename, genRenameDatabase, genRenameSchema, genSelect, genTruncate, genUpdate, hasRealSchemas } from './ddl'
 import type { ColumnInfo } from '$lib/types'
 
 function col(name: string, data_type: string, opts: Partial<ColumnInfo> = {}): ColumnInfo {
@@ -171,5 +171,83 @@ describe('genForeignKey', () => {
       to_column: 'id',
     })
     expect(sql).toBe('ALTER TABLE `app`.`a` ADD CONSTRAINT `fk1` FOREIGN KEY (`b_id`) REFERENCES `app`.`b` (`id`);')
+  })
+})
+
+describe('hasRealSchemas', () => {
+  it('is true only where a schema is its own object inside a database', () => {
+    for (const s of ['postgres', 'mssql', 'oracle']) expect(hasRealSchemas(s), s).toBe(true)
+    // these call their DATABASES "schemas" — the node keeps database operations
+    for (const s of ['mysql', 'mariadb', 'clickhouse', 'sqlite', 'redis']) expect(hasRealSchemas(s), s).toBe(false)
+  })
+})
+
+describe('genRenameSchema', () => {
+  it('PostgreSQL renames in one statement', () => {
+    expect(genRenameSchema('postgres', 'app', 'app_v2')).toBe('ALTER SCHEMA "app" RENAME TO "app_v2";')
+    // no target given → the ready-to-edit placeholder
+    expect(genRenameSchema('postgres', 'app')).toBe('ALTER SCHEMA "app" RENAME TO "app_new";')
+  })
+  it('MSSQL and Oracle explain instead of emitting a statement that cannot work', () => {
+    expect(genRenameSchema('mssql', 'sales')).toMatch(/^-- MSSQL cannot rename a schema/)
+    expect(genRenameSchema('mssql', 'sales')).toContain('TRANSFER')
+    expect(genRenameSchema('oracle', 'APP')).toMatch(/^-- In Oracle a schema IS a user/)
+  })
+  it('schema-as-database engines reuse the database statement', () => {
+    expect(genRenameSchema('clickhouse', 'app', 'app2')).toBe('RENAME DATABASE `app` TO `app2`;')
+    expect(genRenameSchema('mysql', 'app', 'app2')).toMatch(/^-- MySQL\/MariaDB cannot rename/)
+  })
+  it('quotes the identifier (no injection through a crafted name)', () => {
+    expect(genRenameSchema('postgres', 'a"b', 'c"d')).toBe('ALTER SCHEMA "a""b" RENAME TO "c""d";')
+  })
+})
+
+describe('genDropSchema', () => {
+  it('PostgreSQL defaults to RESTRICT and only cascades when asked', () => {
+    expect(genDropSchema('postgres', 'app')).toBe('DROP SCHEMA IF EXISTS "app" RESTRICT;')
+    expect(genDropSchema('postgres', 'app', true)).toBe('DROP SCHEMA IF EXISTS "app" CASCADE;')
+  })
+  it('MSSQL has no CASCADE — the statement is the same either way', () => {
+    expect(genDropSchema('mssql', 'sales')).toBe('DROP SCHEMA IF EXISTS [sales];')
+    expect(genDropSchema('mssql', 'sales', true)).toBe('DROP SCHEMA IF EXISTS [sales];')
+  })
+  it('an Oracle schema is a user', () => {
+    expect(genDropSchema('oracle', 'APP')).toBe('DROP USER "APP";')
+    expect(genDropSchema('oracle', 'APP', true)).toBe('DROP USER "APP" CASCADE;')
+  })
+  it('schema-as-database engines reuse DROP DATABASE', () => {
+    expect(genDropSchema('mysql', 'app')).toBe('DROP DATABASE IF EXISTS `app`;')
+    expect(genDropSchema('clickhouse', 'app', true)).toBe('DROP DATABASE IF EXISTS `app`;')
+  })
+  it('SQLite has no schemas', () => {
+    expect(genDropSchema('sqlite', 'main')).toMatch(/^-- SQLite has no schemas/)
+  })
+})
+
+describe('genCreateSchema', () => {
+  it('PostgreSQL and MSSQL create a real schema (T-SQL has no IF NOT EXISTS)', () => {
+    expect(genCreateSchema('postgres', 'app')).toBe('CREATE SCHEMA IF NOT EXISTS "app";')
+    expect(genCreateSchema('mssql', 'sales')).toBe('CREATE SCHEMA [sales];')
+  })
+  it('an Oracle schema is a user: create + grants + quota, with the given password', () => {
+    const sql = genCreateSchema('oracle', 'APP', { password: 'S3cret' })
+    expect(sql.split('\n')).toEqual([
+      'CREATE USER "APP" IDENTIFIED BY "S3cret";',
+      'GRANT CONNECT, RESOURCE TO "APP";',
+      'ALTER USER "APP" QUOTA UNLIMITED ON USERS;',
+    ])
+    // a double quote cannot live inside a quoted password — it is dropped, never
+    // emitted as something that would break out of the literal
+    expect(genCreateSchema('oracle', 'APP', { password: 'a"b' })).toContain('IDENTIFIED BY "ab";')
+  })
+  it('schema-as-database engines reuse CREATE DATABASE', () => {
+    expect(genCreateSchema('mysql', 'app')).toBe('CREATE DATABASE `app`;')
+    expect(genCreateSchema('clickhouse', 'app')).toBe('CREATE DATABASE `app`;')
+  })
+  it('SQLite has no schemas', () => {
+    expect(genCreateSchema('sqlite', 'main')).toMatch(/^-- SQLite has no schemas/)
+  })
+  it('quotes the identifier', () => {
+    expect(genCreateSchema('postgres', 'a"b')).toBe('CREATE SCHEMA IF NOT EXISTS "a""b";')
   })
 })

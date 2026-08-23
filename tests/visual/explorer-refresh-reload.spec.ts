@@ -148,3 +148,83 @@ test('header Refresh keeps the MongoDB tree open and re-reads it', async ({ page
 
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
+
+// Reported for PG/MSSQL: pressing Refresh "shows nothing reloading". Two causes, one
+// per test below — the schema-wide Indexes folder was never re-read (it lives in its
+// own cache), and a re-read of unchanged catalogs is visually identical to doing
+// nothing, so there was no way to tell the click had been taken.
+async function openSchemaAndIndexes(page: Page, host: string) {
+  await page.locator('.conn-row').filter({ hasText: host }).first().click()
+  await page.waitForTimeout(400)
+  const connect = page.getByRole('button', { name: 'Connect', exact: true })
+  if (await connect.count()) {
+    await connect.first().click()
+    await page.waitForTimeout(600)
+  }
+  await openDatabaseNode(page)
+  await page.waitForTimeout(300)
+  await page.getByText('public', { exact: true }).first().dblclick()
+  await page.waitForTimeout(400)
+  await page.getByText('Tables', { exact: true }).first().dblclick()
+  await page.waitForTimeout(300)
+  await page.getByText('Indexes', { exact: true }).first().dblclick()
+  await page.waitForTimeout(600)
+}
+
+for (const [label, host] of [['Postgres', '10.0.1.5'], ['MSSQL', '10.0.2.9']] as const) {
+  test(`${label}: header Refresh discovers objects created on the server`, async ({ page }) => {
+    const errors: string[] = []
+    page.on('pageerror', (e) => errors.push(String(e)))
+    await boot(page)
+    await openSchemaAndIndexes(page, host)
+
+    // the tree is showing the old catalog
+    await expect(page.getByText('students', { exact: true }).first()).toBeVisible()
+    await expect(page.getByText('idx_students_email', { exact: true }).first()).toBeVisible()
+    await expect(page.getByText('late_table', { exact: true })).toHaveCount(0)
+    await expect(page.getByText('idx_late_email', { exact: true })).toHaveCount(0)
+
+    // meanwhile the server gains a schema, a table and an index
+    await page.evaluate(() => {
+      const w = window as unknown as Record<string, unknown>
+      w.__demoExtraSchema = 'late_schema'
+      w.__demoExtraTable = 'late_table'
+      w.__demoExtraIndex = 'idx_late_email'
+      w.__ipcCalls = {}
+    })
+
+    await page.locator('[aria-label="Refresh"]').first().click()
+    // the click is acknowledged while it runs
+    await expect(page.getByText('Refreshing…')).toBeVisible()
+    await expect(page.getByText('Refreshing…')).toHaveCount(0, { timeout: 10_000 })
+
+    // …and every one of them is on screen now
+    await expect(page.getByText('late_schema', { exact: true }).first()).toBeVisible({ timeout: 10_000 })
+    await expect(page.getByText('late_table', { exact: true }).first()).toBeVisible()
+    await expect(page.getByText('idx_late_email', { exact: true }).first()).toBeVisible()
+
+    const c = await counts(page)
+    expect(c.list_schemas ?? 0, 'schema list re-read').toBeGreaterThan(0)
+    expect(c.list_tables ?? 0, 'object lists re-read').toBeGreaterThan(0)
+    expect(c.scan_indexes ?? 0, 'the Indexes folder must be re-read too').toBeGreaterThan(0)
+    expect(c.list_databases ?? 0, 'database list re-read (PG/MSSQL)').toBeGreaterThan(0)
+
+    expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
+  })
+}
+
+test('header Refresh reports what it re-read (a quiet no-change refresh is still visible)', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(String(e)))
+  await boot(page)
+  await page.getByRole('button', { name: /Postgres/ }).first().click()
+  await page.waitForTimeout(400)
+  await openDatabaseNode(page)
+  await page.waitForTimeout(300)
+
+  // nothing changed on the server this time — the toast is the only proof it ran
+  await page.locator('[aria-label="Refresh"]').first().click()
+  await expect(page.getByText(/Refreshed — .*re-read/).first()).toBeVisible({ timeout: 10_000 })
+
+  expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
+})

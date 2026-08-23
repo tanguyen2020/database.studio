@@ -49,7 +49,7 @@
   import * as chops from '$lib/sql/chops'
   import { toasts } from '$lib/stores/toast.svelte'
   import { quoteIdent, qualified, selectStarSql } from '$lib/sql/dialect'
-  import { genAlterTable, genCreate, genDelete, genDrop, genDropDatabase, genForeignKey, genInsert, genRename, genRenameDatabase, genSelect, genTruncate, genUpdate } from '$lib/sql/ddl'
+  import { genAlterTable, genCreate, genDelete, genDrop, genCreateSchema, genDropDatabase, genDropSchema, genForeignKey, genInsert, genRename, genRenameDatabase, genRenameSchema, genSelect, genTruncate, genUpdate, hasRealSchemas } from '$lib/sql/ddl'
   import { generateScript, type DbObject, type ScriptMode } from '$lib/sql/scripts'
   import { genCreateIndex, genDropIndex, genAlterIndex } from '$lib/sql/indexes'
   import { createTemplate, type CreateKind } from '$lib/sql/create-templates'
@@ -65,6 +65,7 @@
   import { buildExportSelect } from '$lib/export/query'
   import { kafkaTopicRows, natsStreamRows, filterStreamRows, filterTopicRows } from '$lib/stream/explorer'
   import { toAlterStatement, type AlterKind } from '$lib/sql/alter'
+  import { splitStatements } from '$lib/sql/statements'
   import { objectFilterMatch } from '$lib/explorer/filter'
   import { foreignOfTreeKey, schemaOfTreeKey } from '$lib/explorer/target'
   import { foreignReloadPlan, mainReloadPlan, type ReloadPlan } from '$lib/explorer/reload'
@@ -740,10 +741,16 @@
     }
   }
 
+  /** A local server answers so fast that the spinner would flash for ~50ms and the
+   *  click would look ignored ("nothing reloaded at all"). Hold the running state a
+   *  moment so the feedback is actually perceivable. */
+  const MIN_SPIN_MS = 450
+
   async function refreshConnection() {
     const s = selected
     if (!s || refreshingTree) return
     refreshingTree = true
+    const startedAt = Date.now()
     try {
       // Security rows (roles/users/logins) sit in their own cache: drop the OPEN
       // folders' rows and the self-heal effect above re-reads them from the server.
@@ -753,6 +760,10 @@
         for (const f of openSec) delete nextSec[f.key]
         secRows = nextSec
       }
+      // Re-read over the CURRENT session — this button does not reopen the connection
+      // (that is what the Connections Refresh is for): reopening would cancel a query
+      // running on it, drop the per-tab Query Editor connections and lose an open
+      // transaction, which is too much for a tree refresh.
       if (s.system === 'kafka' || s.system === 'nats') {
         await explorer.loadStreaming(s.id, s.system, true)
       } else if (s.system === 'redis') {
@@ -765,9 +776,33 @@
       } else {
         await reloadRelational(s)
       }
+      // Say what happened: re-reading catalogs that did not change looks EXACTLY
+      // like doing nothing, so the tree alone cannot answer "did my Refresh work?".
+      const err = explorer.cache[s.id]?.error
+      if (err) toasts.error(`Refresh failed: ${err}`, s.system)
+      else toasts.success(refreshSummary(s), s.system)
+    } catch (e) {
+      toasts.error(`Refresh failed: ${e}`, s.system)
     } finally {
+      const elapsed = Date.now() - startedAt
+      if (elapsed < MIN_SPIN_MS) await new Promise((r) => setTimeout(r, MIN_SPIN_MS - elapsed))
       refreshingTree = false
     }
+  }
+
+  /** What the refresh actually re-read, in the tree's own words. */
+  function refreshSummary(s: { id: string; system: string }): string {
+    if (s.system === 'kafka') return 'Refreshed — topics re-read'
+    if (s.system === 'nats') return 'Refreshed — streams re-read'
+    if (s.system === 'redis') return 'Refreshed — keys re-scanned'
+    if (s.system === 'mongodb') return 'Refreshed — databases re-read'
+    if (s.system === 'cassandra') return 'Refreshed — keyspaces re-read'
+    const names = (explorer.cache[s.id]?.schemas ?? []).map((x) => x.name)
+    const open = mainReloadPlan(expanded, names)
+    const parts = [`${names.length} schema${names.length === 1 ? '' : 's'}`]
+    if (open.schemas.length) parts.push(`${open.schemas.length} open`)
+    if (open.tables.length) parts.push(`${open.tables.length} table${open.tables.length === 1 ? '' : 's'}`)
+    return `Refreshed — ${parts.join(' · ')} re-read`
   }
 
   /** Relational + ClickHouse: re-read EVERYTHING the tree is showing for this
@@ -796,10 +831,15 @@
   async function applyReloadPlan(connId: string, plan: ReloadPlan) {
     for (const schema of plan.schemas) await explorer.loadSchemaChildren(connId, schema, true)
     for (const t of plan.tables) await explorer.loadTableDetail(connId, t.schema, t.table, true)
-    // ClickHouse Dictionaries live in their own cache (not the schema cache), so
-    // they need re-reading too — otherwise a new dictionary never appears.
     for (const schema of plan.schemas) {
+      // ClickHouse Dictionaries live in their own cache (not the schema cache), so
+      // they need re-reading too — otherwise a new dictionary never appears.
       if (chDicts[dictKey(connId, schema)]) await loadChDicts(connId, schema, true)
+      // Same for the schema-wide "Indexes" folder: it is read by scan_indexes into
+      // its OWN cache, so a refresh that only rebuilt the schema cache left it
+      // frozen — an index created on the server never showed up (reported for
+      // PG/MSSQL, where that folder is the one people watch).
+      if (schemaIndexes[idxKey(connId, schema)]) await loadSchemaIndexes(connId, schema, true)
     }
   }
 
@@ -1221,29 +1261,52 @@
   // placeholder statement in a SQL tab. Confirm runs the ALTER and reloads the tree.
   // Engines that cannot rename a database (MySQL/MariaDB, Oracle, SQLite) have no
   // statement to run: the popup explains what to do and only offers the SQL tab.
-  let renameState = $state<{ db: string; to: string; running: boolean; error: string | null } | null>(null)
-  const renameSupported = $derived(
-    !!renameState && !!selected && !genRenameDatabase(selected.system, renameState.db).trimStart().startsWith('--'),
-  )
+  // The same popup renames a DATABASE or a SCHEMA — `kind` picks the statement and
+  // the wording, `cid` is the connection it runs on (a foreign-database subtree
+  // renames its schema through the sub-connection of that database).
+  let renameState = $state<{
+    kind: 'database' | 'schema'
+    db: string
+    cid: string
+    to: string
+    running: boolean
+    error: string | null
+  } | null>(null)
+  /** statement for a target name (empty target → the `<name>_new` placeholder) */
+  function renameStmt(to?: string): string {
+    const st = renameState
+    if (!st || !selected) return ''
+    return st.kind === 'schema'
+      ? genRenameSchema(selected.system, st.db, to)
+      : genRenameDatabase(selected.system, st.db, to)
+  }
+  const renameSupported = $derived(!!renameState && !!selected && !renameStmt().trimStart().startsWith('--'))
   const renameTarget = $derived(renameState?.to.trim() ?? '')
-  const renameSql = $derived(
-    renameState && selected
-      ? genRenameDatabase(selected.system, renameState.db, renameTarget || `${renameState.db}_new`)
-      : '',
-  )
+  const renameSql = $derived(renameState && selected ? renameStmt(renameTarget || `${renameState.db}_new`) : '')
   /** Confirm stays disabled until the name is usable: non-empty, different from the
-   *  current one, and not already taken by another database on this server. */
-  const renameTaken = $derived(
-    !!renameTarget &&
-      (cache?.databases ?? []).some((d) => d.name.toLowerCase() === renameTarget.toLowerCase()) 
-  )
+   *  current one, and not already taken — by another database on this server, or by
+   *  another schema in the database this schema lives in. */
+  const renameTaken = $derived.by(() => {
+    const st = renameState
+    if (!st || !renameTarget) return false
+    const taken = st.kind === 'schema'
+      ? (explorer.cache[st.cid]?.schemas ?? []).map((x) => x.name)
+      : (cache?.databases ?? []).map((d) => d.name)
+    return taken.some((n) => n.toLowerCase() === renameTarget.toLowerCase())
+  })
   const canRename = $derived(
     renameSupported && !!renameTarget && renameTarget !== renameState?.db && !renameTaken && !renameState?.running,
   )
 
   function renameDatabase(dbName: string) {
     if (!selected || !dbName) return
-    renameState = { db: dbName, to: dbName, running: false, error: null }
+    renameState = { kind: 'database', db: dbName, cid: selected.id, to: dbName, running: false, error: null }
+  }
+
+  /** Rename a SCHEMA — PG/MSSQL/Oracle, where a schema is its own object. */
+  function renameSchema(schema: string, cid = selected?.id) {
+    if (!selected || !schema || !cid) return
+    renameState = { kind: 'schema', db: schema, cid, to: schema, running: false, error: null }
   }
 
   async function runRename() {
@@ -1251,21 +1314,160 @@
     const s = selected
     if (!st || !s || !canRename) return
     const to = st.to.trim()
-    const sql = genRenameDatabase(s.system, st.db, to)
+    const sql = renameStmt(to)
     renameState = { ...st, running: true, error: null }
     try {
-      await closeOurSessionsTo(s.id, st.db)
-      const r = await ipc.execStatement(s.id, sql)
+      // A DATABASE rename needs our own sessions on it closed first (PG/MSSQL
+      // refuse otherwise). A schema lives inside the connected database, so its
+      // statement just runs on the connection that owns it.
+      if (st.kind === 'database') await closeOurSessionsTo(s.id, st.db)
+      const r = await ipc.execStatement(st.cid, sql)
       if (r.error) {
         renameState = { ...st, running: false, error: r.error.message }
         return
       }
       renameState = null
-      toasts.success(`Database "${st.db}" renamed to "${to}"`, s.system)
-      explorer.invalidate(s.id)
-      await refreshConnection()
+      toasts.success(`${st.kind === 'schema' ? 'Schema' : 'Database'} "${st.db}" renamed to "${to}"`, s.system)
+      explorer.invalidate(st.cid)
+      if (st.cid === s.id) await refreshConnection()
+      else await explorer.refresh(st.cid, { kind: 'connection' })
     } catch (e) {
       renameState = { ...st, running: false, error: String(e) }
+    }
+  }
+
+  // ---- New schema ---------------------------------------------------------
+  // Its own popup for the same reason as Drop: the statement is built from what the
+  // user types and a server refusal (name taken, no CREATE privilege) has to stay
+  // readable in the dialog. Oracle needs a password because a schema there IS a
+  // user, so the statement set is CREATE USER + grants + quota.
+  let newSchemaState = $state<{
+    cid: string
+    database: string
+    name: string
+    password: string
+    running: boolean
+    error: string | null
+  } | null>(null)
+  const newSchemaNeedsPassword = $derived(selected?.system === 'oracle')
+  const newSchemaName = $derived(newSchemaState?.name.trim() ?? '')
+  const newSchemaSql = $derived(
+    newSchemaState && selected
+      ? genCreateSchema(selected.system, newSchemaName || 'new_schema', { password: newSchemaState.password })
+      : '',
+  )
+  /** already-used names come from the schema list of the connection it runs on */
+  const newSchemaTaken = $derived.by(() => {
+    const st = newSchemaState
+    if (!st || !newSchemaName) return false
+    return (explorer.cache[st.cid]?.schemas ?? []).some((x) => x.name.toLowerCase() === newSchemaName.toLowerCase())
+  })
+  const canCreateSchema = $derived(
+    !!newSchemaState &&
+      !!newSchemaName &&
+      !newSchemaTaken &&
+      !newSchemaState.running &&
+      (!newSchemaNeedsPassword || (newSchemaState.password.trim().length > 0 && !newSchemaState.password.includes('"'))),
+  )
+
+  function newSchema(cid = selected?.id, database?: string) {
+    if (!selected || !cid) return
+    if (genCreateSchema(selected.system, 'probe').trimStart().startsWith('--')) {
+      stmtTab('New schema', genCreateSchema(selected.system, 'probe'))
+      return
+    }
+    // name the database the user is LOOKING AT (the tree current-DB header), not the
+    // one saved in the profile — they differ once another database is opened.
+    const shown = database ?? cache?.databases?.find((d) => d.current)?.name ?? selected.database ?? ''
+    newSchemaState = { cid, database: shown, name: '', password: '', running: false, error: null }
+  }
+
+  async function runNewSchema() {
+    const st = newSchemaState
+    const s = selected
+    if (!st || !s || !canCreateSchema) return
+    const name = st.name.trim()
+    const sql = genCreateSchema(s.system, name, { password: st.password })
+    newSchemaState = { ...st, running: true, error: null }
+    try {
+      // Oracle emits three statements — run them in order and stop at the first
+      // error, so a failed CREATE USER never leaves stray grants behind.
+      for (const one of splitStatements(sql, s.system)) {
+        const r = await ipc.execStatement(st.cid, one.sql)
+        if (r.error) {
+          newSchemaState = { ...st, running: false, error: r.error.message }
+          return
+        }
+      }
+      newSchemaState = null
+      toasts.success(`Schema "${name}" created`, s.system)
+      explorer.invalidate(st.cid)
+      if (st.cid === s.id) await refreshConnection()
+      else await explorer.refresh(st.cid, { kind: 'connection' })
+    } catch (e) {
+      newSchemaState = { ...st, running: false, error: String(e) }
+    }
+  }
+
+  // ---- Drop schema --------------------------------------------------------
+  // Its own popup rather than the shared confirm: the statement depends on a
+  // CASCADE choice, and a server refusal ("schema is not empty" / "other objects
+  // depend on it") must stay readable RIGHT THERE so the user can tick CASCADE and
+  // retry instead of losing the dialog to a toast.
+  let dropSchemaState = $state<{
+    schema: string
+    cid: string
+    cascade: boolean
+    running: boolean
+    error: string | null
+  } | null>(null)
+  /** MSSQL has no CASCADE — hide the choice there rather than offer a no-op. */
+  const dropSchemaCascadable = $derived(selected?.system !== 'mssql')
+  const dropSchemaSql = $derived(
+    dropSchemaState && selected ? genDropSchema(selected.system, dropSchemaState.schema, dropSchemaState.cascade) : '',
+  )
+
+  function dropSchema(schema: string, cid = selected?.id) {
+    if (!selected || !schema || !cid) return
+    // engines without schemas have nothing to run — keep the explanation in a tab
+    if (genDropSchema(selected.system, schema).trimStart().startsWith('--')) {
+      stmtTab(`Drop schema ${schema}`, genDropSchema(selected.system, schema))
+      return
+    }
+    dropSchemaState = { schema, cid, cascade: false, running: false, error: null }
+  }
+
+  /** Engines that cannot rename in one statement keep the explanation available:
+   *  park it in a SQL tab so the steps can be edited and run by hand. */
+  function openRenameInTab() {
+    const st = renameState
+    renameState = null
+    if (!st || !selected) return
+    const sql = st.kind === 'schema'
+      ? genRenameSchema(selected.system, st.db)
+      : genRenameDatabase(selected.system, st.db)
+    stmtTab(`Rename ${st.kind} ${st.db}`, sql)
+  }
+
+  async function runDropSchema() {
+    const st = dropSchemaState
+    const s = selected
+    if (!st || !s || st.running) return
+    const sql = genDropSchema(s.system, st.schema, st.cascade)
+    dropSchemaState = { ...st, running: true, error: null }
+    try {
+      const r = await ipc.execStatement(st.cid, sql)
+      if (r.error) {
+        dropSchemaState = { ...st, running: false, error: r.error.message }
+        return
+      }
+      dropSchemaState = null
+      toasts.success(`Schema "${st.schema}" dropped`, s.system)
+      explorer.invalidate(st.cid)
+      if (st.cid === s.id) await refreshConnection()
+      else await explorer.refresh(st.cid, { kind: 'connection' })
+    } catch (e) {
+      dropSchemaState = { ...st, running: false, error: String(e) }
     }
   }
 
@@ -2136,6 +2338,9 @@
             {#if !isSqlite}
               <ContextMenu.Item onclick={() => newDatabase()}>New Database…</ContextMenu.Item>
             {/if}
+            {#if selected && hasRealSchemas(selected.system)}
+              <ContextMenu.Item onclick={() => newSchema()}>New Schema…</ContextMenu.Item>
+            {/if}
             <ContextMenu.Item onclick={() => selected && scriptsWizard.show(selected.id, cache?.schemas?.[0]?.name ?? '')}>Generate Scripts…</ContextMenu.Item>
             <ContextMenu.Item onclick={() => selected && backupWizard.show(selected.id, selected.system)}>Backup & Restore…</ContextMenu.Item>
             <ContextMenu.Item onclick={() => selected && tabs.openSchemaCompare(selected.id)}>Compare Schemas…</ContextMenu.Item>
@@ -2196,7 +2401,12 @@
               {/if}
               <ContextMenu.Item onclick={() => renameDatabase(schema.name)}>Rename…</ContextMenu.Item>
               <ContextMenu.Item variant="destructive" onclick={() => dropDatabase(schema.name)}>Drop Database…</ContextMenu.Item>
+            {:else if selected && hasRealSchemas(selected.system)}
+              <ContextMenu.Item onclick={() => newSchema()}>New Schema…</ContextMenu.Item>
+              <ContextMenu.Item onclick={() => renameSchema(schema.name)}>Rename Schema…</ContextMenu.Item>
+              <ContextMenu.Item variant="destructive" onclick={() => dropSchema(schema.name)}>Drop Schema…</ContextMenu.Item>
             {/if}
+            <ContextMenu.Item onclick={() => copyName(schema.name)}>Copy Name</ContextMenu.Item>
             <ContextMenu.Item onclick={() => selected && explorer.refresh(selected.id, { kind: 'schema', schema: schema.name })}>Refresh</ContextMenu.Item>
           </ContextMenu.Content>
         {/snippet}
@@ -2845,6 +3055,9 @@
               <ContextMenu.Item onclick={() => toggleForeignDb(db.name)}>{expanded.has(fkey) ? 'Collapse' : 'Expand'}</ContextMenu.Item>
               <ContextMenu.Separator />
               <ContextMenu.Item onclick={() => selected && tabs.openSchemaCompare(selected.id, { tgtConnId: selected.id, srcDb: db.name })}>Compare Databases…</ContextMenu.Item>
+              {#if selected && hasRealSchemas(selected.system)}
+                <ContextMenu.Item onclick={() => sub && newSchema(sub, db.name)}>New Schema…</ContextMenu.Item>
+              {/if}
               <!-- rename/drop run on the base connection (not attached to db.name), which PG requires -->
               <ContextMenu.Item onclick={() => renameDatabase(db.name)}>Rename…</ContextMenu.Item>
               <ContextMenu.Item onclick={() => copyName(db.name)}>Copy Name</ContextMenu.Item>
@@ -2876,6 +3089,12 @@
                   {/if}
                   <ContextMenu.Item onclick={() => sub && scriptsWizard.show(sub, fsch.name)}>Generate Scripts…</ContextMenu.Item>
                   <ContextMenu.Separator />
+                  {#if selected && hasRealSchemas(selected.system)}
+                    <ContextMenu.Item onclick={() => sub && newSchema(sub, db.name)}>New Schema…</ContextMenu.Item>
+                    <ContextMenu.Item onclick={() => sub && renameSchema(fsch.name, sub)}>Rename Schema…</ContextMenu.Item>
+                    <ContextMenu.Item variant="destructive" onclick={() => sub && dropSchema(fsch.name, sub)}>Drop Schema…</ContextMenu.Item>
+                  {/if}
+                  <ContextMenu.Item onclick={() => copyName(fsch.name)}>Copy Name</ContextMenu.Item>
                   <ContextMenu.Item onclick={() => sub && explorer.refresh(sub, { kind: 'schema', schema: fsch.name })}>Refresh</ContextMenu.Item>
                 </ContextMenu.Content>
               {/snippet}
@@ -3128,8 +3347,9 @@
 </div>
 
 {#if renameState}
-  <!-- Rename database: backdrop click does NOT close (rule chung for form popups);
-       the input takes focus on open so the user can type straight away. -->
+  {@const rnKind = renameState.kind === 'schema' ? 'schema' : 'database'}
+  <!-- Rename database/schema: backdrop click does NOT close (rule chung for form
+       popups); the input takes focus on open so the user can type straight away. -->
   <div
     onkeydown={(e) => {
       if (e.key === 'Escape') renameState = null
@@ -3141,15 +3361,16 @@
     <div
       role="dialog"
       aria-modal="true"
-      aria-label="Rename database"
+      aria-label={`Rename ${rnKind}`}
       tabindex="-1"
       style="background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-14);padding:var(--px-18);min-width:var(--px-340);max-width:var(--px-480);box-shadow:0 var(--px-24) var(--px-60) var(--rgba-0-0-0-_55)"
     >
-      <div style="font-size:var(--px-14);font-weight:600;color:var(--text);margin-bottom:var(--px-8)">Rename database</div>
+      <div style="font-size:var(--px-14);font-weight:600;color:var(--text);margin-bottom:var(--px-8)">Rename {rnKind}</div>
       {#if renameSupported}
         <div style="font-size:var(--px-12_5);color:var(--text2);line-height:1.45;margin-bottom:var(--px-12)">
-          Rename <span class="mono" style="color:var(--text)">{renameState.db}</span> on this server. Objects inside it are untouched;
-          anything referring to it by name (connections, scripts) has to be updated.
+          Rename <span class="mono" style="color:var(--text)">{renameState.db}</span>
+          {renameState.kind === 'schema' ? 'in this database' : 'on this server'}. Objects inside it are untouched;
+          anything referring to it by name ({renameState.kind === 'schema' ? 'search_path, views, application SQL' : 'connections, scripts'}) has to be updated.
         </div>
         <label for="rn-db" style="display:block;font-size:var(--px-11);color:var(--muted);margin-bottom:var(--px-4)">New name</label>
         <input
@@ -3163,7 +3384,7 @@
           style="width:100%;box-sizing:border-box;font-size:var(--px-12_5);padding:var(--px-6) var(--px-8);border-radius:var(--px-6);background:var(--raised);border:var(--px-1) solid var(--border2);color:var(--text)"
         />
         {#if renameTaken}
-          <div style="font-size:var(--px-11_5);color:var(--error);margin-top:var(--px-6)">A database named “{renameTarget}” already exists on this server.</div>
+          <div style="font-size:var(--px-11_5);color:var(--error);margin-top:var(--px-6)">A {rnKind} named “{renameTarget}” already exists {renameState.kind === 'schema' ? 'in this database' : 'on this server'}.</div>
         {/if}
         <div
           class="mono"
@@ -3193,13 +3414,149 @@
           >{renameState.running ? 'Renaming…' : 'Confirm'}</span>
         {:else}
           <span
-            onclick={() => { const st = renameState; renameState = null; if (st) stmtTab(`Rename database ${st.db}`, genRenameDatabase(selected!.system, st.db)) }}
-            onkeydown={(e) => e.key === 'Enter' && (() => { const st = renameState; renameState = null; if (st) stmtTab(`Rename database ${st.db}`, genRenameDatabase(selected!.system, st.db)) })()}
+            onclick={() => openRenameInTab()}
+            onkeydown={(e) => e.key === 'Enter' && openRenameInTab()}
             role="button"
             tabindex="0"
             class="cfm-btn"
           >Open in SQL tab</span>
         {/if}
+      </div>
+    </div>
+  </div>
+{/if}
+
+{#if newSchemaState}
+  <!-- New schema: backdrop click does NOT close (rule chung for form popups); the
+       name input takes focus on open. A server refusal stays in the dialog so the
+       name can be fixed and retried. -->
+  <div
+    onkeydown={(e) => {
+      if (e.key === 'Escape') newSchemaState = null
+      if (e.key === 'Enter' && canCreateSchema) void runNewSchema()
+    }}
+    role="presentation"
+    style="position:fixed;inset:0;background:var(--rgba-0-0-0-_5);display:flex;align-items:center;justify-content:center;z-index:90"
+  >
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="New schema"
+      tabindex="-1"
+      style="background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-14);padding:var(--px-18);min-width:var(--px-340);max-width:var(--px-480);box-shadow:0 var(--px-24) var(--px-60) var(--rgba-0-0-0-_55)"
+    >
+      <div style="font-size:var(--px-14);font-weight:600;color:var(--text);margin-bottom:var(--px-8)">New schema</div>
+      <div style="font-size:var(--px-12_5);color:var(--text2);line-height:1.45;margin-bottom:var(--px-12)">
+        {#if newSchemaNeedsPassword}
+          In Oracle a schema IS a user, so this creates the user plus the grants and quota it needs to own objects.
+        {:else}
+          Create a schema in <span class="mono" style="color:var(--text)">{newSchemaState.database || 'this database'}</span>.
+        {/if}
+      </div>
+      <label for="ns-name" style="display:block;font-size:var(--px-11);color:var(--muted);margin-bottom:var(--px-4)">Name</label>
+      <input
+        id="ns-name"
+        class="mono"
+        use:autofocus
+        bind:value={newSchemaState.name}
+        disabled={newSchemaState.running}
+        spellcheck="false"
+        autocomplete="off"
+        style="width:100%;box-sizing:border-box;font-size:var(--px-12_5);padding:var(--px-6) var(--px-8);border-radius:var(--px-6);background:var(--raised);border:var(--px-1) solid var(--border2);color:var(--text)"
+      />
+      {#if newSchemaTaken}
+        <div style="font-size:var(--px-11_5);color:var(--error);margin-top:var(--px-6)">A schema named “{newSchemaName}” already exists here.</div>
+      {/if}
+      {#if newSchemaNeedsPassword}
+        <label for="ns-pwd" style="display:block;font-size:var(--px-11);color:var(--muted);margin:var(--px-10) 0 var(--px-4)">Password</label>
+        <input
+          id="ns-pwd"
+          class="mono"
+          type="password"
+          bind:value={newSchemaState.password}
+          disabled={newSchemaState.running}
+          spellcheck="false"
+          autocomplete="new-password"
+          style="width:100%;box-sizing:border-box;font-size:var(--px-12_5);padding:var(--px-6) var(--px-8);border-radius:var(--px-6);background:var(--raised);border:var(--px-1) solid var(--border2);color:var(--text)"
+        />
+        {#if newSchemaState.password.includes('"')}
+          <div style="font-size:var(--px-11_5);color:var(--error);margin-top:var(--px-6)">A double quote cannot be used in an Oracle password.</div>
+        {/if}
+      {/if}
+      <div
+        class="mono"
+        style="font-size:var(--px-11_5);color:var(--text);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-8);margin:var(--px-12) 0;white-space:pre-wrap;word-break:break-word"
+      >{newSchemaSql}</div>
+      {#if newSchemaState.error}
+        <div style="font-size:var(--px-11_5);color:var(--error);margin-bottom:var(--px-12);white-space:pre-wrap">{newSchemaState.error}</div>
+      {/if}
+      <div style="display:flex;gap:var(--px-8);justify-content:flex-end">
+        <span onclick={() => (newSchemaState = null)} onkeydown={(e) => e.key === 'Enter' && (newSchemaState = null)} role="button" tabindex="0" class="cfm-btn">Cancel</span>
+        <span
+          onclick={() => void runNewSchema()}
+          onkeydown={(e) => e.key === 'Enter' && void runNewSchema()}
+          role="button"
+          tabindex="0"
+          aria-disabled={!canCreateSchema}
+          aria-busy={newSchemaState.running}
+          class="cfm-btn primary"
+          style={canCreateSchema ? '' : 'opacity:.5;pointer-events:none'}
+        >{newSchemaState.running ? 'Creating…' : 'Create'}</span>
+      </div>
+    </div>
+  </div>
+{/if}
+
+{#if dropSchemaState}
+  <!-- Drop schema: destructive, so it shows the exact statement and keeps the
+       server refusal (a non-empty schema) visible IN the dialog — tick CASCADE and
+       retry without losing it. Backdrop click does NOT close (rule chung). -->
+  <div
+    onkeydown={(e) => { if (e.key === 'Escape') dropSchemaState = null }}
+    role="presentation"
+    style="position:fixed;inset:0;background:var(--rgba-0-0-0-_5);display:flex;align-items:center;justify-content:center;z-index:90"
+  >
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Drop schema"
+      tabindex="-1"
+      style="background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-14);padding:var(--px-18);min-width:var(--px-340);max-width:var(--px-480);box-shadow:0 var(--px-24) var(--px-60) var(--rgba-0-0-0-_55)"
+    >
+      <div style="font-size:var(--px-14);font-weight:600;color:var(--text);margin-bottom:var(--px-8)">Drop schema</div>
+      <div style="font-size:var(--px-12_5);color:var(--text2);line-height:1.45;margin-bottom:var(--px-12)">
+        Drop <span class="mono" style="color:var(--text)">{dropSchemaState.schema}</span>?
+        {#if dropSchemaCascadable}
+          Without CASCADE the server refuses a schema that still holds objects.
+        {:else}
+          MSSQL only drops an EMPTY schema — move or drop its objects first.
+        {/if}
+        This cannot be undone.
+      </div>
+      {#if dropSchemaCascadable}
+        <label style="display:flex;align-items:center;gap:var(--px-8);font-size:var(--px-12_5);color:var(--text);margin-bottom:var(--px-12)">
+          <input type="checkbox" bind:checked={dropSchemaState.cascade} disabled={dropSchemaState.running} />
+          Also drop everything inside it (CASCADE)
+        </label>
+      {/if}
+      <div
+        class="mono"
+        style="font-size:var(--px-11_5);color:var(--text);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-8);margin-bottom:var(--px-12);white-space:pre-wrap;word-break:break-word"
+      >{dropSchemaSql}</div>
+      {#if dropSchemaState.error}
+        <div style="font-size:var(--px-11_5);color:var(--error);margin-bottom:var(--px-12);white-space:pre-wrap">{dropSchemaState.error}</div>
+      {/if}
+      <div style="display:flex;gap:var(--px-8);justify-content:flex-end">
+        <span onclick={() => (dropSchemaState = null)} onkeydown={(e) => e.key === 'Enter' && (dropSchemaState = null)} role="button" tabindex="0" class="cfm-btn">Cancel</span>
+        <span
+          onclick={() => void runDropSchema()}
+          onkeydown={(e) => e.key === 'Enter' && void runDropSchema()}
+          role="button"
+          tabindex="0"
+          aria-busy={dropSchemaState.running}
+          class="cfm-btn danger"
+          style={dropSchemaState.running ? 'opacity:.5;pointer-events:none' : ''}
+        >{dropSchemaState.running ? 'Dropping…' : 'Drop schema'}</span>
       </div>
     </div>
   </div>

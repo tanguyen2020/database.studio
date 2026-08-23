@@ -183,6 +183,104 @@ export function genDropDatabase(system: string, database: string): string {
   }
 }
 
+/** Engines with real schemas INSIDE a database (schema ≠ database), i.e. where a
+ *  schema is its own object to rename/drop. MySQL/MariaDB/ClickHouse call their
+ *  databases "schemas", so those tree nodes keep the DATABASE operations; SQLite
+ *  and the non-SQL engines have no schemas at all. */
+export function hasRealSchemas(system: string): boolean {
+  return system === 'postgres' || system === 'mssql' || system === 'oracle'
+}
+
+/**
+ * CREATE a schema. PostgreSQL/MSSQL create a real schema inside the current
+ * database. In Oracle a schema IS a user, so it needs a password and comes out as
+ * three statements (create + grants + quota) — the caller runs them in order.
+ * Engines whose schema IS a database fall through to CREATE DATABASE.
+ */
+export function genCreateSchema(system: string, schema: string, opts?: { password?: string }): string {
+  const s = quoteIdent(system, schema)
+  switch (system) {
+    case 'postgres':
+      return `CREATE SCHEMA IF NOT EXISTS ${s};`
+    case 'mssql':
+      // T-SQL has no IF NOT EXISTS on CREATE SCHEMA, and it must be the first
+      // statement of its batch — the driver already routes CREATE DDL that way.
+      return `CREATE SCHEMA ${s};`
+    case 'oracle': {
+      // A double-quoted password cannot contain a double quote; the dialog rejects
+      // one rather than emitting something the server would reject or mis-parse.
+      const pwd = (opts?.password ?? '').replaceAll('"', '')
+      return `CREATE USER ${s} IDENTIFIED BY "${pwd}";\nGRANT CONNECT, RESOURCE TO ${s};\nALTER USER ${s} QUOTA UNLIMITED ON USERS;`
+    }
+    case 'mysql':
+    case 'mariadb':
+    case 'clickhouse':
+      return genCreateDatabase(system, schema) // schema == database here
+    case 'sqlite':
+      return `-- SQLite has no schemas (one file = one database).`
+    default:
+      return `-- Creating a schema is not supported for ${system}.`
+  }
+}
+
+
+/**
+ * Rename a schema. Only PostgreSQL does it in one statement: MSSQL has no schema
+ * rename (objects have to be TRANSFERred into a new schema) and an Oracle schema
+ * IS a user, which cannot be renamed either — both return an explanatory comment
+ * so the caller explains instead of pretending it can run something. Engines whose
+ * schema IS a database fall through to the database statement.
+ */
+export function genRenameSchema(system: string, schema: string, newName?: string): string {
+  const from = quoteIdent(system, schema)
+  const to = quoteIdent(system, newName ?? schema + '_new')
+  switch (system) {
+    case 'postgres':
+      // Objects inside keep working; anything naming the schema (search_path, a
+      // view's stored text, application SQL) has to be updated by hand.
+      return `ALTER SCHEMA ${from} RENAME TO ${to};`
+    case 'mssql':
+      return `-- MSSQL cannot rename a schema.\n-- CREATE SCHEMA ${to}; then move every object\n-- (ALTER SCHEMA ${to} TRANSFER ${from}.<object>;) and DROP SCHEMA ${from};`
+    case 'oracle':
+      return `-- In Oracle a schema IS a user, and users cannot be renamed.\n-- Create the new user, copy the objects (Data Pump remap_schema), then DROP USER ${from} CASCADE.`
+    case 'mysql':
+    case 'mariadb':
+    case 'clickhouse':
+      return genRenameDatabase(system, schema, newName) // schema == database here
+    case 'sqlite':
+      return `-- SQLite has no schemas (one file = one database).`
+    default:
+      return `-- Renaming a schema is not supported for ${system}.`
+  }
+}
+
+/**
+ * DROP a schema. `cascade` also drops everything inside it; without it the server
+ * refuses a non-empty schema, which is the safer default — that error names what is
+ * still in there. MSSQL has no CASCADE at all (its DROP SCHEMA only works on an
+ * empty schema). An Oracle schema is a user, so CASCADE is what removes its objects.
+ */
+export function genDropSchema(system: string, schema: string, cascade = false): string {
+  const s = quoteIdent(system, schema)
+  switch (system) {
+    case 'postgres':
+      return `DROP SCHEMA IF EXISTS ${s} ${cascade ? 'CASCADE' : 'RESTRICT'};`
+    case 'mssql':
+      // No CASCADE in T-SQL — drop/transfer the objects first, then this succeeds.
+      return `DROP SCHEMA IF EXISTS ${s};`
+    case 'oracle':
+      return `DROP USER ${s}${cascade ? ' CASCADE' : ''};`
+    case 'mysql':
+    case 'mariadb':
+    case 'clickhouse':
+      return genDropDatabase(system, schema) // schema == database here
+    case 'sqlite':
+      return `-- SQLite has no schemas (one file = one database).`
+    default:
+      return `-- Dropping a schema is not supported for ${system}.`
+  }
+}
+
 export function genTruncate(system: string, schema: string, table: string): string {
   return `TRUNCATE TABLE ${target(system, schema, table)};`
 }

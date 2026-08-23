@@ -25,6 +25,15 @@
   import { tabs } from '$lib/stores/tabs.svelte'
   import { formatClipboard, type ClipFormat } from '$lib/export/clipboard'
   import { classifyType } from '$lib/copy/types'
+  import {
+    formatJson,
+    hasJsonBadge,
+    jsonCellMode,
+    minifyJson,
+    parseEditorText,
+    toEditorText,
+    type JsonCellMode,
+  } from '$lib/grid/json-cell'
   import type { QueryResultSet } from '$lib/types'
 
   /** Bật editable grid khi mở từ Table Data Viewer (biết schema/table/pk). */
@@ -56,11 +65,80 @@
   let editingCell = $state<{ row: number; col: string; insert?: number; seed?: string } | null>(null)
   let previewSql = $state<string[] | null>(null)
   let applying = $state(false)
-  // JSON cell viewer (badge { } → modal)
-  let jsonCell = $state<string | null>(null)
+  // JSON cell viewer/editor (badge { } or double-click → modal). A JSON document
+  // does not fit the one-line inline editor, so JSON cells open this instead;
+  // mode 'none' is the read-only viewer (query results, pg arrays, composites).
+  let jsonCell = $state<{
+    row: number
+    col: string
+    insert?: number
+    mode: JsonCellMode
+    /** value the editor opened on — shown in the header, Save diffs against the row */
+    original: unknown
+    draft: string
+  } | null>(null)
+  const jsonParsed = $derived(
+    jsonCell && jsonCell.mode !== 'none' ? parseEditorText(jsonCell.draft, jsonCell.mode) : null,
+  )
 
-  function isJsonValue(v: unknown): boolean {
-    return typeof v === 'object' && v !== null
+  /** current value of a cell, honouring a pending edit / an inserted row. */
+  function cellValue(row: number, col: string, insert?: number): unknown {
+    if (insert != null) return insertedRows[insert]?.[col] ?? null
+    const k = cellKey(row, col)
+    return (edits.has(k) ? edits.get(k) : data.rows[row]?.[col]) ?? null
+  }
+
+  function modeOf(row: number, col: string, insert?: number): JsonCellMode {
+    return editable ? jsonCellMode(colTypes[col], cellValue(row, col, insert)) : 'none'
+  }
+
+  /** Open the JSON modal. `seed` comes from type-to-replace so the keystroke is
+   *  not swallowed. Read-only grids open it as the viewer. */
+  function openJsonCell(row: number, col: string, insert?: number, seed?: string) {
+    const original = cellValue(row, col, insert)
+    const mode = modeOf(row, col, insert)
+    editingCell = null
+    jsonCell = { row, col, insert, mode, original, draft: seed ?? toEditorText(original, mode) }
+  }
+
+  /** Enter edit on a cell: a JSON column opens the JSON editor, anything else
+   *  keeps the inline input. */
+  function startCellEdit(row: number, col: string, insert?: number, seed?: string) {
+    if (!editable) return
+    if (modeOf(row, col, insert) !== 'none') openJsonCell(row, col, insert, seed)
+    else startEdit(row, col, insert, seed)
+  }
+
+  function applyJsonFormat(fn: (t: string) => string | null) {
+    if (!jsonCell) return
+    const next = fn(jsonCell.draft)
+    if (next === null) return // invalid — keep the draft; the status line explains
+    jsonCell = { ...jsonCell, draft: next }
+  }
+
+  /** Commit the JSON draft into the SAME pending buffer the inline editor writes
+   *  to, so Preview diff / Execute need no special case. */
+  function saveJsonCell() {
+    const m = jsonCell
+    if (!m || m.mode === 'none') return
+    const p = parseEditorText(m.draft, m.mode)
+    if (!p.ok) return
+    if (m.insert != null) {
+      insertedRows[m.insert][m.col] = p.value
+      insertedRows = [...insertedRows]
+    } else {
+      const key = cellKey(m.row, m.col)
+      if (JSON.stringify(p.value) === JSON.stringify(data.rows[m.row]?.[m.col] ?? null)) edits.delete(key)
+      else edits.set(key, p.value)
+      edits = new Map(edits)
+    }
+    jsonCell = null
+  }
+
+  // Focus a freshly-mounted JSON textarea (same reason as focusEditor).
+  function focusArea(node: HTMLTextAreaElement) {
+    node.focus()
+    node.setSelectionRange(node.value.length, node.value.length)
   }
 
   const editable = $derived(!!editTarget)
@@ -145,11 +223,11 @@
     }
     const nextCol = columns[ci]
     if (insert != null) {
-      startEdit(insert, nextCol, insert)
+      startCellEdit(insert, nextCol, insert)
     } else {
       selectedRows = new Set()
       selectedCell = { row, col: nextCol }
-      startEdit(row, nextCol)
+      startCellEdit(row, nextCol)
     }
   }
 
@@ -285,7 +363,7 @@
     const idx = insertedRows.length - 1
     page = Math.max(0, pageCount - 1)
     await scrollToBottom()
-    if (columns.length) startEdit(idx, columns[0], idx)
+    if (columns.length) startCellEdit(idx, columns[0], idx)
   }
 
   function discard() {
@@ -294,6 +372,7 @@
     insertedRows = []
     editingCell = null
     previewSql = null
+    jsonCell = null
   }
 
   /** Dựng GridChange[] từ buffer pending. Mỗi cột kèm SQL type để backend (PG)
@@ -750,6 +829,7 @@
     if (e.key === 'Escape') {
       ctxMenu = null
       editingCell = null
+      jsonCell = null
       return
     }
     // Navicat-style edit entry: a cell is selected (not yet editing) on an
@@ -758,12 +838,12 @@
     if (editable && selectedCell && !editingCell) {
       if (e.key === 'Enter' || e.key === 'F2') {
         e.preventDefault()
-        startEdit(selectedCell.row, selectedCell.col)
+        startCellEdit(selectedCell.row, selectedCell.col)
         return
       }
       if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
         e.preventDefault()
-        startEdit(selectedCell.row, selectedCell.col, undefined, e.key)
+        startCellEdit(selectedCell.row, selectedCell.col, undefined, e.key)
         return
       }
     }
@@ -1049,7 +1129,7 @@
                 e.stopPropagation()
                 // Navicat-style: single-click selects, double-click edits (or copies
                 // on read-only grids).
-                if (editable) startEdit(ri, col)
+                if (editable) startCellEdit(ri, col)
                 else { clickCell(ri, col); void copySelection() }
               }}
               title={cell.isNull ? undefined : cell.text}
@@ -1084,14 +1164,15 @@
                   {:else}
                     <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;{numericCols.has(col) && !isCellSelected && !isRowSelected ? 'color:var(--syntax-number)' : ''}">{cell.text}</span>
                   {/if}
-                  {#if isJsonValue(rawVal)}
-                    <!-- JSON/JSONB cell badge — port dòng 445, click mở modal -->
+                  {#if hasJsonBadge(colTypes[col], rawVal)}
+                    <!-- JSON/JSONB cell badge — port dòng 445; click opens the JSON
+                         viewer, or the JSON editor when the grid is editable -->
                     <span
-                      onclick={(e) => { e.stopPropagation(); jsonCell = JSON.stringify(rawVal, null, 2) }}
-                      onkeydown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); jsonCell = JSON.stringify(rawVal, null, 2) } }}
+                      onclick={(e) => { e.stopPropagation(); openJsonCell(ri, col) }}
+                      onkeydown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); openJsonCell(ri, col) } }}
                       role="button"
                       tabindex="0"
-                      title="Expand JSON"
+                      title={modeOf(ri, col) === 'none' ? 'Expand JSON' : 'Edit JSON'}
                       style="flex:none;font-size:var(--px-9);font-weight:700;color:var(--hex-61afef);border:var(--px-1) solid var(--hex-2a4a6a);border-radius:var(--px-3);padding:0 var(--px-4);cursor:pointer"
                     >{'{ }'}</span>
                   {/if}
@@ -1116,7 +1197,7 @@
               {@const isEditing = editingCell?.insert === insIdx && editingCell?.col === col}
               <td
                 style="border-bottom:var(--px-1) solid var(--border);border-right:var(--px-1) solid var(--border);padding:0;white-space:nowrap"
-                ondblclick={() => startEdit(insIdx, col, insIdx)}
+                ondblclick={() => startCellEdit(insIdx, col, insIdx)}
               >
                 {#if isEditing}
                   <input
@@ -1137,8 +1218,18 @@
                     }}
                   />
                 {:else}
-                  <div style="padding:var(--px-5) var(--px-12);color:{ins[col] == null ? 'var(--muted)' : 'var(--text)'}">
-                    {ins[col] == null ? 'NULL' : String(ins[col])}
+                  <div style="padding:var(--px-5) var(--px-12);display:flex;align-items:center;gap:var(--px-6);color:{ins[col] == null ? 'var(--muted)' : 'var(--text)'}">
+                    <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{display(ins[col], col).text}</span>
+                    {#if hasJsonBadge(colTypes[col], ins[col]) || modeOf(insIdx, col, insIdx) === 'json'}
+                      <span
+                        onclick={(e) => { e.stopPropagation(); openJsonCell(insIdx, col, insIdx) }}
+                        onkeydown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); openJsonCell(insIdx, col, insIdx) } }}
+                        role="button"
+                        tabindex="0"
+                        title="Edit JSON"
+                        style="flex:none;font-size:var(--px-9);font-weight:700;color:var(--hex-61afef);border:var(--px-1) solid var(--hex-2a4a6a);border-radius:var(--px-3);padding:0 var(--px-4);cursor:pointer"
+                      >{'{ }'}</span>
+                    {/if}
                   </div>
                 {/if}
               </td>
@@ -1240,6 +1331,11 @@
     {#if editable}
       {@render item('Paste', () => { clickCell(m.row, m.col); void pasteFromClipboard() })}
     {/if}
+    {#if modeOf(m.row, m.col) !== 'none'}
+      {@render item('Edit as JSON…', () => { ctxMenu = null; openJsonCell(m.row, m.col) })}
+    {:else if hasJsonBadge(colTypes[m.col], data.rows[m.row]?.[m.col])}
+      {@render item('View JSON', () => { ctxMenu = null; openJsonCell(m.row, m.col) })}
+    {/if}
     <div style="height:var(--px-1);background:var(--border);margin:var(--px-4) 0"></div>
     <div style="padding:var(--px-3) var(--px-14);font-size:var(--px-9_5);text-transform:uppercase;letter-spacing:.06em;color:var(--muted)">Copy {selN} row(s) as</div>
     {@render item('Tab-separated', () => copyAs('tsv'))}
@@ -1288,10 +1384,19 @@
   </div>
 {/if}
 
-<!-- JSON cell modal — port jsonCellOpen (format + copy) -->
+<!-- JSON cell modal — viewer on read-only grids, EDITOR on editable ones. A JSON
+     document has no business in the one-line inline editor, so this is where a
+     json/jsonb column is edited: validate, format, then Save into the same
+     pending buffer Execute writes from. Clicking the backdrop does NOT close the
+     editor (project rule for form dialogs — a typed document must not vanish on
+     a stray click); Escape / Cancel do. -->
 {#if jsonCell !== null}
+  {@const m = jsonCell}
+  {@const editing = m.mode !== 'none'}
+  {@const invalid = !!jsonParsed && !jsonParsed.ok}
+  {@const empty = m.draft.trim() === ''}
   <div
-    onclick={() => (jsonCell = null)}
+    onclick={() => { if (!editing) jsonCell = null }}
     onkeydown={(e) => e.key === 'Escape' && (jsonCell = null)}
     role="presentation"
     style="position:fixed;inset:0;background:var(--rgba-0-0-0-_5);display:flex;align-items:center;justify-content:center;z-index:58"
@@ -1299,24 +1404,82 @@
     <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
     <div
       onclick={(e) => e.stopPropagation()}
+      onkeydown={(e) => {
+        if (e.key === 'Escape') { e.stopPropagation(); jsonCell = null }
+        else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); saveJsonCell() }
+      }}
       role="dialog"
-      aria-label="JSON cell"
+      aria-label={editing ? 'Edit JSON cell' : 'JSON cell'}
       tabindex="-1"
-      style="width:var(--px-640);max-width:94vw;background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-14);box-shadow:0 var(--px-30) var(--px-70) var(--rgba-0-0-0-_55);overflow:hidden"
+      style="width:var(--px-720);max-width:94vw;background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-14);box-shadow:0 var(--px-30) var(--px-70) var(--rgba-0-0-0-_55);overflow:hidden"
     >
-      <div style="padding:var(--px-18) var(--px-20) var(--px-8);font-weight:700;font-size:var(--px-15)">JSON cell</div>
-      <div style="padding:0 var(--px-20) var(--px-14)">
-        <pre class="mono selectable" style="max-height:50vh;overflow:auto;border-radius:var(--px-9);background:var(--panel);border:var(--px-1) solid var(--border);padding:var(--px-12);font-size:var(--px-11_5);line-height:1.6;margin:0">{jsonCell}</pre>
+      <div style="padding:var(--px-18) var(--px-20) var(--px-8);display:flex;align-items:baseline;gap:var(--px-8)">
+        <span style="font-weight:700;font-size:var(--px-15)">{editing ? 'Edit JSON' : 'JSON cell'}</span>
+        <span class="mono" style="font-size:var(--px-11_5);color:var(--syntax-function)">{m.col}</span>
+        <span style="font-size:var(--px-11);color:var(--muted)">{m.insert != null ? 'new record' : 'row ' + (m.row + 1)}{colTypes[m.col] ? ' · ' + colTypes[m.col] : ''}</span>
+      </div>
+      <div style="padding:0 var(--px-20) var(--px-10)">
+        {#if editing}
+          <textarea
+            class="mono"
+            bind:value={m.draft}
+            use:focusArea
+            spellcheck="false"
+            aria-label="JSON value"
+            style="width:100%;height:44vh;resize:vertical;box-sizing:border-box;border-radius:var(--px-9);background:var(--panel);border:var(--px-1) solid {invalid ? 'var(--error)' : 'var(--border)'};color:var(--text);padding:var(--px-12);font-size:var(--px-11_5);line-height:1.6;outline:none"
+          ></textarea>
+          <div style="display:flex;align-items:center;gap:var(--px-8);padding-top:var(--px-8);font-size:var(--px-11)">
+            <span class="eg-btn" role="button" tabindex="0" title="Pretty-print"
+              onclick={() => applyJsonFormat(formatJson)}
+              onkeydown={(e) => e.key === 'Enter' && applyJsonFormat(formatJson)}>Format</span>
+            <span class="eg-btn" role="button" tabindex="0" title="Collapse to one line"
+              onclick={() => applyJsonFormat(minifyJson)}
+              onkeydown={(e) => e.key === 'Enter' && applyJsonFormat(minifyJson)}>Minify</span>
+            <span class="eg-btn" role="button" tabindex="0"
+              onclick={() => void copyText(m.draft, 'Copied JSON')}
+              onkeydown={(e) => e.key === 'Enter' && copyText(m.draft, 'Copied JSON')}>Copy</span>
+            {#if invalid}
+              <span style="color:var(--error)">Invalid JSON — {jsonParsed && !jsonParsed.ok ? jsonParsed.error : ''}</span>
+            {:else if empty}
+              <span style="color:var(--muted)">Empty — saves NULL</span>
+            {:else}
+              <span style="color:var(--success)">Valid JSON{m.mode === 'text' ? ' — this column stores it as text' : ''}</span>
+            {/if}
+          </div>
+        {:else}
+          <pre class="mono selectable" style="max-height:50vh;overflow:auto;border-radius:var(--px-9);background:var(--panel);border:var(--px-1) solid var(--border);padding:var(--px-12);font-size:var(--px-11_5);line-height:1.6;margin:0">{toEditorText(m.original, 'json')}</pre>
+          {#if editable}
+            <div style="padding-top:var(--px-8);font-size:var(--px-11);color:var(--muted)">Read-only — {colTypes[m.col] ?? 'this column'} is not a JSON column.</div>
+          {/if}
+        {/if}
       </div>
       <div style="display:flex;gap:var(--px-9);padding:var(--px-14) var(--px-20);border-top:var(--px-1) solid var(--border);background:var(--panel)">
-        <span class="eg-btn" style="margin-left:auto" onclick={async () => { if (jsonCell) await navigator.clipboard.writeText(jsonCell) }} onkeydown={(e) => e.key === 'Enter' && jsonCell && navigator.clipboard.writeText(jsonCell)} role="button" tabindex="0">Copy</span>
-        <span
-          onclick={() => (jsonCell = null)}
-          onkeydown={(e) => e.key === 'Enter' && (jsonCell = null)}
-          role="button"
-          tabindex="0"
-          style="font-size:var(--px-12_5);font-weight:600;background:var(--primary);color:var(--hex-fff);border-radius:var(--px-8);padding:var(--px-8) var(--px-16);cursor:pointer"
-        >Close</span>
+        {#if editing}
+          <span style="font-size:var(--px-11);color:var(--muted);align-self:center">Ctrl+Enter saves · Esc cancels</span>
+          <span class="eg-btn" style="margin-left:auto" role="button" tabindex="0"
+            onclick={() => (jsonCell = null)}
+            onkeydown={(e) => e.key === 'Enter' && (jsonCell = null)}>Cancel</span>
+          <span
+            onclick={saveJsonCell}
+            onkeydown={(e) => e.key === 'Enter' && saveJsonCell()}
+            role="button"
+            tabindex="0"
+            aria-disabled={invalid}
+            title={invalid ? 'Fix the JSON first' : 'Keep this value as a pending change'}
+            style="font-size:var(--px-12_5);font-weight:600;background:var(--primary);color:var(--hex-fff);border-radius:var(--px-8);padding:var(--px-8) var(--px-16);cursor:{invalid ? 'default' : 'pointer'};opacity:{invalid ? 0.45 : 1}"
+          >Save</span>
+        {:else}
+          <span class="eg-btn" style="margin-left:auto" role="button" tabindex="0"
+            onclick={() => void copyText(toEditorText(m.original, 'json'), 'Copied JSON')}
+            onkeydown={(e) => e.key === 'Enter' && copyText(toEditorText(m.original, 'json'), 'Copied JSON')}>Copy</span>
+          <span
+            onclick={() => (jsonCell = null)}
+            onkeydown={(e) => e.key === 'Enter' && (jsonCell = null)}
+            role="button"
+            tabindex="0"
+            style="font-size:var(--px-12_5);font-weight:600;background:var(--primary);color:var(--hex-fff);border-radius:var(--px-8);padding:var(--px-8) var(--px-16);cursor:pointer"
+          >Close</span>
+        {/if}
       </div>
     </div>
   </div>
