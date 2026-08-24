@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { MSSQL, MySQL, PostgreSQL, SQLite, StandardSQL, PLSQL, Cassandra } from '@codemirror/lang-sql'
 import { clickHouseDialect } from '$lib/sql/ch-editor-dialect'
-import { sqlDialectFor } from './dialect'
+import { SQL_SYSTEMS, dialectVocabulary, editorLanguageId, mergeMonarchKeywords, sqlDialectFor } from './dialect'
 
 // The dialect drives keyword completion and how the text is tokenized for the
 // schema source, so a system falling through to StandardSQL silently loses its
@@ -37,5 +37,48 @@ describe('sqlDialectFor', () => {
     expect(cql.has('keyspace')).toBe(true)
     expect(cql.has('allow')).toBe(true)
     expect(words(StandardSQL).has('keyspace')).toBe(false)
+  })
+})
+
+describe('monarch language ids', () => {
+  it('gives every SQL system its own language, and MongoDB JavaScript', () => {
+    expect(editorLanguageId('postgres')).toBe('ds-postgres')
+    expect(editorLanguageId('clickhouse')).toBe('ds-clickhouse')
+    expect(editorLanguageId('oracle')).toBe('ds-oracle')
+    expect(editorLanguageId('mongodb')).toBe('javascript')
+    // an unknown/non-SQL system still gets a valid, registered id
+    expect(editorLanguageId('redis')).toBe('ds-sql')
+    expect(SQL_SYSTEMS.map(editorLanguageId)).toContain('ds-mssql')
+  })
+
+  it('ids are unique and all registered systems are covered', () => {
+    const ids = SQL_SYSTEMS.map(editorLanguageId)
+    expect(new Set(ids).size).toBe(ids.length)
+    expect(ids).toHaveLength(8)
+  })
+})
+
+describe('mergeMonarchKeywords', () => {
+  it('is a union: nothing Monaco used to colour is dropped', () => {
+    const base = ['SELECT', 'FROM', 'ZZZ_ONLY_IN_MONACO']
+    const merged = mergeMonarchKeywords(base, 'oracle')
+    for (const w of base) expect(merged).toContain(w)
+  })
+
+  it('adds the dialect vocabulary Monaco is missing', () => {
+    expect(mergeMonarchKeywords(['SELECT'], 'oracle')).toContain('varchar2')
+    expect(mergeMonarchKeywords(['SELECT'], 'cassandra')).toContain('keyspace')
+    expect(mergeMonarchKeywords(['SELECT'], 'clickhouse')).toContain('lowcardinality')
+  })
+
+  it('de-duplicates case-insensitively (monarch matches ignoring case)', () => {
+    const merged = mergeMonarchKeywords(['SELECT', 'select'], 'postgres')
+    const lower = merged.map((w) => w.toLowerCase())
+    expect(new Set(lower).size).toBe(lower.length)
+    expect(lower.filter((w) => w === 'select')).toHaveLength(1)
+  })
+
+  it('every SQL system contributes a non-trivial vocabulary', () => {
+    for (const sys of SQL_SYSTEMS) expect(dialectVocabulary(sys).length, sys).toBeGreaterThan(50)
   })
 })

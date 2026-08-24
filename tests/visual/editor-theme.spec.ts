@@ -60,3 +60,38 @@ test('the editor palette follows the app theme, both ways', async ({ page }) => 
 
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
+
+// Dialect-specific vocabulary must be painted as a keyword, not left as plain
+// text: MSSQL, SQLite, ClickHouse, Oracle and Cassandra used to share Monaco's
+// generic SQL word list, so their own words (LowCardinality, varchar2, KEYSPACE…)
+// were not highlighted at all.
+test('ClickHouse-only keywords are highlighted in a ClickHouse tab', async ({ page }) => {
+  await blockRemoteFonts(page)
+  await page.goto(APP_URL)
+  await page.waitForSelector('#app > *', { timeout: 15_000 })
+  await page.waitForTimeout(400)
+  // open a query console on the ClickHouse connection (unique host)
+  await page.getByText('10.0.4.2', { exact: false }).first().click({ button: 'right' })
+  await page.waitForTimeout(200)
+  await page.getByText('New Query Console', { exact: true }).first().click()
+  await page.waitForTimeout(700)
+
+  await page.locator('.view-lines').first().click()
+  await page.keyboard.press('Control+A')
+  await page.keyboard.press('Delete')
+  await page.keyboard.type('CREATE TABLE t (a LowCardinality(String)) ENGINE = MergeTree')
+  await page.keyboard.press('Escape')
+  await page.waitForTimeout(500)
+
+  const painted = await page.evaluate(() => {
+    const spans = [...document.querySelectorAll('.view-lines span')]
+    const hit = spans.find((s) => s.textContent?.trim() === 'LowCardinality')
+    const probe = document.createElement('span')
+    probe.style.cssText = 'position:absolute;left:-9999px;color:var(--syntax-keyword)'
+    document.body.appendChild(probe)
+    const keyword = getComputedStyle(probe).color
+    probe.remove()
+    return { color: hit ? getComputedStyle(hit).color : null, keyword }
+  })
+  expect(painted.color, 'LowCardinality was not tokenized on its own').toBe(painted.keyword)
+})

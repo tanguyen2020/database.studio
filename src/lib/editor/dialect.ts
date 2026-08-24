@@ -41,3 +41,49 @@ export function sqlDialectFor(system: string): SQLDialect {
       return StandardSQL
   }
 }
+
+/**
+ * Every SQL system gets its OWN monarch language id, registered in
+ * $lib/editor/monarch with the dialect's vocabulary merged in (see
+ * mergeMonarchKeywords). MongoDB holds mongosh, so it stays on JavaScript.
+ */
+export function editorLanguageId(system: string): string {
+  return system === 'mongodb' ? 'javascript' : `ds-${SQL_SYSTEMS.includes(system) ? system : 'sql'}`
+}
+
+/** Systems that get a dialect-flavoured SQL language of their own. */
+export const SQL_SYSTEMS = [
+  'postgres',
+  'mysql',
+  'mariadb',
+  'mssql',
+  'sqlite',
+  'oracle',
+  'cassandra',
+  'clickhouse',
+]
+
+/** Keywords + type names the dialect declares, lower-cased and de-duplicated. */
+export function dialectVocabulary(system: string): string[] {
+  const spec = sqlDialectFor(system).spec
+  const raw = `${spec.keywords ?? ''} ${spec.types ?? ''}`.toLowerCase().split(/\s+/)
+  return [...new Set(raw.filter(Boolean))]
+}
+
+/**
+ * Monarch keyword list for a system: Monaco's own list UNION the dialect's
+ * vocabulary. A union only ever adds colour — dropping a word Monaco used to
+ * paint would be a regression, and the two lists cover different ground
+ * (Monaco's pgsql list has ~100 words, lang-sql's PostgreSQL dialect ~830).
+ */
+export function mergeMonarchKeywords(base: readonly string[], system: string): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const w of [...base, ...dialectVocabulary(system)]) {
+    const k = w.toLowerCase()
+    if (!k || seen.has(k)) continue
+    seen.add(k)
+    out.push(w)
+  }
+  return out
+}

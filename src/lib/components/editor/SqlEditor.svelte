@@ -11,11 +11,12 @@
   import {
     monaco,
     installMonacoWorkers,
-    monacoLanguage,
     defineDsTheme,
     watchDsTheme,
     releaseAppKeybindings,
   } from '$lib/editor/monaco'
+  import { registerSqlMonarch } from '$lib/editor/monarch'
+  import { SQL_SYSTEMS, editorLanguageId } from '$lib/editor/dialect'
   import { IS_TAURI } from '$lib/demo'
 
   /** Per-model hooks, so ONE global completion provider can serve every open tab
@@ -67,11 +68,12 @@
     defineDsTheme()
     watchDsTheme()
     releaseAppKeybindings()
+    registerSqlMonarch()
     // '.' → qualified names, '$' → Mongo operators, ' ' → a column position with
     // nothing typed yet (right after WHERE / SET / AND …), which the sources
     // answer and Monaco would otherwise never ask about.
     const triggerCharacters = ['.', '$', ' ']
-    for (const lang of ['sql', 'mysql', 'pgsql', 'javascript']) {
+    for (const lang of [...SQL_SYSTEMS.map(editorLanguageId), 'javascript']) {
       monaco.languages.registerCompletionItemProvider(lang, {
         triggerCharacters,
         provideCompletionItems: (model: monaco.editor.ITextModel, position: monaco.Position, ctx: monaco.languages.CompletionContext) =>
@@ -453,7 +455,7 @@
 
     editor = monaco.editor.create(container!, {
       value,
-      language: monacoLanguage(system),
+      language: editorLanguageId(system),
       theme: DS_THEME,
       readOnly,
       ...userOptions(),
@@ -555,7 +557,7 @@
     rebuildSources()
     headless?.setLanguage(sqlDialectFor(system).extension)
     const model = editor?.getModel()
-    if (model) monaco.editor.setModelLanguage(model, monacoLanguage(system))
+    if (model) monaco.editor.setModelLanguage(model, editorLanguageId(system))
     refreshFnDecorations()
   })
 

@@ -31,25 +31,6 @@ export function installMonacoWorkers() {
 }
 
 /**
- * Monarch language for a connection type. MongoDB tabs hold mongosh (JavaScript);
- * everything else is SQL — with the dialect-specific tokenizer where Monaco has
- * one (backtick identifiers for MySQL, dollar-quoted bodies for Postgres).
- */
-export function monacoLanguage(system: string): string {
-  switch (system) {
-    case 'mongodb':
-      return 'javascript'
-    case 'mysql':
-    case 'mariadb':
-      return 'mysql'
-    case 'postgres':
-      return 'pgsql'
-    default:
-      return 'sql'
-  }
-}
-
-/**
  * Give back the keys the app owns. Monaco ships editor bindings that would
  * otherwise shadow a global shortcut whenever the editor has focus (which is most
  * of the time in a query tab): Ctrl+Shift+K deletes a line instead of focusing the
