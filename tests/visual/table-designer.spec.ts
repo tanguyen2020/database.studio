@@ -1,5 +1,14 @@
 import { expect, test } from '@playwright/test'
-import { APP_URL, blockRemoteFonts, openDatabaseNode } from './helpers'
+import { APP_URL, blockRemoteFonts, openDatabaseNode, previewText } from './helpers'
+
+/** Open the Table Designer for a NEW table. The bottom-toolbar "New table" button
+ *  moved to the schema context menu, so go through the menu the app actually has. */
+async function openNewTableDesigner(page: import('@playwright/test').Page) {
+  await page.getByText('public', { exact: true }).first().click({ button: 'right' })
+  await page.waitForTimeout(250)
+  await page.getByRole('menuitem', { name: 'New Table…' }).first().click()
+  await page.waitForTimeout(400)
+}
 
 test('table designer: columns grid + DDL preview + add column', async ({ page }) => {
   const errors: string[] = []
@@ -13,8 +22,7 @@ test('table designer: columns grid + DDL preview + add column', async ({ page })
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(500)
   await openDatabaseNode(page)
-  await page.getByTitle('New table').first().click()
-  await page.waitForTimeout(300)
+  await openNewTableDesigner(page)
 
   // designer tab open with columns grid (seeded id PK row)
   await expect(page.getByRole('tab', { name: /new_table · design/ }).first()).toBeVisible()
@@ -50,7 +58,7 @@ test('table designer: columns grid + DDL preview + add column', async ({ page })
   // Scripts mode → DDL preview shows CREATE TABLE with the picked type
   await page.getByText('Scripts', { exact: true }).first().click()
   await page.waitForTimeout(200)
-  await expect(page.getByText(/CREATE TABLE/).first()).toBeVisible()
+  expect(await previewText(page, 'Generated DDL')).toContain('CREATE TABLE')
   await expect(page.getByText(/jsonb/).first()).toBeVisible()
 
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
@@ -67,8 +75,7 @@ test('table designer: attribute tabs + index in DDL + Ctrl+S saves', async ({ pa
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(500)
   await openDatabaseNode(page)
-  await page.getByTitle('New table').first().click()
-  await page.waitForTimeout(300)
+  await openNewTableDesigner(page)
 
   // all six attribute tabs are present
   for (const t of ['Fields', 'Indexes', 'Foreign Keys', 'Uniques', 'Checks', 'Triggers']) {
@@ -106,7 +113,7 @@ test('table designer: attribute tabs + index in DDL + Ctrl+S saves', async ({ pa
   // Scripts preview includes the CREATE INDEX we defined
   await page.getByText('Scripts', { exact: true }).first().click()
   await page.waitForTimeout(200)
-  await expect(page.getByText(/CREATE INDEX "ix_email"/).first()).toBeVisible()
+  expect(await previewText(page, 'Generated DDL')).toContain('CREATE INDEX "ix_email"')
 
   // Ctrl+S runs the DDL (demo exec returns ok → success toast)
   await page.keyboard.press('Control+s')
@@ -127,8 +134,7 @@ test('table designer: # column, ArrowDown auto-appends a field row, drag reorder
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(500)
   await openDatabaseNode(page)
-  await page.getByTitle('New table').first().click()
-  await page.waitForTimeout(300)
+  await openNewTableDesigner(page)
 
   // the "#" reorder column is present
   await expect(page.getByRole('columnheader', { name: '#', exact: true }).first()).toBeVisible()
@@ -176,7 +182,7 @@ test('table designer: # column, ArrowDown auto-appends a field row, drag reorder
   // the row order flows into the DDL
   await page.getByText('Scripts', { exact: true }).first().click()
   await page.waitForTimeout(200)
-  const ddl = await page.getByText(/CREATE TABLE/).first().innerText()
+  const ddl = await previewText(page, 'Generated DDL')
   expect(ddl.indexOf('"id"')).toBeLessThan(ddl.indexOf('"email"'))
 
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
@@ -222,7 +228,7 @@ test('table designer: existing table can drop a column (ALTER DROP COLUMN)', asy
   // Scripts preview now contains an ALTER … DROP COLUMN
   await page.getByText('Scripts', { exact: true }).first().click()
   await page.waitForTimeout(200)
-  await expect(page.getByText(/DROP COLUMN/).first()).toBeVisible()
+  expect(await previewText(page, 'Generated DDL')).toContain('DROP COLUMN')
 
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
@@ -238,8 +244,7 @@ test('table designer: Partitioning tab emits PARTITION BY in the DDL preview', a
   await page.getByRole('button', { name: /Postgres/ }).first().click()
   await page.waitForTimeout(500)
   await openDatabaseNode(page)
-  await page.getByTitle('New table').first().click()
-  await page.waitForTimeout(300)
+  await openNewTableDesigner(page)
 
   // open the Partitioning tab (free-text key column drives the clause)
   await page.getByRole('tab', { name: 'Partitioning' }).click()
@@ -252,7 +257,7 @@ test('table designer: Partitioning tab emits PARTITION BY in the DDL preview', a
   // preview reflects the partition clause
   await page.getByText('Scripts', { exact: true }).first().click()
   await page.waitForTimeout(200)
-  await expect(page.locator('pre').first()).toContainText('PARTITION BY RANGE ("created_at")')
+  expect(await previewText(page, 'Generated DDL')).toContain('PARTITION BY RANGE ("created_at")')
 
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
@@ -296,7 +301,7 @@ test('table designer: Design existing partitioned table shows partitions + can a
 
   // the inline partition-script preview updates live (no need to switch tabs)
   await expect(page.getByText('Add-partition script').first()).toBeVisible()
-  await expect(page.locator('pre').first()).toContainText(
+  expect(await previewText(page, 'Generated DDL')).toContain(
     `PARTITION OF "public"."enrollments" FOR VALUES FROM ('2026-01-01') TO ('2027-01-01')`,
   )
 
@@ -341,9 +346,9 @@ test('table designer: convert an existing non-partitioned table to partitioned',
 
   // convert script preview shows the rename + recreate + PARTITION OF migration
   await expect(page.getByText('Convert-to-partitioned script').first()).toBeVisible()
-  const pre = page.locator('pre').first()
-  await expect(pre).toContainText('RENAME TO "students_old"')
-  await expect(pre).toContainText('PARTITION OF "public"."students"')
+  const ddlText = await previewText(page, 'Generated DDL')
+  expect(ddlText).toContain('RENAME TO "students_old"')
+  expect(ddlText).toContain('PARTITION OF "public"."students"')
 
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })

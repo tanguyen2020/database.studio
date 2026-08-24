@@ -8,12 +8,13 @@
   // document (see $lib/editor/cm-headless). That keeps every test-pinned
   // behaviour — reserved-word quoting on accept, alias-aware `alias.column`,
   // dotted schema keys, quoted identifiers — instead of re-deriving it.
+  import type * as monaco from 'monaco-editor'
   import {
-    monaco,
-    installMonacoWorkers,
+    loadMonaco,
     defineDsTheme,
     watchDsTheme,
     releaseAppKeybindings,
+    type MonacoApi,
   } from '$lib/editor/monaco'
   import { registerSqlMonarch } from '$lib/editor/monarch'
   import { SQL_SYSTEMS, editorLanguageId } from '$lib/editor/dialect'
@@ -30,18 +31,14 @@
   }
   const hooksByModel = new Map<monaco.editor.ITextModel, ModelHooks>()
 
-  const KIND: Record<string, monaco.languages.CompletionItemKind> = {
-    property: monaco.languages.CompletionItemKind.Field,
-    type: monaco.languages.CompletionItemKind.Class,
-    class: monaco.languages.CompletionItemKind.Struct,
-    method: monaco.languages.CompletionItemKind.Method,
-    function: monaco.languages.CompletionItemKind.Function,
-    keyword: monaco.languages.CompletionItemKind.Keyword,
-    constant: monaco.languages.CompletionItemKind.Constant,
-    variable: monaco.languages.CompletionItemKind.Variable,
-  }
-  export function completionKind(type: string | undefined): monaco.languages.CompletionItemKind {
-    return KIND[type ?? ''] ?? monaco.languages.CompletionItemKind.Variable
+  /** The loaded Monaco API. Set by bootstrapMonaco before any editor exists; the
+   *  `monaco.*` names above are a TYPE-only import, erased at build time. */
+  let m: MonacoApi
+
+  /** Completion-kind map, built once the API is available. */
+  let KIND: Record<string, monaco.languages.CompletionItemKind> = {}
+  function completionKind(type: string | undefined): monaco.languages.CompletionItemKind {
+    return KIND[type ?? ''] ?? m.languages.CompletionItemKind.Variable
   }
 
   /** Test seam (browser/demo only — never in the desktop build): the editor
@@ -60,26 +57,46 @@
     w.__dsEditors = (w.__dsEditors ?? []).filter((e) => e !== ed)
   }
 
-  let bootstrapped = false
-  function bootstrapMonaco() {
-    if (bootstrapped) return
-    bootstrapped = true
-    installMonacoWorkers()
-    defineDsTheme()
-    watchDsTheme()
-    releaseAppKeybindings()
-    registerSqlMonarch()
-    // '.' → qualified names, '$' → Mongo operators, ' ' → a column position with
-    // nothing typed yet (right after WHERE / SET / AND …), which the sources
-    // answer and Monaco would otherwise never ask about.
-    const triggerCharacters = ['.', '$', ' ']
-    for (const lang of [...SQL_SYSTEMS.map(editorLanguageId), 'javascript']) {
-      monaco.languages.registerCompletionItemProvider(lang, {
-        triggerCharacters,
-        provideCompletionItems: (model: monaco.editor.ITextModel, position: monaco.Position, ctx: monaco.languages.CompletionContext) =>
-          hooksByModel.get(model)?.complete(model, position, ctx) ?? { suggestions: [] },
-      })
-    }
+  let booting: Promise<MonacoApi> | null = null
+
+  /** Load Monaco (once) and register everything global: theme, keybinding
+   *  releases, languages and the single completion provider per language. */
+  function bootstrapMonaco(): Promise<MonacoApi> {
+    if (booting) return booting
+    booting = (async () => {
+      m = await loadMonaco()
+      defineDsTheme(m)
+      watchDsTheme()
+      releaseAppKeybindings(m)
+      await registerSqlMonarch(m)
+      const k = m.languages.CompletionItemKind
+      KIND = {
+        property: k.Field,
+        type: k.Class,
+        class: k.Struct,
+        method: k.Method,
+        function: k.Function,
+        keyword: k.Keyword,
+        constant: k.Constant,
+        variable: k.Variable,
+      }
+      // '.' → qualified names, '$' → Mongo operators, ' ' → a column position with
+      // nothing typed yet (right after WHERE / SET / AND …), which the sources
+      // answer and Monaco would otherwise never ask about.
+      const triggerCharacters = ['.', '$', ' ']
+      for (const lang of [...SQL_SYSTEMS.map(editorLanguageId), 'javascript']) {
+        m.languages.registerCompletionItemProvider(lang, {
+          triggerCharacters,
+          provideCompletionItems: (
+            model: monaco.editor.ITextModel,
+            position: monaco.Position,
+            ctx: monaco.languages.CompletionContext,
+          ) => hooksByModel.get(model)?.complete(model, position, ctx) ?? { suggestions: [] },
+        })
+      }
+      return m
+    })()
+    return booting
   }
 </script>
 
@@ -302,7 +319,7 @@
     if (!headless) return { suggestions: [] }
     const doc = model.getValue()
     const offset = model.getOffsetAt(position)
-    const explicit = ctx.triggerKind === monaco.languages.CompletionTriggerKind.Invoke
+    const explicit = ctx.triggerKind === m.languages.CompletionTriggerKind.Invoke
     const cmCtx = headless.context(doc, offset, explicit)
     const word = wordBefore(doc, offset)
     const results = await runSources(sourcesFor(isQualified(doc, offset), word, explicit), cmCtx)
@@ -366,11 +383,11 @@
       for (let line = range.startLineNumber; line <= last; line++) {
         const text = model.getLineContent(line)
         re.lastIndex = 0
-        let m: RegExpExecArray | null
-        while ((m = re.exec(text))) {
-          if (!colorSet.has(m[1].toLowerCase())) continue
+        let hit: RegExpExecArray | null
+        while ((hit = re.exec(text))) {
+          if (!colorSet.has(hit[1].toLowerCase())) continue
           decos.push({
-            range: new monaco.Range(line, m.index + 1, line, m.index + 1 + m[1].length),
+            range: new m.Range(line, hit.index + 1, line, hit.index + 1 + hit[1].length),
             options: { inlineClassName: 'sql-fn' },
           })
         }
@@ -427,7 +444,7 @@
       diags = []
     }
     if (model.isDisposed() || model.getValue() !== doc) return // stale
-    monaco.editor.setModelMarkers(model, LINT_OWNER, diags.map((d) => toMarker(model, d)))
+    m.editor.setModelMarkers(model, LINT_OWNER, diags.map((d) => toMarker(model, d)))
   }
 
   function toMarker(model: monaco.editor.ITextModel, d: Diagnostic): monaco.editor.IMarkerData {
@@ -437,10 +454,10 @@
       message: d.message,
       severity:
         d.severity === 'error'
-          ? monaco.MarkerSeverity.Error
+          ? m.MarkerSeverity.Error
           : d.severity === 'warning'
-            ? monaco.MarkerSeverity.Warning
-            : monaco.MarkerSeverity.Info,
+            ? m.MarkerSeverity.Warning
+            : m.MarkerSeverity.Info,
       startLineNumber: from.lineNumber,
       startColumn: from.column,
       endLineNumber: to.lineNumber,
@@ -453,7 +470,7 @@
     rebuildSources()
     headless = new HeadlessDoc(sqlDialectFor(system).extension, value)
 
-    editor = monaco.editor.create(container!, {
+    editor = m.editor.create(container!, {
       value,
       language: editorLanguageId(system),
       theme: DS_THEME,
@@ -476,7 +493,7 @@
       // stays ON so a lint/execution error explains itself in a tooltip.
       codeLens: false,
       links: false,
-      lightbulb: { enabled: monaco.editor.ShowLightbulbIconMode.Off },
+      lightbulb: { enabled: m.editor.ShowLightbulbIconMode.Off },
       parameterHints: { enabled: false },
       stickyScroll: { enabled: false },
       unicodeHighlight: { ambiguousCharacters: false, invisibleCharacters: false },
@@ -509,7 +526,7 @@
       editor.onDidScrollChange(() => refreshFnDecorations()),
       model.onDidChangeOptions(() => enforceModelOptions()),
       editor.onKeyDown((e: monaco.IKeyboardEvent) => {
-        if (e.keyCode !== monaco.KeyCode.Escape) return
+        if (e.keyCode !== m.KeyCode.Escape) return
         completionDismissed = true // don't let a late load re-open the popup
         onCancel?.()
         // no preventDefault: Escape must still close the suggest/find widget
@@ -519,12 +536,12 @@
     // Run/format bindings. `addAction` keeps them scoped to this editor instance,
     // which matters because every open tab has its own live editor.
     const actions: [string, string, number[], () => void][] = [
-      ['ds.run', 'Run', [monaco.KeyCode.F5], () => onRun?.()],
-      ['ds.runAtCursor', 'Run statement at cursor', [monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter], () => onRunAtCursor?.()],
-      ['ds.cancel', 'Cancel', [monaco.KeyMod.CtrlCmd | monaco.KeyCode.F5], () => onCancel?.()],
-      ['ds.format', 'Format SQL', [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyF], () => onFormat?.()],
-      ['ds.explain', 'Explain', [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyE], () => onExplain?.()],
-      ['ds.save', 'Save', [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS], () => onSaveSnippet?.()],
+      ['ds.run', 'Run', [m.KeyCode.F5], () => onRun?.()],
+      ['ds.runAtCursor', 'Run statement at cursor', [m.KeyMod.CtrlCmd | m.KeyCode.Enter], () => onRunAtCursor?.()],
+      ['ds.cancel', 'Cancel', [m.KeyMod.CtrlCmd | m.KeyCode.F5], () => onCancel?.()],
+      ['ds.format', 'Format SQL', [m.KeyMod.CtrlCmd | m.KeyMod.Shift | m.KeyCode.KeyF], () => onFormat?.()],
+      ['ds.explain', 'Explain', [m.KeyMod.CtrlCmd | m.KeyMod.Shift | m.KeyCode.KeyE], () => onExplain?.()],
+      ['ds.save', 'Save', [m.KeyMod.CtrlCmd | m.KeyCode.KeyS], () => onSaveSnippet?.()],
     ]
     for (const [id, label, keybindings, run] of actions) {
       editor.addAction({ id, label, keybindings, run })
@@ -557,7 +574,7 @@
     rebuildSources()
     headless?.setLanguage(sqlDialectFor(system).extension)
     const model = editor?.getModel()
-    if (model) monaco.editor.setModelLanguage(model, editorLanguageId(system))
+    if (model) m.editor.setModelLanguage(model, editorLanguageId(system))
     refreshFnDecorations()
   })
 
@@ -672,12 +689,12 @@
           : Math.min(from + 1, doc.length)
       return toMarker(model, { from, to: Math.max(to, from + 1), severity: 'error', message: e.message })
     })
-    monaco.editor.setModelMarkers(model, EXEC_OWNER, markers)
+    m.editor.setModelMarkers(model, EXEC_OWNER, markers)
   }
 
   export function clearErrors() {
     const model = editor?.getModel()
-    if (model) monaco.editor.setModelMarkers(model, EXEC_OWNER, [])
+    if (model) m.editor.setModelMarkers(model, EXEC_OWNER, [])
   }
 </script>
 

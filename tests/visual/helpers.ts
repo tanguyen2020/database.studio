@@ -103,3 +103,23 @@ export async function measure(
     props,
   )
 }
+
+/**
+ * Text of a read-only Monaco preview (CodeView), read from the MODEL rather than
+ * the DOM: Monaco splits rendered text into token spans and only renders the
+ * visible lines, so scraping it is brittle. `label` is the component's
+ * `ariaLabel` ("Generated DDL", "Migration script", "Pending SQL", …); with no
+ * label the most recently mounted view is used.
+ */
+export async function previewText(page: Page, label?: string): Promise<string> {
+  return page.evaluate((want) => {
+    type Ed = {
+      getModel: () => { getValue: () => string } | null
+      getRawOptions?: () => { ariaLabel?: string }
+    }
+    const views = ((window as unknown as { __dsViews?: Ed[] }).__dsViews ?? []).filter((e) => e.getModel())
+    const picked = want ? views.filter((e) => e.getRawOptions?.().ariaLabel === want) : views
+    const ed = picked[picked.length - 1] ?? views[views.length - 1]
+    return ed?.getModel()?.getValue() ?? ''
+  }, label)
+}

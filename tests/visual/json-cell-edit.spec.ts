@@ -22,6 +22,27 @@ async function openStudentsViewer(page: import('@playwright/test').Page) {
   await page.waitForTimeout(300)
 }
 
+type View = { getModel: () => { getValue: () => string } | null }
+
+/** Text of the JSON editor, read from the MODEL: Monaco splits the rendered text
+ *  into token spans, so scraping the DOM would be brittle. `__dsViews` is the
+ *  browser/demo-only seam CodeView registers itself in. */
+async function jsonText(page: import('@playwright/test').Page) {
+  return page.evaluate(() => {
+    const views = (window as unknown as { __dsViews?: View[] }).__dsViews ?? []
+    return views[views.length - 1]?.getModel()?.getValue() ?? null
+  })
+}
+
+/** Replace the whole document by typing, the way a user would. */
+async function setJson(page: import('@playwright/test').Page, text: string) {
+  await page.locator('[role="dialog"] .view-lines').first().click()
+  await page.keyboard.press('Control+A')
+  await page.keyboard.press('Delete')
+  await page.keyboard.type(text)
+  await page.waitForTimeout(150)
+}
+
 /** the cell of column `col` (0-based across the data columns) on data row `row`. */
 function cell(page: import('@playwright/test').Page, row: number, col: number) {
   return page.locator('.grid-row').nth(row).locator('td:not(:first-child)').nth(col)
@@ -42,29 +63,28 @@ test('json cell: double-click opens the JSON editor, validates, and saves as a p
   const dlg = page.getByRole('dialog', { name: 'Edit JSON cell' })
   await expect(dlg).toBeVisible()
   await expect(page.locator('.grid-row input')).toHaveCount(0)
-  const area = dlg.getByLabel('JSON value')
-  await expect(area).toBeFocused()
+  await expect(dlg.getByLabel('JSON value')).toBeFocused()
   // opened pretty-printed on the current value
-  expect(await area.inputValue()).toContain('"theme": "dark"')
+  expect(await jsonText(page)).toContain('"theme": "dark"')
   // header names the column and its type
   await expect(dlg.getByText('config', { exact: true })).toBeVisible()
   await expect(dlg.getByText(/row 1 · jsonb/)).toBeVisible()
 
   // invalid JSON blocks Save and says why
-  await area.fill('{"theme": }')
+  await setJson(page, '{"theme": }')
   await expect(dlg.getByText(/Invalid JSON/)).toBeVisible()
   await expect(dlg.getByRole('button', { name: 'Save' })).toHaveAttribute('aria-disabled', 'true')
 
   // clicking the backdrop must NOT discard the draft (form-dialog rule)
   await page.mouse.click(8, 8)
   await expect(dlg).toBeVisible()
-  expect(await area.inputValue()).toBe('{"theme": }')
+  expect(await jsonText(page)).toBe('{"theme": }')
 
   // valid JSON → Format pretty-prints it, Save closes and records the change
-  await area.fill('{"theme":"solarized","tags":["x"]}')
+  await setJson(page, '{"theme":"solarized","tags":["x"]}')
   await expect(dlg.getByText(/^Valid JSON/)).toBeVisible()
   await dlg.getByRole('button', { name: 'Format' }).click()
-  expect(await area.inputValue()).toContain('\n  "theme": "solarized"')
+  expect(await jsonText(page)).toContain('\n  "theme": "solarized"')
   await dlg.getByRole('button', { name: 'Save' }).click()
   await expect(dlg).toBeHidden()
 
@@ -93,10 +113,9 @@ test('json cell: NULL cells, text columns and read-only grids', async ({ page })
   await page.keyboard.press('Enter')
   const dlg = page.getByRole('dialog', { name: 'Edit JSON cell' })
   await expect(dlg).toBeVisible()
-  const area = dlg.getByLabel('JSON value')
-  expect(await area.inputValue()).toBe('')
+  expect(await jsonText(page)).toBe('')
   await expect(dlg.getByText(/Empty — saves NULL/)).toBeVisible()
-  await area.fill('{"seeded":true}')
+  await setJson(page, '{"seeded":true}')
   await page.keyboard.press('Control+Enter') // Ctrl+Enter saves
   await expect(dlg).toBeHidden()
   await expect(nullConfig).toContainText('seeded')
@@ -106,9 +125,9 @@ test('json cell: NULL cells, text columns and read-only grids', async ({ page })
   const prefs = cell(page, 0, 4)
   await prefs.dblclick()
   await expect(dlg).toBeVisible()
-  expect(await area.inputValue()).toBe('{"lang":"vi"}')
+  expect(await jsonText(page)).toBe('{"lang":"vi"}')
   await expect(dlg.getByText(/stores it as text/)).toBeVisible()
-  await area.fill('{"lang":"en"}')
+  await setJson(page, '{"lang":"en"}')
   await dlg.getByRole('button', { name: 'Save' }).click()
   await expect(dlg).toBeHidden()
   await expect(prefs).toContainText('{"lang":"en"}')
@@ -124,7 +143,7 @@ test('json cell: NULL cells, text columns and read-only grids', async ({ page })
   await page.getByText('{ }').first().click()
   const view = page.getByRole('dialog', { name: 'JSON cell' })
   await expect(view).toBeVisible()
-  await expect(view.getByText(/"kind": "read-only"/)).toBeVisible()
+  expect(await jsonText(page)).toContain('"kind": "read-only"')
   await expect(view.getByRole('button', { name: 'Save' })).toHaveCount(0)
   await view.getByRole('button', { name: 'Close' }).click()
   await expect(view).toBeHidden()

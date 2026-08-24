@@ -7,7 +7,8 @@
   import { tabs } from '$lib/stores/tabs.svelte'
   import { toasts } from '$lib/stores/toast.svelte'
   import { splitStatements } from '$lib/sql/statements'
-  import { highlightSql, sqlTokenColor } from '$lib/format/sql'
+  import CodeView from '$lib/components/editor/CodeView.svelte'
+  import { editorLanguageId } from '$lib/editor/dialect'
   import SearchSelect from '$lib/components/SearchSelect.svelte'
   import {
     compareSchemas,
@@ -595,7 +596,7 @@
     </div>
     <div style="flex:1;overflow:auto;background:var(--bg)">
       <!-- syntax-coloured migration (keywords / strings / comments) for readability -->
-      <pre class="selectable mono" style="margin:0;padding:var(--px-16) var(--px-18);font-size:var(--px-12_5);line-height:1.6;white-space:pre;color:var(--text)">{#each highlightSql(migration) as t}<span style="color:{sqlTokenColor(t.kind)}">{t.text}</span>{/each}</pre>
+      <CodeView value={migration} language={editorLanguageId(srcProfile?.system ?? 'sql')} readOnly height="100%" ariaLabel="Migration script" />
     </div>
   {/if}
 

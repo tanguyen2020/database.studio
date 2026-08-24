@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { APP_URL, blockRemoteFonts, openDatabaseNode } from './helpers'
+import { APP_URL, blockRemoteFonts, openDatabaseNode, previewText } from './helpers'
 
 // U1 — PostgreSQL User Manager. The "Users & privileges" Explorer toolbar button
 // opens the User Manager tab (NOT the old Admin view) with the pgAdmin-style
@@ -245,7 +245,7 @@ test('user manager: Oracle users + system privs + object preset', async ({ page 
   await page.waitForTimeout(150)
   await page.getByText('CREATE TABLE', { exact: true }).first().click()
   await page.waitForTimeout(200)
-  await expect(page.getByText(/GRANT CREATE TABLE TO APP_USER/).first()).toBeVisible()
+  expect(await previewText(page, 'Pending SQL')).toContain('GRANT CREATE TABLE TO APP_USER')
 
   // Object Privileges: unified Grant access wizard (Schema owner → object → level)
   await page.getByRole('tab', { name: 'Object Privileges' }).click()
@@ -258,6 +258,8 @@ test('user manager: Oracle users + system privs + object preset', async ({ page 
   await oraDlg.getByText('APP_USER.students', { exact: true }).click()
   await oraDlg.getByText('Read-only', { exact: true }).first().click()
   await page.waitForTimeout(200)
+  // this one is the Grant wizard's own live preview (still a plain block), not the
+  // pending list — so it is read from the DOM
   await expect(page.getByText(/GRANT SELECT ON APP_USER\.STUDENTS TO APP_USER/).first()).toBeVisible()
 
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])

@@ -7,7 +7,8 @@
   import { IS_TAURI } from '$lib/demo'
   import { toasts } from '$lib/stores/toast.svelte'
   import { explorer } from '$lib/stores/explorer.svelte'
-  import { highlightJson, jsonTokenColor } from '$lib/format/json'
+  import CodeView from '$lib/components/editor/CodeView.svelte'
+  import { DS_JSON } from '$lib/editor/monarch'
   import { consumerEmptyText } from '$lib/stream/explorer'
   import { autofocus } from '$lib/actions/autofocus'
   import type { TabState } from '$lib/types'
@@ -484,7 +485,15 @@
             <span onclick={() => (viewState = null)} onkeydown={(e) => e.key === 'Enter' && (viewState = null)} role="button" tabindex="0" class="cm-mini" style="cursor:pointer">Close</span>
           </span>
         </div>
-        <pre class="selectable mono" style="flex:1;overflow:auto;margin:0;background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-8);padding:var(--px-12);font-size:var(--px-12);line-height:1.5;color:var(--text);white-space:pre-wrap;word-break:break-word">{#if viewState.isJson}{#each highlightJson(viewState.text) as tok}<span style="color:{jsonTokenColor(tok.kind)}">{tok.text}</span>{/each}{:else}{viewState.text}{/if}</pre>
+        <div style="flex:1;min-height:0;display:flex">
+          <CodeView
+            value={viewState.text}
+            language={viewState.isJson ? DS_JSON : 'plaintext'}
+            readOnly
+            height="100%"
+            ariaLabel="Payload"
+          />
+        </div>
       </div>
     </div>
   {/if}

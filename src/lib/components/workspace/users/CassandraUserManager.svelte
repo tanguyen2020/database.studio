@@ -10,7 +10,8 @@
   import { toasts } from '$lib/stores/toast.svelte'
   import { cassUserWizard } from '$lib/stores/cassuser.svelte'
   import { grantWizard } from '$lib/stores/grantwizard.svelte'
-  import { highlightSql, sqlTokenColor } from '$lib/format/sql'
+  import CodeView from '$lib/components/editor/CodeView.svelte'
+  import { editorLanguageId } from '$lib/editor/dialect'
   import {
     alterRole,
     CASS_GRID_COLUMNS,
@@ -436,7 +437,7 @@
             <span onclick={execute} onkeydown={(e) => e.key === 'Enter' && execute()} role="button" tabindex="0" aria-disabled={executing} style="margin-left:auto;font-size:var(--px-11_5);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-6);padding:var(--px-4) var(--px-12);cursor:pointer;font-weight:600;opacity:{executing ? 0.6 : 1}">{executing ? 'Executing…' : 'Execute'}</span>
             <span onclick={discard} onkeydown={(e) => e.key === 'Enter' && discard()} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-12);cursor:pointer">Discard</span>
           </div>
-          <pre class="selectable mono" style="margin:0;font-size:var(--px-11);white-space:pre-wrap;color:var(--text2)">{#each pending as s (s)}{#each highlightSql(s + ';\n') as tk (tk)}<span style="color:{sqlTokenColor(tk.kind)}">{tk.text}</span>{/each}{/each}</pre>
+          <CodeView value={pending.join('\n')} language={editorLanguageId('cassandra')} readOnly height="auto" maxHeight={200} ariaLabel="Pending SQL" />
         </div>
       {/if}
     </div>

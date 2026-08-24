@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
-import { APP_URL, blockRemoteFonts } from './helpers'
+import { APP_URL, blockRemoteFonts, previewText } from './helpers'
 
 // The connection/database pickers are searchable comboboxes (SearchSelect): click
 // to open, then pick the option by its exact label.
@@ -74,7 +74,7 @@ test('schema compare: pick source/target + diff view + sync script', async ({ pa
   // Sync Script mode shows migration pre + an Execute button (task 5)
   await page.getByText('Sync Script', { exact: true }).first().click()
   await page.waitForTimeout(200)
-  await expect(page.getByText(/Migration: sync TARGET/).first()).toBeVisible()
+  expect(await previewText(page, 'Migration script')).toContain('Migration: sync TARGET')
   // Refresh button also available in the Script view
   await expect(page.getByText(/Refresh/).first()).toBeVisible()
   const execBtn = page.getByText('Execute', { exact: true }).first()

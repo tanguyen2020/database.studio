@@ -34,6 +34,8 @@
     toEditorText,
     type JsonCellMode,
   } from '$lib/grid/json-cell'
+  import CodeView from '$lib/components/editor/CodeView.svelte'
+  import { DS_JSON } from '$lib/editor/monarch'
   import type { QueryResultSet } from '$lib/types'
 
   /** Bật editable grid khi mở từ Table Data Viewer (biết schema/table/pk). */
@@ -135,11 +137,7 @@
     jsonCell = null
   }
 
-  // Focus a freshly-mounted JSON textarea (same reason as focusEditor).
-  function focusArea(node: HTMLTextAreaElement) {
-    node.focus()
-    node.setSelectionRange(node.value.length, node.value.length)
-  }
+
 
   const editable = $derived(!!editTarget)
   const pendingCount = $derived(edits.size + deletedRows.size + insertedRows.length)
@@ -1420,14 +1418,21 @@
       </div>
       <div style="padding:0 var(--px-20) var(--px-10)">
         {#if editing}
-          <textarea
-            class="mono"
-            bind:value={m.draft}
-            use:focusArea
-            spellcheck="false"
-            aria-label="JSON value"
-            style="width:100%;height:44vh;resize:vertical;box-sizing:border-box;border-radius:var(--px-9);background:var(--panel);border:var(--px-1) solid {invalid ? 'var(--error)' : 'var(--border)'};color:var(--text);padding:var(--px-12);font-size:var(--px-11_5);line-height:1.6;outline:none"
-          ></textarea>
+          <!-- a real JSON editor: tokenised, foldable, Ctrl+F searchable. Validity
+               is still reported below from parseEditorText (no language service,
+               so no extra worker in the bundle). -->
+          <div style="border-radius:var(--px-9);outline:{invalid ? 'var(--px-1) solid var(--error)' : 'none'}">
+            <CodeView
+              value={m.draft}
+              language={DS_JSON}
+              height="44vh"
+              autofocus
+              ariaLabel="JSON value"
+              onChange={(t) => (m.draft = t)}
+              onSubmit={saveJsonCell}
+              onCancel={() => (jsonCell = null)}
+            />
+          </div>
           <div style="display:flex;align-items:center;gap:var(--px-8);padding-top:var(--px-8);font-size:var(--px-11)">
             <span class="eg-btn" role="button" tabindex="0" title="Pretty-print"
               onclick={() => applyJsonFormat(formatJson)}
@@ -1447,7 +1452,15 @@
             {/if}
           </div>
         {:else}
-          <pre class="mono selectable" style="max-height:50vh;overflow:auto;border-radius:var(--px-9);background:var(--panel);border:var(--px-1) solid var(--border);padding:var(--px-12);font-size:var(--px-11_5);line-height:1.6;margin:0">{toEditorText(m.original, 'json')}</pre>
+          <CodeView
+            value={toEditorText(m.original, 'json')}
+            language={DS_JSON}
+            readOnly
+            height="auto"
+            maxHeight={420}
+            ariaLabel="JSON value"
+            onCancel={() => (jsonCell = null)}
+          />
           {#if editable}
             <div style="padding-top:var(--px-8);font-size:var(--px-11);color:var(--muted)">Read-only — {colTypes[m.col] ?? 'this column'} is not a JSON column.</div>
           {/if}

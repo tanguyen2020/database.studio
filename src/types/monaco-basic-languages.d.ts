@@ -18,3 +18,11 @@ declare module 'monaco-editor/esm/vs/basic-languages/pgsql/pgsql.js' {
   export const conf: monaco.languages.LanguageConfiguration
   export const language: monaco.languages.IMonarchLanguage & { keywords?: string[] }
 }
+
+// Side-effect-only modules (contributions + the editor bundle). They are imported
+// dynamically for their registration, never for a value.
+declare module 'monaco-editor/esm/vs/editor/editor.all.js'
+declare module 'monaco-editor/esm/vs/basic-languages/sql/sql.contribution.js'
+declare module 'monaco-editor/esm/vs/basic-languages/mysql/mysql.contribution.js'
+declare module 'monaco-editor/esm/vs/basic-languages/pgsql/pgsql.contribution.js'
+declare module 'monaco-editor/esm/vs/basic-languages/javascript/javascript.contribution.js'

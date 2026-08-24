@@ -14,7 +14,8 @@
     partitionKeyColumns,
     type PartStrategy,
   } from '$lib/sql/partitions'
-  import { highlightSql, sqlTokenColor } from '$lib/format/sql'
+  import CodeView from '$lib/components/editor/CodeView.svelte'
+  import { editorLanguageId } from '$lib/editor/dialect'
 
   // Effect-mirror the store's open flag (reliable cross-component tracking).
   let dlgOpen = $state(false)
@@ -180,7 +181,14 @@
             <!-- live script (UI + script together) -->
             <div style="display:flex;flex-direction:column;gap:var(--px-4)">
               <span class="mono" style="font-size:var(--px-11);text-transform:uppercase;letter-spacing:.06em;color:var(--muted)">Script</span>
-              <pre class="selectable mono" style="margin:0;padding:var(--px-10) var(--px-12);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-8);font-size:var(--px-12);line-height:1.55;white-space:pre-wrap;overflow-x:auto;color:var(--text);min-height:var(--px-40)">{#if sql}{#each highlightSql(sql) as tk}<span style="color:{sqlTokenColor(tk.kind)}">{tk.text}</span>{/each}{:else if warning}<span style="color:var(--warn)">-- {warning}</span>{:else}<span style="color:var(--syntax-comment)">-- fill in the name and bound</span>{/if}</pre>
+              <CodeView
+                value={sql || (warning ? `-- ${warning}` : '-- fill in the name and bound')}
+                language={editorLanguageId(system)}
+                readOnly
+                height="auto"
+                maxHeight={220}
+                ariaLabel="Partition script"
+              />
             </div>
             {#if warning}<div class="mono" style="font-size:var(--px-11_5);color:var(--warn)">⚠ {warning}</div>{/if}
           {/if}

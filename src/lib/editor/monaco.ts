@@ -1,33 +1,52 @@
-// Monaco bootstrap.
+// Monaco loader.
 //
-// Imported lean on purpose: the editor itself plus the SQL/JS *monarch*
-// tokenizers, and NOT `editor.main.js` (which drags in the TypeScript, JSON, CSS
-// and HTML language services — megabytes we never use). The theme is built from
-// the app's CSS tokens so light/dark match the rest of the chrome, and it is
-// rebuilt whenever the theme toggles.
+// Monaco is ~4 MB of JavaScript. The app opens with NO tab (see tabs.restore in
+// the desktop build), so paying for it during boot buys nothing — it is loaded on
+// demand, the first time a query editor mounts, and every later editor reuses the
+// same module. Everything here is therefore async-first: callers `await
+// loadMonaco()` and receive the API object.
+//
+// Imported lean on purpose: the editor plus the SQL/JS *monarch* tokenizers, and
+// NOT `editor.main.js`, which drags in the TypeScript, JSON, CSS and HTML language
+// services we never use.
 
-import 'monaco-editor/esm/vs/editor/editor.all.js'
-import 'monaco-editor/esm/vs/basic-languages/sql/sql.contribution.js'
-import 'monaco-editor/esm/vs/basic-languages/mysql/mysql.contribution.js'
-import 'monaco-editor/esm/vs/basic-languages/pgsql/pgsql.contribution.js'
-import 'monaco-editor/esm/vs/basic-languages/javascript/javascript.contribution.js'
-import * as monaco from 'monaco-editor/esm/vs/editor/editor.api.js'
-import MonacoEditorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker'
+import type * as Monaco from 'monaco-editor'
 import { resolveCssColor } from './color'
 
-export { monaco }
+export type MonacoApi = typeof Monaco
 
 /** Single theme name, redefined in place whenever light/dark flips. */
 export const DS_THEME = 'ds'
 
-let workersInstalled = false
+let api: MonacoApi | null = null
+let inFlight: Promise<MonacoApi> | null = null
 
-/** Wire the editor worker (bundled by Vite, same-origin — CSP-safe). */
-export function installMonacoWorkers() {
-  if (workersInstalled) return
-  workersInstalled = true
-  const g = self as unknown as { MonacoEnvironment?: { getWorker: () => Worker } }
-  g.MonacoEnvironment = { getWorker: () => new MonacoEditorWorker() }
+/** The API if it is already loaded — for code that must not trigger the download. */
+export function loadedMonaco(): MonacoApi | null {
+  return api
+}
+
+/** Load Monaco once; concurrent callers share the same download. */
+export function loadMonaco(): Promise<MonacoApi> {
+  if (api) return Promise.resolve(api)
+  if (inFlight) return inFlight
+  inFlight = (async () => {
+    const [, , , , , mod, worker] = await Promise.all([
+      import('monaco-editor/esm/vs/editor/editor.all.js'),
+      import('monaco-editor/esm/vs/basic-languages/sql/sql.contribution.js'),
+      import('monaco-editor/esm/vs/basic-languages/mysql/mysql.contribution.js'),
+      import('monaco-editor/esm/vs/basic-languages/pgsql/pgsql.contribution.js'),
+      import('monaco-editor/esm/vs/basic-languages/javascript/javascript.contribution.js'),
+      import('monaco-editor/esm/vs/editor/editor.api.js'),
+      import('monaco-editor/esm/vs/editor/editor.worker?worker'),
+    ])
+    const g = self as unknown as { MonacoEnvironment?: { getWorker: () => Worker } }
+    // the editor worker, bundled by Vite as a same-origin file (CSP-safe)
+    g.MonacoEnvironment = { getWorker: () => new worker.default() }
+    api = mod as unknown as MonacoApi
+    return api
+  })()
+  return inFlight
 }
 
 /**
@@ -37,10 +56,10 @@ export function installMonacoWorkers() {
  * connections filter, and F1 opens Monaco's own command palette. Removing the
  * binding lets the event reach the app's window handler.
  */
-export function releaseAppKeybindings() {
-  monaco.editor.addKeybindingRules([
-    { keybinding: monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyK, command: null },
-    { keybinding: monaco.KeyCode.F1, command: null },
+export function releaseAppKeybindings(m: MonacoApi) {
+  m.editor.addKeybindingRules([
+    { keybinding: m.KeyMod.CtrlCmd | m.KeyMod.Shift | m.KeyCode.KeyK, command: null },
+    { keybinding: m.KeyCode.F1, command: null },
   ])
 }
 
@@ -50,7 +69,8 @@ function bare(name: string, fallback: string): string {
 }
 
 /** Define (or redefine) the app theme from the current CSS custom properties. */
-export function defineDsTheme() {
+export function defineDsTheme(m: MonacoApi = api!) {
+  if (!m) return
   const dark = document.documentElement.classList.contains('dark')
   const c = (name: string, fallback: string) => resolveCssColor(name, fallback)
 
@@ -66,7 +86,7 @@ export function defineDsTheme() {
   const warn = c('--warn2', '#d19a66')
   const sel = c('--grid-select', primary)
 
-  monaco.editor.defineTheme(DS_THEME, {
+  m.editor.defineTheme(DS_THEME, {
     base: dark ? 'vs-dark' : 'vs',
     inherit: true,
     rules: [
@@ -81,8 +101,10 @@ export function defineDsTheme() {
       { token: 'type', foreground: bare('--syntax-type', '#e5c07b') },
       { token: 'identifier', foreground: bare('--text', text) },
       { token: 'identifier.quote', foreground: bare('--syntax-string', '#98c379') },
-      // mongosh (JavaScript monarch)
+      // mongosh (JavaScript monarch) + JSON values
       { token: 'regexp', foreground: bare('--syntax-string', '#98c379') },
+      { token: 'string.key', foreground: bare('--syntax-function', '#61afef') },
+      { token: 'string.value', foreground: bare('--syntax-string', '#98c379') },
     ],
     colors: {
       'editor.background': surface,
@@ -123,20 +145,29 @@ export function defineDsTheme() {
       'scrollbarSlider.background': border2 + '99',
       'scrollbarSlider.hoverBackground': border2,
       'scrollbarSlider.activeBackground': primary,
+      'diffEditor.insertedTextBackground': '#28a74533',
+      'diffEditor.removedTextBackground': '#d7373733',
     },
   })
-  monaco.editor.setTheme(DS_THEME)
+  m.editor.setTheme(DS_THEME)
 }
+
+let themeWatch: (() => void) | null = null
 
 /**
  * Keep the theme in step with the app's light/dark toggle (which flips the `dark`
- * class on <html>). Returns a disposer.
+ * class on <html>). Installed once; returns a disposer.
  */
 export function watchDsTheme(): () => void {
+  if (themeWatch) return themeWatch
   if (typeof MutationObserver === 'undefined') return () => {}
   const obs = new MutationObserver(() => defineDsTheme())
   obs.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] })
-  return () => obs.disconnect()
+  themeWatch = () => {
+    obs.disconnect()
+    themeWatch = null
+  }
+  return themeWatch
 }
 
 /** Editor font (family + size) resolved from the app's tokens. */

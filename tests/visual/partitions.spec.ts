@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { APP_URL, blockRemoteFonts, openDatabaseNode } from './helpers'
+import { APP_URL, blockRemoteFonts, openDatabaseNode, previewText } from './helpers'
 
 // Partitions node — expanding a partitioned table (demo: enrollments) shows a
 // "Partitions" folder listing its partitions, with a right-click maintenance menu.
@@ -84,7 +84,7 @@ test('add partition dialog: structured form + live script', async ({ page }) => 
   await page.waitForTimeout(200)
 
   // live script updates inside the dialog
-  await expect(page.getByRole('dialog').locator('pre')).toContainText(
+  expect(await previewText(page, 'Partition script')).toContain(
     `PARTITION OF "public"."enrollments" FOR VALUES FROM ('2027-01-01') TO ('2028-01-01')`,
   )
 
