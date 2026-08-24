@@ -123,3 +123,36 @@ export async function previewText(page: Page, label?: string): Promise<string> {
     return ed?.getModel()?.getValue() ?? ''
   }, label)
 }
+
+/**
+ * Geometry + rendered text of a Monaco preview (CodeView), so a spec can tell
+ * "the model holds the text" from "the user can actually see it". A viewer whose
+ * box collapsed to a few pixels shipped once (the payload popups), and reading the
+ * model alone did NOT catch it.
+ */
+export async function previewBox(
+  page: Page,
+  label?: string,
+): Promise<{ height: number; width: number; text: string; rendered: string }> {
+  return page.evaluate((want) => {
+    type Ed = {
+      getModel: () => { getValue: () => string } | null
+      getDomNode: () => HTMLElement | null
+      getRawOptions?: () => { ariaLabel?: string }
+    }
+    const views = ((window as unknown as { __dsViews?: Ed[] }).__dsViews ?? []).filter((e) => e.getModel())
+    const picked = want ? views.filter((e) => e.getRawOptions?.().ariaLabel === want) : views
+    const ed = picked[picked.length - 1] ?? views[views.length - 1]
+    if (!ed) return { height: -1, width: -1, text: '', rendered: '' }
+    const dom = ed.getDomNode()
+    const box = (dom?.closest('.cv-box') as HTMLElement | null) ?? dom
+    const rect = box?.getBoundingClientRect()
+    const lines = dom?.querySelector('.view-lines') as HTMLElement | null
+    return {
+      height: rect ? Math.round(rect.height) : -1,
+      width: rect ? Math.round(rect.width) : -1,
+      text: ed.getModel()?.getValue() ?? '',
+      rendered: lines?.innerText ?? '',
+    }
+  }, label)
+}

@@ -528,7 +528,9 @@
             value={viewState.text}
             language={viewState.isJson ? DS_JSON : 'plaintext'}
             readOnly
-            height="100%"
+            height="auto"
+            maxHeight={520}
+            minHeight={160}
             ariaLabel="Payload"
           />
         </div>

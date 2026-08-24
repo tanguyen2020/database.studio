@@ -22,6 +22,8 @@
     height?: string
     /** cap for height:'auto', in px */
     maxHeight?: number
+    /** floor for the box, in px — a one-line payload should still read as a viewer */
+    minHeight?: number
     autofocus?: boolean
     onChange?: (text: string) => void
     /** Ctrl/Cmd+Enter inside the editor */
@@ -37,6 +39,7 @@
     readOnly = false,
     height = '40vh',
     maxHeight = 420,
+    minHeight = 0,
     autofocus = false,
     onChange,
     onSubmit,
@@ -64,13 +67,34 @@
     w.__dsViews = (w.__dsViews ?? []).filter((e) => e !== ed)
   }
 
-  /** height:'auto' — follow the content so the whole snippet is visible (and in
-   *  the DOM, which keeps text assertions and Ctrl+F over previews working). */
+  /** Smallest height that still shows something (below this the viewer reads as
+   *  broken — see collapse guard in fitHeight). */
+  const MIN_BOX_PX = 28
+
+  /**
+   * Size the box from the content when asked (height:'auto'), and — always — catch
+   * the case where a percentage height resolved to nothing.
+   *
+   * A `height:100%` box inside a flex parent whose own height is indefinite (a
+   * modal sized by its content, for example) collapses to a few pixels: Monaco
+   * then holds the text but the user sees an empty strip. That shipped once (the
+   * Kafka/NATS/Redis payload popups measured 7px tall), so the guard belongs in
+   * the component, not in each caller.
+   */
   function fitHeight() {
-    if (!auto || !editor || !box) return
+    if (!editor || !box) return
     const lines = editor.getModel()?.getLineCount() ?? 1
     const lh = editor.getOption(m.editor.EditorOption.lineHeight) || 18
-    box.style.height = `${Math.min(maxHeight, Math.max(lh + 12, lines * lh + 12))}px`
+    const wanted = Math.min(maxHeight, Math.max(minHeight, lh + 12, lines * lh + 12))
+    if (auto) {
+      box.style.height = `${wanted}px`
+      return
+    }
+    // fixed/percentage height: only step in when the layout gave us nothing
+    if (box.getBoundingClientRect().height < MIN_BOX_PX) {
+      box.style.height = `${wanted}px`
+      box.style.flex = '1 1 auto'
+    }
   }
 
   onMount(() => {
@@ -144,6 +168,11 @@
         }),
       )
       fitHeight()
+      // one more pass after the browser has laid the dialog/pane out, which is
+      // when a collapsed percentage height becomes visible
+      requestAnimationFrame(() => {
+        if (!disposed) fitHeight()
+      })
       registerTestView(editor)
       if (autofocus) {
         editor.focus()

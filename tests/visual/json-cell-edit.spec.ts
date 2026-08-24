@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { APP_URL, blockRemoteFonts, openDatabaseNode } from './helpers'
+import { APP_URL, blockRemoteFonts, openDatabaseNode, previewBox } from './helpers'
 
 // Editing a JSON cell: a document does not fit the one-line inline editor, so a
 // json/jsonb cell opens the JSON editor (validate → Format → Save into the same
@@ -64,6 +64,10 @@ test('json cell: double-click opens the JSON editor, validates, and saves as a p
   await expect(dlg).toBeVisible()
   await expect(page.locator('.grid-row input')).toHaveCount(0)
   await expect(dlg.getByLabel('JSON value')).toBeFocused()
+  // the editor is a real box, not a collapsed strip that only holds the text
+  const editorBox = await previewBox(page, 'JSON value')
+  expect(editorBox.height, `JSON editor collapsed (${editorBox.height}px)`).toBeGreaterThan(100)
+  expect(editorBox.rendered).toContain('theme')
   // opened pretty-printed on the current value
   expect(await jsonText(page)).toContain('"theme": "dark"')
   // header names the column and its type
@@ -144,6 +148,9 @@ test('json cell: NULL cells, text columns and read-only grids', async ({ page })
   const view = page.getByRole('dialog', { name: 'JSON cell' })
   await expect(view).toBeVisible()
   expect(await jsonText(page)).toContain('"kind": "read-only"')
+  const viewerBox = await previewBox(page, 'JSON value')
+  expect(viewerBox.height, `JSON viewer collapsed (${viewerBox.height}px)`).toBeGreaterThan(100)
+  expect(viewerBox.rendered).toContain('read-only')
   await expect(view.getByRole('button', { name: 'Save' })).toHaveCount(0)
   await view.getByRole('button', { name: 'Close' }).click()
   await expect(view).toBeHidden()

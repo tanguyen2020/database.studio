@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { APP_URL, blockRemoteFonts } from './helpers'
+import { APP_URL, blockRemoteFonts, previewBox } from './helpers'
 
 // Kafka: connecting does NOT open a cluster tab — topics live in the ObjectExplorer
 // sidebar and clicking a topic opens its consumer.
@@ -80,6 +80,17 @@ test('kafka: topic messages are paged (Newest / Previous / Next)', async ({ page
   await page.getByTitle(/How many records to read per page/).selectOption('50')
   await page.waitForTimeout(500)
   expect(await rows.count()).toBeLessThanOrEqual(50)
+
+  // the value popup SHOWS the payload: a viewer whose box collapsed to a few
+  // pixels still holds the text in its model, so height is part of the contract
+  await rows.first().getByTitle('View value as JSON').click()
+  await page.waitForTimeout(600)
+  const payload = await previewBox(page, 'Payload')
+  expect(payload.text, 'kafka payload viewer is empty').not.toBe('')
+  expect(payload.height, `kafka payload viewer collapsed (${payload.height}px)`).toBeGreaterThan(100)
+  expect(payload.rendered.trim(), 'kafka payload not rendered').not.toBe('')
+  await page.getByRole('button', { name: 'Close' }).first().click()
+  await page.waitForTimeout(200)
 
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })

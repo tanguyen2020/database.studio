@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { APP_URL, blockRemoteFonts } from './helpers'
+import { APP_URL, blockRemoteFonts, previewBox } from './helpers'
 
 // Fixed timezone so the localized Time column renders deterministically.
 test.use({ timezoneId: 'America/New_York' })
@@ -97,6 +97,16 @@ test('nats subject messages: selecting a row keeps the 3 action icons visible', 
   await expect(view).toBeVisible()
   await expect(copy).toBeVisible()
   await expect(del).toBeVisible()
+
+  // the payload popup shows the JSON — visibly, not only in the model
+  await view.click()
+  await page.waitForTimeout(600)
+  const natsView = await previewBox(page, 'Payload')
+  expect(natsView.text).toContain('"id"')
+  expect(natsView.height, `payload viewer collapsed (${natsView.height}px)`).toBeGreaterThan(100)
+  expect(natsView.rendered).toContain('"id"')
+  await page.getByRole('button', { name: 'Close' }).first().click()
+  await page.waitForTimeout(200)
   // they turn white on selection (contrast with the blue highlight = not hidden)
   expect(await copy.evaluate((el) => getComputedStyle(el).color)).toBe('rgb(255, 255, 255)')
   expect(await del.evaluate((el) => getComputedStyle(el).color)).toBe('rgb(255, 255, 255)')
