@@ -32,7 +32,7 @@ describe('shouldSuppressNativeMenu', () => {
       <input id="dis" disabled />`
     expect(shouldSuppressNativeMenu(document.getElementById('host'))).toBe(false)
     expect(shouldSuppressNativeMenu(document.getElementById('notes'))).toBe(false)
-    // a right-click inside the CodeMirror editor lands on a child token element
+    // a right-click inside the editor lands on a child token element
     expect(shouldSuppressNativeMenu(document.getElementById('tok'))).toBe(false)
     // read-only / disabled inputs cannot be pasted into → page menu is suppressed
     expect(shouldSuppressNativeMenu(document.getElementById('ro'))).toBe(true)

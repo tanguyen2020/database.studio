@@ -27,6 +27,14 @@ async function watchKeys(page: import('@playwright/test').Page) {
   })
 }
 
+/** The keys under test must reach the guard, i.e. nothing else may claim them.
+ *  With focus in the query editor, Monaco handles Ctrl+S itself (Save) and stops
+ *  the event there — the browser action is prevented either way, but the guard
+ *  never sees it. Measure the guard with focus outside the editor. */
+async function blurEditor(page: import('@playwright/test').Page) {
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
+}
+
 async function prevented(page: import('@playwright/test').Page, key: string) {
   const keys = await page.evaluate(() => (window as unknown as { __keys: [string, boolean][] }).__keys)
   const hit = keys.filter(([k]) => k.toLowerCase() === key.toLowerCase())
@@ -40,6 +48,7 @@ test('release guard blocks browser chrome keys, dev build does not', async ({ pa
 
   // guard ON (release behaviour)
   await open(page, `${APP_URL}?lockKeys=1`)
+  await blurEditor(page)
   await watchKeys(page)
   await page.keyboard.press('Control+r')
   await page.keyboard.press('Control+s')
@@ -72,7 +81,7 @@ test('with the guard on, F5 still runs the query in the editor', async ({ page }
   await page.getByText('New Query Console', { exact: true }).first().click()
   await page.waitForTimeout(700)
 
-  await page.locator('.cm-content').first().click()
+  await page.locator('.view-lines').first().click()
   await page.keyboard.type('SELECT * FROM students')
   await page.keyboard.press('F5')
   await page.waitForTimeout(900)

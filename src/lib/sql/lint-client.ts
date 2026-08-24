@@ -1,5 +1,5 @@
 // Client của lint tầng 1: gọi command `lint_sql` (parse-only, debounce do
-// CodeMirror linter đảm nhiệm) + cảnh báo schema-aware từ cache autocomplete
+// SqlEditor đảm nhiệm, 400ms) + cảnh báo schema-aware từ cache autocomplete
 // (addendum §1.3 — squiggle VÀNG advisory, schema cache có thể cũ).
 
 import type { Diagnostic } from '@codemirror/lint'

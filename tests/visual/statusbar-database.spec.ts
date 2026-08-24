@@ -18,7 +18,7 @@ test('status bar: MySQL shows the run database, not the default schema', async (
   await page.getByText('New Query Console', { exact: true }).first().click()
   await page.waitForTimeout(700)
 
-  await page.locator('.cm-content').first().click()
+  await page.locator('.view-lines').first().click()
   await page.keyboard.type('SELECT * FROM students')
   await page.getByRole('button', { name: 'Run' }).first().click()
   await page.waitForTimeout(600)

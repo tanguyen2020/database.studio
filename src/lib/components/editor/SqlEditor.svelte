@@ -1,51 +1,97 @@
+<script module lang="ts">
+  // Monaco SQL editor (replaces the CodeMirror 6 view — typing/rendering are
+  // Monaco's now, which is what the switch was for).
+  //
+  // What is DELIBERATELY unchanged: the completion SOURCES. Schema/keyword
+  // completion still comes from @codemirror/lang-sql and the column/function/Mongo
+  // sources still live in SqlWorkspace, driven through a headless CodeMirror
+  // document (see $lib/editor/cm-headless). That keeps every test-pinned
+  // behaviour — reserved-word quoting on accept, alias-aware `alias.column`,
+  // dotted schema keys, quoted identifiers — instead of re-deriving it.
+  import {
+    monaco,
+    installMonacoWorkers,
+    monacoLanguage,
+    defineDsTheme,
+    watchDsTheme,
+    releaseAppKeybindings,
+  } from '$lib/editor/monaco'
+  import { IS_TAURI } from '$lib/demo'
+
+  /** Per-model hooks, so ONE global completion provider can serve every open tab
+   *  (tabs stay mounted — see the keep-alive pane in App.svelte). */
+  type ModelHooks = {
+    complete: (
+      model: monaco.editor.ITextModel,
+      position: monaco.Position,
+      ctx: monaco.languages.CompletionContext,
+    ) => Promise<monaco.languages.CompletionList>
+  }
+  const hooksByModel = new Map<monaco.editor.ITextModel, ModelHooks>()
+
+  const KIND: Record<string, monaco.languages.CompletionItemKind> = {
+    property: monaco.languages.CompletionItemKind.Field,
+    type: monaco.languages.CompletionItemKind.Class,
+    class: monaco.languages.CompletionItemKind.Struct,
+    method: monaco.languages.CompletionItemKind.Method,
+    function: monaco.languages.CompletionItemKind.Function,
+    keyword: monaco.languages.CompletionItemKind.Keyword,
+    constant: monaco.languages.CompletionItemKind.Constant,
+    variable: monaco.languages.CompletionItemKind.Variable,
+  }
+  export function completionKind(type: string | undefined): monaco.languages.CompletionItemKind {
+    return KIND[type ?? ''] ?? monaco.languages.CompletionItemKind.Variable
+  }
+
+  /** Test seam (browser/demo only — never in the desktop build): the editor
+   *  instances, so a spec can ask the MODEL how many lines it holds instead of
+   *  counting rendered gutter elements (Monaco virtualises them, and a hidden
+   *  keep-alive pane renders none at all). */
+  function registerTestEditor(ed: monaco.editor.IStandaloneCodeEditor) {
+    if (IS_TAURI) return
+    const w = window as unknown as { __dsEditors?: monaco.editor.IStandaloneCodeEditor[] }
+    w.__dsEditors = [...(w.__dsEditors ?? []).filter((e) => e !== ed), ed]
+  }
+
+  function unregisterTestEditor(ed: monaco.editor.IStandaloneCodeEditor) {
+    if (IS_TAURI) return
+    const w = window as unknown as { __dsEditors?: monaco.editor.IStandaloneCodeEditor[] }
+    w.__dsEditors = (w.__dsEditors ?? []).filter((e) => e !== ed)
+  }
+
+  let bootstrapped = false
+  function bootstrapMonaco() {
+    if (bootstrapped) return
+    bootstrapped = true
+    installMonacoWorkers()
+    defineDsTheme()
+    watchDsTheme()
+    releaseAppKeybindings()
+    // '.' → qualified names, '$' → Mongo operators, ' ' → a column position with
+    // nothing typed yet (right after WHERE / SET / AND …), which the sources
+    // answer and Monaco would otherwise never ask about.
+    const triggerCharacters = ['.', '$', ' ']
+    for (const lang of ['sql', 'mysql', 'pgsql', 'javascript']) {
+      monaco.languages.registerCompletionItemProvider(lang, {
+        triggerCharacters,
+        provideCompletionItems: (model: monaco.editor.ITextModel, position: monaco.Position, ctx: monaco.languages.CompletionContext) =>
+          hooksByModel.get(model)?.complete(model, position, ctx) ?? { suggestions: [] },
+      })
+    }
+  }
+</script>
+
 <script lang="ts">
-  // CodeMirror 6 SQL editor. Dialect-aware highlighting, F5 / Ctrl+Enter /
-  // Ctrl+F5 / Esc keymap, execution-error squiggles (tầng 2 — advisory lint
-  // tầng 1 arrives in Phase 2).
   import { onMount } from 'svelte'
-  import {
-    EditorView,
-    keymap,
-    lineNumbers,
-    ViewPlugin,
-    Decoration,
-    type DecorationSet,
-    type ViewUpdate,
-  } from '@codemirror/view'
-  import { EditorState, Compartment, RangeSetBuilder, type Extension } from '@codemirror/state'
-  import {
-    defaultKeymap,
-    history,
-    historyKeymap,
-    indentWithTab,
-  } from '@codemirror/commands'
-  import {
-    bracketMatching,
-    foldGutter,
-    foldKeymap,
-    indentOnInput,
-    syntaxHighlighting,
-    HighlightStyle,
-  } from '@codemirror/language'
-  import { tags as t } from '@lezer/highlight'
-  import {
-    autocompletion,
-    acceptCompletion,
-    moveCompletionSelection,
-    completionStatus,
-    startCompletion,
-    closeBrackets,
-    closeBracketsKeymap,
-    completionKeymap,
-    type CompletionSource,
-    type Completion,
-  } from '@codemirror/autocomplete'
+  import { editorFont, DS_THEME } from '$lib/editor/monaco'
+  import { HeadlessDoc, runSources } from '$lib/editor/cm-headless'
+  import { mapCompletions } from '$lib/editor/completion-map'
   import { functionCatalog, type FnHint } from '$lib/sql/functions'
   import { expectsColumnHere } from '$lib/sql/column-context'
-  import { highlightSelectionMatches, searchKeymap } from '@codemirror/search'
-  import { linter, setDiagnostics, type Diagnostic } from '@codemirror/lint'
+  import { lineColToOffset } from '$lib/sql/statements'
   import {
-    sql,
+    schemaCompletionSource,
+    keywordCompletionSource,
     SQLDialect,
     PostgreSQL,
     MySQL,
@@ -55,22 +101,23 @@
     type SQLNamespace,
   } from '@codemirror/lang-sql'
   import { clickHouseDialect } from '$lib/sql/ch-editor-dialect'
-  import { lineColToOffset } from '$lib/sql/statements'
+  import type { Completion, CompletionSource } from '@codemirror/autocomplete'
+  import type { Diagnostic } from '@codemirror/lint'
 
   interface Props {
     value: string
     system: string
     readOnly?: boolean
-    /** schema-aware autocomplete (Phase 2): nested { schema: { table: {self,children} } }
+    /** schema-aware autocomplete: nested { schema: { table: {self,children} } }
      *  from the explorer cache; reserved identifiers carry a quoted `apply`. */
     schema?: SQLNamespace
     defaultSchema?: string
-    /** async completion cho `alias.`/`table.` — lazy-load cột của bảng trong FROM/JOIN */
+    /** completion cho `alias.`/`table.` — lazy-load cột của bảng trong FROM/JOIN */
     columnSource?: CompletionSource
     /** functions introspected from the live server (list_functions) — merged with
      *  the static built-ins + curated signatures for the dialect. */
     dynamicFunctions?: FnHint[]
-    /** lint tầng 1 — advisory, debounce 400ms do linter đảm nhiệm, KHÔNG chặn Run */
+    /** lint tầng 1 — advisory, debounce 400ms, KHÔNG chặn Run */
     lintSource?: (doc: string) => Promise<Diagnostic[]>
     onChange?: (doc: string) => void
     onRun?: () => void
@@ -100,11 +147,17 @@
   }: Props = $props()
 
   let container = $state<HTMLDivElement | null>(null)
-  let view: EditorView | null = null
-  const langCompartment = new Compartment()
+  let editor: monaco.editor.IStandaloneCodeEditor | null = null
+  let fnDecorations: monaco.editor.IEditorDecorationsCollection | null = null
+  let headless: HeadlessDoc | null = null
   /** Set when Escape closes the popup; cleared on the next edit. Keeps a late
    *  column load (see refreshCompletion) from re-opening a dismissed popup. */
   let completionDismissed = false
+  let lintTimer: ReturnType<typeof setTimeout> | null = null
+
+  const LINT_OWNER = 'ds-lint'
+  const EXEC_OWNER = 'ds-exec'
+  const LINT_DELAY = 400
 
   function baseDialect(sys: string): SQLDialect {
     switch (sys) {
@@ -129,9 +182,7 @@
   // PG `date_trunc` colour too) PLUS the dialect's own `builtin` words (covers
   // ClickHouse's CH_FUNCTIONS). Driven purely by the function catalog: real
   // functions (incl. MSSQL GETDATE/DATEADD which are also dialect keywords) colour,
-  // while non-function keywords (IN/VALUES/EXISTS — not in any catalog) do not — so
-  // there's NO keyword subtraction (that dropped keyword-named functions). Used only
-  // to COLOUR calls; never fed to the tokenizer, so completion/quoting are unaffected.
+  // while non-function keywords (IN/VALUES/EXISTS — not in any catalog) do not.
   function fnColorSet(sys: string): Set<string> {
     const set = new Set<string>(functionCatalog(sys, dynamicFunctions ?? []).map((f) => f.name.toLowerCase()))
     for (const w of ((baseDialect(sys).spec?.builtin ?? '') as string).split(/\s+/)) {
@@ -140,46 +191,8 @@
     return set
   }
 
-  // Colour known function calls (`name(`) via a decoration — NOT by adding names
-  // to the dialect `builtin`. Putting functions in `builtin` makes the tokenizer
-  // read them as complete keywords, which broke table completion when a table
-  // prefix equals a function name (typing `ord` → the `ORD` function shadowed a
-  // table `order`). A decoration leaves tokenization untouched.
-  const fnMark = Decoration.mark({ class: 'cm-sql-fn' })
-  function functionHighlighter(sys: string) {
-    const set = fnColorSet(sys)
-    const build = (view: EditorView): DecorationSet => {
-      const b = new RangeSetBuilder<Decoration>()
-      const re = /\b([A-Za-z_]\w*)\s*(?=\()/g
-      for (const { from, to } of view.visibleRanges) {
-        const text = view.state.sliceDoc(from, to)
-        let m: RegExpExecArray | null
-        while ((m = re.exec(text))) {
-          if (set.has(m[1].toLowerCase())) {
-            const s = from + m.index
-            b.add(s, s + m[1].length, fnMark)
-          }
-        }
-      }
-      return b.finish()
-    }
-    return ViewPlugin.fromClass(
-      class {
-        decorations: DecorationSet
-        constructor(view: EditorView) {
-          this.decorations = build(view)
-        }
-        update(u: ViewUpdate) {
-          if (u.docChanged || u.viewportChanged) this.decorations = build(u.view)
-        }
-      },
-      { decorations: (v) => v.decorations },
-    )
-  }
-
-  // The SINGLE function-completion source (with signatures). Because the keyword
-  // source below EXCLUDES function names, functions are suggested exactly once —
-  // no duplicate bare/keyword entry alongside the signature one.
+  /** Function completions (with signatures). The keyword source below does not
+   *  carry function names, so a function is suggested exactly once. */
   function fnSource(sys: string): CompletionSource {
     const options: Completion[] = functionCatalog(sys, dynamicFunctions ?? []).map((f) => ({
       label: f.name,
@@ -201,247 +214,350 @@
     }
   }
 
-  function langExt(sys: string) {
-    // MongoDB is mongosh, not SQL — keep the plain lang-sql path (no function/
-    // keyword SQL sources); its columnSource provides Mongo methods/operators.
-    if (sys === 'mongodb') {
-      const base = sql({ dialect: StandardSQL, schema, defaultSchema })
-      const exts: Extension[] = [base]
-      if (columnSource) exts.push(base.language.data.of({ autocomplete: columnSource }))
-      return exts
+  /** Completion sources for the current dialect/schema. Rebuilt only when their
+   *  inputs change — `schemaCompletionSource` pre-builds a tree of the whole
+   *  catalog, far too expensive to construct per keystroke. */
+  let srcSchema: CompletionSource | undefined
+  let srcKeyword: CompletionSource | undefined
+  let srcFn: CompletionSource | undefined
+  let colorSet = new Set<string>()
+  function rebuildSources() {
+    // MongoDB is mongosh, not SQL: its own source carries the collections,
+    // methods, operators and fields — SQL keyword/function noise stays out.
+    if (system === 'mongodb') {
+      srcSchema = undefined
+      srcKeyword = undefined
+      srcFn = undefined
+      colorSet = new Set()
+      return
     }
-    // Relational: use lang-sql's own `sql()` for schema + keyword completion +
-    // language (its schema/alias/reserved-word-quoting behaviour is subtle — hand-
-    // wiring it broke alias-column completion). On top we add a colour decoration
-    // and the function source. Functions from the static/introspected catalog are
-    // NOT dialect keywords, so they're offered once (only by fnSource); the handful
-    // that are also keywords (count/coalesce/…) behave exactly as before.
-    const base = sql({ dialect: baseDialect(sys), schema, defaultSchema })
-    const exts: Extension[] = [base, functionHighlighter(sys), base.language.data.of({ autocomplete: fnSource(sys) })]
-    if (columnSource) exts.push(base.language.data.of({ autocomplete: columnSource }))
-    return exts
+    const dialect = baseDialect(system)
+    srcSchema = schema ? schemaCompletionSource({ dialect, schema, defaultSchema }) : undefined
+    srcKeyword = keywordCompletionSource(dialect)
+    srcFn = fnSource(system)
+    colorSet = fnColorSet(system)
   }
 
-  // Tab / Enter acceptance. `acceptCompletion` only fires when an option is
-  // actually selected, but post-dot column completions can open with nothing
-  // selected (selected = -1) — so Tab/Enter would do nothing until you pressed an
-  // arrow key. This selects the first option when none is, then accepts, so a
-  // single Tab/Enter always inserts the suggestion. Returns false when no popup is
-  // open, letting Enter fall through to a normal newline.
-  function acceptOrSelectFirst(view: EditorView): boolean {
-    if (completionStatus(view.state) == null) return false
-    if (acceptCompletion(view)) return true
-    if (moveCompletionSelection(true)(view)) return acceptCompletion(view)
-    return false
+  /** A caret right after `something.` — a qualified name, where only that
+   *  table's/alias's columns make sense. */
+  function isQualified(doc: string, offset: number): boolean {
+    return /[\w$"`\]]\s*\.\s*[\w$]*$/.test(doc.slice(Math.max(0, offset - 80), offset))
   }
 
-  // Theme-aware SQL syntax palette (AUDIT-3 item 2). Colors resolve from CSS
-  // vars (--syntax-*) so light/dark each get a high-contrast, low-strain palette.
-  const syntaxHl = HighlightStyle.define([
-    { tag: [t.keyword, t.operatorKeyword, t.modifier], color: 'var(--syntax-keyword)', fontWeight: '600' },
-    { tag: [t.string, t.special(t.string), t.regexp], color: 'var(--syntax-string)' },
-    { tag: [t.number, t.bool, t.null], color: 'var(--syntax-number)' },
-    { tag: [t.lineComment, t.blockComment, t.comment], color: 'var(--syntax-comment)', fontStyle: 'italic' },
-    { tag: [t.function(t.variableName), t.function(t.propertyName)], color: 'var(--syntax-function)' },
-    { tag: [t.typeName, t.className, t.namespace], color: 'var(--syntax-type)' },
-    { tag: [t.operator, t.punctuation, t.separator, t.paren, t.bracket], color: 'var(--syntax-operator)' },
-    { tag: [t.variableName, t.propertyName, t.name], color: 'var(--text)' },
-  ])
+  /**
+   * Sources to ask, in rank order. After `alias.` the keyword and function
+   * sources are skipped: CodeMirror could rank them below the columns (boost),
+   * but Monaco sorts by match score FIRST — an exact-match keyword (`or` for
+   * `s.or`) would outrank the column `order` and Tab would insert the keyword.
+   */
+  function sourcesFor(qualified: boolean, word: string, explicit: boolean): (CompletionSource | undefined)[] {
+    if (qualified) return [srcSchema, columnSource]
+    // Nothing typed yet (the caret sits right after WHERE / SET / AND …, which is
+    // why ' ' is a trigger character): only the column source has something
+    // meaningful to say. Without this, every space would dump the dialect's whole
+    // keyword list — CodeMirror never opened a popup there at all.
+    if (!word && !explicit) return [columnSource]
+    return [srcSchema, srcKeyword, srcFn, columnSource]
+  }
 
-  const editorTheme = EditorView.theme({
-    '&': {
-      height: '100%',
-      fontSize: 'var(--px-13)',
-      backgroundColor: 'var(--surface)',
-      color: 'var(--text)',
-    },
-    '.cm-content': {
-      fontFamily: 'var(--font-mono, monospace)',
-      caretColor: 'var(--text)',
-    },
-    // Known function calls, coloured by the functionHighlighter decoration.
-    '.cm-sql-fn': { color: 'var(--syntax-function)' },
-    '.cm-gutters': {
-      backgroundColor: 'var(--surface)',
-      color: 'var(--muted)',
-      border: 'none',
-      borderRight: 'var(--px-1) solid var(--border)',
-    },
-    '.cm-activeLine': { backgroundColor: 'var(--hover)' },
-    '.cm-activeLineGutter': { backgroundColor: 'var(--hover)' },
-    '&.cm-focused .cm-selectionBackground, .cm-selectionBackground': {
-      backgroundColor: 'var(--rgba-74-110-224-_20) !important',
-    },
-    '.cm-cursor': { borderLeftColor: 'var(--text)' },
-    '.cm-lintRange-error': {
-      backgroundImage: 'none',
-      textDecoration: 'underline wavy var(--error) var(--px-1)',
-    },
-    '.cm-tooltip': {
-      backgroundColor: 'var(--raised)',
-      color: 'var(--text)',
-      border: 'var(--px-1) solid var(--border2)',
-    },
-    // Autocomplete popup: wider for readability, and each row is a flex line so
-    // the qualifier (schema/database for a table, data type for a column) sits at
-    // the RIGHT edge instead of crowding the identifier.
-    '.cm-tooltip.cm-tooltip-autocomplete > ul': {
-      minWidth: 'var(--px-340)',
-      maxWidth: 'var(--px-520)',
-      fontFamily: 'var(--font-mono, monospace)',
-    },
-    '.cm-tooltip.cm-tooltip-autocomplete > ul > li': {
-      display: 'flex',
-      alignItems: 'center',
-      padding: 'var(--px-4) var(--px-10)',
-    },
-    '.cm-tooltip-autocomplete .cm-completionLabel': {
-      flex: '0 1 auto',
-      minWidth: '0',
-      overflow: 'hidden',
-      textOverflow: 'ellipsis',
-      whiteSpace: 'nowrap',
-    },
-    '.cm-tooltip-autocomplete .cm-completionDetail': {
-      flex: 'none',
-      marginLeft: 'auto',
-      paddingLeft: 'var(--px-16)',
-      // brighter than --muted so the schema/type qualifier at the right edge is
-      // easy to read on the popup background
-      color: 'var(--text2)',
-      fontStyle: 'normal',
-    },
-    // on the highlighted row (blue background) the qualifier needs a light color to
-    // stay legible — mirror the white label CodeMirror uses for the selected item
-    '.cm-tooltip-autocomplete ul li[aria-selected] .cm-completionDetail': {
-      color: 'var(--hex-fff)',
-    },
-  })
+  /**
+   * Re-run the providers even when the popup is already open. `editor.action.
+   * triggerSuggest` cannot do that — its precondition is "suggest widget NOT
+   * visible" — so a late column load would leave the open popup stale. The
+   * controller's own method has no such precondition.
+   */
+  function retriggerSuggest() {
+    if (!editor) return
+    type Ctrl = { triggerSuggest?: (only?: unknown, auto?: boolean, noFilter?: boolean) => void }
+    const ctrl = editor.getContribution('editor.contrib.suggestController') as unknown as Ctrl | null
+    if (ctrl?.triggerSuggest) ctrl.triggerSuggest(undefined, false, false)
+    else editor.trigger('ds.completion', 'editor.action.triggerSuggest', {})
+  }
+
+  /** Text already typed at the caret — decides which suggestion is preselected. */
+  function wordBefore(doc: string, offset: number): string {
+    return /[\w$]*$/.exec(doc.slice(Math.max(0, offset - 64), offset))?.[0] ?? ''
+  }
+
+  async function complete(
+    model: monaco.editor.ITextModel,
+    position: monaco.Position,
+    ctx: monaco.languages.CompletionContext,
+  ): Promise<monaco.languages.CompletionList> {
+    if (!headless) return { suggestions: [] }
+    const doc = model.getValue()
+    const offset = model.getOffsetAt(position)
+    const explicit = ctx.triggerKind === monaco.languages.CompletionTriggerKind.Invoke
+    const cmCtx = headless.context(doc, offset, explicit)
+    const word = wordBefore(doc, offset)
+    const results = await runSources(sourcesFor(isQualified(doc, offset), word, explicit), cmCtx)
+    const items = mapCompletions(results, word)
+    const end = model.getPositionAt(offset)
+    // All options from one source share a `from`, and a big catalog can return
+    // thousands of them — resolve each distinct offset once instead of per item.
+    const posCache = new Map<number, monaco.Position>()
+    const posAt = (o: number) => {
+      let p = posCache.get(o)
+      if (!p) {
+        p = model.getPositionAt(o)
+        posCache.set(o, p)
+      }
+      return p
+    }
+    const suggestions = items.map((it) => {
+      const start = posAt(it.from)
+      const stop = it.to != null ? posAt(it.to) : end
+      return {
+        label: it.label,
+        kind: completionKind(it.kind),
+        insertText: it.insertText,
+        detail: it.detail,
+        documentation: it.documentation,
+        preselect: it.preselect,
+        // no filterText/sortText on purpose: filterText would only repeat the
+        // label (and push Monaco onto its slower two-pass scoring path), and
+        // Monaco's suggest sorts by score → distance → array order, never by
+        // sortText — so both were pure cost per item on a big catalog.
+        range: {
+          startLineNumber: start.lineNumber,
+          startColumn: start.column,
+          endLineNumber: stop.lineNumber,
+          endColumn: stop.column,
+        },
+      } satisfies monaco.languages.CompletionItem
+    })
+    // `incomplete` re-asks the sources on every keystroke (CodeMirror did the
+    // same): that is how lazily-loaded columns and a freshly loaded catalog show
+    // up without the user having to close and re-open the popup.
+    return { suggestions, incomplete: true }
+  }
+
+  // ---- function-call colouring ------------------------------------------------
+  // A decoration, not a tokenizer entry: putting catalog names into the language's
+  // keyword list makes the tokenizer read a table prefix as a complete keyword
+  // (typing `ord` then offered MySQL's `ORD` instead of the table `order`).
+  // Only the visible range is scanned, so a 10k-line script stays cheap.
+  function refreshFnDecorations() {
+    if (!editor || !fnDecorations) return
+    const model = editor.getModel()
+    if (!model || colorSet.size === 0) {
+      fnDecorations.set([])
+      return
+    }
+    const decos: monaco.editor.IModelDeltaDecoration[] = []
+    const re = /\b([A-Za-z_]\w*)\s*(?=\()/g
+    for (const range of editor.getVisibleRanges()) {
+      const last = Math.min(range.endLineNumber, model.getLineCount())
+      for (let line = range.startLineNumber; line <= last; line++) {
+        const text = model.getLineContent(line)
+        re.lastIndex = 0
+        let m: RegExpExecArray | null
+        while ((m = re.exec(text))) {
+          if (!colorSet.has(m[1].toLowerCase())) continue
+          decos.push({
+            range: new monaco.Range(line, m.index + 1, line, m.index + 1 + m[1].length),
+            options: { inlineClassName: 'sql-fn' },
+          })
+        }
+      }
+    }
+    fnDecorations.set(decos)
+  }
+
+  // ---- one flush per frame ----------------------------------------------------
+  // Monaco reports a content change PER CHARACTER when a block of text lands at
+  // once (a paste, or Playwright's insertText) — CodeMirror delivered that as a
+  // single transaction. Everything below is O(document): reading the text out for
+  // `onChange` (tab state + dirty flag), re-scanning the viewport for function
+  // colouring, re-arming the lint timer. Measured on a 3.4 kB insert: 1737 ms
+  // doing it per change, ~130 ms coalesced. One frame of delay is invisible, and
+  // Run always reads the model directly (getDoc), never this.
+  let flushFrame: number | null = null
+  let pendingChange = false
+
+  function scheduleFlush() {
+    pendingChange = true
+    if (flushFrame != null) return
+    flushFrame = requestAnimationFrame(() => {
+      flushFrame = null
+      if (!pendingChange) return
+      pendingChange = false
+      flushChange()
+    })
+  }
+
+  function flushChange(withLint = true) {
+    const model = editor?.getModel()
+    if (!model) return
+    onChange?.(model.getValue())
+    refreshFnDecorations()
+    if (withLint) scheduleLint()
+  }
+
+  // ---- lint (advisory, debounced — never blocks Run) --------------------------
+  function scheduleLint() {
+    if (!lintSource) return
+    if (lintTimer) clearTimeout(lintTimer)
+    lintTimer = setTimeout(() => void runLint(), LINT_DELAY)
+  }
+
+  async function runLint() {
+    const model = editor?.getModel()
+    if (!model || !lintSource) return
+    const doc = model.getValue()
+    let diags: Diagnostic[] = []
+    try {
+      diags = await lintSource(doc)
+    } catch {
+      diags = []
+    }
+    if (model.isDisposed() || model.getValue() !== doc) return // stale
+    monaco.editor.setModelMarkers(model, LINT_OWNER, diags.map((d) => toMarker(model, d)))
+  }
+
+  function toMarker(model: monaco.editor.ITextModel, d: Diagnostic): monaco.editor.IMarkerData {
+    const from = model.getPositionAt(Math.max(0, d.from))
+    const to = model.getPositionAt(Math.max(d.from + 1, d.to))
+    return {
+      message: d.message,
+      severity:
+        d.severity === 'error'
+          ? monaco.MarkerSeverity.Error
+          : d.severity === 'warning'
+            ? monaco.MarkerSeverity.Warning
+            : monaco.MarkerSeverity.Info,
+      startLineNumber: from.lineNumber,
+      startColumn: from.column,
+      endLineNumber: to.lineNumber,
+      endColumn: to.column,
+    }
+  }
 
   onMount(() => {
-    const state = EditorState.create({
-      doc: value,
-      extensions: [
-        lineNumbers(),
-        foldGutter(),
-        history(),
-        indentOnInput(),
-        bracketMatching(),
-        closeBrackets(),
-        highlightSelectionMatches(),
-        syntaxHighlighting(syntaxHl, { fallback: true }),
-        langCompartment.of(langExt(system)),
-        // autocomplete: keywords dialect + table/column từ schema cache (lang-sql)
-        autocompletion(),
-        // lint tầng 1 — advisory, debounce 400ms (addendum §1.1), không chặn Run
-        linter(async (v) => (lintSource ? await lintSource(v.state.doc.toString()) : []), {
-          delay: 400,
-        }),
-        editorTheme,
-        EditorState.readOnly.of(readOnly),
-        keymap.of([
-          // run bindings take precedence
-          {
-            key: 'F5',
-            run: () => {
-              onRun?.()
-              return true
-            },
-          },
-          {
-            key: 'Ctrl-Enter',
-            run: () => {
-              onRunAtCursor?.()
-              return true
-            },
-          },
-          {
-            key: 'Ctrl-F5',
-            run: () => {
-              onCancel?.()
-              return true
-            },
-          },
-          {
-            key: 'Mod-Shift-f',
-            run: () => {
-              onFormat?.()
-              return true
-            },
-          },
-          {
-            key: 'Mod-Shift-e',
-            run: () => {
-              onExplain?.()
-              return true
-            },
-          },
-          {
-            key: 'Mod-s',
-            run: () => {
-              onSaveSnippet?.()
-              return true
-            },
-          },
-          {
-            key: 'Escape',
-            run: () => {
-              completionDismissed = true // don't let a late load re-open the popup
-              onCancel?.()
-              return false // let Esc also close panels etc.
-            },
-          },
-          // When the completion popup is open, Tab and Enter both accept the
-          // highlighted (or, if none, the first) suggestion. acceptOrSelectFirst
-          // returns false when no completion is active, so Tab falls through to
-          // indentWithTab (normal indentation) and Enter to a normal newline —
-          // accepting a suggestion never re-indents or shifts the line.
-          {
-            key: 'Tab',
-            run: acceptOrSelectFirst,
-          },
-          {
-            key: 'Enter',
-            run: acceptOrSelectFirst,
-          },
-          ...closeBracketsKeymap,
-          ...completionKeymap,
-          ...defaultKeymap,
-          ...historyKeymap,
-          ...foldKeymap,
-          ...searchKeymap,
-          indentWithTab,
-        ]),
-        EditorView.updateListener.of((update) => {
-          if (update.docChanged) {
-            completionDismissed = false // typing again re-arms completion
-            onChange?.(update.state.doc.toString())
-          }
-        }),
-      ],
+    bootstrapMonaco()
+    rebuildSources()
+    headless = new HeadlessDoc(baseDialect(system).extension, value)
+    const { fontFamily, fontSize } = editorFont()
+
+    editor = monaco.editor.create(container!, {
+      value,
+      language: monacoLanguage(system),
+      theme: DS_THEME,
+      readOnly,
+      automaticLayout: true,
+      fontFamily,
+      fontSize,
+      lineNumbers: 'on',
+      minimap: { enabled: false },
+      scrollBeyondLastLine: false,
+      renderLineHighlight: 'line',
+      renderWhitespace: 'selection',
+      tabSize: 2,
+      insertSpaces: true,
+      folding: true,
+      wordWrap: 'off',
+      // widgets must escape the pane's clipping (the editor sits in a fixed-height
+      // flex row above the result panel)
+      fixedOverflowWidgets: true,
+      // the app owns right-click (see native-menu guard) — no editor menu
+      contextmenu: false,
+      // no language service here: nothing to hover-doc, lens or lint-fix. Hover
+      // stays ON so a lint/execution error explains itself in a tooltip.
+      codeLens: false,
+      links: false,
+      lightbulb: { enabled: monaco.editor.ShowLightbulbIconMode.Off },
+      parameterHints: { enabled: false },
+      stickyScroll: { enabled: false },
+      unicodeHighlight: { ambiguousCharacters: false, invisibleCharacters: false },
+      quickSuggestions: { other: true, comments: false, strings: false },
+      quickSuggestionsDelay: 20,
+      suggestOnTriggerCharacters: true,
+      acceptSuggestionOnEnter: 'on',
+      // Tab/Enter accept; a commit character never inserts behind the user's back
+      acceptSuggestionOnCommitCharacter: false,
+      tabCompletion: 'off',
+      wordBasedSuggestions: 'off',
+      suggest: { showWords: false, insertMode: 'replace', showStatusBar: false },
+      padding: { top: 6, bottom: 6 },
+      ariaLabel: 'Query editor',
+      scrollbar: { useShadows: false },
     })
-    view = new EditorView({ state, parent: container! })
-    return () => view?.destroy()
+
+    const model = editor.getModel()!
+    hooksByModel.set(model, { complete })
+    registerTestEditor(editor)
+    fnDecorations = editor.createDecorationsCollection([])
+    refreshFnDecorations()
+    scheduleLint()
+
+    const subs = [
+      model.onDidChangeContent(() => {
+        completionDismissed = false // typing again re-arms completion
+        scheduleFlush()
+      }),
+      editor.onDidScrollChange(() => refreshFnDecorations()),
+      editor.onKeyDown((e: monaco.IKeyboardEvent) => {
+        if (e.keyCode !== monaco.KeyCode.Escape) return
+        completionDismissed = true // don't let a late load re-open the popup
+        onCancel?.()
+        // no preventDefault: Escape must still close the suggest/find widget
+      }),
+    ]
+
+    // Run/format bindings. `addAction` keeps them scoped to this editor instance,
+    // which matters because every open tab has its own live editor.
+    const actions: [string, string, number[], () => void][] = [
+      ['ds.run', 'Run', [monaco.KeyCode.F5], () => onRun?.()],
+      ['ds.runAtCursor', 'Run statement at cursor', [monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter], () => onRunAtCursor?.()],
+      ['ds.cancel', 'Cancel', [monaco.KeyMod.CtrlCmd | monaco.KeyCode.F5], () => onCancel?.()],
+      ['ds.format', 'Format SQL', [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyF], () => onFormat?.()],
+      ['ds.explain', 'Explain', [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyE], () => onExplain?.()],
+      ['ds.save', 'Save', [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS], () => onSaveSnippet?.()],
+    ]
+    for (const [id, label, keybindings, run] of actions) {
+      editor.addAction({ id, label, keybindings, run })
+    }
+
+    return () => {
+      if (lintTimer) clearTimeout(lintTimer)
+      if (flushFrame != null) cancelAnimationFrame(flushFrame)
+      // a tab closed one frame after the last edit must still report that edit
+      if (pendingChange) flushChange(false)
+      for (const s of subs) s.dispose()
+      const m = editor?.getModel()
+      if (m) hooksByModel.delete(m)
+      if (editor) unregisterTestEditor(editor)
+      editor?.dispose()
+      m?.dispose()
+      editor = null
+      headless = null
+    }
   })
 
-  // dialect/schema đổi (đổi connection trong tab hoặc cache autocomplete nạp xong)
-  // → reconfigure lang: reload autocomplete (spec phase-1 §6 + phase-2 §1)
+  // dialect/schema đổi (đổi connection trong tab, cache autocomplete nạp xong,
+  // server functions vừa về) → dựng lại completion sources + bảng màu hàm.
   $effect(() => {
     void schema
-    // Picking another schema must repoint unqualified completions. Today a cache
-    // mutation usually rebuilds anyway, but that is incidental — depend on the
-    // pick itself.
     void defaultSchema
     void system
-    void dynamicFunctions // server functions arrived → rebuild the completion source
-    view?.dispatch({ effects: langCompartment.reconfigure(langExt(system)) })
+    void dynamicFunctions
+    void columnSource
+    rebuildSources()
+    headless?.setLanguage(baseDialect(system).extension)
+    const model = editor?.getModel()
+    if (model) monaco.editor.setModelLanguage(model, monacoLanguage(system))
+    refreshFnDecorations()
+  })
+
+  $effect(() => {
+    editor?.updateOptions({ readOnly })
   })
 
   // ---- public API (via bind:this) ----
 
   /** Focus the editor (e.g. when a fresh Query tab opens via Ctrl/Cmd+N). */
   export function focus() {
-    view?.focus()
+    editor?.focus()
   }
 
   /** Re-run the completion sources because data they need has just arrived
@@ -454,81 +570,117 @@
    *  the user was already waiting on — never open one they didn't ask for:
    *   - the editor must have focus,
    *   - Escape must not have dismissed completion since the last edit,
-   *   - the caret must sit right after an identifier char or a dot (the contexts
-   *     that suggest something). startCompletion() counts as an EXPLICIT request,
-   *     and an explicit request in empty space would dump the whole function
-   *     catalog on screen. */
+   *   - the caret must sit right after an identifier char or a dot, or in a
+   *     position that expects a column with nothing typed yet. */
   export function refreshCompletion() {
-    if (!view?.hasFocus || completionDismissed) return
-    const pos = view.state.selection.main.head
-    const prev = view.state.sliceDoc(Math.max(0, pos - 1), pos)
-    // an identifier/dot context, or a position that expects a column with nothing
-    // typed yet (after WHERE / SET / AND …) — the same positions the completion
-    // source offers from, so late-arriving columns show up there too.
-    if (!/[\w$.]/.test(prev) && !expectsColumnHere(view.state.sliceDoc(Math.max(0, pos - 60), pos))) return
-    startCompletion(view)
+    if (!editor?.hasTextFocus() || completionDismissed) return
+    const model = editor.getModel()
+    const pos = editor.getPosition()
+    if (!model || !pos) return
+    const offset = model.getOffsetAt(pos)
+    const doc = model.getValue()
+    const prev = doc.slice(Math.max(0, offset - 1), offset)
+    if (!/[\w$.]/.test(prev) && !expectsColumnHere(doc.slice(Math.max(0, offset - 60), offset))) return
+    retriggerSuggest()
   }
 
   export function getDoc(): string {
-    return view?.state.doc.toString() ?? ''
+    return editor?.getModel()?.getValue() ?? ''
   }
 
   /** Thay toàn bộ nội dung (Format SQL) — giữ trong 1 transaction để undo được. */
   export function setDoc(next: string) {
-    if (!view) return
-    view.dispatch({
-      changes: { from: 0, to: view.state.doc.length, insert: next },
-    })
+    const model = editor?.getModel()
+    if (!model || !editor) return
+    editor.pushUndoStop()
+    model.pushEditOperations([], [{ range: model.getFullModelRange(), text: next }], () => null)
+    editor.pushUndoStop()
   }
 
   export function getSelection(): string {
-    if (!view) return ''
-    const { from, to } = view.state.selection.main
-    return from === to ? '' : view.state.sliceDoc(from, to)
+    const model = editor?.getModel()
+    const sel = editor?.getSelection()
+    if (!model || !sel) return ''
+    return sel.isEmpty() ? '' : model.getValueInRange(sel)
   }
 
   /** 0-based [from, to) of the primary selection (from === to when empty). */
   export function getSelectionRange(): { from: number; to: number } {
-    if (!view) return { from: 0, to: 0 }
-    const { from, to } = view.state.selection.main
-    return { from, to }
+    const model = editor?.getModel()
+    const sel = editor?.getSelection()
+    if (!model || !sel) return { from: 0, to: 0 }
+    return {
+      from: model.getOffsetAt(sel.getStartPosition()),
+      to: model.getOffsetAt(sel.getEndPosition()),
+    }
   }
 
   export function getCursorOffset(): number {
-    return view?.state.selection.main.head ?? 0
+    const model = editor?.getModel()
+    const pos = editor?.getPosition()
+    if (!model || !pos) return 0
+    return model.getOffsetAt(pos)
   }
 
   /** Jump to a 1-based line/col and focus (Messages click-to-jump). */
   export function jumpTo(line: number, col: number) {
-    if (!view) return
-    const offset = lineColToOffset(view.state.doc.toString(), line, col)
-    view.dispatch({
-      selection: { anchor: offset },
-      scrollIntoView: true,
-    })
-    view.focus()
+    const model = editor?.getModel()
+    if (!model || !editor) return
+    const pos = model.getPositionAt(lineColToOffset(model.getValue(), line, col))
+    editor.setPosition(pos)
+    editor.revealPositionInCenterIfOutsideViewport(pos)
+    editor.focus()
   }
 
   /** Highlight execution errors (positions already mapped to the document). */
   export function showErrors(
     errors: { line: number; col: number; endLine?: number; endCol?: number; message: string }[],
   ) {
-    if (!view) return
-    const doc = view.state.doc.toString()
-    const diagnostics: Diagnostic[] = errors.map((e) => {
+    const model = editor?.getModel()
+    if (!model) return
+    const doc = model.getValue()
+    const markers = errors.map((e) => {
       const from = lineColToOffset(doc, e.line, e.col)
       const to =
         e.endLine != null && e.endCol != null
           ? lineColToOffset(doc, e.endLine, e.endCol)
           : Math.min(from + 1, doc.length)
-      return { from, to: Math.max(to, from + 1), severity: 'error', message: e.message }
+      return toMarker(model, { from, to: Math.max(to, from + 1), severity: 'error', message: e.message })
     })
-    view.dispatch(setDiagnostics(view.state, diagnostics))
+    monaco.editor.setModelMarkers(model, EXEC_OWNER, markers)
   }
 
   export function clearErrors() {
-    if (view) view.dispatch(setDiagnostics(view.state, []))
+    const model = editor?.getModel()
+    if (model) monaco.editor.setModelMarkers(model, EXEC_OWNER, [])
   }
 </script>
 
-<div bind:this={container} class="h-full min-h-0 overflow-hidden selectable"></div>
+<div bind:this={container} class="ds-editor h-full min-h-0 overflow-hidden selectable" data-editor="sql"></div>
+
+<style>
+  /* Known function calls, coloured by the decoration above. Three classes beat
+     Monaco's own two-class token rule, so no !important is needed. */
+  :global(.monaco-editor .view-lines .sql-fn) {
+    color: var(--syntax-function);
+  }
+  /* The suggestion popup: wide enough to read a signature, with the qualifier
+     (schema for a table, data type for a column) at the right edge. Monaco sets
+     an inline width of its own; min-width wins over it without !important. */
+  :global(.monaco-editor .suggest-widget) {
+    min-width: var(--px-520);
+    font-family: var(--font-mono);
+  }
+  /* Monaco's row wrapper is `display: contents`, so the content block sizes to
+     the text and the qualifier ends up glued to the label. Let it fill the row —
+     its own `justify-content: space-between` then puts the qualifier at the edge. */
+  :global(.monaco-editor .suggest-widget .monaco-list-row .main) {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  /* the qualifier must stay legible on the highlighted (blue) row */
+  :global(.monaco-editor .suggest-widget .monaco-list-row.focused .details-label) {
+    color: var(--hex-fff);
+    opacity: 1;
+  }
+</style>

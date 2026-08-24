@@ -8,7 +8,7 @@
 //
 // The guard listens on `window` in the BUBBLE phase — i.e. after every app handler —
 // and only prevents the default when nothing in the app claimed the key. That order is
-// mandatory: CodeMirror ignores any key whose default is already prevented
+// mandatory: the editor ignores any key whose default is already prevented
 // (`eventBelongsToEditor` in @codemirror/view returns false on `event.defaultPrevented`),
 // so a capture-phase guard silently killed F5 = Run query. Verified by e2e.
 

@@ -13,7 +13,7 @@ test('query plan: Explain opens normalized tree + hotspot + summary', async ({ p
   await page.getByRole('button', { name: /Postgres/ }).first().dblclick()
   await page.waitForTimeout(500)
   // type a query then click Explain toolbar button
-  const editor = page.locator('.cm-content').first()
+  const editor = page.locator('.view-lines').first()
   await editor.click()
   await page.keyboard.type('SELECT * FROM enrollments WHERE status = 5')
   await page.getByRole('button', { name: 'Explain' }).first().click()
@@ -22,7 +22,7 @@ test('query plan: Explain opens normalized tree + hotspot + summary', async ({ p
   // Plan shows in the SAME tab's Result panel (a "Query Plan" sub-tab), not a new
   // editor tab — the SQL editor stays visible below/above the plan.
   await expect(page.getByRole('tab', { name: /Query Plan/ }).first()).toBeVisible()
-  await expect(page.locator('.cm-content').first()).toBeVisible()
+  await expect(page.locator('.view-lines').first()).toBeVisible()
   await expect(page.getByText('HashJoin').first()).toBeVisible()
   await expect(page.getByText('SeqScan').first()).toBeVisible()
   await expect(page.getByText('HOTSPOT').first()).toBeVisible()
@@ -64,7 +64,7 @@ test('query plan: Run closes the plan and focuses results; Explain reopens it', 
 
   await page.getByRole('button', { name: /Postgres/ }).first().dblclick()
   await page.waitForTimeout(500)
-  await page.locator('.cm-content').first().click()
+  await page.locator('.view-lines').first().click()
   await page.keyboard.type('SELECT * FROM students')
 
   // Explain → the "Query Plan" sub-tab appears
@@ -99,7 +99,7 @@ test('query plan: Actual toggle hidden for engines without EXPLAIN ANALYZE (Clic
   await page.waitForTimeout(200)
   await page.getByText('New Query Console', { exact: true }).first().click()
   await page.waitForTimeout(700)
-  const editor = page.locator('.cm-content').first()
+  const editor = page.locator('.view-lines').first()
   await editor.click()
   await page.keyboard.type('SELECT * FROM events')
   await page.getByRole('button', { name: 'Explain' }).first().click()
@@ -124,7 +124,7 @@ test('query plan: MySQL now offers the Actual toggle (EXPLAIN ANALYZE)', async (
   await page.waitForTimeout(200)
   await page.getByText('New Query Console', { exact: true }).first().click()
   await page.waitForTimeout(700)
-  await page.locator('.cm-content').first().click()
+  await page.locator('.view-lines').first().click()
   await page.keyboard.type('SELECT * FROM books')
   await page.getByRole('button', { name: 'Explain' }).first().click()
   await page.waitForTimeout(500)
@@ -149,7 +149,7 @@ test('query plan: Cassandra is shown as TRACING/diagnostics, not an Actual plan'
   await page.waitForTimeout(200)
   await page.getByText('New Query Console', { exact: true }).first().click()
   await page.waitForTimeout(700)
-  const editor = page.locator('.cm-content').first()
+  const editor = page.locator('.view-lines').first()
   await editor.click()
   await page.keyboard.type('SELECT * FROM t WHERE v = 1 ALLOW FILTERING')
   await page.getByRole('button', { name: 'Explain' }).first().click()

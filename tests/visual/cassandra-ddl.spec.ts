@@ -19,7 +19,7 @@ test('cassandra: Create Table template + Drop confirm', async ({ page }) => {
   await page.getByRole('menuitem', { name: 'Create Table…' }).click()
   await page.waitForTimeout(300)
   await expect(page.getByRole('tab', { name: /New table/ }).first()).toBeVisible()
-  await expect(page.locator('.cm-content').first()).toContainText('CREATE TABLE campus_ks.new_table')
+  await expect(page.locator('.view-lines').first()).toContainText('CREATE TABLE campus_ks.new_table')
 
   // navigate to a table and Drop → in-app confirm dialog
   await page.getByText('campus_ks').first().dblclick()

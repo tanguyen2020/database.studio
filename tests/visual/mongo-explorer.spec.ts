@@ -4,7 +4,7 @@ import { APP_URL, blockRemoteFonts } from './helpers'
 // Comprehensive MongoDB UI coverage (demo path). Selecting the connection
 // auto-expands its default database, so collections are visible immediately.
 // Collection rows are located by their title (avoids colliding with the
-// pre-seeded "students" text inside a CodeMirror editor tab).
+// pre-seeded "students" text inside the query editor tab).
 const MONGO = /Events MongoDB/
 const coll = (page: import('@playwright/test').Page, name: string) =>
   page.locator(`div[title^="${name} —"]`).first()
@@ -170,7 +170,7 @@ test('mongo UI: no tab on connect + query editor (via New Query) runs a find', a
   await page.waitForTimeout(400)
   await expect(page.getByText('Untitled Mongo').first()).toBeVisible()
 
-  await page.locator('.cm-content').first().click()
+  await page.locator('.view-lines').first().click()
   await page.keyboard.type('db.students.find({})')
   // the Run button (F5 path) executes mongosh via mongo_exec — same as Ctrl+Enter
   await page.getByRole('button', { name: 'Run' }).first().click()
@@ -259,12 +259,12 @@ test('mongo UI: query editor suggests collections after "db."', async ({ page })
   await page.getByText('New Query', { exact: true }).first().click()
   await page.waitForTimeout(400)
 
-  await page.locator('.cm-content').first().click()
+  await page.locator('.view-lines').first().click()
   await page.keyboard.type('db.') // kicks off the lazy collection load
   await page.waitForTimeout(700)
   await page.keyboard.type('s') // re-open the popup with collections cached
   await page.waitForTimeout(500)
-  const tip = page.locator('.cm-tooltip-autocomplete')
+  const tip = page.locator('.suggest-widget.visible')
   await expect(tip).toBeVisible({ timeout: 3000 })
   await expect(tip.getByText('students').first()).toBeVisible()
 
@@ -355,12 +355,12 @@ test('mongo UI: query editor suggests MongoDB methods and operators', async ({ p
   await page.waitForTimeout(250)
   await page.getByText('New Query', { exact: true }).first().click()
   await page.waitForTimeout(400)
-  await page.locator('.cm-content').first().click()
+  await page.locator('.view-lines').first().click()
 
   // after `db.<coll>.` → collection METHODS (find / aggregate / updateOne…)
   await page.keyboard.type('db.students.')
   await page.waitForTimeout(400)
-  const tip = page.locator('.cm-tooltip-autocomplete')
+  const tip = page.locator('.suggest-widget.visible')
   await expect(tip).toBeVisible({ timeout: 3000 })
   await expect(tip.getByText('find', { exact: true }).first()).toBeVisible()
   await expect(tip.getByText('aggregate', { exact: true }).first()).toBeVisible()

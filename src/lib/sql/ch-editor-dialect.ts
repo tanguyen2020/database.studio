@@ -1,8 +1,8 @@
-// ClickHouse dialect for the CodeMirror SQL editor. @codemirror/lang-sql ships
+// ClickHouse dialect for the SQL completion sources. @codemirror/lang-sql ships
 // PostgreSQL/MySQL/MSSQL/SQLite but NOT ClickHouse, so ClickHouse previously fell
 // back to StandardSQL (its ENGINE / LowCardinality / toYYYYMM… keywords weren't
 // highlighted or keyword-suggested). This defines a proper ClickHouse dialect —
-// used ONLY for ClickHouse connections (see SqlEditor.dialectFor); every other
+// used ONLY for ClickHouse connections (see SqlEditor.baseDialect); every other
 // engine keeps its own lang-sql dialect. Matching is case-insensitive, so the
 // token lists are lowercase (covers `Int64`, `LowCardinality`, `toYYYYMM`, …).
 import { SQLDialect } from '@codemirror/lang-sql'

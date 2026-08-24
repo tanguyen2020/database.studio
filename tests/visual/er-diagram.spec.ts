@@ -40,7 +40,7 @@ test('ER diagram: nodes + edges + Mermaid/export toolbar', async ({ page }) => {
   await page.getByText(/Save to DB/).first().click()
   await page.waitForTimeout(300)
   await expect(page.getByRole('tab', { name: /Add Relationships/ }).first()).toBeVisible()
-  await expect(page.locator('.cm-content').first()).toContainText('ADD CONSTRAINT')
+  await expect(page.locator('.view-lines').first()).toContainText('ADD CONSTRAINT')
 
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })

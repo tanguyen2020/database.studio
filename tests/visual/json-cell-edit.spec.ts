@@ -117,7 +117,7 @@ test('json cell: NULL cells, text columns and read-only grids', async ({ page })
   // read-only grid (query editor result): the badge opens the VIEWER — no Save
   await page.getByTitle('New SQL tab (Ctrl+T)').first().click()
   await page.waitForTimeout(200)
-  await page.locator('.cm-content').first().click()
+  await page.locator('.view-lines').first().click()
   await page.keyboard.type('SELECT * FROM json_demo')
   await page.getByRole('button', { name: 'Run' }).first().click()
   await expect(page.getByText(/Rows 1–1 of 1/).first()).toBeVisible({ timeout: 10_000 })

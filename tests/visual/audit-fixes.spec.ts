@@ -53,7 +53,7 @@ test('#4 table context menu: Generate Scripts → Structure and Data', async ({ 
   await page.waitForTimeout(400)
 
   await expect(page.getByRole('tab', { name: /students · scripts/ }).first()).toBeVisible()
-  const editor = page.locator('.cm-content').first()
+  const editor = page.locator('.view-lines').first()
   await expect(editor).toContainText('CREATE TABLE')
   await expect(editor).toContainText('INSERT INTO')
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])

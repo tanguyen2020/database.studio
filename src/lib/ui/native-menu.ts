@@ -26,7 +26,7 @@ export function installNativeMenuGuard(root: Document = document): () => void {
     // Bubble phase, and only when nobody handled the click: bits-ui's context-menu
     // trigger starts with `if (e.defaultPrevented) return` (menu.svelte.js), so a
     // capture-phase preventDefault() here silently killed every app menu (Explorer
-    // tree, Connections, tabs…). Same trap as the CodeMirror F5 one. Components that
+    // tree, Connections, tabs…). Same trap as the editor F5 one. Components that
     // do own the right-click already call preventDefault() themselves, which both
     // opens their menu and keeps the WebView menu away.
     if (e.defaultPrevented) return

@@ -3,7 +3,7 @@ import { APP_URL, blockRemoteFonts, openDatabaseNode } from './helpers'
 
 // DELETE without WHERE / TRUNCATE in the query editor must pop an in-app
 // confirm before running (all relational systems). Enter/Tab accept-completion
-// is exercised by CodeMirror; here we cover the destructive-statement guard.
+// is exercised by the editor; here we cover the destructive-statement guard.
 
 async function boot(page: import('@playwright/test').Page) {
   await blockRemoteFonts(page)
@@ -18,7 +18,7 @@ async function boot(page: import('@playwright/test').Page) {
 }
 
 async function typeAndRun(page: import('@playwright/test').Page, sql: string) {
-  await page.locator('.cm-content').first().click()
+  await page.locator('.view-lines').first().click()
   await page.keyboard.press('Control+A')
   await page.keyboard.press('Delete')
   await page.keyboard.type(sql)

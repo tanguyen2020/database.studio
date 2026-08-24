@@ -25,7 +25,7 @@ test('result panel: hidden on new tab, auto-shows on Run, X + Ctrl+J toggle', as
   await expect(page.getByTitle('Hide Result panel (Ctrl+J)')).toHaveCount(0)
 
   // Run → the panel auto-reveals with results.
-  await page.locator('.cm-content').first().click()
+  await page.locator('.view-lines').first().click()
   await page.keyboard.type('SELECT * FROM students')
   await page.getByRole('button', { name: 'Run' }).first().click()
   await page.waitForTimeout(500)
@@ -58,7 +58,7 @@ test('result views: cycle Grid/JSON/Single Row/Chart renders each cleanly', asyn
   await openDatabaseNode(page)
   await page.getByTitle('New SQL tab (Ctrl+T)').first().click()
   await page.waitForTimeout(200)
-  await page.locator('.cm-content').first().click()
+  await page.locator('.view-lines').first().click()
   await page.keyboard.type('SELECT * FROM students')
   await page.getByRole('button', { name: 'Run' }).first().click()
   await page.waitForTimeout(500)

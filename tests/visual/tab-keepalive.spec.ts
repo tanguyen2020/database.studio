@@ -25,7 +25,7 @@ test('switching tabs keeps results and never re-runs the query', async ({ page }
   await page.getByTitle('New SQL tab (Ctrl+T)').first().click()
   await page.waitForTimeout(200)
   // Background tabs stay in the DOM (hidden) — always drive the visible editor.
-  await page.locator('.cm-content:visible').first().click()
+  await page.locator('.view-lines:visible').first().click()
   await page.keyboard.type('SELECT * FROM students')
   await page.getByRole('button', { name: 'Run' }).first().click()
   await page.waitForTimeout(500)
@@ -36,7 +36,7 @@ test('switching tabs keeps results and never re-runs the query', async ({ page }
   // Tab B — a second editor, typed but never run.
   await page.getByTitle('New SQL tab (Ctrl+T)').first().click()
   await page.waitForTimeout(200)
-  await page.locator('.cm-content:visible').first().click()
+  await page.locator('.view-lines:visible').first().click()
   await page.keyboard.type('SELECT 42')
   // A's results are not on screen while B is active.
   await expect(page.getByText(/Rows 1–3 of 3/).first()).toBeHidden()
@@ -55,7 +55,7 @@ test('switching tabs keeps results and never re-runs the query', async ({ page }
   // And B kept its unsaved text (it was not torn down and rebuilt).
   await page.getByRole('tab').filter({ hasText: /Untitled/ }).last().click()
   await page.waitForTimeout(300)
-  await expect(page.locator('.cm-content:visible').first()).toContainText('SELECT 42')
+  await expect(page.locator('.view-lines:visible').first()).toContainText('SELECT 42')
 
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
@@ -109,7 +109,7 @@ test('a big result is still painted after switching tabs (no scroll nudge)', asy
 
   await page.getByTitle('New SQL tab (Ctrl+T)').first().click()
   await page.waitForTimeout(200)
-  await page.locator('.cm-content:visible').first().click()
+  await page.locator('.view-lines:visible').first().click()
   await page.keyboard.type('SELECT * FROM perf_rows_1000')
   await page.getByRole('button', { name: 'Run' }).first().click()
   await page.waitForTimeout(800)
@@ -132,7 +132,7 @@ test('a big result is still painted after switching tabs (no scroll nudge)', asy
 
 // Root cause of that empty grid: a background tab kept in the DOM with
 // display:none has NO box, so anything that measures its viewport (the
-// virtualized grid, CodeMirror) computes "nothing fits" while hidden and only
+// virtualized grid, Monaco) computes "nothing fits" while hidden and only
 // recovers on the next scroll/resize. A hidden tab must stay laid out.
 test('a background tab keeps a real box while hidden', async ({ page }) => {
   await blockRemoteFonts(page)
@@ -145,7 +145,7 @@ test('a background tab keeps a real box while hidden', async ({ page }) => {
   await openDatabaseNode(page)
   await page.getByTitle('New SQL tab (Ctrl+T)').first().click()
   await page.waitForTimeout(200)
-  await page.locator('.cm-content:visible').first().click()
+  await page.locator('.view-lines:visible').first().click()
   await page.keyboard.type('SELECT * FROM perf_rows_1000')
   await page.getByRole('button', { name: 'Run' }).first().click()
   await page.waitForTimeout(700)
@@ -185,7 +185,7 @@ test('a scrolled grid comes back painted, at the same scroll position', async ({
   await openDatabaseNode(page)
   await page.getByTitle('New SQL tab (Ctrl+T)').first().click()
   await page.waitForTimeout(200)
-  await page.locator('.cm-content:visible').first().click()
+  await page.locator('.view-lines:visible').first().click()
   await page.keyboard.type('SELECT * FROM perf_rows_1000')
   await page.getByRole('button', { name: 'Run' }).first().click()
   await page.waitForTimeout(800)

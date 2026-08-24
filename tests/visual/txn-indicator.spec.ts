@@ -22,7 +22,7 @@ test('query editor: open transaction shows a badge until commit/rollback', async
   const badge = page.getByText('⚠ TXN open')
   await expect(badge).toHaveCount(0)
 
-  const editor = page.locator('.cm-content').first()
+  const editor = page.locator('.view-lines').first()
   await editor.click()
   await page.keyboard.type('BEGIN;')
   await page.keyboard.press('F5')

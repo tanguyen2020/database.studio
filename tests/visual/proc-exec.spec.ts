@@ -35,7 +35,7 @@ test('execute routine: dialog by signature → Execute runs and shows results', 
 
   // a SQL tab opened holding the SELECT add_one(41) AND it auto-ran → result grid
   await expect(page.getByRole('tab', { name: /add_one/ }).first()).toBeVisible()
-  await expect(page.locator('.cm-content').first()).toContainText('add_one')
+  await expect(page.locator('.view-lines').first()).toContainText('add_one')
   // the result region shows the executed output (demo exec returns rows)
   await expect(page.getByText(/Single Row/).first()).toBeVisible({ timeout: 8000 })
 

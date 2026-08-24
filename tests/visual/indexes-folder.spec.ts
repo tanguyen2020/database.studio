@@ -41,7 +41,7 @@ test('explorer: schema-wide Indexes folder + context menus', async ({ page }) =>
   await page.waitForTimeout(300)
   // Alter opens a SQL tab (view/edit — not executed) with the index's real definition
   // as a re-runnable DROP + CREATE reflecting its actual columns.
-  const editor = page.locator('.cm-content').first()
+  const editor = page.locator('.view-lines').first()
   await expect(editor).toContainText('DROP INDEX')
   await expect(editor).toContainText('CREATE UNIQUE INDEX')
   await expect(editor).toContainText('idx_students_email')

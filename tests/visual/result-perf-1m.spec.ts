@@ -63,7 +63,7 @@ test('result views stay responsive with 1,000,000 rows', async ({ page }) => {
   await page.waitForTimeout(200)
 
   // load 1,000,000 real rows
-  await page.locator('.cm-content').first().click()
+  await page.locator('.view-lines').first().click()
   await page.keyboard.type('SELECT * FROM perf_rows_1000000')
   await page.keyboard.press('Escape') // dismiss autocomplete
   await reset(page)

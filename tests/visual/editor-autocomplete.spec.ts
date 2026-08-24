@@ -18,12 +18,12 @@ async function openSqlTab(page: import('@playwright/test').Page) {
 }
 
 async function completionsFor(page: import('@playwright/test').Page, text: string) {
-  await page.locator('.cm-content').first().click()
+  await page.locator('.view-lines').first().click()
   await page.keyboard.press('Control+A')
   await page.keyboard.press('Delete')
   await page.keyboard.type(text)
   await page.waitForTimeout(500)
-  const tip = page.locator('.cm-tooltip-autocomplete')
+  const tip = page.locator('.suggest-widget.visible')
   await expect(tip).toBeVisible({ timeout: 3000 })
   return tip.innerText()
 }
@@ -34,10 +34,10 @@ test('suggests tables of the connected database', async ({ page }) => {
   expect(list).toContain('students')
   // the suggestion is explicit: the table's schema/database shows as a qualifier,
   // right-aligned to the edge of a comfortably wide popup.
-  const row = page.locator('.cm-tooltip-autocomplete li').first()
-  const detail = row.locator('.cm-completionDetail')
+  const row = page.locator('.suggest-widget.visible .monaco-list-row').first()
+  const detail = row.locator('.details-label')
   await expect(detail).toHaveText('public')
-  const labelBox = await row.locator('.cm-completionLabel').boundingBox()
+  const labelBox = await row.locator('.label-name').boundingBox()
   const detailBox = await detail.boundingBox()
   // the qualifier sits well to the right of the label (a real gap, not adjacent)
   expect(detailBox!.x).toBeGreaterThan(labelBox!.x + labelBox!.width + 40)
@@ -77,15 +77,15 @@ async function newTabFor(page: import('@playwright/test').Page, hostText: string
 
 /** Type text, wait for the popup, accept with Tab, return the editor contents. */
 async function acceptAndRead(page: import('@playwright/test').Page, text: string) {
-  await page.locator('.cm-content').first().click()
+  await page.locator('.view-lines').first().click()
   await page.keyboard.press('Control+A')
   await page.keyboard.press('Delete')
   await page.keyboard.type(text)
   await page.waitForTimeout(500)
-  await expect(page.locator('.cm-tooltip-autocomplete')).toBeVisible({ timeout: 3000 })
+  await expect(page.locator('.suggest-widget.visible')).toBeVisible({ timeout: 3000 })
   await page.keyboard.press('Tab')
   await page.waitForTimeout(200)
-  return page.locator('.cm-content').first().innerText()
+  return page.locator('.view-lines').first().innerText()
 }
 
 test('MySQL: reserved/keyword table names are backtick-quoted on accept', async ({ page }) => {
@@ -110,14 +110,14 @@ test('PostgreSQL: reserved word double-quoted, MySQL-only keyword left bare', as
 // Columns load lazily, so the pattern is: type up to the trigger (kicks off the
 // load), wait, then type one more char to reopen the popup with columns cached.
 async function columnPopup(page: import('@playwright/test').Page, text: string, extra: string) {
-  await page.locator('.cm-content').first().click()
+  await page.locator('.view-lines').first().click()
   await page.keyboard.press('Control+A')
   await page.keyboard.press('Delete')
   await page.keyboard.type(text)
   await page.waitForTimeout(700) // lazy column load kicks off + resolves
   await page.keyboard.type(extra) // re-open the popup, columns now cached
   await page.waitForTimeout(500)
-  const tip = page.locator('.cm-tooltip-autocomplete')
+  const tip = page.locator('.suggest-widget.visible')
   await expect(tip).toBeVisible({ timeout: 3000 })
   return tip.innerText()
 }
@@ -141,26 +141,26 @@ async function openSlowSqlTab(page: import('@playwright/test').Page) {
 
 test('columns appear on their own when the server answers slowly (no extra keystroke)', async ({ page }) => {
   await openSlowSqlTab(page)
-  await page.locator('.cm-content').first().click()
+  await page.locator('.view-lines').first().click()
   await page.keyboard.press('Control+A')
   await page.keyboard.press('Delete')
   await page.keyboard.type('SELECT * FROM students WHERE students.')
   // stop typing — exactly what a user does — and let the lazy load finish
-  const tip = page.locator('.cm-tooltip-autocomplete')
+  const tip = page.locator('.suggest-widget.visible')
   await expect(tip).toBeVisible({ timeout: 6000 })
   await expect(tip).toContainText('first_name', { timeout: 6000 })
 })
 
 test('bare column names appear on their own once the slow load lands', async ({ page }) => {
   await openSlowSqlTab(page)
-  await page.locator('.cm-content').first().click()
+  await page.locator('.view-lines').first().click()
   await page.keyboard.press('Control+A')
   await page.keyboard.press('Delete')
   await page.keyboard.type('SELECT fir FROM students')
   // put the caret back on the partial column word and stop
   for (let i = 0; i < ' FROM students'.length; i++) await page.keyboard.press('ArrowLeft')
   await page.keyboard.type('s')
-  const tip = page.locator('.cm-tooltip-autocomplete')
+  const tip = page.locator('.suggest-widget.visible')
   await expect(tip).toBeVisible({ timeout: 6000 })
   await expect(tip).toContainText('first_name', { timeout: 6000 })
 })
@@ -169,24 +169,24 @@ test('bare column names appear on their own once the slow load lands', async ({ 
 // must never open one that was dismissed or that the caret has moved away from.
 test('Escape stays closed when the slow column load lands', async ({ page }) => {
   await openSlowSqlTab(page)
-  await page.locator('.cm-content').first().click()
+  await page.locator('.view-lines').first().click()
   await page.keyboard.press('Control+A')
   await page.keyboard.press('Delete')
   await page.keyboard.type('SELECT * FROM students WHERE students.')
   await page.keyboard.press('Escape')
   await page.waitForTimeout(2000) // columns land in ~900ms
-  await expect(page.locator('.cm-tooltip-autocomplete')).toHaveCount(0)
+  await expect(page.locator('.suggest-widget.visible')).toHaveCount(0)
 })
 
 test('a late column load does not pop a menu open in empty space', async ({ page }) => {
   await openSlowSqlTab(page)
-  await page.locator('.cm-content').first().click()
+  await page.locator('.view-lines').first().click()
   await page.keyboard.press('Control+A')
   await page.keyboard.press('Delete')
   await page.keyboard.type('SELECT * FROM students WHERE students.')
   await page.keyboard.type(' ') // caret now sits after whitespace
   await page.waitForTimeout(2000)
-  await expect(page.locator('.cm-tooltip-autocomplete')).toHaveCount(0)
+  await expect(page.locator('.suggest-widget.visible')).toHaveCount(0)
 })
 
 // ---- function completion: full per-dialect catalog (not just the curated ~11) --
@@ -209,33 +209,33 @@ test('catalog function suggestions are not duplicated, and carry a signature', a
   await newTabFor(page, 'localhost:3306') // MySQL — has the biggest static catalog
   await completionsFor(page, 'SELECT json_ext') // json_extract: a function, NOT a keyword
   // exactly one row — from the catalog, with its signature — no bare twin.
-  const rows = page.locator('.cm-tooltip-autocomplete li')
-  const labels = await rows.locator('.cm-completionLabel').allInnerTexts()
+  const rows = page.locator('.suggest-widget.visible .monaco-list-row')
+  const labels = await rows.locator('.label-name').allInnerTexts()
   expect(labels.filter((l) => l === 'json_extract')).toHaveLength(1)
   const row = rows.filter({ hasText: 'json_extract' }).first()
-  await expect(row.locator('.cm-completionDetail')).toContainText('json_extract')
+  await expect(row.locator('.details-label')).toContainText('json_extract')
 })
 
 test('known function calls are colour-highlighted in the editor', async ({ page }) => {
   await openSqlTab(page) // Postgres
-  await page.locator('.cm-content').first().click()
+  await page.locator('.view-lines').first().click()
   await page.keyboard.press('Control+A')
   await page.keyboard.press('Delete')
   await page.keyboard.type('SELECT date_trunc(x) FROM t')
   await page.waitForTimeout(400)
-  // the decoration wraps the function name in a .cm-sql-fn span
-  const fn = page.locator('.cm-content .cm-sql-fn', { hasText: 'date_trunc' })
+  // the decoration wraps the function name in a .sql-fn span
+  const fn = page.locator('.view-lines .sql-fn', { hasText: 'date_trunc' })
   await expect(fn).toBeVisible()
 })
 
 test('MSSQL: keyword-named functions (GETDATE/DATEADD) are coloured', async ({ page }) => {
   await newTabFor(page, '10.0.2.9') // MSSQL connection
-  await page.locator('.cm-content').first().click()
+  await page.locator('.view-lines').first().click()
   await page.keyboard.type('SELECT DATEADD(day, 1, GETDATE());')
   await page.waitForTimeout(400)
   // both are T-SQL functions AND dialect keywords — they must still colour (the
   // colour set is driven by the function catalog, with no keyword subtraction).
-  const coloured = await page.locator('.cm-content .cm-sql-fn').allInnerTexts()
+  const coloured = await page.locator('.view-lines .sql-fn').allInnerTexts()
   expect(coloured).toContain('DATEADD')
   expect(coloured).toContain('GETDATE')
 })

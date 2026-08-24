@@ -3,7 +3,7 @@ import { APP_URL, blockRemoteFonts, openDatabaseNode } from './helpers'
 
 // Typing in the Query Editor must stay responsive on a BIG script and a BIG
 // database. This is a real gate, not a smoke test: it types into the actual
-// CodeMirror instance (completion sources + lint + persistence all live) and
+// Monaco instance (completion sources + lint + persistence all live) and
 // measures the main thread from inside the page.
 //
 // Regression it locks down: `splitStatements` used to convert every statement's
@@ -148,20 +148,23 @@ async function profileTop(page: Page, burst: () => Promise<void>) {
 
 async function scenario(page: Page, params: string, repeats: number) {
   await boot(page, params)
-  await page.locator('.cm-content').first().click()
+  await page.locator('.view-lines').first().click()
   if (repeats > 0) {
     await page.keyboard.insertText(STMT.repeat(repeats))
     await page.waitForTimeout(2500)
   }
-  // real document size (CodeMirror virtualises the DOM, so textContent is only
-  // the viewport) — the last line number in the gutter after jumping to the end
+  // real document size — asked of the MODEL, not of the rendered gutter: the view
+  // is virtualised (and a hidden keep-alive pane renders no gutter at all), so
+  // counting DOM line numbers under-reports or reads 0. `window.__dsEditors` is
+  // the editor's browser/demo-only test seam.
   await page.keyboard.press('Control+End')
   await page.waitForTimeout(300)
   const lines = await page.evaluate(() => {
-    const nums = [...document.querySelectorAll('.cm-lineNumbers .cm-gutterElement')]
-      .map((e) => Number(e.textContent))
-      .filter((n) => Number.isFinite(n) && n > 0)
-    return nums.length ? Math.max(...nums) : 0
+    type Ed = { getModel: () => { getLineCount: () => number } | null; hasTextFocus: () => boolean }
+    const eds = ((window as unknown as { __dsEditors?: Ed[] }).__dsEditors ?? []).filter((e) => e.getModel())
+    if (!eds.length) return 0
+    const ed = eds.find((e) => e.hasTextFocus()) ?? eds[eds.length - 1]
+    return ed.getModel()!.getLineCount()
   })
 
   // Land in a real completion context at the END of the document (the worst case:

@@ -1,6 +1,6 @@
 <script lang="ts">
   // SQL editor workspace for one tab: toolbar (connection dropdown + Run/Cancel)
-  // + CodeMirror + resizable split + result panel. Run is selection-aware (F5),
+  // + the Monaco editor + resizable split + result panel. Run is selection-aware (F5),
   // Ctrl+Enter runs the statement at the cursor.
   import SqlEditor from '$lib/components/editor/SqlEditor.svelte'
   import SqliteFileHeader from './SqliteFileHeader.svelte'

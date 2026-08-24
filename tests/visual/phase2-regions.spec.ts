@@ -3,7 +3,7 @@
 // phải khớp trong ngưỡng anti-aliasing (threshold 0.1, maxDiffPixelRatio thấp).
 //
 // Vùng so Phase 2 v1: title bar / tab bar / status bar / sidebar connections.
-// (Vùng editor/result phụ thuộc CodeMirror vs renderer tự chế của prototype —
+// (Vùng editor/result phụ thuộc Monaco vs renderer tự chế của prototype —
 // so bằng bảng số đo, không pixel.)
 
 import { expect, test, type Page } from '@playwright/test'

@@ -50,7 +50,7 @@ test('Chart SVG export → triggers a file download', async ({ page }) => {
   await openDatabaseNode(page)
   await page.getByTitle('New SQL tab (Ctrl+T)').first().click()
   await page.waitForTimeout(300)
-  await page.locator('.cm-content').first().click()
+  await page.locator('.view-lines').first().click()
   await page.keyboard.type('SELECT id, gpa FROM students')
   await page.getByRole('button', { name: 'Run' }).first().click()
   // result render → segmented toggle Grid/JSON/Single Row/Chart xuất hiện

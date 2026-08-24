@@ -82,9 +82,9 @@ describe('installWebViewKeyGuard', () => {
     expect(press('r', { ctrl: true })).toBe(true)
   })
 
-  it('stays out of the way when the app handled the key first (CodeMirror F5 = Run)', () => {
+  it('stays out of the way when the app handled the key first (editor F5 = Run)', () => {
     // The guard listens on window in the bubble phase, so an element handler runs
-    // first. CodeMirror ignores keys whose default is already prevented — if the
+    // first. The editor ignores keys whose default is already prevented — if the
     // guard ran in the capture phase it would silently break F5 = Run query.
     dispose = installWebViewKeyGuard()
     const editor = document.createElement('div')

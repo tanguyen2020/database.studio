@@ -31,7 +31,7 @@ test('explorer depth: Show Definition + properties + view columns', async ({ pag
   await page.getByText('Show Definition').first().click()
   await page.waitForTimeout(300)
   await expect(page.getByRole('tab', { name: /add_one · definition/ }).first()).toBeVisible()
-  await expect(page.locator('.cm-content').first()).toContainText('CREATE')
+  await expect(page.locator('.view-lines').first()).toContainText('CREATE')
 
   // View column expansion: expand Views → vw_active_students columns via chevron
   await page.getByText('Views', { exact: true }).first().dblclick()

@@ -1,5 +1,5 @@
 // Function-signature autocomplete data (Phase 5 · T21). Pure per-dialect list →
-// unit-testable; SqlEditor feeds it into a CodeMirror completion source.
+// unit-testable; SqlEditor feeds it into the editor completion sources.
 
 import { staticFunctions } from './functions.catalog'
 

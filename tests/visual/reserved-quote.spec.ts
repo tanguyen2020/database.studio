@@ -21,7 +21,7 @@ test('Tab accepts and quotes a reserved-word column', async ({ page }) => {
   page.on('pageerror', (e) => errors.push(String(e)))
   await openSqlTab(page)
 
-  const content = page.locator('.cm-content').first()
+  const content = page.locator('.view-lines').first()
   await content.click()
   await page.keyboard.press('Control+A')
   await page.keyboard.press('Delete')
@@ -29,7 +29,7 @@ test('Tab accepts and quotes a reserved-word column', async ({ page }) => {
   await page.keyboard.type('SELECT * FROM students s WHERE s.or')
   await page.waitForTimeout(900)
 
-  await expect(page.locator('.cm-tooltip-autocomplete')).toBeVisible({ timeout: 3000 })
+  await expect(page.locator('.suggest-widget.visible')).toBeVisible({ timeout: 3000 })
   await page.keyboard.press('Tab') // single Tab accepts the highlighted column
   await page.waitForTimeout(200)
 
@@ -39,13 +39,13 @@ test('Tab accepts and quotes a reserved-word column', async ({ page }) => {
 
 test('Enter accepts the column, and inserts a newline when no popup is open', async ({ page }) => {
   await openSqlTab(page)
-  const content = page.locator('.cm-content').first()
+  const content = page.locator('.view-lines').first()
   await content.click()
   await page.keyboard.press('Control+A')
   await page.keyboard.press('Delete')
   await page.keyboard.type('SELECT * FROM students s WHERE s.or')
   await page.waitForTimeout(900)
-  await expect(page.locator('.cm-tooltip-autocomplete')).toBeVisible({ timeout: 3000 })
+  await expect(page.locator('.suggest-widget.visible')).toBeVisible({ timeout: 3000 })
   await page.keyboard.press('Enter') // accepts the column
   await page.waitForTimeout(200)
   await expect(content).toContainText('s."order"')

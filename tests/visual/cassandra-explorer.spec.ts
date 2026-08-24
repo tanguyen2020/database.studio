@@ -30,7 +30,7 @@ test('cassandra: multi-keyspace tree + View DDL', async ({ page }) => {
   await page.getByRole('menuitem', { name: 'View DDL (CQL)' }).click()
   await page.waitForTimeout(300)
   await expect(page.getByRole('tab', { name: /students_by_id DDL/ }).first()).toBeVisible()
-  await expect(page.locator('.cm-content').first()).toContainText('CREATE TABLE')
+  await expect(page.locator('.view-lines').first()).toContainText('CREATE TABLE')
 
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })

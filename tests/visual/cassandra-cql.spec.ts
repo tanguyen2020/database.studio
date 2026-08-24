@@ -21,7 +21,7 @@ test('cassandra: CQL warning + Load next page (paging)', async ({ page }) => {
   await expect(page.getByTitle('Consistency level for statements run from this editor')).toBeVisible()
 
   // run a full-scan query → server warning + first page (25 rows) + paging token
-  await page.locator('.cm-content').first().click()
+  await page.locator('.view-lines').first().click()
   await page.keyboard.type('SELECT * FROM students_by_id ALLOW FILTERING')
   await page.getByRole('button', { name: 'Run' }).first().click()
   await page.waitForTimeout(500)

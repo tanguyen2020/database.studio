@@ -50,12 +50,12 @@ test('switching schema repoints unqualified table suggestions', async ({ page })
 
   const schema = page.locator('input[title="Schema"]:visible')
   const type = async (text: string) => {
-    await page.locator('.cm-content').first().click()
+    await page.locator('.view-lines').first().click()
     await page.keyboard.press('Control+A')
     await page.keyboard.press('Delete')
     await page.keyboard.type(text)
     await page.waitForTimeout(600)
-    const tip = page.locator('.cm-tooltip-autocomplete')
+    const tip = page.locator('.suggest-widget.visible')
     await expect(tip).toBeVisible({ timeout: 4000 })
     return tip.innerText()
   }

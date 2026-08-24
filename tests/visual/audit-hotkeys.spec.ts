@@ -33,7 +33,7 @@ test('Run executes the selected statement only', async ({ page }) => {
   await openDatabaseNode(page)
   await page.getByTitle('New SQL tab (Ctrl+T)').first().click()
   await page.waitForTimeout(200)
-  await page.locator('.cm-content').first().click()
+  await page.locator('.view-lines').first().click()
   await page.keyboard.type('SELECT 1;\nSELECT 2;')
   // select the second line only
   await page.keyboard.press('Home')
@@ -108,7 +108,7 @@ test('closing a dirty query tab prompts to save', async ({ page }) => {
   await openDatabaseNode(page)
   await page.getByTitle('New SQL tab (Ctrl+T)').first().click()
   await page.waitForTimeout(200)
-  await page.locator('.cm-content').first().click()
+  await page.locator('.view-lines').first().click()
   await page.keyboard.type('SELECT 1')
   await page.waitForTimeout(200)
   await page.keyboard.press('Control+w') // close active tab
