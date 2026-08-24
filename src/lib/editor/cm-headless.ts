@@ -36,6 +36,18 @@ export function minimalChange(
   return { from: start, to: endOld, insert: newDoc.slice(start, endNew) }
 }
 
+/**
+ * CodeMirror stores line endings as LF only: give it a CRLF document and every
+ * offset it reports is one char per preceding line SHORTER than Monaco's. Mixing
+ * the two coordinate systems is what made completion ranges point at the wrong
+ * text ("No suggestions." on any line below a line break). Positions therefore
+ * cross the boundary as line/column — which both editors agree on — and the text
+ * is normalised here.
+ */
+export function normalizeEol(doc: string): string {
+  return doc.indexOf('\r') < 0 ? doc : doc.replace(/\r\n?/g, '\n')
+}
+
 export class HeadlessDoc {
   private state: EditorState
 
@@ -53,16 +65,35 @@ export class HeadlessDoc {
     this.state = EditorState.create({ doc: this.state.doc, extensions: [language] })
   }
 
-  /** Bring the headless document in line with the editor's text. */
+  /** Bring the headless document in line with the editor's text (LF-normalised). */
   sync(doc: string): EditorState {
-    const change = minimalChange(this.state.doc.toString(), doc)
+    const change = minimalChange(this.state.doc.toString(), normalizeEol(doc))
     if (change) this.state = this.state.update({ changes: change }).state
     return this.state
   }
 
-  context(doc: string, pos: number, explicit: boolean): CompletionContext {
+  /** 1-based line/column (editor coordinates) → offset in this document. */
+  offsetOf(lineNumber: number, column: number): number {
+    const doc = this.state.doc
+    const line = doc.line(Math.max(1, Math.min(lineNumber, doc.lines)))
+    return Math.min(line.from + Math.max(0, column - 1), line.to)
+  }
+
+  /** offset in this document → 1-based line/column (editor coordinates). */
+  positionOf(offset: number): { lineNumber: number; column: number } {
+    const doc = this.state.doc
+    const line = doc.lineAt(Math.max(0, Math.min(offset, doc.length)))
+    return { lineNumber: line.number, column: offset - line.from + 1 }
+  }
+
+  /**
+   * Completion context at an editor position. Takes line/column — NOT an offset —
+   * so a document whose editor uses CRLF can never shift the caret (see
+   * normalizeEol).
+   */
+  context(doc: string, lineNumber: number, column: number, explicit: boolean): CompletionContext {
     const state = this.sync(doc)
-    return new CompletionContext(state, Math.min(pos, state.doc.length), explicit)
+    return new CompletionContext(state, this.offsetOf(lineNumber, column), explicit)
   }
 }
 

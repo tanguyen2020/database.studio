@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { PostgreSQL, schemaCompletionSource } from '@codemirror/lang-sql'
-import { HeadlessDoc, minimalChange, runSources } from './cm-headless'
+import { HeadlessDoc, minimalChange, normalizeEol, runSources } from './cm-headless'
 
 describe('minimalChange', () => {
   it('reports one localised replacement (so Lezer can reuse the parse tree)', () => {
@@ -37,14 +37,15 @@ describe('HeadlessDoc', () => {
     const doc = new HeadlessDoc(PostgreSQL.extension, 'SELECT 1')
     expect(doc.sync('SELECT 2').doc.toString()).toBe('SELECT 2')
     expect(doc.sync('SELECT 2').doc.toString()).toBe('SELECT 2') // idempotent
-    const ctx = doc.context('SELECT * FROM students', 22, false)
+    const ctx = doc.context('SELECT * FROM students', 1, 23, false)
     expect(ctx.pos).toBe(22)
     expect(ctx.state.doc.toString()).toBe('SELECT * FROM students')
   })
 
   it('clamps a position past the end of the document', () => {
     const doc = new HeadlessDoc(PostgreSQL.extension, '')
-    expect(doc.context('SELECT', 999, false).pos).toBe(6)
+    expect(doc.context('SELECT', 1, 999, false).pos).toBe(6)
+    expect(doc.context('SELECT', 99, 1, false).pos).toBe(0)
   })
 
   it('drives the real lang-sql schema source (the behaviour Monaco borrows)', async () => {
@@ -55,7 +56,7 @@ describe('HeadlessDoc', () => {
       defaultSchema: 'public',
     })
     const sql = 'SELECT * FROM students s WHERE s.'
-    const results = await runSources([source], doc.context(sql, sql.length, false))
+    const results = await runSources([source], doc.context(sql, 1, sql.length + 1, false))
     expect(results).toHaveLength(1)
     expect(results[0].options.map((o) => o.label)).toContain('first_name')
   })
@@ -64,7 +65,7 @@ describe('HeadlessDoc', () => {
 describe('runSources', () => {
   it('skips a throwing source instead of losing the whole popup', async () => {
     const doc = new HeadlessDoc(PostgreSQL.extension)
-    const ctx = doc.context('SELECT a', 8, false)
+    const ctx = doc.context('SELECT a', 1, 9, false)
     const results = await runSources(
       [
         () => {
@@ -79,7 +80,7 @@ describe('runSources', () => {
 
   it('awaits an async source and drops empty/null answers', async () => {
     const doc = new HeadlessDoc(PostgreSQL.extension)
-    const ctx = doc.context('SELECT a', 8, false)
+    const ctx = doc.context('SELECT a', 1, 9, false)
     const results = await runSources(
       [
         () => null,
@@ -90,5 +91,48 @@ describe('runSources', () => {
       ctx,
     )
     expect(results.map((r) => r.options[0].label)).toEqual(['later'])
+  })
+})
+
+// The bug this API shape exists to prevent: Monaco keeps CRLF documents (2 chars
+// per line break) while CodeMirror normalises to LF (1), so an OFFSET taken from
+// one and used in the other drifts by one char per line above the caret. That
+// drift made completion ranges cover the wrong text and Monaco dropped every
+// suggestion ("No suggestions." on any line below a line break).
+describe('CRLF documents (Monaco) vs LF (CodeMirror)', () => {
+  it('normalizeEol collapses CRLF and lone CR', () => {
+    expect(normalizeEol('a\r\nb')).toBe('a\nb')
+    expect(normalizeEol('a\rb')).toBe('a\nb')
+    expect(normalizeEol('a\nb')).toBe('a\nb')
+    expect(normalizeEol('')).toBe('')
+  })
+
+  it('maps a caret on line 4 of a CRLF document to the right offset and back', () => {
+    const doc = new HeadlessDoc(PostgreSQL.extension)
+    // 'select * from academic_sessions;' + 3 CRLF breaks + 'select * from stu'
+    const crlf = 'select * from academic_sessions;\r\n\r\n\r\nselect * from stu'
+    const ctx = doc.context(crlf, 4, 18, false) // caret after 'stu'
+    expect(ctx.state.doc.lines).toBe(4)
+    // in LF coordinates line 4 starts at 32+3 = 35, so the caret sits at 52
+    expect(ctx.pos).toBe(52)
+    // …and mapping back lands on the same line/column the editor asked about
+    expect(doc.positionOf(ctx.pos)).toEqual({ lineNumber: 4, column: 18 })
+    // the word start (49) maps back to column 15 — where 'stu' really begins
+    expect(doc.positionOf(49)).toEqual({ lineNumber: 4, column: 15 })
+  })
+
+  it('lang-sql suggests tables on a later line of a CRLF document', async () => {
+    const doc = new HeadlessDoc(PostgreSQL.extension)
+    const source = schemaCompletionSource({
+      dialect: PostgreSQL,
+      schema: { public: { students: { self: { label: 'students', type: 'type' }, children: [] } } },
+      defaultSchema: 'public',
+    })
+    const crlf = 'select * from academic_sessions;\r\n\r\n\r\nselect * from stu'
+    const results = await runSources([source], doc.context(crlf, 4, 18, false))
+    expect(results).toHaveLength(1)
+    expect(results[0].options.map((o) => o.label)).toContain('students')
+    // the replaced range starts at the word, i.e. column 15 on line 4
+    expect(doc.positionOf(results[0].from)).toEqual({ lineNumber: 4, column: 15 })
   })
 })

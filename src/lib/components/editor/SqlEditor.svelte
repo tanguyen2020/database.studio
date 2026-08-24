@@ -318,20 +318,24 @@
   ): Promise<monaco.languages.CompletionList> {
     if (!headless) return { suggestions: [] }
     const doc = model.getValue()
-    const offset = model.getOffsetAt(position)
     const explicit = ctx.triggerKind === m.languages.CompletionTriggerKind.Invoke
-    const cmCtx = headless.context(doc, offset, explicit)
-    const word = wordBefore(doc, offset)
-    const results = await runSources(sourcesFor(isQualified(doc, offset), word, explicit), cmCtx)
+    // Everything below works in the HEADLESS document's coordinates: the caret
+    // crosses over as line/column (both editors agree on those), never as an
+    // offset — CodeMirror normalises CRLF to LF, so offsets differ by one char per
+    // line above the caret and a completion range would cover the wrong text.
+    const cmCtx = headless.context(doc, position.lineNumber, position.column, explicit)
+    const cmText = cmCtx.state.doc.toString()
+    const word = wordBefore(cmText, cmCtx.pos)
+    const results = await runSources(sourcesFor(isQualified(cmText, cmCtx.pos), word, explicit), cmCtx)
     const items = mapCompletions(results, word)
-    const end = model.getPositionAt(offset)
+    const end = { lineNumber: position.lineNumber, column: position.column }
     // All options from one source share a `from`, and a big catalog can return
     // thousands of them — resolve each distinct offset once instead of per item.
-    const posCache = new Map<number, monaco.Position>()
+    const posCache = new Map<number, { lineNumber: number; column: number }>()
     const posAt = (o: number) => {
       let p = posCache.get(o)
       if (!p) {
-        p = model.getPositionAt(o)
+        p = headless!.positionOf(o)
         posCache.set(o, p)
       }
       return p
@@ -358,6 +362,7 @@
         },
       } satisfies monaco.languages.CompletionItem
     })
+
     // `incomplete` re-asks the sources on every keystroke (CodeMirror did the
     // same): that is how lazily-loaded columns and a freshly loaded catalog show
     // up without the user having to close and re-open the popup.
@@ -466,11 +471,25 @@
   }
 
   onMount(() => {
-    bootstrapMonaco()
-    rebuildSources()
-    headless = new HeadlessDoc(sqlDialectFor(system).extension, value)
+    let disposed = false
+    const subs: monaco.IDisposable[] = []
 
-    editor = m.editor.create(container!, {
+    // Monaco is loaded on demand (see $lib/editor/monaco), so setup MUST wait for
+    // it — the very first editor of a session would otherwise call `m.editor` on
+    // an API that has not arrived yet and take the tab down with it. The cleanup
+    // below works whether or not setup ran: closing the tab mid-download must not
+    // leave an editor behind.
+    void (async () => {
+      await bootstrapMonaco()
+      if (disposed || !container) return
+      setUpEditor()
+    })()
+
+    function setUpEditor() {
+      rebuildSources()
+      headless = new HeadlessDoc(sqlDialectFor(system).extension, value)
+
+      editor = m.editor.create(container!, {
       value,
       language: editorLanguageId(system),
       theme: DS_THEME,
@@ -510,54 +529,61 @@
       scrollbar: { useShadows: false },
     })
 
-    const model = editor.getModel()!
-    hooksByModel.set(model, { complete })
-    model.updateOptions(userModelOptions())
-    registerTestEditor(editor)
-    fnDecorations = editor.createDecorationsCollection([])
-    refreshFnDecorations()
-    scheduleLint()
+      const model = editor.getModel()!
+      // LF everywhere. Monaco would otherwise keep whatever the text arrived with
+      // (CRLF from a paste or a saved query) and its offsets would then disagree
+      // with CodeMirror's — which normalises to LF — by one char per line above
+      // the caret. That drift pointed completion ranges at the wrong text.
+      model.setEOL(m.editor.EndOfLineSequence.LF)
+      hooksByModel.set(model, { complete })
+      model.updateOptions(userModelOptions())
+      registerTestEditor(editor)
+      fnDecorations = editor.createDecorationsCollection([])
+      refreshFnDecorations()
+      scheduleLint()
 
-    const subs = [
-      model.onDidChangeContent(() => {
-        completionDismissed = false // typing again re-arms completion
-        scheduleFlush()
-      }),
-      editor.onDidScrollChange(() => refreshFnDecorations()),
-      model.onDidChangeOptions(() => enforceModelOptions()),
-      editor.onKeyDown((e: monaco.IKeyboardEvent) => {
-        if (e.keyCode !== m.KeyCode.Escape) return
-        completionDismissed = true // don't let a late load re-open the popup
-        onCancel?.()
-        // no preventDefault: Escape must still close the suggest/find widget
-      }),
-    ]
+      subs.push(
+        model.onDidChangeContent(() => {
+          completionDismissed = false // typing again re-arms completion
+          scheduleFlush()
+        }),
+        editor.onDidScrollChange(() => refreshFnDecorations()),
+        model.onDidChangeOptions(() => enforceModelOptions()),
+        editor.onKeyDown((e: monaco.IKeyboardEvent) => {
+          if (e.keyCode !== m.KeyCode.Escape) return
+          completionDismissed = true // don't let a late load re-open the popup
+          onCancel?.()
+          // no preventDefault: Escape must still close the suggest/find widget
+        }),
+      )
 
-    // Run/format bindings. `addAction` keeps them scoped to this editor instance,
-    // which matters because every open tab has its own live editor.
-    const actions: [string, string, number[], () => void][] = [
-      ['ds.run', 'Run', [m.KeyCode.F5], () => onRun?.()],
-      ['ds.runAtCursor', 'Run statement at cursor', [m.KeyMod.CtrlCmd | m.KeyCode.Enter], () => onRunAtCursor?.()],
-      ['ds.cancel', 'Cancel', [m.KeyMod.CtrlCmd | m.KeyCode.F5], () => onCancel?.()],
-      ['ds.format', 'Format SQL', [m.KeyMod.CtrlCmd | m.KeyMod.Shift | m.KeyCode.KeyF], () => onFormat?.()],
-      ['ds.explain', 'Explain', [m.KeyMod.CtrlCmd | m.KeyMod.Shift | m.KeyCode.KeyE], () => onExplain?.()],
-      ['ds.save', 'Save', [m.KeyMod.CtrlCmd | m.KeyCode.KeyS], () => onSaveSnippet?.()],
-    ]
-    for (const [id, label, keybindings, run] of actions) {
-      editor.addAction({ id, label, keybindings, run })
+      // Run/format bindings. `addAction` keeps them scoped to this editor instance,
+      // which matters because every open tab has its own live editor.
+      const actions: [string, string, number[], () => void][] = [
+        ['ds.run', 'Run', [m.KeyCode.F5], () => onRun?.()],
+        ['ds.runAtCursor', 'Run statement at cursor', [m.KeyMod.CtrlCmd | m.KeyCode.Enter], () => onRunAtCursor?.()],
+        ['ds.cancel', 'Cancel', [m.KeyMod.CtrlCmd | m.KeyCode.F5], () => onCancel?.()],
+        ['ds.format', 'Format SQL', [m.KeyMod.CtrlCmd | m.KeyMod.Shift | m.KeyCode.KeyF], () => onFormat?.()],
+        ['ds.explain', 'Explain', [m.KeyMod.CtrlCmd | m.KeyMod.Shift | m.KeyCode.KeyE], () => onExplain?.()],
+        ['ds.save', 'Save', [m.KeyMod.CtrlCmd | m.KeyCode.KeyS], () => onSaveSnippet?.()],
+      ]
+      for (const [id, label, keybindings, run] of actions) {
+        editor.addAction({ id, label, keybindings, run })
+      }
     }
 
     return () => {
+      disposed = true
       if (lintTimer) clearTimeout(lintTimer)
       if (flushFrame != null) cancelAnimationFrame(flushFrame)
       // a tab closed one frame after the last edit must still report that edit
       if (pendingChange) flushChange(false)
       for (const s of subs) s.dispose()
-      const m = editor?.getModel()
-      if (m) hooksByModel.delete(m)
+      const model = editor?.getModel()
+      if (model) hooksByModel.delete(model)
       if (editor) unregisterTestEditor(editor)
       editor?.dispose()
-      m?.dispose()
+      model?.dispose()
       editor = null
       headless = null
     }
