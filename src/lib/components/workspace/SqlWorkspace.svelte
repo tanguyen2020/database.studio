@@ -816,6 +816,9 @@
   // named snippet, since there is no file system.
   async function saveSnippet() {
     if (!editor) return
+    // Settings → Editor → "Format on save": tidy the statement first, so what
+    // lands in the file is what the editor now shows.
+    if (settings.value.formatOnSave) doFormat()
     const sqlText = editor.getDoc().trim()
     if (!sqlText) return
     if (IS_TAURI) {

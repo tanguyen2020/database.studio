@@ -89,18 +89,9 @@
   import { functionCatalog, type FnHint } from '$lib/sql/functions'
   import { expectsColumnHere } from '$lib/sql/column-context'
   import { lineColToOffset } from '$lib/sql/statements'
-  import {
-    schemaCompletionSource,
-    keywordCompletionSource,
-    SQLDialect,
-    PostgreSQL,
-    MySQL,
-    MSSQL,
-    SQLite,
-    StandardSQL,
-    type SQLNamespace,
-  } from '@codemirror/lang-sql'
-  import { clickHouseDialect } from '$lib/sql/ch-editor-dialect'
+  import { schemaCompletionSource, keywordCompletionSource, type SQLNamespace } from '@codemirror/lang-sql'
+  import { sqlDialectFor } from '$lib/editor/dialect'
+  import { settings } from '$lib/stores/settings.svelte'
   import type { Completion, CompletionSource } from '@codemirror/autocomplete'
   import type { Diagnostic } from '@codemirror/lint'
 
@@ -159,22 +150,44 @@
   const EXEC_OWNER = 'ds-exec'
   const LINT_DELAY = 400
 
-  function baseDialect(sys: string): SQLDialect {
-    switch (sys) {
-      case 'postgres':
-        return PostgreSQL
-      case 'mysql':
-      case 'mariadb':
-        return MySQL
-      case 'mssql':
-        return MSSQL
-      case 'sqlite':
-        return SQLite
-      case 'clickhouse':
-        return clickHouseDialect // lang-sql has no CH dialect → our own
-      default:
-        return StandardSQL
+  /**
+   * Editor options the user controls in Settings → Editor. These were never read
+   * before (the CodeMirror editor ignored them too); Monaco takes them straight.
+   * A missing/blank value falls back to the design tokens, so the defaults look
+   * exactly like the prototype.
+   */
+  function userOptions(): monaco.editor.IEditorOptions {
+    const s = settings.value
+    const font = editorFont()
+    const size = Number(s.fontSize)
+    const delay = Number(s.autocompleteDelayMs)
+    return {
+      fontFamily: (s.fontFamily ?? '').trim() || font.fontFamily,
+      fontSize: Number.isFinite(size) && size >= 8 && size <= 40 ? size : font.fontSize,
+      wordWrap: s.wordWrap ? 'on' : 'off',
+      quickSuggestionsDelay: Number.isFinite(delay) && delay >= 0 && delay <= 2000 ? delay : 20,
     }
+  }
+
+  /** Indentation is a MODEL option in Monaco, not an editor one. */
+  function userModelOptions(): monaco.editor.ITextModelUpdateOptions {
+    const tab = Number(settings.value.tabSize)
+    return { tabSize: Number.isFinite(tab) && tab >= 1 && tab <= 8 ? tab : 2, insertSpaces: true }
+  }
+
+  /**
+   * Keep the user's indentation. Monaco's model service re-detects indentation
+   * from the text and overwrites what we set — and its `detectIndentation` flag
+   * lives in the configuration service, out of reach of editor options (measured:
+   * the tab size applied at mount was silently replaced by 4). Re-assert it when
+   * the model reports a change; the equality check keeps this from looping.
+   */
+  function enforceModelOptions() {
+    const model = editor?.getModel()
+    if (!model) return
+    const want = userModelOptions()
+    const cur = model.getOptions()
+    if (cur.tabSize !== want.tabSize || cur.insertSpaces !== want.insertSpaces) model.updateOptions(want)
   }
 
   // Set of known function names for a dialect — the merged catalog (static +
@@ -185,7 +198,7 @@
   // while non-function keywords (IN/VALUES/EXISTS — not in any catalog) do not.
   function fnColorSet(sys: string): Set<string> {
     const set = new Set<string>(functionCatalog(sys, dynamicFunctions ?? []).map((f) => f.name.toLowerCase()))
-    for (const w of ((baseDialect(sys).spec?.builtin ?? '') as string).split(/\s+/)) {
+    for (const w of ((sqlDialectFor(sys).spec?.builtin ?? '') as string).split(/\s+/)) {
       if (w) set.add(w.toLowerCase())
     }
     return set
@@ -231,7 +244,7 @@
       colorSet = new Set()
       return
     }
-    const dialect = baseDialect(system)
+    const dialect = sqlDialectFor(system)
     srcSchema = schema ? schemaCompletionSource({ dialect, schema, defaultSchema }) : undefined
     srcKeyword = keywordCompletionSource(dialect)
     srcFn = fnSource(system)
@@ -436,26 +449,22 @@
   onMount(() => {
     bootstrapMonaco()
     rebuildSources()
-    headless = new HeadlessDoc(baseDialect(system).extension, value)
-    const { fontFamily, fontSize } = editorFont()
+    headless = new HeadlessDoc(sqlDialectFor(system).extension, value)
 
     editor = monaco.editor.create(container!, {
       value,
       language: monacoLanguage(system),
       theme: DS_THEME,
       readOnly,
+      ...userOptions(),
       automaticLayout: true,
-      fontFamily,
-      fontSize,
       lineNumbers: 'on',
       minimap: { enabled: false },
       scrollBeyondLastLine: false,
       renderLineHighlight: 'line',
       renderWhitespace: 'selection',
-      tabSize: 2,
       insertSpaces: true,
       folding: true,
-      wordWrap: 'off',
       // widgets must escape the pane's clipping (the editor sits in a fixed-height
       // flex row above the result panel)
       fixedOverflowWidgets: true,
@@ -470,7 +479,6 @@
       stickyScroll: { enabled: false },
       unicodeHighlight: { ambiguousCharacters: false, invisibleCharacters: false },
       quickSuggestions: { other: true, comments: false, strings: false },
-      quickSuggestionsDelay: 20,
       suggestOnTriggerCharacters: true,
       acceptSuggestionOnEnter: 'on',
       // Tab/Enter accept; a commit character never inserts behind the user's back
@@ -485,6 +493,7 @@
 
     const model = editor.getModel()!
     hooksByModel.set(model, { complete })
+    model.updateOptions(userModelOptions())
     registerTestEditor(editor)
     fnDecorations = editor.createDecorationsCollection([])
     refreshFnDecorations()
@@ -496,6 +505,7 @@
         scheduleFlush()
       }),
       editor.onDidScrollChange(() => refreshFnDecorations()),
+      model.onDidChangeOptions(() => enforceModelOptions()),
       editor.onKeyDown((e: monaco.IKeyboardEvent) => {
         if (e.keyCode !== monaco.KeyCode.Escape) return
         completionDismissed = true // don't let a late load re-open the popup
@@ -543,7 +553,7 @@
     void dynamicFunctions
     void columnSource
     rebuildSources()
-    headless?.setLanguage(baseDialect(system).extension)
+    headless?.setLanguage(sqlDialectFor(system).extension)
     const model = editor?.getModel()
     if (model) monaco.editor.setModelLanguage(model, monacoLanguage(system))
     refreshFnDecorations()
@@ -551,6 +561,19 @@
 
   $effect(() => {
     editor?.updateOptions({ readOnly })
+  })
+
+  // Settings → Editor applies live: changing the font size or word wrap must not
+  // need the tab to be reopened.
+  $effect(() => {
+    const s = settings.value
+    void s.fontSize
+    void s.fontFamily
+    void s.tabSize
+    void s.wordWrap
+    void s.autocompleteDelayMs
+    editor?.updateOptions(userOptions())
+    editor?.getModel()?.updateOptions(userModelOptions())
   })
 
   // ---- public API (via bind:this) ----
