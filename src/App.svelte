@@ -71,7 +71,7 @@
   import { settings } from '$lib/stores/settings.svelte'
   import HistoryTab from '$lib/components/workspace/HistoryTab.svelte'
   import SavedQueriesTab from '$lib/components/workspace/SavedQueriesTab.svelte'
-  import { connections } from '$lib/stores/connections.svelte'
+  import { baseConnId, connections } from '$lib/stores/connections.svelte'
   import { tabs } from '$lib/stores/tabs.svelte'
   import { ui } from '$lib/stores/ui.svelte'
   import { findShortcut } from '$lib/keys/shortcuts'
@@ -245,6 +245,21 @@
     })
   })
 
+  // The pinned Objects tab lists a LIVE catalog, so it must not outlive its
+  // connection: closing the connection (Disconnect, a lost socket, deleting the
+  // profile) closes the tab. A reconnect flips `connected` to false for its whole
+  // window — `connecting` marks that, so a refresh/retry keeps the tab.
+  $effect(() => {
+    const objTab = tabs.tabs.find((t) => t.contentType === 'objects')
+    // Profiles arrive asynchronously at startup: "no profile yet" is not "closed".
+    if (!objTab || !connections.loaded) return
+    const base = baseConnId(objTab.connectionId ?? '')
+    const profile = connections.byId(base)
+    const live = !!profile?.connected || connections.connecting.has(base)
+    if (live) return
+    untrack(() => tabs.closeObjectsTab(base))
+  })
+
   // ---- resizers (sidebar width + connection-list height) ----
   let draggingSidebar = $state(false)
   let draggingConnList = $state(false)
@@ -264,9 +279,9 @@
   }
 
   // Each vertical resizer resizes the panel on its LEFT, so the handle the user
-  // grabs is always the edge of the panel that moves — in either split order.
-  const middlePanel = $derived<'conn' | 'explorer'>(ui.sidebarLayout === 'right' ? 'explorer' : 'conn')
-  const outerPanel = $derived<'conn' | 'explorer'>(ui.sidebarLayout === 'right' ? 'conn' : 'explorer')
+  // grabs is always the edge of the panel that moves.
+  const middlePanel: 'conn' | 'explorer' = 'conn'
+  const outerPanel: 'conn' | 'explorer' = 'explorer'
 
   function dragSidebar(e: PointerEvent) {
     if (!draggingSidebar) return
@@ -296,9 +311,8 @@
   <!-- BODY — dòng 68 -->
   <div style="flex:1;display:flex;min-height:0">
     {#if ui.sidebarSplit}
-      <!-- SPLIT SIDEBAR — Connections and Explorer as two side-by-side panels.
-           ui.sidebarLayout picks the order: 'left' = Connections | Explorer,
-           'right' = Explorer | Connections (title-bar layout buttons). -->
+      <!-- SPLIT SIDEBAR — Connections | Explorer as two side-by-side panels
+           (the two-panel title-bar layout button). -->
       {#snippet connectionsPanel()}
         <aside
           bind:this={connAside}
@@ -313,7 +327,7 @@
           style="flex:none;width:var(--px-5);cursor:col-resize;background:var(--border);align-self:stretch"
           role="separator"
           aria-orientation="vertical"
-          title={ui.sidebarLayout === 'right' ? 'Drag to resize the Explorer panel' : 'Drag to resize the Connections panel'}
+          title="Drag to resize the Connections panel"
           onpointerdown={(e) => {
             draggingConnPanel = true
             ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
@@ -332,15 +346,9 @@
         </aside>
       {/snippet}
 
-      {#if ui.sidebarLayout === 'right'}
-        {@render explorerPanel()}
-        {@render connectionsResizer()}
-        {@render connectionsPanel()}
-      {:else}
-        {@render connectionsPanel()}
-        {@render connectionsResizer()}
-        {@render explorerPanel()}
-      {/if}
+      {@render connectionsPanel()}
+      {@render connectionsResizer()}
+      {@render explorerPanel()}
     {:else}
       <!-- LEFT SIDEBAR — dòng 71 -->
       <aside

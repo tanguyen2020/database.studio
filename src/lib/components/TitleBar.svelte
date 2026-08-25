@@ -28,13 +28,12 @@
     fontMenuOpen = false
   }
 
-  // Sidebar layout — three buttons, like an editor layout picker: Connections
-  // left of the Explorer, one stacked column, or Connections right of it. The
-  // choice is remembered and re-applied on the next start (ui.setSidebarLayout).
+  // Sidebar layout — two buttons, like an editor layout picker: Connections left
+  // of the Explorer, or one stacked column. The choice is remembered and
+  // re-applied on the next start (ui.setSidebarLayout).
   const LAYOUTS: { mode: import('$lib/stores/ui.svelte').SidebarLayout; label: string; title: string }[] = [
     { mode: 'left', label: 'Connections left', title: 'Two panels — Connections on the left, Explorer on the right' },
     { mode: 'stacked', label: 'One sidebar', title: 'One sidebar — Connections above the Explorer' },
-    { mode: 'right', label: 'Connections right', title: 'Two panels — Explorer on the left, Connections on the right' },
   ]
 
   // Session Monitor (T23) — mở Admin view cho connection đang chọn.
@@ -55,7 +54,7 @@
     <span class="mono" style="font-size:var(--px-10);color:var(--muted)" title="Installed version">v{APP_VERSION}</span>
   </div>
   <div style="margin-left:auto;display:flex;align-items:center;gap:var(--px-8)">
-    <!-- sidebar layout picker (3 modes) — sits next to Sessions -->
+    <!-- sidebar layout picker — sits next to Sessions -->
     <div role="radiogroup" aria-label="Sidebar layout" style="display:flex;align-items:center;gap:var(--px-2)">
       {#each LAYOUTS as l (l.mode)}
         {@const on = ui.sidebarLayout === l.mode}
@@ -75,12 +74,9 @@
             {#if l.mode === 'left'}
               <line x1="10" y1="4.5" x2="10" y2="19.5"></line>
               <rect x="3" y="4.5" width="7" height="15" fill="currentColor" stroke="none" opacity="0.55"></rect>
-            {:else if l.mode === 'stacked'}
+            {:else}
               <line x1="3" y1="13" x2="21" y2="13"></line>
               <rect x="3" y="13" width="18" height="6.5" fill="currentColor" stroke="none" opacity="0.55"></rect>
-            {:else}
-              <line x1="14" y1="4.5" x2="14" y2="19.5"></line>
-              <rect x="14" y="4.5" width="7" height="15" fill="currentColor" stroke="none" opacity="0.55"></rect>
             {/if}
           </svg>
         </span>

@@ -10,7 +10,8 @@
   import { onMount } from 'svelte'
   import type * as monaco from 'monaco-editor'
   import { loadMonaco, defineDsTheme, watchDsTheme, editorFont, DS_THEME, type MonacoApi } from '$lib/editor/monaco'
-  import { registerSqlMonarch } from '$lib/editor/monarch'
+  import { DS_JSON, registerSqlMonarch } from '$lib/editor/monarch'
+  import { highlightJson, jsonTokenColor } from '$lib/format/json'
   import { IS_TAURI } from '$lib/demo'
 
   interface Props {
@@ -49,6 +50,9 @@
 
   let host = $state<HTMLDivElement | null>(null)
   let box = $state<HTMLDivElement | null>(null)
+  /** Monaco could not be brought up — show the text as plain, selectable content
+   *  instead of an empty box (see the fallback below). */
+  let failed = $state(false)
   let editor: monaco.editor.IStandaloneCodeEditor | null = null
   let m: MonacoApi
   const auto = $derived(height === 'auto')
@@ -102,11 +106,24 @@
     const subs: monaco.IDisposable[] = []
 
     void (async () => {
-      m = await loadMonaco()
+      try {
+        m = await loadMonaco()
+      } catch (e) {
+        // The viewer must still show the payload: a dialog whose only job is to
+        // display JSON must never come up blank because a chunk failed to load.
+        if (!disposed) failed = true
+        console.error('CodeView: Monaco failed to load', e)
+        return
+      }
       if (disposed || !host) return
       defineDsTheme(m)
       watchDsTheme()
-      await registerSqlMonarch(m)
+      try {
+        await registerSqlMonarch(m)
+      } catch (e) {
+        // Highlighting is optional — keep going with Monaco's built-in languages.
+        console.error('CodeView: language registration failed', e)
+      }
       if (disposed || !host) return
       const font = editorFont()
 
@@ -217,9 +234,16 @@
 <div
   bind:this={box}
   class="cv-box"
-  style={auto ? '' : `height:${height}`}
+  style="{auto ? '' : `height:${height};`}min-height:{Math.max(minHeight, MIN_BOX_PX)}px"
 >
-  <div bind:this={host} class="cv-host"></div>
+  {#if failed}
+    <!-- Monaco is unavailable: selectable text beats an empty viewer, and JSON
+         still gets its colours from the app's own tokenizer. -->
+    <pre class="selectable mono cv-fallback" aria-label={ariaLabel}>{#if language === DS_JSON}{#each highlightJson(value) as t}<span
+            style="color:{jsonTokenColor(t.kind)}">{t.text}</span>{/each}{:else}{value}{/if}</pre>
+  {:else}
+    <div bind:this={host} class="cv-host"></div>
+  {/if}
 </div>
 
 <style>
@@ -234,5 +258,16 @@
   .cv-host {
     width: 100%;
     height: 100%;
+  }
+  .cv-fallback {
+    margin: 0;
+    width: 100%;
+    height: 100%;
+    overflow: auto;
+    padding: var(--px-8);
+    font-size: var(--px-12);
+    color: var(--text2);
+    white-space: pre-wrap;
+    word-break: break-word;
   }
 </style>

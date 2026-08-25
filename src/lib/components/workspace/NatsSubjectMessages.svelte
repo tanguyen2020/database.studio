@@ -519,8 +519,8 @@
           <span class="mono" style="font-size:var(--px-11);color:var(--sacc-amber)">{viewState.subject}</span>
           {#if !viewState.isJson}<span style="font-size:var(--px-10_5);color:var(--muted)">(not JSON — raw payload)</span>{/if}
           <span style="margin-left:auto;display:flex;gap:var(--px-8)">
-            <span onclick={() => viewState && copyMsg(viewState.text)} onkeydown={(e) => e.key === 'Enter' && viewState && copyMsg(viewState.text)} role="button" tabindex="0" class="eg-btn">Copy</span>
-            <span onclick={() => (viewState = null)} onkeydown={(e) => e.key === 'Enter' && (viewState = null)} role="button" tabindex="0" class="eg-btn">Close</span>
+            <span onclick={() => viewState && copyMsg(viewState.text)} onkeydown={(e) => e.key === 'Enter' && viewState && copyMsg(viewState.text)} role="button" tabindex="0" class="pv-btn primary">Copy</span>
+            <span onclick={() => (viewState = null)} onkeydown={(e) => e.key === 'Enter' && (viewState = null)} role="button" tabindex="0" class="pv-btn">Close</span>
           </span>
         </div>
         <div style="flex:1;min-height:0;display:flex">

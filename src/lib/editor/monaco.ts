@@ -26,11 +26,33 @@ export function loadedMonaco(): MonacoApi | null {
   return api
 }
 
-/** Load Monaco once; concurrent callers share the same download. */
+/** Test seam (browser/demo only): `?noMonaco=1` fails every load (proves the
+ *  viewers degrade instead of showing an empty box), `?noMonaco=once` fails only
+ *  the first attempt (proves a failed load is not cached — the next editor works). */
+function forcedFailure(): boolean {
+  if (typeof window === 'undefined') return false
+  let mode: string | null = null
+  try {
+    mode = new URLSearchParams(window.location.search).get('noMonaco')
+  } catch {
+    return false
+  }
+  if (mode === null) return false
+  if (mode !== 'once') return true
+  const w = window as unknown as { __monacoFailedOnce?: boolean }
+  if (w.__monacoFailedOnce) return false
+  w.__monacoFailedOnce = true
+  return true
+}
+
+/** Load Monaco once; concurrent callers share the same download. A FAILED load is
+ *  not cached: keeping the rejected promise in `inFlight` would blank every editor
+ *  and viewer opened afterwards until the app was restarted. */
 export function loadMonaco(): Promise<MonacoApi> {
   if (api) return Promise.resolve(api)
   if (inFlight) return inFlight
   inFlight = (async () => {
+    if (forcedFailure()) throw new Error('Monaco load forced to fail (?noMonaco=1)')
     const [, , , , , mod, worker] = await Promise.all([
       import('monaco-editor/esm/vs/editor/editor.all.js'),
       import('monaco-editor/esm/vs/basic-languages/sql/sql.contribution.js'),
@@ -46,6 +68,9 @@ export function loadMonaco(): Promise<MonacoApi> {
     api = mod as unknown as MonacoApi
     return api
   })()
+  inFlight.catch(() => {
+    inFlight = null // let the next caller try again instead of inheriting the failure
+  })
   return inFlight
 }
 

@@ -1,13 +1,12 @@
 import { expect, test, type Page } from '@playwright/test'
 import { APP_URL, blockRemoteFonts } from './helpers'
 
-// Three title-bar layout buttons (next to Sessions) split the sidebar into
-// Connections + Explorer panels: Connections left, one stacked sidebar, or
-// Connections right. The pick is remembered and re-applied on the next start.
+// Two title-bar layout buttons (next to Sessions) pick the sidebar layout:
+// Connections | Explorer as two panels, or one stacked sidebar. The pick is
+// remembered and re-applied on the next start.
 
 const LEFT = 'Connections left'
 const STACKED = 'One sidebar'
-const RIGHT = 'Connections right'
 
 const conn = (p: Page) => p.locator('[data-sidebar-panel="connections"]')
 const expl = (p: Page) => p.locator('[data-sidebar-panel="explorer"]')
@@ -20,14 +19,16 @@ async function boot(page: Page) {
   await page.waitForTimeout(400)
 }
 
-test('sidebar layout: three modes, panel order, and it survives a restart', async ({ page }) => {
+test('sidebar layout: two modes, panel order, and it survives a restart', async ({ page }) => {
   const errors: string[] = []
   page.on('pageerror', (e) => errors.push(String(e)))
   await boot(page)
 
-  // all three buttons live in the title bar, next to Sessions
+  // both buttons live in the title bar, next to Sessions — and the dropped
+  // "Connections right" mode is not offered any more
   const bar = page.getByRole('radiogroup', { name: 'Sidebar layout' })
-  await expect(bar.getByRole('radio')).toHaveCount(3)
+  await expect(bar.getByRole('radio')).toHaveCount(2)
+  await expect(bar.getByRole('radio', { name: 'Connections right' })).toHaveCount(0)
   const sessions = (await page.getByRole('button', { name: 'Sessions', exact: true }).boundingBox())!
   const group = (await bar.boundingBox())!
   expect(Math.abs(group.y - sessions.y)).toBeLessThan(6) // same row
@@ -61,17 +62,7 @@ test('sidebar layout: three modes, panel order, and it survives a restart', asyn
   await page.waitForTimeout(400)
   await expect(expl(page).getByText(/Postgres/).first()).toBeVisible()
 
-  // ---- Connections right | Explorer left (order flips, both still there)
-  await bar.getByRole('radio', { name: RIGHT }).click()
-  await page.waitForTimeout(200)
-  {
-    const c = (await conn(page).boundingBox())!
-    const e = (await expl(page).boundingBox())!
-    expect(c.x).toBeGreaterThan(e.x + e.width - 1) // Connections to the right
-    expect(Math.abs(e.height - c.height)).toBeLessThan(2)
-  }
-
-  // ---- remembered across a restart (reload), including which side
+  // ---- remembered across a restart (reload)
   await page.reload()
   await page.waitForSelector('#app > *', { timeout: 15_000 })
   await page.waitForTimeout(400)
@@ -79,10 +70,10 @@ test('sidebar layout: three modes, panel order, and it survives a restart', asyn
   {
     const c = (await conn(page).boundingBox())!
     const e = (await expl(page).boundingBox())!
-    expect(c.x).toBeGreaterThan(e.x + e.width - 1) // still Explorer | Connections
+    expect(e.x).toBeGreaterThan(c.x + c.width - 1) // still Connections | Explorer
   }
   await expect(
-    page.getByRole('radiogroup', { name: 'Sidebar layout' }).getByRole('radio', { name: RIGHT }),
+    page.getByRole('radiogroup', { name: 'Sidebar layout' }).getByRole('radio', { name: LEFT }),
   ).toHaveAttribute('aria-checked', 'true')
 
   // ---- back to one sidebar: Connections above the Explorer

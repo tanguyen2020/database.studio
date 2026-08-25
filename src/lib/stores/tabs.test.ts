@@ -290,6 +290,26 @@ describe('Objects tab — pinned, non-closable singleton', () => {
     expect(tabs.tabs[2].id).toBe(a.id)
   })
 
+  it('closeObjectsTab removes it — the connection it lists is gone', () => {
+    const obj = tabs.openObjectsTab({ connId: 'c1', database: 'app' })
+    const a = tabs.openSqlTab({ connectionId: null })
+    tabs.activate(obj.id)
+    tabs.closeObjectsTab()
+    expect(tabs.tabs.filter((t) => t.contentType === 'objects')).toHaveLength(0)
+    expect(tabs.byId(obj.id)).toBeNull()
+    // the closed tab was active → focus falls back to a surviving tab
+    expect(tabs.activeTabId).toBe(a.id)
+  })
+
+  it('closeObjectsTab(connId) only touches the tab of that connection (derived ids included)', () => {
+    // Objects opened on a per-database sub-connection of c1
+    const obj = tabs.openObjectsTab({ connId: 'c1::analytics', database: 'analytics' })
+    tabs.closeObjectsTab('c2') // another connection closed → keep it
+    expect(tabs.byId(obj.id)).not.toBeNull()
+    tabs.closeObjectsTab('c1') // its own base connection closed → close it
+    expect(tabs.byId(obj.id)).toBeNull()
+  })
+
   it('is not duplicated by duplicate()', () => {
     const obj = tabs.openObjectsTab({ connId: 'c1', database: 'app' })
     tabs.duplicate(obj.id)

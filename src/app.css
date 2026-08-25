@@ -232,6 +232,39 @@
   .selectable {
     user-select: text;
   }
+
+  /* Payload-popup buttons (Kafka / NATS / Redis "View … as JSON", and any other
+     small viewer dialog). The old neutral chips read as disabled on a light
+     background — Copy is the action, so it carries the accent; Close stays
+     secondary but sits on a raised surface with a real border. */
+  .pv-btn {
+    font-size: var(--px-12);
+    font-weight: 600;
+    border-radius: var(--px-6);
+    padding: var(--px-4) var(--px-12);
+    cursor: pointer;
+    color: var(--text);
+    background: var(--raised);
+    border: var(--px-1) solid var(--border2);
+    outline: none;
+  }
+  .pv-btn:hover {
+    background: color-mix(in srgb, var(--primary) 12%, var(--raised));
+    border-color: var(--primary);
+  }
+  .pv-btn:focus-visible {
+    outline: var(--px-2) solid var(--primary);
+    outline-offset: var(--px-1);
+  }
+  .pv-btn.primary {
+    color: var(--hex-fff);
+    background: var(--primary);
+    border-color: var(--primary);
+  }
+  .pv-btn.primary:hover {
+    background: color-mix(in srgb, var(--primary) 88%, var(--text));
+    border-color: color-mix(in srgb, var(--primary) 88%, var(--text));
+  }
 }
 
 /* scrollbar — port từ khối <style> của Database Studio.dc.html */

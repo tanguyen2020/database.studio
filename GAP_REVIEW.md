@@ -57,9 +57,9 @@ Status legend: **Implemented** (wired end-to-end, evidence) · **Partial** (pres
 | Bottom toolbar: Export / dump | Implemented [T15] | `ObjectExplorer.svelte` → Generate Scripts / dump | |
 | Bottom toolbar: Backup database | Implemented [T22] | `BackupDialog.svelte`; `commands/backup.rs` | |
 | Bottom toolbar: Users & privileges / Session Monitor | Implemented [T23] | `AdminView.svelte`; `commands/admin.rs` | |
-| Expand all / Collapse all | Implemented | `ObjectExplorer.svelte` | |
+| Expand all / Collapse all | Implemented | `ObjectExplorer.svelte` | disabled (with `aria-disabled` + reason in the title) until the selected connection is open — same for header Refresh |
 | Explorer tree text search (Ctrl+F) | Implemented [T18] | `ObjectExplorer.svelte` filter + Ctrl+F | object **pinning** still Missing |
-| Right-side Object Properties panel | Implemented | `PropertiesPanel.svelte` | shell + empty state; hidden on startup + edge-handle toggle [A3-4]; rich DDL/stats content still Partial |
+| Right-side Object Properties panel | Implemented | `PropertiesPanel.svelte` | shell + empty state; hidden on startup + edge-handle toggle [A3-4]; empty while the connection is closed (a closed connection has no live object to describe); rich DDL/stats content still Partial |
 
 ---
 

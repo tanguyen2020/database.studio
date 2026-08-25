@@ -4,7 +4,7 @@
 import * as ipc from '$lib/ipc'
 import { IS_TAURI } from '$lib/demo'
 import type { SystemType, TabContentType, TabState } from '$lib/types'
-import { connections } from './connections.svelte'
+import { baseConnId, connections } from './connections.svelte'
 import { results } from './results.svelte'
 import { explorer } from './explorer.svelte'
 
@@ -775,6 +775,35 @@ class TabsStore {
     this.activeTabId = tab.id
     this.schedulePersist()
     return tab
+  }
+
+  /**
+   * Closes the pinned Objects tab. Users cannot close it, but it must go away when
+   * its connection is no longer open (disconnect / connection lost / profile
+   * deleted): it lists a live catalog, so leaving it behind shows a database that is
+   * not reachable any more. `connId` (optional) restricts this to an Objects tab
+   * belonging to that connection — derived ids (`{base}::db`, `{base}#tab-…`) count
+   * as their base profile.
+   */
+  closeObjectsTab(connId?: string) {
+    const tab = this.tabs.find((t) => t.contentType === 'objects')
+    if (!tab) return
+    if (connId && baseConnId(tab.connectionId ?? '') !== baseConnId(connId)) return
+    const wasActive0 = this.activeTabId === tab.id
+    const wasActive1 = this.activeTabId1 === tab.id
+    const idx0 = this.tabsInPane(0).findIndex((t) => t.id === tab.id)
+    const idx1 = this.tabsInPane(1).findIndex((t) => t.id === tab.id)
+    this.tabs = this.tabs.filter((t) => t.id !== tab.id)
+    if (wasActive0) {
+      const p0 = this.tabsInPane(0)
+      this.activeTabId = p0[Math.min(Math.max(idx0, 0), p0.length - 1)]?.id ?? null
+    }
+    if (wasActive1) {
+      const p1 = this.tabsInPane(1)
+      this.activeTabId1 = p1[Math.min(Math.max(idx1, 0), p1.length - 1)]?.id ?? null
+      if (this.tabsInPane(1).length === 0) this.closeSplit()
+    }
+    this.schedulePersist()
   }
 
   /** The Objects tab cannot be closed / reordered / dragged (pinned system tab). */

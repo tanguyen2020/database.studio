@@ -471,7 +471,8 @@
   // T18 — Object Properties panel: suy ra type/schema/name từ key node đang chọn.
   const selProps = $derived.by(() => {
     const k = treeSel
-    if (!k || k.indexOf(':') < 0 || !selected) return null
+    // Properties describe a LIVE object: a closed connection has none to show.
+    if (!k || k.indexOf(':') < 0 || !selected?.connected) return null
     const prefix = k.slice(0, k.indexOf(':'))
     const rest = k.slice(k.indexOf(':') + 1)
     const dot = rest.indexOf('.')
@@ -491,7 +492,7 @@
   const propTarget = $derived.by((): PropTarget | null => {
     const k = treeSel
     const s = selected
-    if (!k || !s || k.indexOf(':') < 0) return null
+    if (!k || !s || !s.connected || k.indexOf(':') < 0) return null
     const kindMap: Record<string, { kind: string; label: string }> = {
       t: { kind: 'table', label: 'Table' },
       v: { kind: 'view', label: 'View' },
@@ -598,6 +599,9 @@
     const s = selected
     if (!s || s.connected) return
     untrack(() => {
+      // The tree is empty while closed, so a selection left over from the live
+      // session would keep the Properties panel showing an object nobody can reach.
+      treeSel = null
       const subs = dbSubIds[s.id]
       if (!subs) return
       for (const sub of Object.values(subs)) explorer.invalidate(sub)
@@ -748,7 +752,9 @@
 
   async function refreshConnection() {
     const s = selected
-    if (!s || refreshingTree) return
+    // A closed connection has no session to re-read over: the button is disabled in
+    // that state, and this guards the keyboard / programmatic paths too.
+    if (!s || !s.connected || refreshingTree) return
     refreshingTree = true
     const startedAt = Date.now()
     try {
@@ -1665,6 +1671,7 @@
 
   // ---- Collapse / Expand All (header icons, next to Refresh) ----------------
   function collapseAll() {
+    if (!canCollapseAll) return
     expanded = new Set()
   }
   /** Opens every node the header owns for this connection: the current-database /
@@ -1694,6 +1701,11 @@
     }
   }
   const canExpandAll = $derived(!!selected?.connected && supportsExpandAll(selected?.system))
+  /** Collapse all / Refresh act on a live tree, so both stay disabled until the
+   *  selected connection is open — nothing is loaded before that, and a disconnect
+   *  leaves the tree empty. */
+  const canCollapseAll = $derived(!!selected?.connected)
+  const canRefreshTree = $derived(!!selected?.connected)
   // Icon-only header buttons: stacked double chevrons (down = open everything,
   // up = close everything), the conventional tree affordance.
   const EXPAND_ALL_SVG =
@@ -1902,9 +1914,12 @@
         tabindex="0"
         aria-busy={expandingTree}
         aria-label="Expand all"
+        aria-disabled={!canExpandAll}
         title={canExpandAll
           ? 'Expand all (databases, schemas and object folders)'
-          : 'Expand all — not available for this connection'}
+          : selected?.connected
+            ? 'Expand all — not available for this connection'
+            : 'Expand all — open the connection first'}
         style="display:inline-flex;align-items:center;cursor:{canExpandAll && !expandingTree ? 'pointer' : 'default'};color:var(--muted);opacity:{canExpandAll ? (expandingTree ? 0.5 : 1) : 0.4}"
       >{@html EXPAND_ALL_SVG}</span>
       <span
@@ -1913,8 +1928,9 @@
         role="button"
         tabindex="0"
         aria-label="Collapse all"
-        title="Collapse all"
-        style="display:inline-flex;align-items:center;cursor:{selected ? 'pointer' : 'default'};color:var(--muted);opacity:{selected ? 1 : 0.4}"
+        aria-disabled={!canCollapseAll}
+        title={canCollapseAll ? 'Collapse all' : 'Collapse all — open the connection first'}
+        style="display:inline-flex;align-items:center;cursor:{canCollapseAll ? 'pointer' : 'default'};color:var(--muted);opacity:{canCollapseAll ? 1 : 0.4}"
       >{@html COLLAPSE_ALL_SVG}</span>
       <span
         onclick={refreshConnection}
@@ -1923,8 +1939,9 @@
         tabindex="0"
         aria-busy={refreshingTree}
         aria-label="Refresh"
-        title="Refresh"
-        style="display:inline-flex;align-items:center;gap:var(--px-4);cursor:{refreshingTree ? 'default' : 'pointer'};color:var(--muted);font-size:var(--px-11_5);font-weight:600;opacity:{selected ? (refreshingTree ? 0.6 : 1) : 0.4}"
+        aria-disabled={!canRefreshTree}
+        title={canRefreshTree ? 'Refresh' : 'Refresh — open the connection first'}
+        style="display:inline-flex;align-items:center;gap:var(--px-4);cursor:{canRefreshTree && !refreshingTree ? 'pointer' : 'default'};color:var(--muted);font-size:var(--px-11_5);font-weight:600;opacity:{canRefreshTree ? (refreshingTree ? 0.6 : 1) : 0.4}"
       ><span class="tree-refresh-glyph" class:spinning={refreshingTree} style="font-size:var(--px-13)">⟳</span>{refreshingTree ? 'Refreshing…' : 'Refresh'}</span>
     </div>
   </div>

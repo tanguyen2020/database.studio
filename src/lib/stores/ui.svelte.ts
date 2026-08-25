@@ -5,9 +5,8 @@ import type { ProfileDraft, ProfilePublic } from '$lib/types'
 
 /** Sidebar layout: where the Connections panel sits relative to the Explorer.
  *  'stacked' = one column (Connections above Explorer — the prototype layout),
- *  'left'    = two panels side by side, Connections on the left,
- *  'right'   = two panels side by side, Connections on the right. */
-export type SidebarLayout = 'left' | 'stacked' | 'right'
+ *  'left'    = two panels side by side, Connections on the left. */
+export type SidebarLayout = 'left' | 'stacked'
 
 export interface EditConnectedRequest {
   draft: ProfileDraft
@@ -94,10 +93,10 @@ class UiStore {
   requestConnectionToggle() {
     this.connToggleTick++
   }
-  /** Remembers which side Connections was on, so merge → split comes back the same. */
+  /** Split ⇄ merge returns to the two-panel layout (Connections | Explorer). */
   private lastSplitSide: SidebarLayout = 'left'
 
-  /** Pick the sidebar layout (the three title-bar buttons). */
+  /** Pick the sidebar layout (the title-bar buttons). */
   setSidebarLayout(mode: SidebarLayout) {
     this.sidebarLayout = mode
     if (mode !== 'stacked') this.lastSplitSide = mode
@@ -203,10 +202,11 @@ class UiStore {
       document.documentElement.classList.toggle('dark', this.theme === 'dark')
       try {
         const stored = localStorage.getItem('sidebar_layout')
-        if (stored === 'left' || stored === 'right' || stored === 'stacked') {
-          this.sidebarLayout = stored
-          if (stored !== 'stacked') this.lastSplitSide = stored
-        } else {
+        // 'right' (Explorer | Connections) was dropped — installs that picked it
+        // come back on the remaining two-panel layout instead of a dead mode.
+        if (stored === 'left' || stored === 'right') this.sidebarLayout = 'left'
+        else if (stored === 'stacked') this.sidebarLayout = 'stacked'
+        else {
           const split = localStorage.getItem('sidebar_split') // pre-3-mode key
           if (split === '1') this.sidebarLayout = 'left'
           else if (split === '0') this.sidebarLayout = 'stacked'
@@ -231,11 +231,11 @@ class UiStore {
         }
         if (!hasLocalLayout) {
           const m = parsed.sidebarLayout
-          if (m === 'left' || m === 'right' || m === 'stacked') this.sidebarLayout = m
+          if (m === 'left' || m === 'right') this.sidebarLayout = 'left' // 'right' was dropped
+          else if (m === 'stacked') this.sidebarLayout = 'stacked'
           else if (typeof parsed.sidebarSplit === 'boolean') {
             this.sidebarLayout = parsed.sidebarSplit ? 'left' : 'stacked' // pre-3-mode installs
           }
-          if (this.sidebarLayout !== 'stacked') this.lastSplitSide = this.sidebarLayout
         }
         if (parsed.connPanelWidth > 150) this.connPanelWidth = parsed.connPanelWidth
         // rightPanelOpen intentionally NOT restored — the Properties panel always

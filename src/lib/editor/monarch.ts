@@ -19,13 +19,23 @@ import { SQL_SYSTEMS, editorLanguageId, mergeMonarchKeywords } from './dialect'
  *  service + worker; a plain monarch keeps the bundle lean and needs no worker). */
 export const DS_JSON = 'ds-json'
 
-let registered = false
+let registration: Promise<void> | null = null
 
-/** Register the editor's languages. Safe to call more than once. */
-export async function registerSqlMonarch(m: MonacoApi) {
-  if (registered) return
-  registered = true
+/** Register the editor's languages. Safe to call more than once: concurrent
+ *  callers share ONE registration. (A plain boolean flag set before the await let
+ *  a second editor start on a language id that was not registered yet, and a
+ *  failed run would have latched forever.) */
+export function registerSqlMonarch(m: MonacoApi): Promise<void> {
+  if (!registration) {
+    registration = register(m).catch((e) => {
+      registration = null // a failed registration must not latch
+      throw e
+    })
+  }
+  return registration
+}
 
+async function register(m: MonacoApi) {
   const [sql, mysql, pgsql] = await Promise.all([
     import('monaco-editor/esm/vs/basic-languages/sql/sql.js'),
     import('monaco-editor/esm/vs/basic-languages/mysql/mysql.js'),
