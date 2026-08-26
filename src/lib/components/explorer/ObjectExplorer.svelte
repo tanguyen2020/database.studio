@@ -69,13 +69,7 @@
   import { objectFilterMatch } from '$lib/explorer/filter'
   import { foreignOfTreeKey, schemaOfTreeKey } from '$lib/explorer/target'
   import { foreignReloadPlan, mainReloadPlan, type ReloadPlan } from '$lib/explorer/reload'
-  import {
-    cassandraExpandKeys,
-    natsExpandKeys,
-    relationalExpandKeys,
-    rootNodeKey,
-    supportsExpandAll,
-  } from '$lib/explorer/expand'
+  import { rootNodeKey } from '$lib/explorer/expand'
   import { autofocus } from '$lib/actions/autofocus'
   import { toSqlInsert } from '$lib/export/rows'
   import type { ColumnInfo, PartitionInfo, RoutineInfo, TableInfo } from '$lib/types'
@@ -1669,49 +1663,10 @@
     })
   }
 
-  // ---- Collapse / Expand All (header icons, next to Refresh) ----------------
-  function collapseAll() {
-    if (!canCollapseAll) return
-    expanded = new Set()
-  }
-  /** Opens every node the header owns for this connection: the current-database /
-   *  file node, each schema (loading its children first so the folders are filled),
-   *  and each object folder — or keyspaces/streams for Cassandra/NATS. Table and
-   *  column level nodes stay closed (one introspection round-trip per table), and
-   *  OTHER databases are left alone on purpose: expanding them would open a
-   *  connection per database on the server. */
-  let expandingTree = $state(false)
-  async function expandAll() {
-    const s = selected
-    if (!s || !s.connected || expandingTree || !supportsExpandAll(s.system)) return
-    expandingTree = true
-    try {
-      if (s.system === 'cassandra') {
-        for (const ks of cassKeyspaces) await loadCassKeyspace(s.id, ks)
-        expanded = new Set([...expanded, ...cassandraExpandKeys(cassKeyspaces)])
-      } else if (s.system === 'nats') {
-        expanded = new Set([...expanded, ...natsExpandKeys(streamRows.map((r) => r.name))])
-      } else {
-        const schemas = (cache?.schemas ?? []).map((x) => x.name)
-        for (const name of schemas) await explorer.loadSchemaChildren(s.id, name)
-        expanded = new Set([...expanded, ...relationalExpandKeys(s.system, schemas)])
-      }
-    } finally {
-      expandingTree = false
-    }
-  }
-  const canExpandAll = $derived(!!selected?.connected && supportsExpandAll(selected?.system))
-  /** Collapse all / Refresh act on a live tree, so both stay disabled until the
-   *  selected connection is open — nothing is loaded before that, and a disconnect
-   *  leaves the tree empty. */
-  const canCollapseAll = $derived(!!selected?.connected)
+  /** Refresh acts on a live tree, so it stays disabled until the selected
+   *  connection is open — nothing is loaded before that, and a disconnect leaves
+   *  the tree empty. */
   const canRefreshTree = $derived(!!selected?.connected)
-  // Icon-only header buttons: stacked double chevrons (down = open everything,
-  // up = close everything), the conventional tree affordance.
-  const EXPAND_ALL_SVG =
-    '<svg viewBox="0 0 14 14" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3.5 L7 7 L11 3.5"/><path d="M3 8 L7 11.5 L11 8"/></svg>'
-  const COLLAPSE_ALL_SVG =
-    '<svg viewBox="0 0 14 14" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6.5 L7 3 L11 6.5"/><path d="M3 11 L7 7.5 L11 11"/></svg>'
 
 
   // map C trong Component (dòng 3947): màu glyph per loại object
@@ -1906,32 +1861,6 @@
       <span class="mono" style="font-size:var(--px-11_5);color:var(--text2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{selected.name}</span>
     {/if}
     <div style="margin-left:auto;display:inline-flex;align-items:center;gap:var(--px-8);flex:none">
-      <!-- Expand all / Collapse all — icon-only quick actions next to Refresh -->
-      <span
-        onclick={expandAll}
-        onkeydown={(e) => e.key === 'Enter' && expandAll()}
-        role="button"
-        tabindex="0"
-        aria-busy={expandingTree}
-        aria-label="Expand all"
-        aria-disabled={!canExpandAll}
-        title={canExpandAll
-          ? 'Expand all (databases, schemas and object folders)'
-          : selected?.connected
-            ? 'Expand all — not available for this connection'
-            : 'Expand all — open the connection first'}
-        style="display:inline-flex;align-items:center;cursor:{canExpandAll && !expandingTree ? 'pointer' : 'default'};color:var(--muted);opacity:{canExpandAll ? (expandingTree ? 0.5 : 1) : 0.4}"
-      >{@html EXPAND_ALL_SVG}</span>
-      <span
-        onclick={collapseAll}
-        onkeydown={(e) => e.key === 'Enter' && collapseAll()}
-        role="button"
-        tabindex="0"
-        aria-label="Collapse all"
-        aria-disabled={!canCollapseAll}
-        title={canCollapseAll ? 'Collapse all' : 'Collapse all — open the connection first'}
-        style="display:inline-flex;align-items:center;cursor:{canCollapseAll ? 'pointer' : 'default'};color:var(--muted);opacity:{canCollapseAll ? 1 : 0.4}"
-      >{@html COLLAPSE_ALL_SVG}</span>
       <span
         onclick={refreshConnection}
         onkeydown={(e) => e.key === 'Enter' && refreshConnection()}

@@ -1,9 +1,9 @@
 import { expect, test } from '@playwright/test'
 import { APP_URL, blockRemoteFonts, openDatabaseNode } from './helpers'
 
-// A closed connection has no live catalog: the Explorer's Expand all / Collapse all /
-// Refresh actions and the Properties readout are disabled, and the pinned Objects tab
-// (which lists a live catalog) is closed with the connection.
+// A closed connection has no live catalog: the Explorer's Refresh action and the
+// Properties readout are disabled, and the pinned Objects tab (which lists a live
+// catalog) is closed with the connection.
 
 test('explorer: closing the connection disables its tree actions and Properties', async ({ page }) => {
   const errors: string[] = []
@@ -18,13 +18,9 @@ test('explorer: closing the connection disables its tree actions and Properties'
   await page.waitForTimeout(500)
   await openDatabaseNode(page)
 
-  const expandAll = page.getByRole('button', { name: 'Expand all' })
-  const collapseAll = page.getByRole('button', { name: 'Collapse all' })
   const refresh = page.getByRole('button', { name: 'Refresh', exact: true }).first()
 
-  // connected: all three act on the tree
-  await expect(expandAll).toHaveAttribute('aria-disabled', 'false')
-  await expect(collapseAll).toHaveAttribute('aria-disabled', 'false')
+  // connected: Refresh acts on the tree
   await expect(refresh).toHaveAttribute('aria-disabled', 'false')
 
   // select the schema → the Properties readout describes it
@@ -44,9 +40,7 @@ test('explorer: closing the connection disables its tree actions and Properties'
   await page.waitForTimeout(700)
   await expect(page.getByText('Not connected.').first()).toBeVisible()
 
-  // every tree action is disabled…
-  await expect(expandAll).toHaveAttribute('aria-disabled', 'true')
-  await expect(collapseAll).toHaveAttribute('aria-disabled', 'true')
+  // the tree action is disabled…
   await expect(refresh).toHaveAttribute('aria-disabled', 'true')
   // …and clicking Refresh really does nothing (no catalog re-read)
   await refresh.click({ force: true })
