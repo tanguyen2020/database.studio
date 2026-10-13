@@ -180,12 +180,26 @@ impl MssqlDriver {
     ) -> Result<StatementOutcome, QueryError> {
         let owned: Vec<MssqlParam> = params.iter().map(MssqlParam::from_json).collect();
         let refs: Vec<&dyn tiberius::ToSql> = owned.iter().map(|p| p as &dyn tiberius::ToSql).collect();
-        let stream = self.client.query(sql, &refs).await.map_err(|e| map_error(&e))?;
+        let mut stream = self.client.query(sql, &refs).await.map_err(|e| map_error(&e))?;
+        // Take the column metadata from the STREAM before consuming it: an empty
+        // result set has no row to read headers from, and the data viewer (which
+        // opens a table through this path) must still show the table's columns.
+        let mut cols: Vec<ColumnDef> = stream
+            .columns()
+            .await
+            .map_err(|e| map_error(&e))?
+            .map(|cs| {
+                cs.iter()
+                    .map(|c| (c.name().to_string(), type_name(c.column_type())))
+                    .collect::<Vec<ColumnDef>>()
+            })
+            .unwrap_or_default();
         let rows = stream.into_first_result().await.map_err(|e| map_error(&e))?;
-        let mut cols: Vec<ColumnDef> = Vec::new();
-        if let Some(first) = rows.first() {
-            for c in first.columns() {
-                cols.push((c.name().to_string(), type_name(c.column_type())));
+        if cols.is_empty() {
+            if let Some(first) = rows.first() {
+                for c in first.columns() {
+                    cols.push((c.name().to_string(), type_name(c.column_type())));
+                }
             }
         }
         let mut out_rows: Vec<Value> = Vec::new();
@@ -292,7 +306,11 @@ impl MssqlDriver {
                         ISNULL((SELECT SUM(ps.row_count) FROM sys.dm_db_partition_stats ps
                                 WHERE ps.object_id = o.object_id AND ps.index_id IN (0, 1)), 0),
                         ISNULL((SELECT SUM(ps.reserved_page_count) * 8192 FROM sys.dm_db_partition_stats ps
-                                WHERE ps.object_id = o.object_id), 0)
+                                WHERE ps.object_id = o.object_id), 0),
+                        CAST(CASE WHEN EXISTS(SELECT 1 FROM sys.indexes i
+                                                JOIN sys.partition_schemes sch ON sch.data_space_id = i.data_space_id
+                                               WHERE i.object_id = o.object_id AND i.index_id IN (0, 1))
+                                  THEN 1 ELSE 0 END AS bit)
                  FROM sys.objects o
                  JOIN sys.schemas s ON s.schema_id = o.schema_id
                  WHERE o.type IN ('U','V') AND s.name = @P1
@@ -314,6 +332,8 @@ impl MssqlDriver {
                 locked: false,
                 engine: None,
                 data_length: r.get::<i64, _>(3),
+                partition_of: None,
+                is_partitioned: r.get::<bool, _>(4),
             })
             .collect())
     }

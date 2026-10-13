@@ -39,10 +39,21 @@ test('explorer per-database tree: current header + foreign database expands', as
   await page.waitForTimeout(600)
   const tbl = page.getByRole('treeitem', { name: /students/ }).last()
   await tbl.scrollIntoViewIfNeeded()
-  await tbl.getByRole('button').first().click() // chevron → expand to columns
+  await tbl.getByRole('button').first().click() // chevron → expand to its folders
   await page.waitForTimeout(600)
+  // columns live under a Columns folder, same as Indexes / Constraints
+  await page.getByRole('treeitem', { name: /Columns/ }).last().getByRole('button').first().click()
+  await page.waitForTimeout(400)
   const col = page.getByText('first_name').first()
   await expect(col).toBeVisible()
+
+  // a foreign-database table shows Indexes and Constraints too — it used to render
+  // only Columns and Partitions, so there was no way to see a table's indexes in
+  // any database other than the one the connection opened on.
+  const fRows = await page.locator('[role="treeitem"]').allInnerTexts()
+  const fAt = fRows.map((t) => t.replace(/\s+/g, ' ')).lastIndexOf(fRows.map((t) => t.replace(/\s+/g, ' ')).find((t) => t.includes('students')) ?? '')
+  expect(fRows.slice(fAt + 1).join(' | ')).toContain('Indexes')
+  expect(fRows.slice(fAt + 1).join(' | ')).toContain('Constraints')
 
   // foreign-database columns must have the same context menu as MySQL's
   await col.click({ button: 'right' })

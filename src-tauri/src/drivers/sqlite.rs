@@ -318,6 +318,8 @@ impl SqliteDriver {
                     locked,
                     engine: None,
                     data_length: None,
+                    partition_of: None,
+                    is_partitioned: None,
                 });
             }
             // sqlite_master itself is browsable (locked/read-only).
@@ -329,6 +331,8 @@ impl SqliteDriver {
                 locked: true,
                 engine: None,
                 data_length: None,
+                partition_of: None,
+                is_partitioned: None,
             });
             Ok(out)
         })

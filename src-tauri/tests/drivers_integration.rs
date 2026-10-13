@@ -8657,3 +8657,187 @@ async fn nats_wildcard_subject_loads_messages_even_when_counting_is_hopeless() {
     drv.js_delete_stream("WIDE").await.unwrap();
     eprintln!("CHK nats_wildcard_subject_loads_messages_even_when_counting_is_hopeless OK");
 }
+
+// ---------------------------------------------------------------------------
+// Table Data Viewer (Open Data) on an EMPTY table — the grid must still show the
+// columns of the table. The viewer reaches the engine through grid::build_select
+// + `exec_params`; that path used to read the column headers off the FIRST ROW,
+// so a table with no rows produced `cols: []` and the grid rendered nothing but
+// the row-number gutter. Each test below runs the exact statement the viewer
+// sends, then checks the headers match the ones reported once rows exist.
+// ---------------------------------------------------------------------------
+
+/// The statement the Table Data Viewer sends for an unfiltered first page.
+fn viewer_select(
+    system: &str,
+    schema: Option<&str>,
+    table: &str,
+) -> database_studio_lib::drivers::grid::BoundStatement {
+    database_studio_lib::drivers::grid::build_select(
+        system,
+        &schema.map(str::to_string),
+        table,
+        &[],
+        false,
+        &[],
+        100,
+        0,
+    )
+}
+
+const EMPTY_COLS: [&str; 4] = ["id", "full_name", "score", "created_at"];
+
+#[tokio::test]
+async fn pg_empty_table_still_reports_its_columns() {
+    let (_c, port) = start_pg().await;
+    let params = PgConnParams {
+        host: "localhost".into(),
+        port,
+        database: "testdb".into(),
+        user: "postgres".into(),
+        password: PASS.into(),
+        ssl: false,
+        ssl_ca: String::new(),
+        ssl_cert: String::new(),
+        ssl_key: String::new(),
+    };
+    let mut drv = retry("postgres", || PgDriver::connect(&params)).await;
+    drv.exec("CREATE TABLE empty_view (id int PRIMARY KEY, full_name text, score numeric, created_at timestamptz)")
+        .await
+        .unwrap();
+
+    let stmt = viewer_select("postgres", Some("public"), "empty_view");
+    let StatementOutcome::Rows { result } = drv.exec_params(&stmt.sql, &stmt.params).await.unwrap() else {
+        panic!("expected rows")
+    };
+    assert!(result.rows.is_empty(), "table is empty");
+    let names: Vec<&str> = result.cols.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(names, EMPTY_COLS, "columns still reported for an empty table");
+    assert!(result.cols.iter().all(|(_, t)| !t.is_empty()), "every column carries a type: {:?}", result.cols);
+
+    drv.exec("INSERT INTO empty_view VALUES (1, 'a', 1.5, now())").await.unwrap();
+    let StatementOutcome::Rows { result: filled } = drv.exec_params(&stmt.sql, &stmt.params).await.unwrap() else {
+        panic!("expected rows")
+    };
+    assert_eq!(filled.rows.len(), 1);
+    assert_eq!(filled.cols, result.cols, "same headers with and without rows");
+}
+
+async fn mysql_like_empty_table_columns(image: (&str, &str), system: &'static str) {
+    let c = GenericImage::new(image.0, image.1)
+        .with_exposed_port(3306.tcp())
+        .with_env_var("MYSQL_ROOT_PASSWORD", PASS)
+        .with_env_var("MYSQL_DATABASE", "testdb")
+        .start()
+        .await
+        .unwrap_or_else(|e| panic!("start {} container: {e}", image.0));
+    let port = c.get_host_port_ipv4(3306).await.unwrap();
+    let params = MySqlConnParams {
+        host: "localhost".into(),
+        port,
+        database: "testdb".into(),
+        user: "root".into(),
+        password: PASS.into(),
+        ssl: false,
+        ssl_ca: String::new(),
+        ssl_cert: String::new(),
+        ssl_key: String::new(),
+    };
+    let mut drv = retry(system, || MySqlDriver::connect(&params, system)).await;
+    drv.exec("CREATE TABLE empty_view (id INT PRIMARY KEY, full_name VARCHAR(50), score DECIMAL(6,2), created_at DATETIME)")
+        .await
+        .unwrap();
+
+    let stmt = viewer_select(system, Some("testdb"), "empty_view");
+    let StatementOutcome::Rows { result } = drv.exec_params(&stmt.sql, &stmt.params).await.unwrap() else {
+        panic!("expected rows")
+    };
+    assert!(result.rows.is_empty(), "table is empty");
+    let names: Vec<&str> = result.cols.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(names, EMPTY_COLS, "columns still reported for an empty table");
+    assert!(result.cols.iter().all(|(_, t)| !t.is_empty()), "every column carries a type: {:?}", result.cols);
+
+    drv.exec("INSERT INTO empty_view VALUES (1, 'a', 1.50, NOW())").await.unwrap();
+    let StatementOutcome::Rows { result: filled } = drv.exec_params(&stmt.sql, &stmt.params).await.unwrap() else {
+        panic!("expected rows")
+    };
+    assert_eq!(filled.rows.len(), 1);
+    let filled_names: Vec<&str> = filled.cols.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(filled_names, names, "same headers with and without rows");
+}
+
+#[tokio::test]
+async fn mysql_empty_table_still_reports_its_columns() {
+    mysql_like_empty_table_columns(("mysql", "8"), "mysql").await;
+}
+
+#[tokio::test]
+async fn mariadb_empty_table_still_reports_its_columns() {
+    mysql_like_empty_table_columns(("mariadb", "11"), "mariadb").await;
+}
+
+#[tokio::test]
+async fn mssql_empty_table_still_reports_its_columns() {
+    let c = GenericImage::new("mcr.microsoft.com/mssql/server", "2022-latest")
+        .with_exposed_port(1433.tcp())
+        .with_env_var("ACCEPT_EULA", "Y")
+        .with_env_var("MSSQL_SA_PASSWORD", MSSQL_PASS)
+        .start()
+        .await
+        .expect("start mssql container");
+    let port = c.get_host_port_ipv4(1433).await.unwrap();
+    let params = MssqlConnParams {
+        host: "localhost".into(),
+        port,
+        database: "".into(),
+        user: "sa".into(),
+        password: MSSQL_PASS.into(),
+        ssl: false,
+        ssl_ca: String::new(),
+        auth: "sql".into(),
+    };
+    let mut drv = retry("mssql", || MssqlDriver::connect(&params)).await;
+    drv.exec("CREATE TABLE dbo.empty_view (id INT PRIMARY KEY, full_name NVARCHAR(50), score DECIMAL(6,2), created_at DATETIME2)")
+        .await
+        .unwrap();
+
+    let stmt = viewer_select("mssql", Some("dbo"), "empty_view");
+    let StatementOutcome::Rows { result } = drv.exec_params(&stmt.sql, &stmt.params).await.unwrap() else {
+        panic!("expected rows")
+    };
+    assert!(result.rows.is_empty(), "table is empty");
+    let names: Vec<&str> = result.cols.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(names, EMPTY_COLS, "columns still reported for an empty table");
+    assert!(result.cols.iter().all(|(_, t)| !t.is_empty()), "every column carries a type: {:?}", result.cols);
+
+    drv.exec("INSERT INTO dbo.empty_view VALUES (1, 'a', 1.50, SYSDATETIME())").await.unwrap();
+    let StatementOutcome::Rows { result: filled } = drv.exec_params(&stmt.sql, &stmt.params).await.unwrap() else {
+        panic!("expected rows")
+    };
+    assert_eq!(filled.rows.len(), 1);
+    assert_eq!(filled.cols, result.cols, "same headers with and without rows");
+}
+
+/// SQLite reads its headers from the prepared statement, so it was already
+/// correct — this pins that it stays correct.
+#[tokio::test]
+async fn sqlite_empty_table_still_reports_its_columns() {
+    let dir = std::env::temp_dir().join(format!("ds_empty_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("empty.db");
+    let _ = std::fs::remove_file(&path);
+    let params = SqliteConnParams { path: path.to_string_lossy().to_string(), mode: SqliteMode::ReadWrite };
+    let drv = SqliteDriver::connect(&params).await.expect("open sqlite file");
+    drv.exec("CREATE TABLE empty_view (id INTEGER PRIMARY KEY, full_name TEXT, score REAL, created_at TEXT)")
+        .await
+        .unwrap();
+
+    let stmt = viewer_select("sqlite", Some("main"), "empty_view");
+    let StatementOutcome::Rows { result } = drv.exec_params(&stmt.sql, stmt.params.clone()).await.unwrap() else {
+        panic!("expected rows")
+    };
+    assert!(result.rows.is_empty(), "table is empty");
+    let names: Vec<&str> = result.cols.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(names, EMPTY_COLS);
+    let _ = std::fs::remove_file(&path);
+}

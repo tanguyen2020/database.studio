@@ -36,6 +36,12 @@ pub async fn export_query_to_file(
             let file = std::fs::File::create(&path)
                 .map_err(|e| QueryError::new("export", format!("cannot create file: {e}"), e.to_string()))?;
             let mut w = BufWriter::new(file);
+            // CSV = "CSV UTF-8 (with BOM)": Excel only decodes UTF-8 (Vietnamese,
+            // CJK…) correctly when the file starts with the byte-order mark.
+            if matches!(fmt, ExportFormat::Csv) {
+                w.write_all(&[0xEF, 0xBB, 0xBF])
+                    .map_err(|e| QueryError::new("export", format!("write error: {e}"), e.to_string()))?;
+            }
             let mut d = driver.lock().await;
             let total = match &mut *d {
                 LiveConnection::Postgres(pg) => {

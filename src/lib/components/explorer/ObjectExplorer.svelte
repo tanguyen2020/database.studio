@@ -73,6 +73,8 @@
   import { autofocus } from '$lib/actions/autofocus'
   import { toSqlInsert } from '$lib/export/rows'
   import type { ColumnInfo, PartitionInfo, RoutineInfo, TableInfo } from '$lib/types'
+  import type { TableDetail } from '$lib/stores/explorer.svelte'
+  import { partitionedTableIcon, rowIcon } from '$lib/explorer/icons'
   import { untrack, type Snippet } from 'svelte'
 
   const selected = $derived(connections.selected)
@@ -1152,6 +1154,21 @@
     return bits.join(' · ')
   }
 
+  /** A PostgreSQL partition IS a table (its own relation in pg_class), so it can be
+   *  introspected like one and shown with its own columns / indexes / constraints.
+   *  The other engines model a partition as a storage unit of the parent table —
+   *  there is no separate relation to read, so those rows stay leaves. */
+  function partitionIsTable(system: string): boolean {
+    return system === 'postgres'
+  }
+
+  /** Expand one partition row: same contract as expandTable, but keyed by the
+   *  partition row so it can sit under the parent's Partitions node. */
+  function expandPartition(cid: string, schema: string, key: string, part: string) {
+    toggle(key)
+    void explorer.loadTableDetail(cid, schema, part)
+  }
+
   /** Reveal a table's Partitions node: load its detail, then expand both the
    *  table row and its Partitions folder so existing partitions become visible. */
   async function showPartitions(cid: string, schema: string, table: string, tableKey: string, partsKey: string) {
@@ -1175,7 +1192,19 @@
     system: string,
     database?: string,
   ): { label: string; run: () => void }[] {
-    const items: { label: string; run: () => void }[] = [{ label: 'Copy name', run: () => copyName(p.name) }]
+    const items: { label: string; run: () => void }[] = []
+    // A PostgreSQL partition is itself a table, so it can be opened and queried.
+    // The tree no longer lists partitions next to their parent (they'd bury it), so
+    // this menu is the way in. Other engines address partitions only through the
+    // parent table, so there is nothing to open there.
+    if (system === 'postgres') {
+      items.push({ label: 'Open Data', run: () => tabs.openTableViewer(cid, schema, p.name) })
+      items.push({
+        label: 'New Query',
+        run: () => stmtTab(p.name, selectStarSql(system, schema, p.name), database, cid),
+      })
+    }
+    items.push({ label: 'Copy name', run: () => copyName(p.name) })
     if (p.expression) items.push({ label: 'Copy bound / value', run: () => copyName(p.expression!) })
     for (const op of partitionOps(system, schema, table, p)) {
       items.push({
@@ -1692,18 +1721,37 @@
   const KAFKA_LOGO =
     '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="display:block" aria-hidden="true"><circle cx="6" cy="12" r="2.2"/><circle cx="18" cy="5.5" r="2.2"/><circle cx="18" cy="18.5" r="2.2"/><path d="M8 11 L16 6.5"/><path d="M8 13 L16 17.5"/></svg>'
 
-  // Folder icon for database nodes (DataGrip-style) — inline SVG, uses currentColor.
-  const DB_FOLDER_SVG =
-    '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M3 7a1 1 0 0 1 1-1h5l2 2h8a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V7Z"/></svg>'
+  // A partitioned table: the shared table mark with a "P" badge (see explorer/icons).
+  const PARTITIONED_TABLE_SVG = partitionedTableIcon()
 
   // Funnel icon for the per-folder filter toggle (shown on the right of folder headers).
   const FILTER_ICON =
     '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4h18l-7 8v6l-4 2v-8z"/></svg>'
 
+  /** Everything the shared Partitions node needs. `partsKey`/`ptPrefix` are passed in
+   *  so the main tree and the foreign-database subtree keep their existing row keys. */
+  interface PartitionsNodeArgs {
+    cid: string
+    schema: string
+    table: string
+    parts: PartitionInfo[]
+    /** the schema cache the partitions resolve their own detail from (PG only) */
+    details: Record<string, TableDetail>
+    depth: number
+    system: string
+    partsKey: string
+    ptPrefix: string
+    database?: string
+  }
+
   interface RowProps {
     key: string
     depth: number
     glyph: string
+    /** the mark to draw (see $lib/explorer/icons). Rows set this where the glyph is
+     *  ambiguous — ⌗ is both an index and a constraint, ▤ is a schema, a folder and
+     *  a Columns node. Left out, the glyph picks the mark. */
+    icon?: string
     /** optional inline SVG shown instead of the mono glyph (e.g. folder icon) */
     svg?: string
     color: string
@@ -1772,10 +1820,11 @@
         onclick={(e) => { if (p.expandable) { e.stopPropagation(); treeSel = p.key; p.onClick?.() } }}
         style="flex:none;width:var(--px-16);text-align:center;font-size:var(--px-16);color:var(--text2);cursor:{p.expandable ? 'pointer' : 'default'}"
       >{p.expandable ? (expanded.has(p.key) ? '▾' : '▸') : ''}</span>
-      <span class="mono" style="flex:none;width:var(--px-15);display:flex;align-items:center;justify-content:center;font-size:var(--px-12);color:{p.color}">{#if p.svg}{@html p.svg}{:else}{p.glyph}{/if}</span>
-      <span class="mono" style="font-size:var(--px-12_5);font-weight:{p.head ? 700 : 500};color:{p.nameColor ?? (sel || p.head ? 'var(--text)' : 'var(--text2)')};overflow:hidden;text-overflow:ellipsis">{p.name}</span>
+      <span class="mono" style="flex:none;width:var(--px-15);display:flex;align-items:center;justify-content:center;font-size:var(--px-12);color:{p.color}">{#if p.svg ?? rowIcon(p.icon, p.glyph)}{@html p.svg ?? rowIcon(p.icon, p.glyph)}{:else}{p.glyph}{/if}</span>
+      <!-- line-height is pinned to the mono metric the row was built around, so moving the name to the UI face keeps every row exactly the height it was -->
+      <span style="font-family:var(--font-main);line-height:var(--px-17);font-size:var(--px-12_5);font-weight:{p.head ? 700 : 500};color:{p.nameColor ?? (sel || p.head ? 'var(--text)' : 'var(--text2)')};flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis">{p.name}</span>
       {#if p.locked}<span style="font-size:var(--px-9)" title="System table — read-only">🔒</span>{/if}
-      <span class="mono" title={p.metaTitle ?? ''} style="font-size:var(--px-10);color:{p.metaTitle ? 'var(--sacc-amber)' : 'var(--muted)'};margin-left:auto">{p.meta ?? ''}</span>
+      <span class="mono" title={p.metaTitle ?? ''} style="font-size:var(--px-10);color:{p.metaTitle ? 'var(--sacc-amber)' : 'var(--muted)'};margin-left:auto;flex:0 100 auto;min-width:0;overflow:hidden;text-overflow:ellipsis">{p.meta ?? ''}</span>
       {#if p.filterable}
         {@const active = hasFolderFilter(p.key) || folderFilterOpen[p.key]}
         <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
@@ -1815,6 +1864,145 @@
   {/if}
 {/snippet}
 
+<!-- The "Partitions" node of one table, shared by the main tree and the
+     foreign-database subtree so both behave identically. On PostgreSQL every
+     partition IS a table, so each row expands into its own columns / indexes /
+     constraints — the same shape a table has, just nested under Partitions. -->
+{#snippet partitionsNode(a: PartitionsNodeArgs)}
+  {@render row({
+    key: a.partsKey,
+    depth: a.depth,
+    glyph: '▤',
+    icon: 'partition',
+    color: C.part,
+    name: 'Partitions',
+    meta: a.parts[0]?.key ?? String(a.parts.length),
+    expandable: true,
+    onClick: () => toggle(a.partsKey),
+  })}
+  {#if expanded.has(a.partsKey)}
+    {@const asTable = partitionIsTable(a.system)}
+    {#each a.parts as pt (pt.name)}
+      {@const ptKey = `${a.ptPrefix}${pt.name}`}
+      {@const pdetail = a.details[pt.name]}
+      {#snippet ptMenu()}
+        <ContextMenu.Content class="w-56">
+          {#each partitionMenuItems(a.cid, a.schema, a.table, pt, a.system, a.database) as it (it.label)}
+            <ContextMenu.Item onclick={it.run}>{it.label}</ContextMenu.Item>
+          {/each}
+        </ContextMenu.Content>
+      {/snippet}
+      {@render row(
+        {
+          key: ptKey,
+          depth: a.depth + 1,
+          glyph: asTable ? '▦' : '▤',
+          icon: 'partition',
+          color: C.part,
+          name: pt.name,
+          meta: partMeta(pt),
+          expandable: asTable,
+          onClick: asTable ? () => expandPartition(a.cid, a.schema, ptKey, pt.name) : undefined,
+          onDblClick: asTable ? () => tabs.openTableViewer(a.cid, a.schema, pt.name) : undefined,
+        },
+        ptMenu,
+      )}
+      {#if asTable && expanded.has(ptKey)}
+        {#if explorer.isLoading(a.cid, `table:${a.schema}.${pt.name}`)}
+          <div class="mono" style="padding-left:calc(var(--px-6) + {a.depth + 2} * var(--px-15));font-size:var(--px-10);color:var(--muted)">loading…</div>
+        {:else if pdetail}
+          {@const pColsKey = `${ptKey}:columns`}
+          {@render row({
+            key: pColsKey,
+            depth: a.depth + 2,
+            glyph: '▤',
+            icon: 'column',
+            color: C.col,
+            name: 'Columns',
+            meta: String((pdetail.columns ?? []).length),
+            expandable: true,
+            onClick: () => toggle(pColsKey),
+          })}
+          {#if expanded.has(pColsKey)}
+          {#each pdetail.columns ?? [] as col (col.name)}
+            {#snippet ptColMenu()}
+              <ContextMenu.Content class="w-48">
+                <ContextMenu.Item onclick={() => copyName(col.name)}>Copy Name</ContextMenu.Item>
+                <ContextMenu.Item onclick={() => copyName(`${pt.name}.${col.name}`)}>Copy as table.column</ContextMenu.Item>
+              </ContextMenu.Content>
+            {/snippet}
+            {@render row(
+              {
+                key: `${ptKey}:col:${col.name}`,
+                depth: a.depth + 3,
+                glyph: '▸',
+                color: C.col,
+                name: col.name,
+                meta: `${col.data_type}${col.is_pk ? ' · PK' : col.is_fk ? ' · FK' : ''}${!col.nullable && !col.is_pk ? ' · NN' : ''}`,
+              },
+              ptColMenu,
+            )}
+          {/each}
+          {/if}
+          {@const ixKey = `${ptKey}:indexes`}
+          {@render row({
+            key: ixKey,
+            depth: a.depth + 2,
+            glyph: '⌗',
+            color: C.idx,
+            name: 'Indexes',
+            meta: pdetail.errors?.indexes ? 'unavailable' : String(pdetail.indexes?.length ?? 0),
+            metaTitle: pdetail.errors?.indexes,
+            expandable: (pdetail.indexes ?? []).length > 0,
+            onClick: () => toggle(ixKey),
+          })}
+          {#if (pdetail.indexes ?? []).length > 0}
+            {#if expanded.has(ixKey)}
+              {#each pdetail.indexes ?? [] as ix (ix.name)}
+                {@render row({
+                  key: `${ixKey}:${ix.name}`,
+                  depth: a.depth + 3,
+                  glyph: '⌗',
+                  color: C.idx,
+                  name: ix.name,
+                  meta: `${ix.method}${ix.unique ? ' · UNIQUE' : ''}`,
+                })}
+              {/each}
+            {/if}
+          {/if}
+          {@const ctKey = `${ptKey}:constraints`}
+          {@render row({
+            key: ctKey,
+            depth: a.depth + 2,
+            glyph: '⌗',
+            icon: 'constraint',
+            color: C.idx,
+            name: 'Constraints',
+            meta: pdetail.errors?.constraints ? 'unavailable' : String(pdetail.constraints?.length ?? 0),
+            metaTitle: pdetail.errors?.constraints,
+            expandable: (pdetail.constraints ?? []).length > 0,
+            onClick: () => toggle(ctKey),
+          })}
+          {#if (pdetail.constraints ?? []).length > 0}
+            {#if expanded.has(ctKey)}
+              {#each pdetail.constraints ?? [] as ct (ct.name)}
+                {@render row({
+                  key: `${ctKey}:${ct.name}`,
+                  depth: a.depth + 3,
+                  glyph: '⌗',
+                  icon: 'constraint',
+                  color: C.idx,
+                  name: ct.name,
+                  meta: ct.kind,
+                })}
+              {/each}
+            {/if}
+          {/if}
+        {/if}
+      {/if}
+    {/each}
+  {/if}
+{/snippet}
 <!-- per-folder object filter — a search box revealed by the folder's context-menu
      "Filter…" (SSMS-style); hidden otherwise. -->
 {#snippet folderFilter(key: string, depth: number)}
@@ -2050,7 +2238,7 @@
               <ContextMenu.Item onclick={() => selected && refreshCassKeyspace(ks)}>Refresh</ContextMenu.Item>
             </ContextMenu.Content>
           {/snippet}
-          {@render row({ key: ksKey, depth: 0, glyph: '▤', color: C.schema, name: ks, meta: 'keyspace', head: true, expandable: true, onClick: () => toggleCassKeyspace(ks, ksKey) }, ksMenu)}
+          {@render row({ key: ksKey, depth: 0, glyph: '▤', icon: 'schema', color: C.schema, name: ks, meta: 'keyspace', head: true, expandable: true, onClick: () => toggleCassKeyspace(ks, ksKey) }, ksMenu)}
           {#if expanded.has(ksKey)}
             {#if !tree}
               <div style="padding:var(--px-8) var(--px-24);font-size:var(--px-11_5);color:var(--muted)">Loading keyspace…</div>
@@ -2063,7 +2251,7 @@
                   <ContextMenu.Item onclick={() => selected && refreshCassKeyspace(ks)}>Refresh</ContextMenu.Item>
                 </ContextMenu.Content>
               {/snippet}
-              {@render row({ key: tKey, depth: 1, glyph: '▤', color: C.folder, name: 'Tables', meta: String(tree.tables.length), head: true, expandable: true, onClick: () => toggle(tKey) }, tablesFolderMenu)}
+              {@render row({ key: tKey, depth: 1, glyph: '▤', icon: 'table', color: C.folder, name: 'Tables', meta: String(tree.tables.length), head: true, expandable: true, onClick: () => toggle(tKey) }, tablesFolderMenu)}
               {#if expanded.has(tKey)}
                 {#each tree.tables as t (t.name)}
                   {@const tbKey = `cass:t:${ks}:${t.name}`}
@@ -2162,7 +2350,7 @@
               {/if}
               <!-- replication (properties) -->
               {#if tree.replication}
-                {@render row({ key: `cass:repl:${ks}`, depth: 1, glyph: '⚙', color: C.col, name: 'replication', meta: tree.replication })}
+                {@render row({ key: `cass:repl:${ks}`, depth: 1, glyph: '⚙', icon: 'settings', color: C.col, name: 'replication', meta: tree.replication })}
               {/if}
             {/if}
           {/if}
@@ -2303,7 +2491,7 @@
         {/snippet}
         {#if !dbFiltering || matchDb(curDbName)}
           <!-- expandable + collapsed by default: its schemas only show when opened -->
-          {@render row({ key: 'curdb', depth: 0, glyph: '', svg: DB_FOLDER_SVG, color: 'var(--primary)', name: curDb?.name ?? selected.database ?? 'database', meta: 'current', head: true, expandable: true, onClick: () => toggle('curdb') }, curDbMenu)}
+          {@render row({ key: 'curdb', depth: 0, glyph: '', icon: 'database', color: 'var(--primary)', name: curDb?.name ?? selected.database ?? 'database', meta: 'current', head: true, expandable: true, onClick: () => toggle('curdb') }, curDbMenu)}
         {/if}
       {/if}
 
@@ -2312,6 +2500,7 @@
           key: 'file',
           depth: 0,
           glyph: '▤',
+          icon: 'database',
           color: C.schema,
           name: (selected.sqlite_mode === 'in-memory' ? ':memory:' : selected.sqlite_path.split(/[\\/]/).pop()) || 'database',
           meta: 'file',
@@ -2362,7 +2551,7 @@
           // schema-as-database systems (MySQL/MariaDB/ClickHouse) show a database
           // folder + "database" label; PG/MSSQL real schemas keep the schema glyph.
           glyph: schemaNodeIsDatabase ? '' : '▤',
-          svg: schemaNodeIsDatabase ? DB_FOLDER_SVG : undefined,
+          icon: schemaNodeIsDatabase ? 'database' : 'schema',
           color: schemaNodeIsDatabase ? C.folder : C.schema,
           name: schema.name,
           meta: explorer.isLoading(selected.id, `schema:${schema.name}`) ? '…' : schemaNodeIsDatabase ? 'database' : 'schema',
@@ -2384,7 +2573,8 @@
           {@const fnKey = `f:${schema.name}:fns`}
           {@const tvfKey = `f:${schema.name}:tvf`}
           {@const scalarKey = `f:${schema.name}:scalar`}
-          {@const tables = (sc.tables?.filter((t) => t.kind !== 'view') ?? []).filter((t) => folderMatch(tKey, t.name))}
+          <!-- Partitions are real tables on PG; they live under their parent's Partitions node, not here. -->
+          {@const tables = (sc.tables?.filter((t) => t.kind !== 'view' && !t.partition_of) ?? []).filter((t) => folderMatch(tKey, t.name))}
           {@const views = (sc.tables?.filter((t) => t.kind === 'view') ?? []).filter((t) => folderMatch(vKey, t.name))}
           {@const procs = (sc.routines?.filter((r) => r.kind === 'procedure') ?? []).filter((r) => folderMatch(pKey, r.name))}
           {@const allFns = sc.routines?.filter((r) => r.kind !== 'procedure') ?? []}
@@ -2406,6 +2596,7 @@
             key: `f:${schema.name}:tables`,
             depth: base + 1,
             glyph: '▤',
+            icon: 'table',
             color: C.folder,
             name: 'Tables',
             meta: String(tables.length),
@@ -2439,6 +2630,7 @@
                   key: `t:${schema.name}.${t.name}`,
                   depth: base + 2,
                   glyph: '▦',
+                  svg: t.is_partitioned ? PARTITIONED_TABLE_SVG : undefined,
                   color: C.table,
                   name: t.name,
                   meta: isClickhouse && t.engine ? t.engine : t.row_estimate != null && t.row_estimate > 0 ? `${t.row_estimate.toLocaleString()} rows` : '',
@@ -2454,6 +2646,21 @@
                 {#if explorer.isLoading(selected.id, `table:${schema.name}.${t.name}`)}
                   <div class="mono" style="padding-left:calc(var(--px-6) + {base + 3} * var(--px-15));font-size:var(--px-10);color:var(--muted)">loading…</div>
                 {:else if detail}
+                  <!-- Columns is a folder like Indexes / Constraints / Partitions, so a
+                       wide table does not bury them under a hundred column rows. -->
+                  {@const colsKey = `cols:${schema.name}.${t.name}`}
+                  {@render row({
+                    key: colsKey,
+                    depth: base + 3,
+                    glyph: '▤',
+                    icon: 'column',
+                    color: C.col,
+                    name: 'Columns',
+                    meta: String((detail.columns ?? []).length),
+                    expandable: true,
+                    onClick: () => toggle(colsKey),
+                  })}
+                  {#if expanded.has(colsKey)}
                   {#each detail.columns ?? [] as col (col.name)}
                     {#snippet columnMenu()}
                       <ContextMenu.Content class="w-48">
@@ -2468,7 +2675,7 @@
                     {@render row(
                       {
                         key: `col:${schema.name}.${t.name}.${col.name}`,
-                        depth: base + 3,
+                        depth: base + 4,
                         glyph: '▸',
                         color: C.col,
                         name: col.name,
@@ -2477,17 +2684,23 @@
                       columnMenu,
                     )}
                   {/each}
+                  {/if}
+                  <!-- Indexes and Constraints render even when empty: a table that
+                       really has none and one whose introspection failed used to look
+                       identical (no node at all), and there was then no way to ask the
+                       tree "what indexes does this table have?". -->
+                  {@render row({
+                    key: `i:${schema.name}.${t.name}`,
+                    depth: base + 3,
+                    glyph: '⌗',
+                    color: C.idx,
+                    name: 'Indexes',
+                    meta: detail.errors?.indexes ? 'unavailable' : String(detail.indexes?.length ?? 0),
+                    metaTitle: detail.errors?.indexes,
+                    expandable: (detail.indexes ?? []).length > 0,
+                    onClick: () => toggle(`i:${schema.name}.${t.name}`),
+                  })}
                   {#if (detail.indexes ?? []).length > 0}
-                    {@render row({
-                      key: `i:${schema.name}.${t.name}`,
-                      depth: base + 3,
-                      glyph: '⌗',
-                      color: C.idx,
-                      name: 'Indexes',
-                      meta: String(detail.indexes?.length),
-                      expandable: true,
-                      onClick: () => toggle(`i:${schema.name}.${t.name}`),
-                    })}
                     {#if expanded.has(`i:${schema.name}.${t.name}`)}
                       {#each detail.indexes ?? [] as ix (ix.name)}
                         {@render row({
@@ -2501,23 +2714,26 @@
                       {/each}
                     {/if}
                   {/if}
+                  {@render row({
+                    key: `c:${schema.name}.${t.name}`,
+                    depth: base + 3,
+                    glyph: '⌗',
+                    icon: 'constraint',
+                    color: C.idx,
+                    name: 'Constraints',
+                    meta: detail.errors?.constraints ? 'unavailable' : String(detail.constraints?.length ?? 0),
+                    metaTitle: detail.errors?.constraints,
+                    expandable: (detail.constraints ?? []).length > 0,
+                    onClick: () => toggle(`c:${schema.name}.${t.name}`),
+                  })}
                   {#if (detail.constraints ?? []).length > 0}
-                    {@render row({
-                      key: `c:${schema.name}.${t.name}`,
-                      depth: base + 3,
-                      glyph: '⌗',
-                      color: C.idx,
-                      name: 'Constraints',
-                      meta: String(detail.constraints?.length),
-                      expandable: true,
-                      onClick: () => toggle(`c:${schema.name}.${t.name}`),
-                    })}
                     {#if expanded.has(`c:${schema.name}.${t.name}`)}
                       {#each detail.constraints ?? [] as ct (ct.name)}
                         {@render row({
                           key: `ct:${schema.name}.${t.name}.${ct.name}`,
                           depth: base + 4,
                           glyph: '⌗',
+                          icon: 'constraint',
                           color: C.idx,
                           name: ct.name,
                           meta: ct.kind,
@@ -2526,38 +2742,18 @@
                     {/if}
                   {/if}
                   {#if (detail.partitions ?? []).length > 0}
-                    {@render row({
-                      key: `p:${schema.name}.${t.name}`,
+                    {@render partitionsNode({
+                      cid: selected!.id,
+                      schema: schema.name,
+                      table: t.name,
+                      parts: detail.partitions ?? [],
+                      details: sc.tableDetails,
                       depth: base + 3,
-                      glyph: '▤',
-                      color: C.part,
-                      name: 'Partitions',
-                      meta: detail.partitions?.[0]?.key ?? String(detail.partitions?.length),
-                      expandable: true,
-                      onClick: () => toggle(`p:${schema.name}.${t.name}`),
+                      system: selected!.system,
+                      partsKey: `p:${schema.name}.${t.name}`,
+                      ptPrefix: `pt:${schema.name}.${t.name}.`,
+                      database: dbForSchema(schema.name),
                     })}
-                    {#if expanded.has(`p:${schema.name}.${t.name}`)}
-                      {#each detail.partitions ?? [] as pt (pt.name)}
-                        {#snippet partitionMenu()}
-                          <ContextMenu.Content class="w-56">
-                            {#each partitionMenuItems(selected!.id, schema.name, t.name, pt, selected!.system) as it (it.label)}
-                              <ContextMenu.Item onclick={it.run}>{it.label}</ContextMenu.Item>
-                            {/each}
-                          </ContextMenu.Content>
-                        {/snippet}
-                        {@render row(
-                          {
-                            key: `pt:${schema.name}.${t.name}.${pt.name}`,
-                            depth: base + 4,
-                            glyph: '▤',
-                            color: C.part,
-                            name: pt.name,
-                            meta: partMeta(pt),
-                          },
-                          partitionMenu,
-                        )}
-                      {/each}
-                    {/if}
                   {/if}
                 {/if}
               {/if}
@@ -2616,16 +2812,30 @@
                 viewMenu,
               )}
               {#if vOpen && vDetail}
+                {@const vColsKey = `vcols:${schema.name}.${v.name}`}
+                {@render row({
+                  key: vColsKey,
+                  depth: base + 3,
+                  glyph: '▤',
+                  icon: 'column',
+                  color: C.col,
+                  name: 'Columns',
+                  meta: String((vDetail.columns ?? []).length),
+                  expandable: true,
+                  onClick: () => toggle(vColsKey),
+                })}
+                {#if expanded.has(vColsKey)}
                 {#each vDetail.columns ?? [] as col (col.name)}
                   {@render row({
                     key: `vcol:${schema.name}.${v.name}.${col.name}`,
-                    depth: base + 3,
+                    depth: base + 4,
                     glyph: '▸',
                     color: C.col,
                     name: col.name,
                     meta: `${col.data_type}${!col.nullable ? ' · NN' : ''}`,
                   })}
                 {/each}
+                {/if}
               {/if}
             {/each}
           {/if}
@@ -3012,7 +3222,7 @@
               <ContextMenu.Item variant="destructive" onclick={() => dropDatabase(db.name)}>Drop Database…</ContextMenu.Item>
             </ContextMenu.Content>
           {/snippet}
-          {@render row({ key: fkey, depth: 0, glyph: '', svg: DB_FOLDER_SVG, color: C.folder, name: db.name, meta: attaching === db.name ? 'attaching…' : 'database', head: true, expandable: true, onClick: () => toggleForeignDb(db.name) }, dbMenu)}
+          {@render row({ key: fkey, depth: 0, glyph: '', icon: 'database', color: C.folder, name: db.name, meta: attaching === db.name ? 'attaching…' : 'database', head: true, expandable: true, onClick: () => toggleForeignDb(db.name) }, dbMenu)}
           {#if expanded.has(fkey) && fcache}
             {#each fcache.schemas ?? [] as fsch (fsch.name)}
               {@const skey = `${fkey}:s:${fsch.name}`}
@@ -3044,9 +3254,9 @@
                   <ContextMenu.Item onclick={() => sub && explorer.refresh(sub, { kind: 'schema', schema: fsch.name })}>Refresh</ContextMenu.Item>
                 </ContextMenu.Content>
               {/snippet}
-              {@render row({ key: skey, depth: 1, glyph: '▤', color: C.schema, name: fsch.name, meta: 'schema', head: true, expandable: true, onClick: () => { toggle(skey); if (sub && !fsc?.tables) void explorer.loadSchemaChildren(sub, fsch.name) }, onDblClick: () => { toggle(skey); if (sub) { if (!fsc?.tables) void explorer.loadSchemaChildren(sub, fsch.name); tabs.openObjectsTab({ connId: sub, database: db.name, schema: fsch.name }) } } }, fSchemaMenu)}
+              {@render row({ key: skey, depth: 1, glyph: '▤', icon: 'schema', color: C.schema, name: fsch.name, meta: 'schema', head: true, expandable: true, onClick: () => { toggle(skey); if (sub && !fsc?.tables) void explorer.loadSchemaChildren(sub, fsch.name) }, onDblClick: () => { toggle(skey); if (sub) { if (!fsc?.tables) void explorer.loadSchemaChildren(sub, fsch.name); tabs.openObjectsTab({ connId: sub, database: db.name, schema: fsch.name }) } } }, fSchemaMenu)}
               {#if expanded.has(skey) && fsc}
-                {@const fTables = fsc.tables?.filter((t) => t.kind !== 'view') ?? []}
+                {@const fTables = fsc.tables?.filter((t) => t.kind !== 'view' && !t.partition_of) ?? []}
                 {@const fViews = fsc.tables?.filter((t) => t.kind === 'view') ?? []}
                 {@const fProcs = fsc.routines?.filter((r) => r.kind === 'procedure') ?? []}
                 {@const fFns = fsc.routines?.filter((r) => r.kind !== 'procedure') ?? []}
@@ -3121,6 +3331,7 @@
                         key: `${folderKey}:${nm}`,
                         depth: 3,
                         glyph: glyph as string,
+                        svg: fk === 't' && (it as TableInfo).is_partitioned ? PARTITIONED_TABLE_SVG : undefined,
                         color: fk === 't' ? C.table : fk === 'v' ? C.view : fk === 'tg' ? C.trig : fk === 'sq' ? C.seq : fk === 'p' ? C.proc : C.func,
                         name: nm,
                         expandable: isTblLike,
@@ -3134,6 +3345,19 @@
                         {#if explorer.isLoading(sub, `table:${fsch.name}.${nm}`)}
                           <div class="mono" style="padding-left:calc(var(--px-6) + 4 * var(--px-15));font-size:var(--px-10);color:var(--muted)">loading…</div>
                         {:else if fdetail}
+                          {@const fColsKey = `${folderKey}:${nm}:columns`}
+                          {@render row({
+                            key: fColsKey,
+                            depth: 4,
+                            glyph: '▤',
+                            icon: 'column',
+                            color: C.col,
+                            name: 'Columns',
+                            meta: String((fdetail.columns ?? []).length),
+                            expandable: true,
+                            onClick: () => toggle(fColsKey),
+                          })}
+                          {#if expanded.has(fColsKey)}
                           {#each fdetail.columns ?? [] as col (col.name)}
                             {#snippet fColMenu()}
                               <ContextMenu.Content class="w-48">
@@ -3148,7 +3372,7 @@
                             {@render row(
                               {
                                 key: `${folderKey}:${nm}:col:${col.name}`,
-                                depth: 4,
+                                depth: 5,
                                 glyph: '▸',
                                 color: C.col,
                                 name: col.name,
@@ -3157,39 +3381,70 @@
                               fColMenu,
                             )}
                           {/each}
+                          {/if}
+                          {@const fIxK = `${folderKey}:${nm}:indexes`}
+                          {@render row({
+                            key: fIxK,
+                            depth: 4,
+                            glyph: '⌗',
+                            color: C.idx,
+                            name: 'Indexes',
+                            meta: fdetail.errors?.indexes ? 'unavailable' : String(fdetail.indexes?.length ?? 0),
+                            metaTitle: fdetail.errors?.indexes,
+                            expandable: (fdetail.indexes ?? []).length > 0,
+                            onClick: () => toggle(fIxK),
+                          })}
+                          {#if expanded.has(fIxK)}
+                            {#each fdetail.indexes ?? [] as ix (ix.name)}
+                              {@render row({
+                                key: `${fIxK}:${ix.name}`,
+                                depth: 5,
+                                glyph: '⌗',
+                                color: C.idx,
+                                name: ix.name,
+                                meta: `${ix.method}${ix.unique ? ' · UNIQUE' : ''}`,
+                              })}
+                            {/each}
+                          {/if}
+                          {@const fCtK = `${folderKey}:${nm}:constraints`}
+                          {@render row({
+                            key: fCtK,
+                            depth: 4,
+                            glyph: '⌗',
+                            icon: 'constraint',
+                            color: C.idx,
+                            name: 'Constraints',
+                            meta: fdetail.errors?.constraints ? 'unavailable' : String(fdetail.constraints?.length ?? 0),
+                            metaTitle: fdetail.errors?.constraints,
+                            expandable: (fdetail.constraints ?? []).length > 0,
+                            onClick: () => toggle(fCtK),
+                          })}
+                          {#if expanded.has(fCtK)}
+                            {#each fdetail.constraints ?? [] as ct (ct.name)}
+                              {@render row({
+                                key: `${fCtK}:${ct.name}`,
+                                depth: 5,
+                                glyph: '⌗',
+                                icon: 'constraint',
+                                color: C.idx,
+                                name: ct.name,
+                                meta: ct.kind,
+                              })}
+                            {/each}
+                          {/if}
                           {#if (fdetail.partitions ?? []).length > 0}
-                            {@render row({
-                              key: `${folderKey}:${nm}:parts`,
+                            {@render partitionsNode({
+                              cid: sub!,
+                              schema: fsch.name,
+                              table: nm,
+                              parts: fdetail.partitions ?? [],
+                              details: fsc.tableDetails,
                               depth: 4,
-                              glyph: '▤',
-                              color: C.part,
-                              name: 'Partitions',
-                              meta: fdetail.partitions?.[0]?.key ?? String(fdetail.partitions?.length),
-                              expandable: true,
-                              onClick: () => toggle(`${folderKey}:${nm}:parts`),
+                              system: selected!.system,
+                              partsKey: `${folderKey}:${nm}:parts`,
+                              ptPrefix: `${folderKey}:${nm}:pt:`,
+                              database: db.name,
                             })}
-                            {#if expanded.has(`${folderKey}:${nm}:parts`)}
-                              {#each fdetail.partitions ?? [] as pt (pt.name)}
-                                {#snippet fPartitionMenu()}
-                                  <ContextMenu.Content class="w-56">
-                                    {#each partitionMenuItems(sub!, fsch.name, nm, pt, selected!.system, db.name) as it (it.label)}
-                                      <ContextMenu.Item onclick={it.run}>{it.label}</ContextMenu.Item>
-                                    {/each}
-                                  </ContextMenu.Content>
-                                {/snippet}
-                                {@render row(
-                                  {
-                                    key: `${folderKey}:${nm}:pt:${pt.name}`,
-                                    depth: 5,
-                                    glyph: '▤',
-                                    color: C.part,
-                                    name: pt.name,
-                                    meta: partMeta(pt),
-                                  },
-                                  fPartitionMenu,
-                                )}
-                              {/each}
-                            {/if}
                           {/if}
                         {/if}
                       {/if}

@@ -12,7 +12,8 @@
   import ResultPlanView from './ResultPlanView.svelte'
   import type { SubResult, TabExecution, ExplainState } from '$lib/stores/results.svelte'
   import { mapErrorToDocument } from '$lib/sql/errors'
-  import { toJson, download, csvCell, sqlLiteral } from '$lib/export/rows'
+  import { toJson, download, csvCell, sqlLiteral, CSV_BOM } from '$lib/export/rows'
+  import { toXlsx, XLSX_MIME, numericColumns, bytesToBase64 } from '$lib/export/xlsx'
   import { toXml } from '$lib/export/clipboard'
   import { exportWizard } from '$lib/stores/export.svelte'
   import { ui } from '$lib/stores/ui.svelte'
@@ -98,30 +99,35 @@
   // Export progress overlay state — a running bar so you can tell when it's done.
   let exportJob = $state<{ name: string; pct: number; rows: number; done: boolean; error?: string; path?: string } | null>(null)
 
-  const FMT_META: Record<'csv' | 'json' | 'sql' | 'xls' | 'xml', { ext: string; mime: string; label: string }> = {
+  const FMT_META: Record<'csv' | 'json' | 'sql' | 'xlsx' | 'xml', { ext: string; mime: string; label: string }> = {
     csv: { ext: 'csv', mime: 'text/csv', label: 'CSV' },
     json: { ext: 'json', mime: 'application/json', label: 'JSON' },
     sql: { ext: 'sql', mime: 'text/plain', label: 'SQL' },
-    xls: { ext: 'xls', mime: 'application/vnd.ms-excel', label: 'Excel' },
+    xlsx: { ext: 'xlsx', mime: XLSX_MIME, label: 'Excel' },
     xml: { ext: 'xml', mime: 'application/xml', label: 'XML' },
   }
-
-  const xmlEsc = (v: unknown) =>
-    v == null ? '' : String(typeof v === 'object' ? JSON.stringify(v) : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
   // Serialize rows in chunks, reporting progress so the bar animates (and the UI
   // stays responsive on large results). Reuses the pure csvCell/sqlLiteral escapers.
   async function serialize(
-    fmt: 'csv' | 'json' | 'sql' | 'xls' | 'xml',
+    fmt: 'csv' | 'json' | 'sql' | 'xlsx' | 'xml',
     headers: string[],
     rows: Record<string, unknown>[],
     onProgress: (done: number) => void,
-  ): Promise<string> {
+    colTypes: [string, string][] = [],
+  ): Promise<string | Uint8Array> {
     // XML reuses the shared toXml (identical to "Copy as XML") — synchronous, fine
     // for the in-memory result set.
     if (fmt === 'xml') {
       onProgress(1)
       return toXml(headers, rows)
+    }
+    // Excel = a real .xlsx workbook; numeric columns are written as numbers.
+    if (fmt === 'xlsx') {
+      onProgress(0.5)
+      const bytes = await toXlsx(headers, rows, { sheet: 'result', numericCols: numericColumns(colTypes) })
+      onProgress(1)
+      return bytes
     }
     const CHUNK = 1000
     const n = rows.length
@@ -131,27 +137,25 @@
       for (const r of rows.slice(i, i + CHUNK)) {
         if (fmt === 'csv') parts.push(headers.map((h) => csvCell(r[h])).join(','))
         else if (fmt === 'json') parts.push('  ' + JSON.stringify(r))
-        else if (fmt === 'sql') parts.push(`INSERT INTO "result" (${cols}) VALUES (${headers.map((h) => sqlLiteral(r[h])).join(', ')});`)
-        else parts.push(`<tr>${headers.map((h) => `<td>${xmlEsc(r[h])}</td>`).join('')}</tr>`)
+        else parts.push(`INSERT INTO "result" (${cols}) VALUES (${headers.map((h) => sqlLiteral(r[h])).join(', ')});`)
       }
       onProgress(n ? Math.min(1, (i + CHUNK) / n) : 1)
       await new Promise((res) => setTimeout(res, 0)) // yield → bar animates + UI responsive
     }
     onProgress(1)
     if (fmt === 'csv') {
-      const head = headers.map(csvCell).join(',')
+      // CSV UTF-8 with BOM — Excel reads Vietnamese/CJK correctly only with it.
+      const head = CSV_BOM + headers.map(csvCell).join(',')
       return parts.length ? `${head}\n${parts.join('\n')}` : head
     }
     if (fmt === 'json') return `[\n${parts.join(',\n')}\n]`
-    if (fmt === 'sql') return parts.join('\n')
-    const th = headers.map((h) => `<th>${xmlEsc(h)}</th>`).join('')
-    return `<html><head><meta charset="utf-8"></head><body><table border="1"><thead><tr>${th}</tr></thead><tbody>${parts.join('')}</tbody></table></body></html>`
+    return parts.join('\n')
   }
 
   // Export the current result: pick a destination (native save dialog in the
   // desktop app; browser download otherwise), serialize with a progress bar,
   // write to disk, and report completion.
-  async function doExport(fmt: 'csv' | 'json' | 'sql' | 'xls' | 'xml') {
+  async function doExport(fmt: 'csv' | 'json' | 'sql' | 'xlsx' | 'xml') {
     exportOpen = false
     const r = activeResult?.kind === 'rows' ? activeResult.result : undefined
     if (!r) return
@@ -177,9 +181,10 @@
     try {
       const content = await serialize(fmt, headers, rows, (done) => {
         if (exportJob) exportJob.pct = Math.round(done * 90)
-      })
+      }, r.cols as [string, string][])
       if (IS_TAURI && savePath) {
-        await ipc.writeTextFile(savePath, content)
+        if (typeof content === 'string') await ipc.writeTextFile(savePath, content)
+        else await ipc.writeFileBase64(savePath, bytesToBase64(content))
       } else {
         download(filename, content, meta.mime)
       }
@@ -205,7 +210,7 @@
     exportOpen = false
     const r = activeResult?.kind === 'rows' ? activeResult.result : undefined
     if (!r) return
-    exportWizard.showResult(connId ?? '', r.cols.map((c) => c[0]), r.rows as Record<string, unknown>[])
+    exportWizard.showResult(connId ?? '', r.cols.map((c) => c[0]), r.rows as Record<string, unknown>[], r.cols as [string, string][])
   }
 
   const MESSAGES = -1
@@ -346,8 +351,8 @@
           <!-- click-outside backdrop: closes the Export menu (dropdown = close on outside click) -->
           <div role="presentation" style="position:fixed;inset:0;z-index:19" onclick={() => (exportOpen = false)}></div>
           <div style="position:absolute;right:0;top:calc(100% + var(--px-4));z-index:20;background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-8);box-shadow:0 var(--px-8) var(--px-24) rgba(0,0,0,.4);overflow:hidden;min-width:var(--px-120)">
-            {#each [['csv', 'CSV'], ['json', 'JSON'], ['sql', 'SQL INSERT'], ['xls', 'Excel (.xls)'], ['xml', 'XML']] as [fmt, label] (fmt)}
-              <div class="exp-item" onclick={() => doExport(fmt as 'csv' | 'json' | 'sql' | 'xls' | 'xml')} onkeydown={(e) => e.key === 'Enter' && doExport(fmt as 'csv' | 'json' | 'sql' | 'xls' | 'xml')} role="button" tabindex="0" style="padding:var(--px-7) var(--px-12);font-size:var(--px-12);cursor:pointer;color:var(--text2)">{label}</div>
+            {#each [['csv', 'CSV'], ['json', 'JSON'], ['sql', 'SQL INSERT'], ['xlsx', 'Excel (.xlsx)'], ['xml', 'XML']] as [fmt, label] (fmt)}
+              <div class="exp-item" onclick={() => doExport(fmt as 'csv' | 'json' | 'sql' | 'xlsx' | 'xml')} onkeydown={(e) => e.key === 'Enter' && doExport(fmt as 'csv' | 'json' | 'sql' | 'xlsx' | 'xml')} role="button" tabindex="0" style="padding:var(--px-7) var(--px-12);font-size:var(--px-12);cursor:pointer;color:var(--text2)">{label}</div>
             {/each}
             <div class="exp-item" onclick={openExportWizard} onkeydown={(e) => e.key === 'Enter' && openExportWizard()} role="button" tabindex="0" style="padding:var(--px-7) var(--px-12);font-size:var(--px-12);cursor:pointer;color:var(--text2);border-top:var(--px-1) solid var(--border)">Custom… (columns/limit)</div>
           </div>

@@ -245,3 +245,95 @@ describe('supportsPartitioning', () => {
     expect(supportsPartitioning('cassandra')).toBe(false)
   })
 })
+
+// Oracle — named partitions like MySQL, but its own grammar: LIST bounds have no
+// IN keyword, maintenance is ALTER TABLE … PARTITION, and an existing table is
+// repartitioned in place with MODIFY … ONLINE (no rename/copy dance).
+describe('Oracle partitioning', () => {
+  it('partitionOps: truncate + rebuild indexes always, DROP only for RANGE/LIST', () => {
+    const range = partitionOps('oracle', 'APP', 'EVENTS', { name: 'P2024', method: 'RANGE' })
+    expect(range.map((o) => o.label)).toEqual([
+      'Truncate partition',
+      'Rebuild unusable indexes',
+      'Drop partition',
+    ])
+    expect(range[0].sql).toBe('ALTER TABLE "APP"."EVENTS" TRUNCATE PARTITION "P2024";')
+    expect(range[0].danger).toBe(true)
+    expect(range[1].sql).toBe(
+      'ALTER TABLE "APP"."EVENTS" MODIFY PARTITION "P2024" REBUILD UNUSABLE LOCAL INDEXES;',
+    )
+    expect(range[2].sql).toBe('ALTER TABLE "APP"."EVENTS" DROP PARTITION "P2024";')
+
+    const hash = partitionOps('oracle', 'APP', 'EVENTS', { name: 'P0', method: 'HASH' })
+    expect(hash.some((o) => o.label === 'Drop partition')).toBe(false)
+  })
+
+  it('buildPartitionCreate: inline PARTITION BY inside CREATE TABLE (no pre/post)', () => {
+    const r = buildPartitionCreate('oracle', 'APP', 'EVENTS', {
+      strategy: 'RANGE',
+      columns: ['CREATED_AT'],
+      partitions: [{ name: 'P2024', bound: "DATE '2025-01-01'" }],
+    })
+    expect(r.clause).toBe(
+      'PARTITION BY RANGE ("CREATED_AT") (\n  PARTITION "P2024" VALUES LESS THAN (DATE \'2025-01-01\')\n)',
+    )
+    expect(r.pre).toEqual([])
+    expect(r.post).toEqual([])
+    expect(r.warnings).toEqual([])
+  })
+
+  it('buildPartitionCreate: LIST uses VALUES (…) — Oracle has no VALUES IN', () => {
+    const r = buildPartitionCreate('oracle', 'APP', 'EVENTS', {
+      strategy: 'LIST',
+      columns: ['REGION'],
+      partitions: [{ name: 'P_EU', bound: "'EU'" }],
+    })
+    expect(r.clause).toContain('PARTITION "P_EU" VALUES (\'EU\')')
+    expect(r.clause).not.toContain('VALUES IN')
+  })
+
+  it('buildPartitionCreate: HASH emits PARTITIONS n', () => {
+    const r = buildPartitionCreate('oracle', 'APP', 'EVENTS', {
+      strategy: 'HASH',
+      columns: ['ID'],
+      hashCount: 4,
+    })
+    expect(r.clause).toBe('PARTITION BY HASH ("ID")\nPARTITIONS 4')
+  })
+
+  it('buildAddPartition: ALTER TABLE … ADD PARTITION (RANGE and LIST forms)', () => {
+    expect(
+      buildAddPartition('oracle', 'APP', 'EVENTS', 'RANGE', { name: 'P2026', bound: "DATE '2027-01-01'" }).sql,
+    ).toBe('ALTER TABLE "APP"."EVENTS" ADD PARTITION "P2026" VALUES LESS THAN (DATE \'2027-01-01\');')
+    expect(buildAddPartition('oracle', 'APP', 'EVENTS', 'LIST', { name: 'P_US', bound: "'US'" }).sql).toBe(
+      'ALTER TABLE "APP"."EVENTS" ADD PARTITION "P_US" VALUES (\'US\');',
+    )
+  })
+
+  it('buildConvertToPartitioned: in-place MODIFY … ONLINE, nothing is dropped', () => {
+    const r = buildConvertToPartitioned('oracle', 'APP', 'EVENTS', {
+      strategy: 'RANGE',
+      columns: ['CREATED_AT'],
+      partitions: [{ name: 'P2024', bound: "DATE '2025-01-01'" }],
+    })
+    expect(r.pre).toEqual([])
+    expect(r.post).toHaveLength(1)
+    expect(r.post[0]).toContain('ALTER TABLE "APP"."EVENTS"')
+    expect(r.post[0]).toContain('MODIFY')
+    expect(r.post[0]).toContain('PARTITION BY RANGE ("CREATED_AT")')
+    expect(r.post[0].trimEnd().endsWith('ONLINE;')).toBe(true)
+    // unlike PG/ClickHouse this never renames or drops the original table
+    expect(r.post.join(' ')).not.toMatch(/DROP TABLE|RENAME/)
+    expect(r.warnings.join(' ')).toMatch(/12cR2/)
+  })
+
+  it('addPartitionTemplate: editable ADD PARTITION skeleton', () => {
+    const t = addPartitionTemplate('oracle', 'APP', 'EVENTS')
+    expect(t).toContain('ALTER TABLE "APP"."EVENTS" ADD PARTITION pNEW VALUES LESS THAN (...)')
+  })
+
+  it('is gated in by both designer capability checks', () => {
+    expect(supportsPartitioning('oracle')).toBe(true)
+    expect(canConvertToPartitioned('oracle')).toBe(true)
+  })
+})

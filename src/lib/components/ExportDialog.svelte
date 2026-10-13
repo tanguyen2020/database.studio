@@ -10,18 +10,20 @@
   import { connections } from '$lib/stores/connections.svelte'
   import { settings } from '$lib/stores/settings.svelte'
   import { toasts } from '$lib/stores/toast.svelte'
-  import { toCsv, toJson, toSqlInsert, toExcelHtml, download } from '$lib/export/rows'
+  import { toCsv, toJson, toSqlInsert, withBom, download } from '$lib/export/rows'
+  import { toXlsx, XLSX_MIME, numericColumns, bytesToBase64 } from '$lib/export/xlsx'
   import { toXml } from '$lib/export/clipboard'
   import { buildExportSelect, supportsOffset } from '$lib/export/query'
   import { save as saveFileDialog } from '@tauri-apps/plugin-dialog'
 
-  type Fmt = 'csv' | 'json' | 'sql' | 'xls' | 'xml'
-  const EXT: Record<Fmt, string> = { csv: 'csv', json: 'json', sql: 'sql', xls: 'xls', xml: 'xml' }
+  type Fmt = 'csv' | 'json' | 'sql' | 'xlsx' | 'xml'
+  const EXT: Record<Fmt, string> = { csv: 'csv', json: 'json', sql: 'sql', xlsx: 'xlsx', xml: 'xml' }
+  const LABEL: Record<Fmt, string> = { csv: 'CSV', json: 'JSON', sql: 'SQL', xlsx: 'Excel (.xlsx)', xml: 'XML' }
   const MIME: Record<Fmt, string> = {
     csv: 'text/csv',
     json: 'application/json',
     sql: 'text/plain',
-    xls: 'application/vnd.ms-excel',
+    xlsx: XLSX_MIME,
     xml: 'application/xml',
   }
   const PAGE = 5000
@@ -83,12 +85,19 @@
     cols = cols.includes(c) ? cols.filter((x) => x !== c) : [...cols, c]
   }
 
-  function serialize(headers: string[], rows: Record<string, unknown>[]): string {
-    if (format === 'csv') return toCsv(headers, rows)
+  // [name, type] of the exported columns → numeric ones become Excel numbers.
+  const colTypes = $derived.by((): [string, string][] => {
+    if (exportWizard.mode === 'result') return exportWizard.resultCols
+    return (cache?.bySchema[exportWizard.schema]?.tableDetails[exportWizard.table]?.columns ?? []).map((c) => [c.name, c.data_type])
+  })
+
+  async function serialize(headers: string[], rows: Record<string, unknown>[]): Promise<string | Uint8Array> {
+    // CSV UTF-8 with BOM — Excel reads Vietnamese/CJK correctly only with it.
+    if (format === 'csv') return withBom(toCsv(headers, rows))
+    if (format === 'xlsx') return toXlsx(headers, rows, { sheet: exportWizard.table || 'Sheet1', numericCols: numericColumns(colTypes) })
     if (format === 'json') return toJson(rows.map((r) => Object.fromEntries(headers.map((h) => [h, r[h]]))))
     if (format === 'sql') return toSqlInsert(exportWizard.table || 'export', headers, rows)
-    if (format === 'xml') return toXml(headers, rows)
-    return toExcelHtml(headers, rows)
+    return toXml(headers, rows)
   }
 
   async function fetchTableRows(headers: string[]): Promise<Record<string, unknown>[] | null> {
@@ -187,9 +196,19 @@
         rows = await fetchTableRows(headers)
       }
       if (rows === null) return // error already set
-      const content = serialize(headers, rows)
-      download(filename, content, MIME[format])
-      result = `✓ exported ${rows.length} rows → ${filename}`
+      const content = await serialize(headers, rows)
+      let dest = filename
+      if (IS_TAURI) {
+        // A real Save dialog: WebView2 can't do an <a download> of a binary blob.
+        const path = await saveFileDialog({ defaultPath: filename, filters: [{ name: LABEL[format], extensions: [EXT[format]] }] })
+        if (!path) return
+        if (typeof content === 'string') await ipc.writeTextFile(path, content)
+        else await ipc.writeFileBase64(path, bytesToBase64(content))
+        dest = path
+      } else {
+        download(filename, content, MIME[format])
+      }
+      result = `✓ exported ${rows.length} rows → ${dest}`
       toasts.success(result)
     } catch (e) {
       result = `✗ ${e}`
@@ -211,8 +230,8 @@
         <!-- format -->
         <div style="display:flex;gap:var(--px-14);font-size:var(--px-12);color:var(--text2);align-items:center">
           Format
-          {#each ['csv', 'json', 'sql', 'xls', 'xml'] as const as f (f)}
-            <label style="display:flex;align-items:center;gap:var(--px-5);cursor:pointer"><input type="radio" name="expfmt" checked={format === f} onchange={() => setFormat(f)} /> {f.toUpperCase()}</label>
+          {#each ['csv', 'json', 'sql', 'xlsx', 'xml'] as const as f (f)}
+            <label style="display:flex;align-items:center;gap:var(--px-5);cursor:pointer"><input type="radio" name="expfmt" checked={format === f} onchange={() => setFormat(f)} /> {LABEL[f]}</label>
           {/each}
         </div>
         <!-- columns -->

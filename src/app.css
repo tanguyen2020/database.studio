@@ -85,6 +85,7 @@
    * enum/meta columns, a warm monospace tone for subjects, and a number that only
    * turns red when there IS a backlog. LIGHT = GitHub Primer light; the .dark block
    * below swaps in Primer dark. Token-exempt literals, same pattern as --sacc-*. */
+  --badge-part: #b45309; /* token-exempt: partitioned-table "P" badge — same deep amber in both themes so the white glyph stays readable */
   --tbl-link: #0550ae; /* token-exempt: data-table identifier (link) */
   --tbl-head: #1f2328; /* token-exempt: data-table header text */
   --tbl-meta: #57606a; /* token-exempt: data-table enum/meta column */

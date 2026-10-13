@@ -898,6 +898,8 @@ impl MongoDriver {
                         locked: false,
                         engine: None,
                         data_length: None,
+                        partition_of: None,
+                        is_partitioned: None,
                     });
                 }
             }

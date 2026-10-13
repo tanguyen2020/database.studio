@@ -20,6 +20,10 @@ export interface TableDetail {
   indexes?: IndexInfo[]
   constraints?: ConstraintInfo[]
   partitions?: PartitionInfo[]
+  /** Why a part of the detail is missing. allSettled keeps the parts that loaded,
+   *  but an empty list and a failed query look identical in the tree — the node
+   *  would just vanish. Keep the reason so it can be shown instead. */
+  errors?: { columns?: string; indexes?: string; constraints?: string; partitions?: string }
 }
 
 export interface SchemaCache {
@@ -138,14 +142,22 @@ class ExplorerStore {
     return this.cache[connId]?.loading.has(key) ?? false
   }
 
-  private async track<T>(connId: string, key: string, work: () => Promise<T>): Promise<T | null> {
+  private async track<T>(
+    connId: string,
+    key: string,
+    work: () => Promise<T>,
+    /** Keep the failure out of `c.error`. The tree swaps the WHOLE subtree for that
+     *  message, which is right for "could not list schemas" and badly wrong for one
+     *  table whose indexes are not readable — that used to blank the Explorer. */
+    quiet = false,
+  ): Promise<T | null> {
     const c = this.conn(connId)
     c.loading = new Set([...c.loading, key])
-    c.error = undefined
+    if (!quiet) c.error = undefined
     try {
       return await work()
     } catch (e) {
-      c.error = String(e)
+      if (!quiet) c.error = String(e)
       return null
     } finally {
       const next = new Set(c.loading)
@@ -227,24 +239,49 @@ class ExplorerStore {
 
   private async loadTableDetailNow(connId: string, schema: string, table: string) {
     const sc = this.schema(connId, schema)
-    await this.track(connId, `table:${schema}.${table}`, async () => {
+    await this.track(
+      connId,
+      `table:${schema}.${table}`,
+      async () => {
       // allSettled, NOT Promise.all: index/constraint introspection can fail on some
       // engines/servers, and Promise.all would then discard the columns that loaded
       // fine — so a table would expand to nothing. Columns are what matter most; keep
       // them even when indexes/constraints error (item 4 — columns for every engine).
+      // Each call is wrapped so a transport that throws SYNCHRONOUSLY still lands in
+      // allSettled instead of escaping it and failing the whole load. The call itself
+      // stays synchronous — deferring it to a microtask would break the request
+      // coalescing above, which counts on the fetch starting before the first await.
+      const settle = <T>(f: () => Promise<T>): Promise<T> => {
+        try {
+          return f()
+        } catch (e) {
+          return Promise.reject(e)
+        }
+      }
       const [colsR, idxR, consR, partR] = await Promise.allSettled([
-        ipc.listColumns(connId, schema, table),
-        ipc.listIndexes(connId, schema, table),
-        ipc.listConstraints(connId, schema, table),
-        ipc.listPartitions(connId, schema, table),
+        settle(() => ipc.listColumns(connId, schema, table)),
+        settle(() => ipc.listIndexes(connId, schema, table)),
+        settle(() => ipc.listConstraints(connId, schema, table)),
+        settle(() => ipc.listPartitions(connId, schema, table)),
       ])
+      const why = (r: PromiseSettledResult<unknown>) =>
+        r.status === 'rejected' ? String((r.reason as Error)?.message ?? r.reason) : undefined
+      const errors = {
+        columns: why(colsR),
+        indexes: why(idxR),
+        constraints: why(consR),
+        partitions: why(partR),
+      }
       sc.tableDetails[table] = {
         columns: colsR.status === 'fulfilled' ? colsR.value : [],
         indexes: idxR.status === 'fulfilled' ? idxR.value : [],
         constraints: consR.status === 'fulfilled' ? consR.value : [],
         partitions: partR.status === 'fulfilled' ? partR.value : [],
+        errors: Object.values(errors).some(Boolean) ? errors : undefined,
       }
-    })
+      },
+      true,
+    )
   }
 
   /** Refresh a single node without touching siblings. */

@@ -227,11 +227,11 @@
       role="dialog"
       aria-label={isNew ? 'New connection' : draft.name}
       tabindex="-1"
-      style="width:var(--px-840);max-width:94vw;height:var(--px-560);max-height:90vh;background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-16);box-shadow:0 var(--px-30) var(--px-70) var(--rgba-0-0-0-_55);overflow:hidden;display:flex"
+      style="width:var(--px-840);max-width:94vw;max-height:90vh;background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-16);box-shadow:0 var(--px-30) var(--px-70) var(--rgba-0-0-0-_55);overflow:hidden;display:flex"
     >
-      <div style="flex:1;display:flex;flex-direction:column;min-width:0">
+      <div style="flex:1;display:flex;flex-direction:column;min-width:0;min-height:0">
         <!-- header — port dòng 2173-2181 -->
-        <div style="display:flex;align-items:center;gap:var(--px-10);padding:var(--px-16) var(--px-20);border-bottom:var(--px-1) solid var(--border)">
+        <div style="flex:none;display:flex;align-items:center;gap:var(--px-10);padding:var(--px-16) var(--px-20);border-bottom:var(--px-1) solid var(--border)">
           {#if isNew}
             <span
               onclick={backToPicker}
@@ -255,14 +255,16 @@
           >×</span>
         </div>
 
-        <!-- body — port dòng 2182-2261 -->
-        <div style="flex:1;overflow:auto;padding:var(--px-18) var(--px-20)">
+        <!-- body — port dòng 2182-2261. The panel sizes to its content (no fixed
+             height); past 90vh only this body scrolls, header/footer stay put. -->
+        <div style="flex:1 1 auto;min-height:0;overflow:auto;padding:var(--px-18) var(--px-20)">
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--px-14)">
-            <div style="grid-column:1/3">
+            <!-- row 1: name | environment -->
+            <div>
               <div class="cm-label">Connection name</div>
               <input class="cm-input" bind:value={draft.name} />
             </div>
-            <div style="grid-column:1/3">
+            <div>
               <div class="cm-label">Environment</div>
               <select class="cm-input" bind:value={draft.env}>
                 <option value="production">Production</option>
@@ -334,37 +336,6 @@
               </div>
             </div>
 
-            <!-- database — port dòng 2205-2207 (Redis: DB index 0–15; NATS/Kafka: ẩn) -->
-            <div style={isNats || isKafka ? 'display:none' : ''}>
-              {#if isRedis}
-                <div class="cm-label">DB Index</div>
-                <select class="cm-input" bind:value={draft.database}>
-                  {#each Array.from({ length: 16 }, (_, i) => String(i)) as n (n)}
-                    <option value={n}>{n}</option>
-                  {/each}
-                </select>
-              {:else if isOracle}
-                <!-- Oracle connects by service name (default) or SID; the value goes
-                     in `database` and the kind is stored in `mssql_auth` (reused). -->
-                <div class="cm-label">{draft.mssql_auth === 'sid' ? 'SID' : 'Service name'}</div>
-                <input class="cm-input mono" bind:value={draft.database} placeholder={dbPlaceholder} />
-              {:else}
-                <div class="cm-label">Database</div>
-                <input class="cm-input mono" bind:value={draft.database} placeholder={dbPlaceholder} />
-              {/if}
-            </div>
-
-            {#if isOracle}
-              <!-- Oracle connect kind (reuses mssql_auth): Service Name vs SID. -->
-              <div>
-                <div class="cm-label">Connect by</div>
-                <select class="cm-input" bind:value={draft.mssql_auth}>
-                  <option value="">Service Name</option>
-                  <option value="sid">SID</option>
-                </select>
-              </div>
-            {/if}
-
             {#if isKafka}
               <!-- Kafka SASL mechanism (tái dùng field mssql_auth làm auth mode) -->
               <div style="grid-column:1/3">
@@ -418,33 +389,72 @@
               </div>
             {/if}
 
-            {#if authShowUser && !isRedis}
-              <div>
-                <div class="cm-label">User</div>
-                <input class="cm-input mono" bind:value={draft.user} />
-              </div>
-            {/if}
-            {#if authShowPass}
-              <!-- port dòng 2215-2217: label xanh AES-256; input thật thay div dots -->
-              <div style="grid-column:1/3">
-                <div class="cm-label">
-                  Password <span style="color:var(--hex-27ae60)">· AES-256 encrypted</span>
-                  {#if !isNew && draft.has_password && !passwordTouched}
-                    <span style="color:var(--muted);font-weight:400">(saved — type to change)</span>
+            <!-- credentials row: [Connect by (Oracle)] · Database · User · Password —
+                 one row, as many equal columns as fields this engine shows. Kept after
+                 the engine-specific blocks (MSSQL auth, Kafka SASL…) that decide
+                 whether User / Password appear at all. -->
+            <div class="cm-cred-row">
+              {#if isOracle}
+                <!-- Oracle connect kind (reuses mssql_auth): Service Name vs SID. -->
+                <div>
+                  <div class="cm-label">Connect by</div>
+                  <select class="cm-input" bind:value={draft.mssql_auth}>
+                    <option value="">Service Name</option>
+                    <option value="sid">SID</option>
+                  </select>
+                </div>
+              {/if}
+
+              <!-- database — port dòng 2205-2207 (Redis: DB index 0–15; NATS/Kafka: ẩn) -->
+              {#if !isNats && !isKafka}
+                <div>
+                  {#if isRedis}
+                    <div class="cm-label">DB Index</div>
+                    <select class="cm-input" bind:value={draft.database}>
+                      {#each Array.from({ length: 16 }, (_, i) => String(i)) as n (n)}
+                        <option value={n}>{n}</option>
+                      {/each}
+                    </select>
+                  {:else if isOracle}
+                    <!-- Oracle connects by service name (default) or SID; the value goes
+                         in `database` and the kind is stored in `mssql_auth` (reused). -->
+                    <div class="cm-label">{draft.mssql_auth === 'sid' ? 'SID' : 'Service name'}</div>
+                    <input class="cm-input mono" bind:value={draft.database} placeholder={dbPlaceholder} />
+                  {:else}
+                    <div class="cm-label">Database</div>
+                    <input class="cm-input mono" bind:value={draft.database} placeholder={dbPlaceholder} />
                   {/if}
                 </div>
-                <input
-                  class="cm-input mono"
-                  type="password"
-                  value={password}
-                  placeholder={!isNew && draft.has_password ? '••••••••••••' : ''}
-                  oninput={(e) => {
-                    password = e.currentTarget.value
-                    passwordTouched = true
-                  }}
-                />
-              </div>
-            {/if}
+              {/if}
+              {#if authShowUser && !isRedis}
+                <div>
+                  <div class="cm-label">User</div>
+                  <input class="cm-input mono" bind:value={draft.user} />
+                </div>
+              {/if}
+              {#if authShowPass}
+                <!-- port dòng 2215-2217: label xanh AES-256; input thật thay div dots -->
+                <div>
+                  <div class="cm-label">
+                    Password <span style="color:var(--hex-27ae60)">· AES-256 encrypted</span>
+                    {#if !isNew && draft.has_password && !passwordTouched}
+                      <span style="color:var(--muted);font-weight:400">(saved — type to change)</span>
+                    {/if}
+                  </div>
+                  <input
+                    class="cm-input mono"
+                    type="password"
+                    value={password}
+                    placeholder={!isNew && draft.has_password ? '••••••••••••' : ''}
+                    oninput={(e) => {
+                      password = e.currentTarget.value
+                      passwordTouched = true
+                    }}
+                  />
+                </div>
+              {/if}
+            </div>
+
             {#if authWindows}
               <!-- port dòng 2218-2220 -->
               <div style="grid-column:1/3;font-size:var(--px-11_5);color:var(--muted);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-8);padding:var(--px-9) var(--px-11)">
@@ -640,6 +650,16 @@
 {/if}
 
 <style>
+  /* Database · User · Password on one row: one equal column per visible field,
+     inputs aligned on the bottom edge even when a label wraps. */
+  .cm-cred-row {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(0, 1fr);
+    gap: var(--px-14);
+    align-items: end;
+  }
   /* input chuẩn của form — port style inline lặp lại ở dòng 2184+ */
   .cm-label {
     font-size: var(--px-11);
@@ -657,6 +677,12 @@
     color: var(--text);
     outline: none;
     font-family: inherit;
+  }
+  /* a <select> renders 2px taller than an <input> at the same padding — trim it so
+     fields sharing a row (Name | Environment, Connect by · Service name…) line up. */
+  select.cm-input {
+    padding-top: var(--px-8);
+    padding-bottom: var(--px-8);
   }
   /* input trong SSH panel — nền --bg, padding 8px 11px (dòng 2232+) */
   .cm-input-ssh {

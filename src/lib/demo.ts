@@ -360,6 +360,22 @@ function bigSchemaSize(): number {
   if (bigSchemaN === null) bigSchemaN = bigParam('bigSchema')
   return bigSchemaN
 }
+/** `?emptyTable=1` (demo/browser only): Open Data lands on a table that holds NO
+ *  rows. The columns must still reach the grid — the drivers used to read the
+ *  headers off the first row, so an empty table came back with `cols: []` and the
+ *  viewer rendered nothing but the row-number gutter. Inert without the parameter. */
+function emptyTableMode(): boolean {
+  if (typeof window === 'undefined') return false
+  return new URLSearchParams(window.location.search).get('emptyTable') === '1'
+}
+/** `?indexesFail=1` (demo/browser only): index introspection errors, the way a
+ *  locked-down server does. An empty list and a failed query used to look identical
+ *  in the tree (the node simply vanished), so the tree has to keep showing Indexes
+ *  and say WHY it is empty. Inert without the parameter. */
+function indexesFail(): boolean {
+  if (typeof window === 'undefined') return false
+  return new URLSearchParams(window.location.search).get('indexesFail') === '1'
+}
 /** Test seam (demo/browser only): pretend the SERVER gained an object while the app
  *  was showing the old tree. `window.__demoExtraTable` / `__demoExtraSchema` are set
  *  mid-test, so a Refresh has something new to discover — otherwise a re-read is
@@ -502,7 +518,10 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
       return ok([
         { name: 'students', kind: 'table', row_estimate: 3842, locked: false, engine: 'MergeTree', data_length: 1114112 },
         { name: 'courses', kind: 'table', row_estimate: 214, locked: false, engine: 'ReplacingMergeTree', data_length: 65536 },
-        { name: 'enrollments', kind: 'table', row_estimate: 12480, locked: false, engine: 'MergeTree', data_length: 3686400 },
+        { name: 'enrollments', kind: 'table', row_estimate: 12480, locked: false, engine: 'MergeTree', data_length: 3686400, is_partitioned: true },
+        // A PG partition is a real table: the list carries it (autocomplete, Generate
+        // Scripts, Schema Compare read this), the tree/Objects tab hide it under its parent.
+        { name: 'enrollments_2024', kind: 'table', row_estimate: 4120, locked: false, partition_of: 'enrollments', data_length: 1245184 },
         // reserved/keyword-named tables — autocomplete must quote them per dialect.
         // `schedule` is a keyword only in MySQL/MariaDB; `order` is reserved in
         // every engine (PG/SQLite "order", MySQL/MariaDB/CH `order`, MSSQL [order]).
@@ -533,7 +552,7 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
       // enrollments holds FKs (student_id, course_id) referencing students.id /
       // courses.id. Other tables keep the generic demo shape.
       const colTable = String(args?.table ?? '')
-      if (colTable === 'enrollments')
+      if (colTable === 'enrollments' || colTable.startsWith('enrollments_'))
         return ok([
           { name: 'id', data_type: 'int4', nullable: false, default: null, is_pk: true, is_fk: false, auto_increment: true },
           { name: 'student_id', data_type: 'int4', nullable: false, default: null, is_pk: false, is_fk: true },
@@ -779,6 +798,7 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
         { name: 'fk_enrollments_course', from_table: 'enrollments', from_column: 'course_id', to_table: 'courses', to_column: 'id' },
       ])
     case 'list_indexes':
+      if (indexesFail()) throw new Error('permission denied for relation pg_index')
       return ok([
         { name: 'students_pkey', method: 'btree', columns: ['id'], unique: true, primary: true },
         { name: 'idx_students_gpa', method: 'btree', columns: ['gpa'], unique: false, primary: false },
@@ -935,9 +955,11 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
           duration_ms: 7,
         })
       }
-      // Table Data Viewer footer: a plain COUNT(*) → a fixed demo total.
+      // Table Data Viewer footer: a plain COUNT(*) → a fixed demo total (0 rows
+      // under ?emptyTable=1, so the footer agrees with the empty grid).
       if (/^\s*SELECT\s+COUNT\(\*\)/i.test(stmtSql)) {
-        return ok({ ok: true, result: { cols: [['c', 'int8']], rows: [{ c: 3842 }], total: 1 }, duration_ms: 4 })
+        const c = emptyTableMode() ? 0 : 3842
+        return ok({ ok: true, result: { cols: [['c', 'int8']], rows: [{ c }], total: 1 }, duration_ms: 4 })
       }
       // New Database dialog — charset/collation lists read from the server. Each
       // branch mirrors the shape of the real catalog query in sql/database-options.ts.
@@ -1046,16 +1068,19 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
       // Table Data Viewer (editable grid). Carries the two shapes a JSON cell can
       // arrive in, so the JSON editor is exercised on the real path: a decoded
       // document in a json column, and a document stored in a text column.
+      const viewerCols: [string, string][] = [
+        ['id', 'int4'],
+        ['first_name', 'varchar'],
+        ['gpa', 'numeric'],
+        ['config', 'jsonb'],
+        ['prefs_text', 'nvarchar'],
+      ]
+      // A table with no rows still reports its columns (see emptyTableMode).
+      if (emptyTableMode()) return ok({ ok: true, result: { cols: viewerCols, rows: [], total: 0 }, duration_ms: 4 })
       return ok({
         ok: true,
         result: {
-          cols: [
-            ['id', 'int4'],
-            ['first_name', 'varchar'],
-            ['gpa', 'numeric'],
-            ['config', 'jsonb'],
-            ['prefs_text', 'nvarchar'],
-          ] as [string, string][],
+          cols: viewerCols,
           rows: [
             { id: 1, first_name: 'An', gpa: 3.9, config: { theme: 'dark', tags: ['a', 'b'] }, prefs_text: '{"lang":"vi"}' },
             { id: 2, first_name: 'Binh', gpa: 3.7, config: { theme: 'light', tags: [] }, prefs_text: '{"lang":"en"}' },

@@ -10,6 +10,8 @@ class ExportStore {
   // result-mode payload (materialized rows already in the client)
   resultHeaders = $state<string[]>([])
   resultRows = $state<Record<string, unknown>[]>([])
+  /** [name, type] of the result columns — lets Excel export write numbers as numbers. */
+  resultCols = $state<[string, string][]>([])
 
   showTable(connId: string, schema: string, table: string) {
     this.mode = 'table'
@@ -18,16 +20,18 @@ class ExportStore {
     this.table = table
     this.resultHeaders = []
     this.resultRows = []
+    this.resultCols = []
     this.open = true
   }
 
-  showResult(connId: string, headers: string[], rows: Record<string, unknown>[]) {
+  showResult(connId: string, headers: string[], rows: Record<string, unknown>[], cols: [string, string][] = []) {
     this.mode = 'result'
     this.connId = connId
     this.schema = ''
     this.table = 'result'
     this.resultHeaders = headers
     this.resultRows = rows
+    this.resultCols = cols
     this.open = true
   }
 

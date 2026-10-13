@@ -451,3 +451,149 @@ async fn bench_oracle_wide_100k() {
     let (rows, ncols) = match &out { StatementOutcome::Rows { result } => (result.total, result.cols.len()), _ => (0, 0) };
     eprintln!("BENCH wide oracle    = {ms} ms  ({rows} rows x {ncols} cols)");
 }
+
+/// Partitioning end-to-end on a real Oracle: every DDL below is EXACTLY what the
+/// frontend builders in `src/lib/sql/partitions.ts` emit for `system = 'oracle'`
+/// (`buildPartitionCreate` clause, `buildAddPartition`, `partitionOps`,
+/// `buildConvertToPartitioned`) — only the trailing `;` is stripped, because the
+/// Oracle driver takes one statement without it. Each step is verified through
+/// `OracleDriver::partitions()`, i.e. the same call the Explorer's Partitions node makes.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs a live Oracle container (gvenzl/oracle-free) + Instant Client — run with --ignored"]
+async fn oracle_partitions_end_to_end() {
+    let mut d = OracleDriver::connect(&params()).await.expect("connect");
+    let _ = d
+        .exec("BEGIN EXECUTE IMMEDIATE 'DROP USER apppart CASCADE'; EXCEPTION WHEN OTHERS THEN NULL; END;")
+        .await;
+    for sql in [
+        "CREATE USER apppart IDENTIFIED BY Apppart123",
+        "ALTER USER apppart QUOTA UNLIMITED ON USERS",
+    ] {
+        d.exec(sql).await.unwrap_or_else(|e| panic!("setup failed [{sql}]: {}", e.message));
+    }
+
+    // (1) CREATE — buildPartitionCreate('oracle', …).clause appended to CREATE TABLE.
+    // Note the quoted UPPERCASE key: that is what introspection feeds the designer.
+    d.exec(
+        "CREATE TABLE apppart.events (id NUMBER, created_at DATE)\n\
+         PARTITION BY RANGE (\"CREATED_AT\") (\n  \
+           PARTITION \"P2024\" VALUES LESS THAN (DATE '2025-01-01'),\n  \
+           PARTITION \"P2025\" VALUES LESS THAN (DATE '2026-01-01')\n)",
+    )
+    .await
+    .expect("create partitioned table with the generated clause");
+
+    let parts = d.partitions("APPPART", "EVENTS").await.expect("partitions");
+    assert_eq!(parts.len(), 2, "two partitions introspected: {parts:?}");
+    assert!(parts.iter().all(|p| p.method == "RANGE"), "method RANGE: {parts:?}");
+    assert!(
+        parts.iter().all(|p| p.key.as_deref() == Some("CREATED_AT")),
+        "partition key column reported: {parts:?}"
+    );
+    assert_eq!(parts[0].name, "P2024", "ordered by position: {parts:?}");
+    assert_eq!(parts[0].position, Some(1), "1-based position");
+    assert!(
+        parts[0].expression.as_deref().unwrap_or("").contains("2025-01-01"),
+        "high_value bound is surfaced: {:?}",
+        parts[0].expression
+    );
+    // A plain table must report nothing (this is what hides the Partitions node).
+    d.exec("CREATE TABLE apppart.plain (id NUMBER, created_at DATE)").await.expect("plain table");
+    assert!(
+        d.partitions("APPPART", "PLAIN").await.expect("plain partitions").is_empty(),
+        "non-partitioned table returns an empty list"
+    );
+
+    // The tree badges a partitioned table with a "P" before it is expanded, from
+    // all_tables.partitioned — so the badge has to agree with partitions() above.
+    let tables = d.tables("APPPART").await.expect("tables");
+    let flagged: Vec<&str> = tables
+        .iter()
+        .filter(|t| t.is_partitioned == Some(true))
+        .map(|t| t.name.as_str())
+        .collect();
+    assert_eq!(flagged, vec!["EVENTS"], "only the partitioned table is badged: {flagged:?}");
+    let plain = tables.iter().find(|t| t.name == "PLAIN").expect("plain row");
+    assert_eq!(plain.is_partitioned, Some(false), "a plain table is never badged: {plain:?}");
+
+    // (2) ADD — buildAddPartition('oracle', …, 'RANGE', …).sql
+    // The builders end every statement with `;`. The dialog sends that string
+    // verbatim, which is only safe because the driver normalises it away
+    // (oracle.rs `prepare_statement`) — Oracle itself rejects ORA-00911 otherwise.
+    let with_semicolon = d
+        .exec("ALTER TABLE \"APPPART\".\"EVENTS\" ADD PARTITION \"PTMP\" VALUES LESS THAN (DATE '2028-01-01');")
+        .await;
+    assert!(with_semicolon.is_ok(), "builder SQL runs verbatim, semicolon and all: {with_semicolon:?}");
+    d.exec("ALTER TABLE \"APPPART\".\"EVENTS\" DROP PARTITION \"PTMP\"").await.expect("drop temp partition");
+    d.exec("ALTER TABLE \"APPPART\".\"EVENTS\" ADD PARTITION \"P2026\" VALUES LESS THAN (DATE '2027-01-01')")
+        .await
+        .expect("add partition");
+    let parts = d.partitions("APPPART", "EVENTS").await.expect("partitions after add");
+    assert_eq!(parts.len(), 3, "partition added: {parts:?}");
+    assert_eq!(parts[2].name, "P2026", "new partition is last: {parts:?}");
+
+    // (3) TRUNCATE one partition — partitionOps[0]. Rows in the *other* partitions stay.
+    for sql in [
+        "INSERT INTO apppart.events VALUES (1, DATE '2024-06-01')",
+        "INSERT INTO apppart.events VALUES (2, DATE '2024-07-01')",
+        "INSERT INTO apppart.events VALUES (3, DATE '2025-06-01')",
+    ] {
+        d.exec(sql).await.expect("seed rows");
+    }
+    let count = |o: &StatementOutcome| match o {
+        StatementOutcome::Rows { result } => result.rows[0]
+            .as_object()
+            .and_then(|o| o.values().next())
+            .map(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())).unwrap_or(-1))
+            .unwrap_or(-1),
+        _ => -1,
+    };
+    let before = d.exec("SELECT COUNT(*) AS N FROM apppart.events").await.expect("count");
+    assert_eq!(count(&before), 3, "three rows seeded");
+    d.exec("ALTER TABLE \"APPPART\".\"EVENTS\" TRUNCATE PARTITION \"P2024\"")
+        .await
+        .expect("truncate partition");
+    let after = d.exec("SELECT COUNT(*) AS N FROM apppart.events").await.expect("count");
+    assert_eq!(count(&after), 1, "only the 2024 partition was emptied");
+    assert_eq!(
+        d.partitions("APPPART", "EVENTS").await.expect("partitions").len(),
+        3,
+        "truncate keeps the partition itself"
+    );
+
+    // (4) Rebuild unusable local indexes — partitionOps[1] must be valid SQL.
+    d.exec("CREATE INDEX apppart.events_created_ix ON apppart.events (created_at) LOCAL")
+        .await
+        .expect("local index");
+    d.exec("ALTER TABLE \"APPPART\".\"EVENTS\" MODIFY PARTITION \"P2024\" REBUILD UNUSABLE LOCAL INDEXES")
+        .await
+        .expect("rebuild unusable local indexes");
+
+    // (5) DROP one partition — partitionOps last entry.
+    d.exec("ALTER TABLE \"APPPART\".\"EVENTS\" DROP PARTITION \"P2026\"")
+        .await
+        .expect("drop partition");
+    let parts = d.partitions("APPPART", "EVENTS").await.expect("partitions after drop");
+    assert_eq!(parts.len(), 2, "partition dropped: {parts:?}");
+    assert!(!parts.iter().any(|p| p.name == "P2026"), "P2026 gone: {parts:?}");
+
+    // (6) CONVERT an existing table in place — buildConvertToPartitioned('oracle', …).post[0].
+    // This is the step the spec flagged as [NEEDS VERIFYING]: MODIFY … ONLINE (12cR2+).
+    d.exec("INSERT INTO apppart.plain VALUES (1, DATE '2025-03-01')").await.expect("seed plain");
+    d.exec("INSERT INTO apppart.plain VALUES (2, DATE '2026-03-01')").await.expect("seed plain");
+    d.exec(
+        "ALTER TABLE \"APPPART\".\"PLAIN\"\n  MODIFY\nPARTITION BY RANGE (\"CREATED_AT\") (\n  \
+         PARTITION \"P2025\" VALUES LESS THAN (DATE '2026-01-01'),\n  \
+         PARTITION \"PMAX\" VALUES LESS THAN (MAXVALUE)\n)\n  ONLINE",
+    )
+    .await
+    .expect("convert an existing table to partitioned in place");
+    let parts = d.partitions("APPPART", "PLAIN").await.expect("partitions after convert");
+    assert_eq!(parts.len(), 2, "converted table is partitioned: {parts:?}");
+    assert!(parts.iter().all(|p| p.method == "RANGE"), "RANGE after convert: {parts:?}");
+    let kept = d.exec("SELECT COUNT(*) AS N FROM apppart.plain").await.expect("count");
+    assert_eq!(count(&kept), 2, "convert preserved the data (no copy/drop dance)");
+
+    let _ = d.exec("BEGIN EXECUTE IMMEDIATE 'DROP USER apppart CASCADE'; EXCEPTION WHEN OTHERS THEN NULL; END;").await;
+    eprintln!("CHK oracle_partitions_end_to_end OK");
+}

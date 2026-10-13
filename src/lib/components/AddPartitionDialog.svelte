@@ -1,6 +1,6 @@
 <script lang="ts">
   // Add Partition dialog — structured form + live, syntax-highlighted script that
-  // runs on the connection (PG/MySQL/MariaDB) or opens as a template (MSSQL/CH).
+  // runs on the connection (PG/MySQL/MariaDB/Oracle) or opens as a template (MSSQL/CH).
   // Introspects the table's current partitioning to pick the right inputs.
   import { addPartitionWizard } from '$lib/stores/addpartition.svelte'
   import { explorer } from '$lib/stores/explorer.svelte'
@@ -45,7 +45,10 @@
 
   const system = $derived(addPartitionWizard.system)
   const rangePg = $derived(strategy === 'RANGE' && system === 'postgres')
-  const canRun = $derived(system === 'postgres' || system === 'mysql' || system === 'mariadb')
+  // Engines whose buildAddPartition() emits runnable SQL (MSSQL/ClickHouse only warn).
+  const canRun = $derived(
+    system === 'postgres' || system === 'mysql' || system === 'mariadb' || system === 'oracle',
+  )
 
   async function load() {
     loading = true

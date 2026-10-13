@@ -91,7 +91,8 @@
         list = perSchema.flat()
       }
       // Objects grid lists base tables (views/system objects excluded).
-      rows = list.filter((t) => t.kind === 'table')
+      // Partitions are listed under their parent table in the Explorer, not as rows here.
+      rows = list.filter((t) => t.kind === 'table' && !t.partition_of)
       // Compute exact counts in the background (desktop app only).
       if (IS_TAURI && cid) void fetchCounts(cid, rows, gen)
     } catch (e) {

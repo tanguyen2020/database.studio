@@ -24,6 +24,7 @@
   import { applyGridChanges, previewGridChanges, chGenerateMutations, cancelQuery, type GridChange } from '$lib/ipc'
   import { tabs } from '$lib/stores/tabs.svelte'
   import { formatClipboard, type ClipFormat } from '$lib/export/clipboard'
+  import { CSV_BOM } from '$lib/export/rows'
   import { classifyType } from '$lib/copy/types'
   import {
     formatJson,
@@ -799,7 +800,8 @@
       .map((row) => columns.map((c) => csvEscape(rawText(row[c]))).join(','))
       .join('\n')
     try {
-      await invoke('write_text_file', { path, contents: `${header}\n${body}\n` })
+      // CSV UTF-8 with BOM so Excel decodes non-ASCII text correctly.
+      await invoke('write_text_file', { path, contents: `${CSV_BOM}${header}\n${body}\n` })
       toasts.success(`Exported ${data.rows.length.toLocaleString()} rows → ${path}`)
     } catch (e) {
       toasts.error(String(e))

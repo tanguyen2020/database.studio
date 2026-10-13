@@ -186,6 +186,18 @@ pub struct TableInfo {
     /// Best-effort — `None` on engines where it isn't cheaply available.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data_length: Option<i64>,
+    /// Parent table when this row IS a partition (PostgreSQL only — a declarative
+    /// partition is a real table in pg_class). The list still carries it, so
+    /// autocomplete / Generate Scripts / Schema Compare keep seeing every relation;
+    /// only the Explorer's Tables folder and the Objects tab hide it, because it
+    /// belongs under its parent's "Partitions" node.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub partition_of: Option<String>,
+    /// True when this table IS partitioned (it owns partitions). The tree marks it
+    /// with a "P" badge so a partitioned parent is recognisable before expanding it.
+    /// `None` on engines without table partitioning (SQLite, Mongo).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_partitioned: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

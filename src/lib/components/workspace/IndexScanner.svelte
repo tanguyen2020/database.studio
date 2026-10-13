@@ -5,7 +5,7 @@
   import { untrack } from 'svelte'
   import * as ipc from '$lib/ipc'
   import { toasts } from '$lib/stores/toast.svelte'
-  import { toCsv, toJson, download } from '$lib/export/rows'
+  import { toCsv, toJson, withBom, download } from '$lib/export/rows'
   import type { TabState } from '$lib/types'
 
   interface Props {
@@ -58,7 +58,7 @@
   }
   function exportCsv() {
     const headers = ['name', 'table', 'columns', 'index_type', 'unique', 'primary', 'usage', 'flags']
-    download(`indexes_${schema}.csv`, toCsv(headers, (result?.indexes ?? []).map((r) => ({ ...r, columns: r.columns.join(' '), flags: r.flags.join(' ') }))), 'text/csv')
+    download(`indexes_${schema}.csv`, withBom(toCsv(headers, (result?.indexes ?? []).map((r) => ({ ...r, columns: r.columns.join(' '), flags: r.flags.join(' ') })))), 'text/csv')
     toasts.success('Exported CSV')
   }
   function exportJson() {

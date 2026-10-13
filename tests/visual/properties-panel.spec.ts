@@ -43,6 +43,9 @@ test('properties panel shows selected table columns and column detail', async ({
     .first()
     .click()
   await page.waitForTimeout(300)
+  // columns live under a Columns folder, same as Indexes / Constraints
+  await page.getByRole('treeitem', { name: /Columns/ }).first().getByRole('button').first().click()
+  await page.waitForTimeout(300)
   await page.getByRole('treeitem', { name: /first_name/ }).first().click()
   await page.waitForTimeout(200)
   await expect(pp.getByText('Column', { exact: true }).first()).toBeVisible()

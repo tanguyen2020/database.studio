@@ -724,11 +724,11 @@
             {#if canConvertToPartitioned(system)}
               <div class="mono" style="font-size:var(--px-12);color:var(--muted);line-height:1.5">
                 This table is not partitioned. Turn on to partition it —
-                {#if system === 'mysql' || system === 'mariadb'}MySQL/MariaDB alter it in place (<code>ALTER TABLE … PARTITION BY …</code>).{:else if system === 'postgres'}PostgreSQL recreates it (rename + create partitioned + copy + drop) — review the script.{:else}SQL Server creates a partition function + scheme and a clustered index on it.{/if}
+                {#if system === 'mysql' || system === 'mariadb'}MySQL/MariaDB alter it in place (<code>ALTER TABLE … PARTITION BY …</code>).{:else if system === 'postgres'}PostgreSQL recreates it (rename + create partitioned + copy + drop) — review the script.{:else if system === 'oracle'}Oracle repartitions in place (<code>ALTER TABLE … MODIFY PARTITION BY … ONLINE</code>, needs 12cR2+) — local indexes are rebuilt.{:else if system === 'clickhouse'}ClickHouse recreates it (rename + create with PARTITION BY + copy + drop) — set ENGINE/ORDER BY to match the original before running.{:else}SQL Server creates a partition function + scheme and a clustered index on it.{/if}
               </div>
             {:else}
               <div class="mono" style="font-size:var(--px-12);color:var(--muted);line-height:1.5">
-                This table is not partitioned. {system === 'clickhouse' ? 'ClickHouse cannot change PARTITION BY on an existing table' : 'Partitioning an existing table requires recreating it'} — use <b>New Table</b> with the Partitioning tab, then migrate the data.
+                This table is not partitioned. Partitioning an existing table is not supported for this engine — use <b>New Table</b> with the Partitioning tab, then migrate the data.
               </div>
             {/if}
           {:else if partEnabled}

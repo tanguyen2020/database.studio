@@ -20,8 +20,10 @@ test('leaf (column) context menu offers Refresh', async ({ page }) => {
   await page.waitForTimeout(300)
   await page.getByText('Tables', { exact: true }).first().dblclick()
   await page.waitForTimeout(300)
-  // expand the table's columns via its chevron
+  // expand the table, then its Columns folder (columns live in a folder like Indexes)
   await page.getByRole('treeitem', { name: /students/ }).first().getByRole('button').first().click()
+  await page.waitForTimeout(300)
+  await page.getByRole('treeitem', { name: /Columns/ }).first().getByRole('button').first().click()
   await page.waitForTimeout(300)
   await page.getByText('id', { exact: true }).first().click({ button: 'right' })
   await page.waitForTimeout(200)

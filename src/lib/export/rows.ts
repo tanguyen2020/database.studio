@@ -93,22 +93,28 @@ export function parseCsv(
   return { headers, rows: nonEmpty }
 }
 
-/** Excel export dep-free: bảng HTML với đuôi .xls + mime ms-excel (Excel mở được). */
-export function toExcelHtml(headers: string[], rows: Record<string, unknown>[]): string {
-  const esc = (v: unknown) =>
-    v == null ? '' : String(typeof v === 'object' ? JSON.stringify(v) : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-  const th = headers.map((h) => `<th>${esc(h)}</th>`).join('')
-  const trs = rows.map((r) => `<tr>${headers.map((h) => `<td>${esc(r[h])}</td>`).join('')}</tr>`).join('')
-  return `<html><head><meta charset="utf-8"></head><body><table border="1"><thead><tr>${th}</tr></thead><tbody>${trs}</tbody></table></body></html>`
+/** UTF-8 byte-order mark. Exported CSV is "CSV UTF-8 (with BOM)": without it
+ *  Excel decodes the file as the local ANSI code page and Vietnamese / CJK text
+ *  turns into mojibake. */
+export const CSV_BOM = '\uFEFF'
+
+/** Prefix the BOM exactly once (a caller may already have added it). */
+export function withBom(csv: string): string {
+  return csv.startsWith(CSV_BOM) ? csv : CSV_BOM + csv
 }
 
 /** Trigger download 1 blob text trong browser (dùng ở component). */
-export function download(filename: string, content: string, mime = 'text/plain') {
-  const blob = new Blob([content], { type: mime })
+export function download(filename: string, content: string | Uint8Array, mime = 'text/plain') {
+  const blob = new Blob([content as BlobPart], { type: mime })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
   a.download = filename
+  a.style.display = 'none'
+  document.body.appendChild(a) // a detached anchor's download can be dropped by Chromium
   a.click()
-  URL.revokeObjectURL(url)
+  a.remove()
+  // Revoking synchronously races the browser's fetch of the blob and can cancel
+  // the download; release it once the download has surely started.
+  setTimeout(() => URL.revokeObjectURL(url), 10_000)
 }

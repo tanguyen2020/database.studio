@@ -229,7 +229,7 @@ impl ChDriver {
     pub async fn tables(&mut self, schema: &str) -> Result<Vec<TableInfo>, QueryError> {
         let (body, _) = self
             .raw_query(
-                "SELECT name, engine, total_rows, total_bytes FROM system.tables WHERE database = {db:String} ORDER BY name",
+                "SELECT name, engine, total_rows, total_bytes, partition_key FROM system.tables WHERE database = {db:String} ORDER BY name",
                 &[("db", schema)],
             )
             .await?;
@@ -254,6 +254,8 @@ impl ChDriver {
                         .as_str()
                         .and_then(|s| s.parse::<i64>().ok())
                         .or_else(|| r["total_bytes"].as_i64()),
+                    partition_of: None,
+                    is_partitioned: Some(!r["partition_key"].as_str().unwrap_or("").trim().is_empty()),
                 }
             })
             .collect())

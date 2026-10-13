@@ -35,8 +35,11 @@ test('header Refresh re-reads the open schema, its tables and the database list'
   await page.getByRole('treeitem', { name: /Tables/ }).first().dblclick()
   await page.waitForTimeout(600)
   const students = page.getByRole('treeitem', { name: /students/ }).first()
-  await students.getByRole('button').first().click() // chevron → columns
+  await students.getByRole('button').first().click() // chevron → its folders
   await page.waitForTimeout(600)
+  // columns live under a Columns folder, same as Indexes / Constraints
+  await page.getByRole('treeitem', { name: /Columns/ }).first().getByRole('button').first().click()
+  await page.waitForTimeout(400)
   await expect(page.getByText('first_name').first()).toBeVisible()
 
   const before = await counts(page)

@@ -136,6 +136,15 @@ export interface TableInfo {
   engine?: string
   /** On-disk size in bytes (best-effort; undefined where unavailable). */
   data_length?: number
+  /** Set when this row IS a partition of that table (PostgreSQL — a declarative
+   *  partition is a real table). The list keeps carrying it so autocomplete,
+   *  Generate Scripts, Schema Compare etc. still see every relation; only the
+   *  Explorer's Tables folder and the Objects tab hide it, since it is shown
+   *  under its parent's "Partitions" node. */
+  partition_of?: string
+  /** True when this table OWNS partitions. The tree badges it with a "P" so a
+   *  partitioned parent is recognisable without expanding it. */
+  is_partitioned?: boolean
 }
 
 export interface ColumnInfo {

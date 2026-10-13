@@ -131,7 +131,17 @@ impl MySqlDriver {
         let rows = mysql_fetch_params(&mut self.conn, sql, params)
             .await
             .map_err(|e| map_exec_error(self.system, &e))?;
-        let (cols, out_rows) = decode_rows(&rows, self.system).await?;
+        let (mut cols, out_rows) = decode_rows(&rows, self.system).await?;
+        // Empty result set has no rows to read column types from → describe(),
+        // the same fallback `exec` uses. The data viewer opens a table through
+        // THIS path, so without it an empty table rendered no columns at all.
+        if cols.is_empty() {
+            if let Ok(desc) = describe(&mut self.conn, sql).await {
+                for c in desc.columns() {
+                    cols.push((c.name().to_string(), c.type_info().name().to_lowercase()));
+                }
+            }
+        }
         let total = out_rows.len() as u64;
         Ok(StatementOutcome::Rows { result: QueryResultSet { cols, rows: out_rows, total } })
     }
@@ -196,13 +206,21 @@ impl MySqlDriver {
             // information_schema numeric columns are BIGINT UNSIGNED — CAST to SIGNED
             // so sqlx decodes them as i64 (otherwise try_get::<i64> silently yields None,
             // which is why row_estimate used to come back empty for MySQL).
-            "SELECT TABLE_NAME,
-                    CASE TABLE_TYPE WHEN 'VIEW' THEN 'view' ELSE 'table' END,
-                    CAST(COALESCE(TABLE_ROWS, 0) AS SIGNED),
-                    CAST(COALESCE(DATA_LENGTH, 0) + COALESCE(INDEX_LENGTH, 0) AS SIGNED)
-             FROM information_schema.TABLES
-             WHERE CONVERT(TABLE_SCHEMA USING utf8mb4) = CONVERT(? USING utf8mb4)
-             ORDER BY TABLE_NAME",
+            // The outer table MUST be aliased: information_schema.PARTITIONS also has
+            // TABLE_SCHEMA/TABLE_NAME, so an unqualified reference inside the EXISTS
+            // resolves to the INNER table and the correlation degrades to p.x = p.x,
+            // which reports every table as partitioned.
+            "SELECT t.TABLE_NAME,
+                    CASE t.TABLE_TYPE WHEN 'VIEW' THEN 'view' ELSE 'table' END,
+                    CAST(COALESCE(t.TABLE_ROWS, 0) AS SIGNED),
+                    CAST(COALESCE(t.DATA_LENGTH, 0) + COALESCE(t.INDEX_LENGTH, 0) AS SIGNED),
+                    CAST(EXISTS(SELECT 1 FROM information_schema.PARTITIONS p
+                                 WHERE CONVERT(p.TABLE_SCHEMA USING utf8mb4) = CONVERT(t.TABLE_SCHEMA USING utf8mb4)
+                                   AND CONVERT(p.TABLE_NAME USING utf8mb4) = CONVERT(t.TABLE_NAME USING utf8mb4)
+                                   AND p.PARTITION_NAME IS NOT NULL) AS SIGNED)
+             FROM information_schema.TABLES t
+             WHERE CONVERT(t.TABLE_SCHEMA USING utf8mb4) = CONVERT(? USING utf8mb4)
+             ORDER BY t.TABLE_NAME",
         )
         .bind(schema)
         .fetch_all(&mut self.conn)
@@ -218,6 +236,8 @@ impl MySqlDriver {
                 locked: false,
                 engine: None,
                 data_length: r.try_get::<i64, _>(3).ok(),
+                partition_of: None,
+                is_partitioned: r.try_get::<i64, _>(4).ok().map(|v| v != 0),
             })
             .collect())
     }

@@ -215,8 +215,8 @@ impl OracleDriver {
         let o = lit(schema);
         let res = self
             .query(&format!(
-                "SELECT table_name AS name, 'table' AS kind, num_rows AS nrows FROM all_tables WHERE owner = {o} \
-                 UNION ALL SELECT view_name AS name, 'view' AS kind, NULL AS nrows FROM all_views WHERE owner = {o} ORDER BY name"
+                "SELECT table_name AS name, 'table' AS kind, num_rows AS nrows, partitioned AS parted FROM all_tables WHERE owner = {o} \
+                 UNION ALL SELECT view_name AS name, 'view' AS kind, NULL AS nrows, NULL AS parted FROM all_views WHERE owner = {o} ORDER BY name"
             ))
             .await?;
         let sizes = self.segment_sizes(schema, "TABLE").await;
@@ -232,6 +232,8 @@ impl OracleDriver {
                     locked: false,
                     engine: None,
                     data_length: sizes.get(&name).copied(),
+                    partition_of: None,
+                    is_partitioned: Some(jstr(r, "PARTED").eq_ignore_ascii_case("YES")),
                     name,
                 }
             })

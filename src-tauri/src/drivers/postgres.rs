@@ -147,6 +147,13 @@ impl PgDriver {
             for c in first.columns() {
                 cols.push((c.name().to_string(), c.type_info().name().to_lowercase()));
             }
+        } else if let Ok(desc) = describe(&mut self.conn, sql).await {
+            // Zero rows: describe the statement so the grid still shows headers.
+            // The data viewer reaches an empty table through THIS path, and
+            // without the fallback it rendered a grid with no columns at all.
+            for c in desc.columns() {
+                cols.push((c.name().to_string(), c.type_info().name().to_lowercase()));
+            }
         }
         let mut out_rows: Vec<Value> = Vec::new();
         for row in &rows {
@@ -230,12 +237,37 @@ impl PgDriver {
 
     pub async fn tables(&mut self, schema: &str) -> Result<Vec<TableInfo>, QueryError> {
         let rows = sqlx::query(
+            // A declarative partition IS a table in pg_class, so listing pg_class
+            // verbatim shows one row per partition and buries the parent. Every row is
+            // still returned (autocomplete, Generate Scripts, Schema Compare and the
+            // rest need the real relations); partitions just carry `partition_of` so
+            // the tree + Objects tab can show them under the parent instead.
+            // Rows/size are rolled up into the parent, whose own relation holds no
+            // data (pg_total_relation_size on a partitioned table is 0).
+            // The join matches only parents with relkind 'p', so legacy INHERITS
+            // children are not flagged, and PG 9.x (no 'p') is unaffected.
             "SELECT c.relname,
                     CASE c.relkind WHEN 'v' THEN 'view' WHEN 'm' THEN 'view' ELSE 'table' END AS kind,
-                    GREATEST(c.reltuples::bigint, 0) AS row_estimate,
-                    CASE WHEN c.relkind IN ('r','p','m')
+                    CASE WHEN c.relkind = 'p'
+                         THEN (SELECT COALESCE(SUM(GREATEST(ch.reltuples::bigint, 0)), 0)::bigint
+                                 FROM pg_catalog.pg_inherits i
+                                 JOIN pg_catalog.pg_class ch ON ch.oid = i.inhrelid
+                                WHERE i.inhparent = c.oid)
+                         ELSE GREATEST(c.reltuples::bigint, 0) END AS row_estimate,
+                    CASE WHEN c.relkind = 'p'
+                         -- SUM() over bigint returns numeric in PG; cast back or
+                         -- sqlx's try_get::<i64> yields None and the column reads empty.
+                         THEN (SELECT COALESCE(SUM(pg_catalog.pg_total_relation_size(ch.oid)), 0)::bigint
+                                 FROM pg_catalog.pg_inherits i
+                                 JOIN pg_catalog.pg_class ch ON ch.oid = i.inhrelid
+                                WHERE i.inhparent = c.oid)
+                         WHEN c.relkind IN ('r','m')
                          THEN pg_catalog.pg_total_relation_size(c.oid)::bigint
-                         ELSE 0 END AS data_length
+                         ELSE 0 END AS data_length,
+                    (SELECT p.relname FROM pg_catalog.pg_inherits i
+                       JOIN pg_catalog.pg_class p ON p.oid = i.inhparent
+                      WHERE i.inhrelid = c.oid AND p.relkind = 'p') AS partition_of,
+                    (c.relkind = 'p') AS is_partitioned
              FROM pg_catalog.pg_class c
              JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
              WHERE n.nspname = $1 AND c.relkind IN ('r','p','v','m')
@@ -255,6 +287,8 @@ impl PgDriver {
                 locked: false,
                 engine: None,
                 data_length: r.try_get::<i64, _>(3).ok(),
+                partition_of: r.try_get::<Option<String>, _>(4).ok().flatten(),
+                is_partitioned: r.try_get::<bool, _>(5).ok(),
             })
             .collect())
     }

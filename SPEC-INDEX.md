@@ -87,6 +87,7 @@ Driver module `drivers/<system>.rs` + variant trong `LiveConnection` + **nhánh 
 | `SPEC-ORACLE-FEATURE.md` | Oracle engine (khuôn relational) | Đã implement; §0.0 sửa mâu thuẫn driver |
 | `SPEC-MONGODB-FEATURE.md` | MongoDB engine (khuôn non-SQL) | Đã implement; §0.0 lệch nhỏ |
 | `SPEC-BACKUP-RESTORE.md` | Backup & Restore per-engine (SQLite in-process; PG/MySQL/CH/Mongo shell tool) | Viết mới theo code |
+| `SPEC-PARTITIONS.md` | Table partitioning per-engine (View/Manage/Create/Convert/Add) | Viết mới theo code; ma trận 12 engine + gap ở §11 |
 
 ### Addendum thiết kế theo hệ (phần lớn còn đúng — override spec gốc khi mâu thuẫn)
 `spec/Database Studio design/design_handoff_database_studio/`:
