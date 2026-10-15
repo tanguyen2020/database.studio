@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from '$lib/components/Icon.svelte'
   // Table Data Viewer — mở khi double-click bảng trong Explorer. Filter builder
   // (column/operator/value, AND|OR) + sort đa cột (Shift+click header) + phân
   // trang server-side (LIMIT/OFFSET) qua exec_filtered (tham số hóa). Reuse
@@ -190,7 +191,7 @@
     <span class="mono" style="color:var(--text2)" title={`${schema}.${table}`}>{schema}.{table}</span>
     <span class="tv-btn" style="background:{filtersOpen ? 'var(--hover)' : 'var(--panel)'}" onclick={() => (filtersOpen = !filtersOpen)} onkeydown={(e) => e.key === 'Enter' && (filtersOpen = !filtersOpen)} role="button" tabindex="0">Filters {filters.length ? `(${filters.length})` : ''} ▾</span>
     <div style="margin-left:auto;display:flex;align-items:center;gap:var(--px-8)">
-      <span class="tv-btn" style="display:inline-flex;align-items:center;gap:var(--px-5)" onclick={() => { page = 0; void load() }} onkeydown={(e) => e.key === 'Enter' && (page = 0, load())} role="button" tabindex="0" title="Refresh">⟳ Refresh</span>
+      <span class="tv-btn" style="display:inline-flex;align-items:center;gap:var(--px-5)" onclick={() => { page = 0; void load() }} onkeydown={(e) => e.key === 'Enter' && (page = 0, load())} role="button" tabindex="0" title="Refresh"><Icon name="refresh" size={12} /> Refresh</span>
       {#if data}
         <span class="mono" style="font-size:var(--px-12_5);color:var(--muted)">{durationMs} ms</span>
       {/if}

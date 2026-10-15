@@ -269,6 +269,9 @@ fn build_explain(system: &str, sql: &str, actual: bool) -> String {
         "mysql" | "mariadb" => format!("EXPLAIN FORMAT=JSON {sql}"),
         "sqlite" => format!("EXPLAIN QUERY PLAN {sql}"),
         "clickhouse" => format!("EXPLAIN indexes = 1 {sql}"),
+        // DuckDB: JSON tree; ANALYZE runs the query and adds per-operator rows/time.
+        "duckdb" if actual => format!("EXPLAIN ANALYZE (FORMAT JSON) {sql}"),
+        "duckdb" => format!("EXPLAIN (FORMAT JSON) {sql}"),
         _ => format!("EXPLAIN {sql}"),
     }
 }
@@ -315,6 +318,14 @@ fn parse_for_system(
                 })
                 .collect();
             Ok(plan::parse_sqlite(&parsed))
+        }
+        // DuckDB: rows of (explain_key, explain_value); the JSON plan is the value.
+        "duckdb" => {
+            let cell = rows
+                .iter()
+                .find_map(|r| r.get("explain_value").and_then(|v| v.as_str()))
+                .ok_or("DuckDB EXPLAIN returned no plan")?;
+            plan::parse_duckdb(cell, actual)
         }
         "clickhouse" => {
             let text = rows

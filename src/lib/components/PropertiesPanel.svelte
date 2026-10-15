@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from '$lib/components/Icon.svelte'
   // Object Properties (right sidebar) — port 1:1 từ Database Studio.dc.html
   // dòng 1510-1554. Shell + toggle giữ nguyên. Nội dung properties (columns /
   // indexes / definition) được nối vào đây, đọc object đang chọn trong Explorer
@@ -211,13 +212,31 @@
     role="button"
     tabindex="0"
     title="Show Properties panel"
-    style="flex:none;width:var(--px-18);align-self:stretch;display:flex;align-items:center;justify-content:center;cursor:pointer;background:var(--surface);border-left:var(--px-1) solid var(--border);color:var(--muted)"
+    class="props-rail"
+    style="flex:none;width:var(--px-26);align-self:stretch;display:flex;flex-direction:column;align-items:center;gap:var(--px-8);padding-top:var(--px-12);cursor:pointer;background:var(--surface);border-left:var(--px-1) solid var(--border);color:var(--muted)"
   >
-    <span style="font-size:var(--px-12);font-weight:700;letter-spacing:.1em;writing-mode:vertical-rl;text-orientation:mixed;text-transform:uppercase">⇤ Properties</span>
+    <Icon name="panel-right" size={14} />
+    <!-- label drawn by CSS: the rail is named by its title, so the word "Properties" stays unique to the real panel -->
+    <span class="props-rail-label" aria-hidden="true" data-label="Properties"></span>
   </div>
 {/if}
 
 <style>
+  .props-rail-label {
+    display: block;
+    font-size: var(--px-11_5);
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    writing-mode: vertical-rl;
+    text-orientation: mixed;
+  }
+  .props-rail-label::after {
+    content: attr(data-label);
+  }
+  .props-rail:hover {
+    color: var(--text);
+    background: color-mix(in srgb, var(--text) 4%, var(--surface));
+  }
   .pp {
     display: flex;
     flex-direction: column;

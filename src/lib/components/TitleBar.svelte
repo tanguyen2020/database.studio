@@ -1,4 +1,5 @@
 <script lang="ts">
+  import AppLogo from '$lib/components/AppLogo.svelte'
   // Title bar — port 1:1 từ Database Studio.dc.html dòng 45-65:
   // logo D gradient 20px + tên app; phải: Saved / History / Sessions (Phase 2+,
   // toast) + theme toggle. Chiều cao 42px nền --header.
@@ -49,8 +50,8 @@
 
 <div style="height:var(--px-42);flex:none;display:flex;align-items:center;gap:var(--px-14);padding:0 var(--px-14);background:var(--header);border-bottom:var(--px-1) solid var(--border)">
   <div style="display:flex;align-items:center;gap:var(--px-8)">
-    <div style="width:var(--px-20);height:var(--px-20);border-radius:var(--px-6);background:linear-gradient(135deg,var(--hex-5b7cff),var(--hex-27ae60) 60%,var(--hex-f29111));display:flex;align-items:center;justify-content:center;font-weight:800;font-size:var(--px-11);color:var(--hex-fff)">D</div>
-    <span style="font-weight:700;letter-spacing:-.01em">Database Studio</span>
+    <AppLogo size={20} />
+    <span style="font-weight:650;letter-spacing:-.01em">Database Studio</span>
     <span class="mono" style="font-size:var(--px-10);color:var(--muted)" title="Installed version">v{APP_VERSION}</span>
   </div>
   <div style="margin-left:auto;display:flex;align-items:center;gap:var(--px-8)">

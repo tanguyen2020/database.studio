@@ -78,7 +78,7 @@ pub struct ConnectionProfile {
     pub ssl_cert: String,
     #[serde(default)]
     pub ssl_key: String,
-    /// SQLite only: file path ("" for in-memory).
+    /// SQLite / DuckDB: file path ("" for in-memory).
     #[serde(default)]
     pub sqlite_path: String,
     #[serde(default)]
@@ -113,6 +113,8 @@ impl ConnectionProfile {
             SystemType::Oracle => 1521,
             // Management HTTP API (the AMQP port 5672 cannot list queues/exchanges).
             SystemType::Rabbitmq => 15672,
+            // Embedded (a file path, like SQLite) — no network port.
+            SystemType::Duckdb => 0,
         }
     }
 }

@@ -19,6 +19,10 @@ fn not_sqlite() -> QueryError {
     QueryError::new("sqlite", "Connection is not SQLite", "not sqlite")
 }
 
+fn not_duckdb() -> QueryError {
+    QueryError::new("duckdb", "Connection is not DuckDB", "not duckdb")
+}
+
 /// Write the MongoDB password to a temp `--config` YAML so it stays OFF the
 /// process argv (mongodump/mongorestore have no password env var). The caller
 /// removes the file right after the tool exits.
@@ -105,7 +109,7 @@ pub async fn backup_tool_status(
         .get_connection(&conn_id)
         .map(|p| p.system.as_str().to_string())
         .unwrap_or_default();
-    if system == "sqlite" {
+    if system == "sqlite" || system == "duckdb" {
         return Ok(BackupToolStatus { tool: Some("(in-process)".into()), available: true });
     }
     // MSSQL runs native BACKUP/RESTORE through the app's own connection — no binary.
@@ -145,6 +149,23 @@ pub async fn backup_database(
             .await?
             .map_err(|e| AppError::Driver(e.message))?;
         return Ok(format!("✓ SQLite backup → {dest}"));
+    }
+
+    // DuckDB: in-process copy into a new .duckdb file (ATTACH + COPY FROM DATABASE).
+    if system == "duckdb" {
+        let dest2 = dest.clone();
+        state
+            .registry
+            .with_driver(&conn_id, move |d| async move {
+                let g = d.lock().await;
+                match &*g {
+                    LiveConnection::Duckdb(s) => s.backup_to(dest2).await,
+                    _ => Err(not_duckdb()),
+                }
+            })
+            .await?
+            .map_err(|e| AppError::Driver(e.message))?;
+        return Ok(format!("✓ DuckDB backup → {dest}"));
     }
 
     // MSSQL: native T-SQL BACKUP DATABASE run through the app's own connection (no
@@ -253,6 +274,21 @@ pub async fn restore_database(
             .await?
             .map_err(|e| AppError::Driver(e.message))?;
         return Ok(format!("✓ SQLite restored ← {src}"));
+    }
+    if system == "duckdb" {
+        let src2 = src.clone();
+        state
+            .registry
+            .with_driver(&conn_id, move |d| async move {
+                let g = d.lock().await;
+                match &*g {
+                    LiveConnection::Duckdb(s) => s.restore_from(src2).await,
+                    _ => Err(not_duckdb()),
+                }
+            })
+            .await?
+            .map_err(|e| AppError::Driver(e.message))?;
+        return Ok(format!("✓ DuckDB restored ← {src}"));
     }
     // MSSQL: native RESTORE DATABASE via the app's own connection. Requires the DB
     // not be in active use (may need single-user / a master connection); .bak is server-side.

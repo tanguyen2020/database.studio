@@ -47,6 +47,9 @@
   // port từ cm object (dòng 5766-5777): rel gồm cả sqlite → form sqlite vẫn
   // hiện Host/Port/Database như prototype; Host = đường dẫn file.
   const isSqlite = $derived(draft?.system === 'sqlite')
+  // DuckDB is embedded too: a file path (or :memory:) + mode, no server, no auth.
+  const isDuckdb = $derived(draft?.system === 'duckdb')
+  const isFileDb = $derived(isSqlite || isDuckdb)
   const isMssql = $derived(draft?.system === 'mssql')
   const isRedis = $derived(draft?.system === 'redis')
   const isNats = $derived(draft?.system === 'nats')
@@ -55,10 +58,12 @@
   const isOracle = $derived(draft?.system === 'oracle')
   // RabbitMQ: host/port = Management HTTP API; `database` carries the virtual host.
   const isRabbit = $derived(draft?.system === 'rabbitmq')
-  const hostLabel = $derived(isKafka ? 'Host / Bootstrap' : isCassandra ? 'Contact points' : 'Host')
+  const hostLabel = $derived(isKafka ? 'Host / Bootstrap' : isCassandra ? 'Contact points' : isDuckdb ? 'Database file' : 'Host')
   const hostPlaceholder = $derived(
     isSqlite
       ? '/data/local.db'
+      : isDuckdb
+        ? '/data/analytics.duckdb'
       : isKafka
         ? '192.168.1.10  (or broker1:9092,broker2:9092)'
         : isCassandra
@@ -68,8 +73,8 @@
   const dbPlaceholder = $derived(draft?.system === 'postgres' ? 'postgres' : isOracle ? 'FREEPDB1' : '')
   // port từ dòng 5791-5796: auth flags MSSQL
   const authWindows = $derived(isMssql && draft?.mssql_auth === 'windows')
-  const authShowUser = $derived(!authWindows)
-  const authShowPass = $derived(!authWindows)
+  const authShowUser = $derived(!authWindows && !isDuckdb)
+  const authShowPass = $derived(!authWindows && !isDuckdb)
   const sshMode = $derived(draft?.ssh.auth === 'key' ? 'key' : 'password')
 
   // TLS cert fields hiện khi bật SSL — MSSQL chỉ CA (tiberius không mTLS).
@@ -100,7 +105,11 @@
     saving = true
     try {
       if (!draft.name.trim()) {
-        draft.name = isSqlite ? draft.sqlite_path || 'SQLite' : draft.host || draft.system
+        draft.name = isSqlite
+          ? draft.sqlite_path || 'SQLite'
+          : isDuckdb
+            ? draft.sqlite_path.split(/[\\/]/).pop() || 'DuckDB'
+            : draft.host || draft.system
       }
       const p = await connections.quickConnect(buildDraftPayload())
       if (p) close()
@@ -114,10 +123,15 @@
   async function browseSqliteFile() {
     const picked = await openFileDialog({
       multiple: false,
-      filters: [
-        { name: 'SQLite database', extensions: ['db', 'sqlite', 'sqlite3', 'db3'] },
-        { name: 'All files', extensions: ['*'] },
-      ],
+      filters: isDuckdb
+        ? [
+            { name: 'DuckDB database', extensions: ['duckdb', 'ddb', 'db'] },
+            { name: 'All files', extensions: ['*'] },
+          ]
+        : [
+            { name: 'SQLite database', extensions: ['db', 'sqlite', 'sqlite3', 'db3'] },
+            { name: 'All files', extensions: ['*'] },
+          ],
     })
     if (typeof picked === 'string' && draft) {
       draft.sqlite_path = picked
@@ -276,7 +290,7 @@
               </select>
             </div>
 
-            {#if isSqlite}
+            {#if isFileDb}
               <!-- port dòng 2192-2195 -->
               <div style="grid-column:1/3">
                 <div class="cm-label">Mode</div>
@@ -287,7 +301,11 @@
                 </select>
               </div>
               <div style="grid-column:1/3;font-size:var(--px-11_5);color:var(--muted);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-8);padding:var(--px-9) var(--px-11)">
-                SQLite is an embedded file-based database. No server required.
+                {#if isDuckdb}
+                  DuckDB is an embedded analytical database (one file, or in-memory). No server required — a new file is created when the path does not exist.
+                {:else}
+                  SQLite is an embedded file-based database. No server required.
+                {/if}
               </div>
             {/if}
 
@@ -298,7 +316,7 @@
             <div style="grid-column:1/3;display:grid;grid-template-columns:2fr 1fr;gap:var(--px-14)">
               <div>
                 <div class="cm-label">{hostLabel}</div>
-                {#if isSqlite}
+                {#if isFileDb}
                   <!-- SQLite is file-based: the path input keeps its double-click
                        shortcut, plus a visible Browse button (the double-click was
                        an invisible affordance nobody could discover). -->
@@ -308,7 +326,7 @@
                       style="flex:1;min-width:0"
                       bind:value={draft.sqlite_path}
                       placeholder={hostPlaceholder}
-                      title="Path to the .db file — double-click or use Browse…"
+                      title={isDuckdb ? 'Path to the .duckdb file — double-click or use Browse…' : 'Path to the .db file — double-click or use Browse…'}
                       disabled={draft.sqlite_mode === 'in-memory'}
                       ondblclick={browseSqliteFile}
                     />
@@ -317,7 +335,7 @@
                       onkeydown={(e) => e.key === 'Enter' && draft?.sqlite_mode !== 'in-memory' && browseSqliteFile()}
                       role="button"
                       tabindex="0"
-                      title={draft.sqlite_mode === 'in-memory' ? 'In-memory database — no file' : 'Choose a SQLite database file'}
+                      title={draft.sqlite_mode === 'in-memory' ? 'In-memory database — no file' : isDuckdb ? 'Choose a DuckDB database file' : 'Choose a SQLite database file'}
                       aria-disabled={draft.sqlite_mode === 'in-memory'}
                       style="flex:none;display:flex;align-items:center;gap:var(--px-6);background:var(--bg);border:var(--px-1) solid var(--border);border-radius:var(--px-8);padding:var(--px-8) var(--px-12);font-size:var(--px-12_5);font-weight:600;cursor:pointer;color:var(--text2);opacity:{draft.sqlite_mode === 'in-memory' ? '.5' : '1'}"
                     >
@@ -330,7 +348,7 @@
               </div>
               <div>
                 <div class="cm-label">Port</div>
-                {#if isSqlite}
+                {#if isFileDb}
                   <input class="cm-input mono" value="" disabled />
                 {:else}
                   <input class="cm-input mono" type="number" bind:value={draft.port} />
@@ -408,7 +426,7 @@
               {/if}
 
               <!-- database — port dòng 2205-2207 (Redis: DB index 0–15; NATS/Kafka: ẩn) -->
-              {#if !isNats && !isKafka}
+              {#if !isNats && !isKafka && !isDuckdb}
                 <div>
                   {#if isRedis}
                     <div class="cm-label">DB Index</div>

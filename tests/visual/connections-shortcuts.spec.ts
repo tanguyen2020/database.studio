@@ -32,12 +32,11 @@ test('connections: keyboard navigation + shortcuts', async ({ page }) => {
 
   // ← collapses the selected connection's group (its rows disappear), → expands.
   const rowsBefore = await page.locator('.conn-row').count()
+  // (rows leave with the collapse motion, so poll until they are gone)
   await page.keyboard.press('ArrowLeft')
-  await page.waitForTimeout(150)
-  expect(await page.locator('.conn-row').count()).toBeLessThan(rowsBefore)
+  await expect.poll(() => page.locator('.conn-row').count()).toBeLessThan(rowsBefore)
   await page.keyboard.press('ArrowRight')
-  await page.waitForTimeout(150)
-  expect(await page.locator('.conn-row').count()).toBe(rowsBefore)
+  await expect.poll(() => page.locator('.conn-row').count()).toBe(rowsBefore)
 
   // Ctrl+Shift+K opens the filter box and focuses it.
   await page.keyboard.press('Control+Shift+K')

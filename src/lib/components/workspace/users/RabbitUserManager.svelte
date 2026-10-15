@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from '$lib/components/Icon.svelte'
   // RabbitMQ users & access (Management HTTP API): users + tags + password,
   // vhost permissions (configure / write / read regexes) + topic permissions,
   // policies per vhost, and virtual hosts. Every change is applied immediately —
@@ -324,7 +325,7 @@
     {/if}
     <span style="margin-left:auto;display:flex;gap:var(--px-8)">
       <span onclick={openCreate} onkeydown={(e) => e.key === 'Enter' && openCreate()} role="button" tabindex="0" class="pv-btn primary">＋ New user</span>
-      <span onclick={() => load()} onkeydown={(e) => e.key === 'Enter' && load()} role="button" tabindex="0" class="pv-btn" aria-busy={loading}>⟳ Refresh</span>
+      <span onclick={() => load()} onkeydown={(e) => e.key === 'Enter' && load()} role="button" tabindex="0" class="pv-btn" aria-busy={loading}><Icon name="refresh" size={12} /> Refresh</span>
     </span>
   </div>
 

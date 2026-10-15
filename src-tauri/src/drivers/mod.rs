@@ -4,6 +4,7 @@ pub mod backup;
 pub mod cancel;
 pub mod cassandra;
 pub mod clickhouse;
+pub mod duckdb;
 pub mod grid;
 pub mod index_scan;
 pub mod kafka;
@@ -27,6 +28,8 @@ use crate::error::QueryError;
 
 use cassandra::{CassandraConnParams, CassandraDriver};
 use clickhouse::{ChConnParams, ChDriver};
+// `self::` — the extern crate is also called `duckdb`.
+use self::duckdb::{DuckConnParams, DuckDriver};
 use kafka::{KafkaConnParams, KafkaDriver};
 use mongo::{MongoConnParams, MongoDriver};
 use mssql::{MssqlConnParams, MssqlDriver};
@@ -60,6 +63,8 @@ pub enum LiveConnection {
     Oracle(OracleDriver),
     /// RabbitMQ via the Management HTTP API (message broker, not SQL).
     Rabbitmq(RabbitDriver),
+    /// DuckDB — embedded analytical database (file or in-memory).
+    Duckdb(DuckDriver),
 }
 
 fn pg_params(p: &ConnectionProfile, ep: &Endpoint, password: &str) -> PgConnParams {
@@ -118,6 +123,18 @@ fn sqlite_params(p: &ConnectionProfile) -> SqliteConnParams {
     SqliteConnParams {
         path: p.sqlite_path.clone(),
         mode: if p.sqlite_path.is_empty() { SqliteMode::InMemory } else { p.sqlite_mode },
+    }
+}
+
+/// DuckDB reuses the SQLite profile fields: `sqlite_path` (empty = in-memory) +
+/// `sqlite_mode`; `database` names an ATTACHed database to switch to (the
+/// Explorer's per-database sub-connection), empty = the file's own database.
+fn duckdb_params(p: &ConnectionProfile) -> DuckConnParams {
+    DuckConnParams {
+        path: p.sqlite_path.clone(),
+        mode: if p.sqlite_path.trim().is_empty() { SqliteMode::InMemory } else { p.sqlite_mode },
+        database: p.database.clone(),
+        owner: p.id.clone(),
     }
 }
 
@@ -316,6 +333,7 @@ impl LiveConnection {
             SystemType::Rabbitmq => Ok(Self::Rabbitmq(
                 RabbitDriver::connect(&rabbitmq_params(profile, endpoint, password)).await?,
             )),
+            SystemType::Duckdb => Ok(Self::Duckdb(DuckDriver::connect(&duckdb_params(profile)).await?)),
             #[allow(unreachable_patterns)]
             other => Err(QueryError::new(
                 other.as_str(),
@@ -356,6 +374,7 @@ impl LiveConnection {
             SystemType::Rabbitmq => {
                 RabbitDriver::test(&rabbitmq_params(profile, endpoint, password)).await
             }
+            SystemType::Duckdb => DuckDriver::test(&duckdb_params(profile)).await,
             #[allow(unreachable_patterns)]
             other => TestResult {
                 ok: false,
@@ -390,6 +409,7 @@ impl LiveConnection {
             // đi qua command mongo_exec chuyên biệt).
             Self::Mongo(d) => Box::pin(async move { d.exec_mongo(sql, None, None).await.map(|o| o.outcome) }),
             Self::Oracle(d) => Box::pin(d.exec(sql)),
+            Self::Duckdb(d) => Box::pin(d.exec(sql)),
         }
     }
 
@@ -407,6 +427,7 @@ impl LiveConnection {
             Self::Cassandra(d) => d.ping().await,
             Self::Mongo(d) => d.ping().await,
             Self::Oracle(d) => d.ping().await,
+            Self::Duckdb(d) => d.ping().await,
         }
     }
 
@@ -444,6 +465,7 @@ impl LiveConnection {
                 "mongodb param select not supported",
             )),
             Self::Oracle(d) => d.exec_params(sql, params).await,
+            Self::Duckdb(d) => d.exec_params(sql, params.to_vec()).await,
         }
     }
 
@@ -473,6 +495,7 @@ impl LiveConnection {
             // Mongo: insert/update/delete document by `_id` (no OLTP transaction).
             Self::Mongo(d) => d.apply_grid(changes).await,
             Self::Oracle(d) => d.apply_changes(changes).await,
+            Self::Duckdb(d) => d.apply_changes(changes.to_vec()).await,
         }
     }
 
@@ -494,6 +517,7 @@ impl LiveConnection {
             // Mongo: cây database→collection lấy qua command mongo_* chuyên biệt.
             Self::Mongo(_) => Ok(Vec::new()),
             Self::Oracle(d) => d.schemas().await,
+            Self::Duckdb(d) => d.schemas().await,
         }
     }
 
@@ -506,6 +530,8 @@ impl LiveConnection {
             Self::Mssql(d) => d.databases().await,
             Self::Mongo(d) => d.databases().await,
             Self::Oracle(d) => d.databases().await,
+            // DuckDB: the opened file + every ATTACHed database (catalogs).
+            Self::Duckdb(d) => d.databases().await,
             _ => Ok(Vec::new()),
         }
     }
@@ -525,6 +551,7 @@ impl LiveConnection {
             // Mongo: "schema" = database, "table" = collection.
             Self::Mongo(d) => d.collections(schema).await,
             Self::Oracle(d) => d.tables(schema).await,
+            Self::Duckdb(d) => d.tables(schema).await,
         }
     }
 
@@ -542,6 +569,7 @@ impl LiveConnection {
             Self::Cassandra(_) => Ok(Vec::new()),
             Self::Mongo(d) => d.collection_fields(schema, table).await,
             Self::Oracle(d) => d.columns(schema, table).await,
+            Self::Duckdb(d) => d.columns(schema, table).await,
         }
     }
 
@@ -559,6 +587,7 @@ impl LiveConnection {
             Self::Cassandra(_) => Ok(Vec::new()),
             Self::Mongo(d) => d.indexes(schema, table).await,
             Self::Oracle(d) => d.indexes(schema, table).await,
+            Self::Duckdb(d) => d.indexes(schema, table).await,
         }
     }
 
@@ -577,6 +606,7 @@ impl LiveConnection {
             Self::Cassandra(_) => Ok(Vec::new()),
             Self::Mongo(_) => Ok(Vec::new()),
             Self::Oracle(d) => d.constraints(schema, table).await,
+            Self::Duckdb(d) => d.constraints(schema, table).await,
         }
     }
 
@@ -594,6 +624,8 @@ impl LiveConnection {
             Self::Cassandra(_) => Ok(Vec::new()),
             Self::Mongo(_) => Ok(Vec::new()),
             Self::Oracle(d) => d.routines(schema).await,
+            // DuckDB has no stored procedures; user macros are its functions.
+            Self::Duckdb(d) => d.routines(schema).await,
         }
     }
 
@@ -615,6 +647,7 @@ impl LiveConnection {
             Self::Cassandra(_) => Ok(Vec::new()),
             Self::Mongo(_) => Ok(Vec::new()),
             Self::Oracle(d) => d.functions(schema).await,
+            Self::Duckdb(d) => d.functions().await,
         }
     }
 
@@ -632,6 +665,8 @@ impl LiveConnection {
             Self::Cassandra(_) => Ok(Vec::new()),
             Self::Mongo(_) => Ok(Vec::new()),
             Self::Oracle(d) => d.triggers(schema).await,
+            // DuckDB has no triggers.
+            Self::Duckdb(_) => Ok(Vec::new()),
         }
     }
 
@@ -639,6 +674,7 @@ impl LiveConnection {
         match self {
             Self::Postgres(d) => d.sequences(schema).await,
             Self::Oracle(d) => d.sequences(schema).await,
+            Self::Duckdb(d) => d.sequences(schema).await,
             // MySQL/MariaDB/MSSQL(Phase1)/SQLite: no sequences node
             _ => Ok(Vec::new()),
         }
@@ -652,6 +688,7 @@ impl LiveConnection {
             Self::Mssql(d) => d.foreign_keys(schema).await,
             Self::Sqlite(d) => d.foreign_keys(schema).await,
             Self::Oracle(d) => d.foreign_keys(schema).await,
+            Self::Duckdb(d) => d.foreign_keys(schema).await,
             _ => Ok(Vec::new()),
         }
     }
@@ -677,6 +714,9 @@ impl LiveConnection {
             // Mongo sharding ≠ declarative partitioning (ngoài parity core).
             Self::Mongo(_) => Ok(Vec::new()),
             Self::Oracle(d) => d.partitions(schema, table).await,
+            // DuckDB has no declarative partitioning (hive-partitioned files are
+            // read with read_parquet(…, hive_partitioning = true), not tables).
+            Self::Duckdb(_) => Ok(Vec::new()),
         }
     }
 
@@ -702,6 +742,7 @@ impl LiveConnection {
             Self::Cassandra(d) => ("cassandra", d.scan_indexes(schema).await?, Vec::new()),
             Self::Mongo(d) => ("mongodb", d.scan_indexes(schema).await?, Vec::new()),
             Self::Oracle(d) => ("oracle", d.scan_indexes(schema).await?, Vec::new()),
+            Self::Duckdb(d) => ("duckdb", d.scan_indexes(schema).await?, Vec::new()),
             #[allow(unreachable_patterns)]
             _ => {
                 return Ok(index_scan::IndexScanResult {
@@ -721,6 +762,15 @@ impl LiveConnection {
             summary,
             suggestions,
         })
+    }
+
+    /// Engines whose running statement can be interrupted from another thread
+    /// (DuckDB runs on a blocking thread that aborting the task cannot stop).
+    pub fn interrupt_handle(&self) -> Option<std::sync::Arc<::duckdb::InterruptHandle>> {
+        match self {
+            Self::Duckdb(d) => Some(d.interrupt_handle()),
+            _ => None,
+        }
     }
 }
 

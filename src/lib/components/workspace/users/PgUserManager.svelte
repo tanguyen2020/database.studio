@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from '$lib/components/Icon.svelte'
   // PostgreSQL User Manager (U1). One principal type = role; "user" = role with
   // LOGIN, "group" = role without. Tabs: General (attributes + password + drop),
   // Membership (grant/revoke), Privileges (per-schema grid §1.8.3 with presets).
@@ -503,7 +504,7 @@
     <span style="font-size:var(--px-12);font-weight:700">Login/Group Roles</span>
     <span style="font-size:var(--px-11);color:var(--muted)">{roles.length} roles</span>
     <span onclick={() => cid && pgRoleWizard.show(cid)} onkeydown={(e) => e.key === 'Enter' && cid && pgRoleWizard.show(cid)} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer;font-weight:600">+ New Role</span>
-    <span onclick={refresh} onkeydown={(e) => e.key === 'Enter' && refresh()} role="button" tabindex="0" aria-busy={refreshing} style="margin-left:auto;font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer;opacity:{refreshing ? 0.6 : 1}">{refreshing ? '⟳ Refreshing…' : '⟳ Refresh'}</span>
+    <span onclick={refresh} onkeydown={(e) => e.key === 'Enter' && refresh()} role="button" tabindex="0" aria-busy={refreshing} style="margin-left:auto;font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer;opacity:{refreshing ? 0.6 : 1}"><Icon name="refresh" size={12} /> {refreshing ? 'Refreshing…' : 'Refresh'}</span>
   </div>
 
   <!-- Model explainer — PostgreSQL merges "user" and "group" into one concept. -->
@@ -655,7 +656,7 @@
             <!-- Access overview: what this role can access per database → schema -->
             <div style="display:flex;align-items:center;gap:var(--px-10);margin-bottom:var(--px-10);flex-wrap:wrap">
               <span style="font-size:var(--px-12);color:var(--text2)">What <span class="mono" style="color:var(--text);font-weight:600">{selected}</span> can access, per database → schema.</span>
-              <span onclick={loadAccess} onkeydown={(e) => e.key === 'Enter' && loadAccess()} role="button" tabindex="0" aria-busy={accessLoading} style="margin-left:auto;font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer;opacity:{accessLoading ? 0.6 : 1}">{accessLoading ? '⟳ Loading…' : '⟳ Refresh'}</span>
+              <span onclick={loadAccess} onkeydown={(e) => e.key === 'Enter' && loadAccess()} role="button" tabindex="0" aria-busy={accessLoading} style="margin-left:auto;font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer;opacity:{accessLoading ? 0.6 : 1}"><Icon name="refresh" size={12} /> {accessLoading ? 'Loading…' : 'Refresh'}</span>
             </div>
             {#if boolY(selectedRole.rolsuper)}
               <div style="font-size:var(--px-11_5);color:var(--warn2);margin-bottom:var(--px-8)">★ Superuser — full access to every database and schema (grants below are in addition).</div>

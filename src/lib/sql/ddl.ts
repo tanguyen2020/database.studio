@@ -128,6 +128,9 @@ export function genRenameDatabase(system: string, database: string, newName?: st
       return `-- MySQL/MariaDB cannot rename a database directly.\n-- Create ${to}, move each table (RENAME TABLE ${from}.t TO ${to}.t), then DROP DATABASE ${from}.`
     case 'sqlite':
       return `-- SQLite databases are files — rename the .sqlite file on disk instead.`
+    case 'duckdb':
+      // A DuckDB database is an attached file; its name is the ATTACH alias.
+      return `-- DuckDB cannot rename a database. Re-attach the file under the new name:\n-- DETACH ${from}; ATTACH '<path>.duckdb' AS ${to};`
     default:
       return `-- Renaming a database is not supported for ${system}.`
   }
@@ -152,6 +155,9 @@ export function genCreateDatabase(system: string, database: string, opts?: Datab
       return `CREATE USER ${d} IDENTIFIED BY "change_me";\nGRANT CONNECT, RESOURCE TO ${d};\nALTER USER ${d} QUOTA UNLIMITED ON USERS;`
     case 'sqlite':
       return `-- SQLite databases are files — create a new connection with a new .sqlite path.`
+    case 'duckdb':
+      // A new DuckDB database is a new file, attached to this one (path is the user's).
+      return `-- A DuckDB database is a file. Attach (and create) one with:\n-- ATTACH '<path>/${database}.duckdb' AS ${d};`
     default:
       return `-- Creating a database is not supported for ${system}.`
   }
@@ -178,6 +184,10 @@ export function genDropDatabase(system: string, database: string): string {
       return `DROP USER ${d} CASCADE;`
     case 'sqlite':
       return `-- SQLite databases are files — delete the .sqlite file on disk instead.`
+    case 'duckdb':
+      // DuckDB databases are attached files: DETACH removes it from this session;
+      // the file on disk is kept (delete it there to really drop it).
+      return `DETACH DATABASE IF EXISTS ${d};`
     default:
       return `-- Dropping a database is not supported for ${system}.`
   }
@@ -188,7 +198,7 @@ export function genDropDatabase(system: string, database: string): string {
  *  databases "schemas", so those tree nodes keep the DATABASE operations; SQLite
  *  and the non-SQL engines have no schemas at all. */
 export function hasRealSchemas(system: string): boolean {
-  return system === 'postgres' || system === 'mssql' || system === 'oracle'
+  return system === 'postgres' || system === 'mssql' || system === 'oracle' || system === 'duckdb'
 }
 
 /**
@@ -218,6 +228,8 @@ export function genCreateSchema(system: string, schema: string, opts?: { passwor
       return genCreateDatabase(system, schema) // schema == database here
     case 'sqlite':
       return `-- SQLite has no schemas (one file = one database).`
+    case 'duckdb':
+      return `CREATE SCHEMA IF NOT EXISTS ${s};`
     default:
       return `-- Creating a schema is not supported for ${system}.`
   }
@@ -249,6 +261,8 @@ export function genRenameSchema(system: string, schema: string, newName?: string
       return genRenameDatabase(system, schema, newName) // schema == database here
     case 'sqlite':
       return `-- SQLite has no schemas (one file = one database).`
+    case 'duckdb':
+      return `-- DuckDB cannot rename a schema.\n-- CREATE SCHEMA ${to}; recreate each object in it (CREATE TABLE ${to}.t AS FROM ${from}.t),\n-- then DROP SCHEMA ${from} CASCADE;`
     default:
       return `-- Renaming a schema is not supported for ${system}.`
   }
@@ -276,6 +290,8 @@ export function genDropSchema(system: string, schema: string, cascade = false): 
       return genDropDatabase(system, schema) // schema == database here
     case 'sqlite':
       return `-- SQLite has no schemas (one file = one database).`
+    case 'duckdb':
+      return `DROP SCHEMA IF EXISTS ${s} ${cascade ? 'CASCADE' : 'RESTRICT'};`
     default:
       return `-- Dropping a schema is not supported for ${system}.`
   }
@@ -333,7 +349,7 @@ export function designerDdl(system: string, schema: string, table: string, cols:
 }
 
 function defaultSchema(system: string): string {
-  if (system === 'sqlite') return 'main'
+  if (system === 'sqlite' || system === 'duckdb') return 'main'
   if (system === 'mysql' || system === 'mariadb' || system === 'clickhouse') return ''
   if (system === 'mssql') return 'dbo'
   // Oracle: schema = connected user (resolved by caller); empty → current-user schema.

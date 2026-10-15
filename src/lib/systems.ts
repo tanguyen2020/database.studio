@@ -52,6 +52,8 @@ const EXTRA: Record<
   nats: { category: 'STREAMING', defaultPort: 4222, quote: null, available: true }, // Phase 3
   // message broker — port = Management HTTP API (the AMQP port 5672 cannot list topology)
   rabbitmq: { category: 'STREAMING', defaultPort: 15672, quote: null, available: true },
+  // embedded analytical database — a file path (or :memory:), like SQLite
+  duckdb: { category: 'EMBEDDED', defaultPort: null, quote: 'double', available: true },
   orphan: { category: null, defaultPort: null, quote: null, available: false },
 }
 
@@ -91,6 +93,7 @@ export const SYSTEM_ORDER: SystemKey[] = [
   'nats',
   'rabbitmq',
   'sqlite',
+  'duckdb',
 ]
 
 /** Env tag — port từ map ENV trong .dc.html: [label, bg, fg] */

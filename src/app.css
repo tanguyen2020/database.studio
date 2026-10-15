@@ -1,6 +1,7 @@
 @import 'tailwindcss';
 @import 'tw-animate-css';
 @import './lib/tokens.css';
+@import './lib/theme.css';
 
 @custom-variant dark (&:is(.dark *));
 
@@ -17,16 +18,7 @@
   --warn: var(--hex-f0a020);
   --warn2: var(--hex-f0c674);
   --error: var(--hex-e06c75);
-  /* Result Grid row selection — periwinkle blue (the requested selection color).
-     Not a prototype token; used only for grid selection. */
-  --grid-select: #5b7cff;
-  /* Sidebar (Connections + Object Explorer) background. In light mode the prototype
-     surface is pure white, which reads as glary/high-strain for a tool developers
-     stare at all day — soften it to a low-luminance cool grey so the panel recedes
-     (the --border still separates it from the content area). Dark mode keeps the
-     prototype surface untouched (override in .dark below). Non-prototype literal,
-     same justified pattern as --grid-select above. */
-  --sidebar: #e7ebf3;
+  /* --grid-select and --sidebar are defined in lib/theme.css (product theme). */
 
   /* shadcn-svelte mapping */
   --background: var(--bg);
@@ -112,8 +104,6 @@
 }
 
 .dark {
-  /* dark sidebar keeps the prototype surface (pixel-diff baseline is dark) */
-  --sidebar: var(--surface);
   /* SQL editor syntax palette — One Dark, via existing prototype hex tokens. */
   --syntax-keyword: var(--hex-c678dd);
   --syntax-string: var(--hex-98c379);
@@ -234,57 +224,10 @@
     user-select: text;
   }
 
-  /* Payload-popup buttons (Kafka / NATS / Redis "View … as JSON", and any other
-     small viewer dialog). The old neutral chips read as disabled on a light
-     background — Copy is the action, so it carries the accent; Close stays
-     secondary but sits on a raised surface with a real border. */
-  .pv-btn {
-    font-size: var(--px-12);
-    font-weight: 600;
-    border-radius: var(--px-6);
-    padding: var(--px-4) var(--px-12);
-    cursor: pointer;
-    color: var(--text);
-    background: var(--raised);
-    border: var(--px-1) solid var(--border2);
-    outline: none;
-  }
-  .pv-btn:hover {
-    background: color-mix(in srgb, var(--primary) 12%, var(--raised));
-    border-color: var(--primary);
-  }
-  .pv-btn:focus-visible {
-    outline: var(--px-2) solid var(--primary);
-    outline-offset: var(--px-1);
-  }
-  .pv-btn.primary {
-    color: var(--hex-fff);
-    background: var(--primary);
-    border-color: var(--primary);
-  }
-  .pv-btn.primary:hover {
-    background: color-mix(in srgb, var(--primary) 88%, var(--text));
-    border-color: color-mix(in srgb, var(--primary) 88%, var(--text));
-  }
+  /* .pv-btn / .eg-btn / .cfm-btn buttons are defined once in lib/theme.css */
 }
 
-/* scrollbar — port từ khối <style> của Database Studio.dc.html */
-::-webkit-scrollbar {
-  width: var(--px-10);
-  height: var(--px-10);
-}
-::-webkit-scrollbar-thumb {
-  background: var(--border2);
-  border-radius: var(--px-6);
-  border: var(--px-2) solid transparent;
-  background-clip: padding-box;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: var(--muted);
-}
-::-webkit-scrollbar-track {
-  background: transparent;
-}
+/* scrollbars — styled in lib/theme.css */
 
 /* keyframes — port nguyên từ Database Studio.dc.html */
 @keyframes spin {

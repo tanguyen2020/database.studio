@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from '$lib/components/Icon.svelte'
   // Query Plan Visualizer (Phase 5 · T1). Gọi explain_plan → cây PlanNode chuẩn
   // hóa (1 component cho mọi hệ). Toggle Estimated/Actual (actual thực sự chạy
   // query — cảnh báo side-effect), View raw, panel summary + warnings.
@@ -104,7 +105,7 @@
         <span onclick={toggleActual} onkeydown={(e) => e.key === 'Enter' && toggleActual()} role="button" tabindex="0" style="font-size:var(--px-11_5);background:{actual ? 'var(--primary)' : 'var(--panel)'};color:{actual ? 'var(--hex-fff)' : 'var(--text)'};border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-12);cursor:pointer;font-weight:600">Actual</span>
       {/if}
       <span onclick={() => (showRaw = !showRaw)} onkeydown={(e) => e.key === 'Enter' && (showRaw = !showRaw)} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-12);cursor:pointer">View raw</span>
-      <span onclick={run} onkeydown={(e) => e.key === 'Enter' && run()} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-12);cursor:pointer">⟳ Re-explain</span>
+      <span onclick={run} onkeydown={(e) => e.key === 'Enter' && run()} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-12);cursor:pointer"><Icon name="refresh" size={12} /> Re-explain</span>
     </div>
   </div>
 

@@ -1,4 +1,7 @@
 <script lang="ts">
+  import Icon from '$lib/components/Icon.svelte'
+  import { armCollapse, treeOut } from '$lib/ui/tree-motion'
+  import Chevron from '$lib/components/Chevron.svelte'
   // RabbitMQ browser embedded in the ObjectExplorer sidebar (same shape as the
   // Redis key browser): vhost selector + broker summary + ＋Queue / ＋Exchange, a
   // name filter, and two folders — Queues (message counts) and Exchanges (type).
@@ -217,7 +220,7 @@
     </select>
     {#if loading}
       <span class="mono" aria-live="polite" style="font-size:var(--px-10_5);color:var(--primary);display:inline-flex;align-items:center;gap:var(--px-4)">
-        <span class="rb-spin" aria-hidden="true">⟳</span> Loading…
+        <span class="rb-spin" aria-hidden="true"><Icon name="refresh" size={12} /></span> Loading…
       </span>
     {:else if overview}
       <span class="mono" data-testid="rabbit-summary" style="font-size:var(--px-10_5);color:var(--muted)" title="Broker totals across every vhost · Erlang {overview.erlang_version}">
@@ -253,14 +256,14 @@
       <!-- Queues -->
       <div
         class="rb-row rb-head"
-        onclick={() => (openQueues = !openQueues)}
-        onkeydown={(e) => e.key === 'Enter' && (openQueues = !openQueues)}
+        onclick={() => (openQueues && armCollapse(), openQueues = !openQueues)}
+        onkeydown={(e) => e.key === 'Enter' && (openQueues && armCollapse(), openQueues = !openQueues)}
         role="treeitem"
         aria-selected="false"
         aria-expanded={openQueues}
         tabindex="0"
       >
-        <span class="mono rb-chev">{openQueues ? '▾' : '▸'}</span>
+        <span class="mono rb-chev"><Chevron open={openQueues} size={12} /></span>
         <span style="font-size:var(--px-12);font-weight:700;color:var(--text)">Queues</span>
         <span class="mono rb-meta">{qRows.length}{filter.trim() ? ` of ${queues.length}` : ''}</span>
       </div>
@@ -274,7 +277,7 @@
           {@const badge = queueTypeBadge(q.queue_type)}
           <ContextMenu.Root>
             <ContextMenu.Trigger>
-              <div
+              <div out:treeOut|global
                 class="rb-row"
                 class:sel={active?.kind === 'rabbit-queue' && active.name === q.name}
                 onclick={() => tabs.openRabbitQueue(connId, vhost, q.name)}
@@ -306,14 +309,14 @@
       <!-- Exchanges -->
       <div
         class="rb-row rb-head"
-        onclick={() => (openExchanges = !openExchanges)}
-        onkeydown={(e) => e.key === 'Enter' && (openExchanges = !openExchanges)}
+        onclick={() => (openExchanges && armCollapse(), openExchanges = !openExchanges)}
+        onkeydown={(e) => e.key === 'Enter' && (openExchanges && armCollapse(), openExchanges = !openExchanges)}
         role="treeitem"
         aria-selected="false"
         aria-expanded={openExchanges}
         tabindex="0"
       >
-        <span class="mono rb-chev">{openExchanges ? '▾' : '▸'}</span>
+        <span class="mono rb-chev"><Chevron open={openExchanges} size={12} /></span>
         <span style="font-size:var(--px-12);font-weight:700;color:var(--text)">Exchanges</span>
         <span class="mono rb-meta">{xRows.length}{filter.trim() ? ` of ${exchanges.length}` : ''}</span>
       </div>
@@ -326,7 +329,7 @@
         {#each xRows as x (x.name)}
           <ContextMenu.Root>
             <ContextMenu.Trigger>
-              <div
+              <div out:treeOut|global
                 class="rb-row"
                 class:sel={active?.kind === 'rabbit-exchange' && active.name === x.name}
                 onclick={() => tabs.openRabbitExchange(connId, vhost, x.name)}
@@ -457,23 +460,5 @@
     to {
       transform: rotate(360deg);
     }
-  }
-  .eg-btn {
-    font-size: var(--px-12);
-    color: var(--text2);
-    background: var(--panel);
-    border: var(--px-1) solid var(--border);
-    border-radius: var(--px-6);
-    padding: var(--px-5) var(--px-14);
-    cursor: pointer;
-  }
-  .eg-btn:hover {
-    background: var(--hover);
-  }
-  .eg-btn.danger {
-    color: var(--hex-fff);
-    background: var(--error);
-    border-color: var(--error);
-    font-weight: 600;
   }
 </style>

@@ -74,6 +74,12 @@ export function toAlterStatement(system: string, kind: AlterKind, schema: string
       // ClickHouse has no CREATE OR REPLACE for tables — surface the DDL for manual edit.
       return `-- ClickHouse has no CREATE OR REPLACE for tables — edit with ALTER TABLE …\n${def};`
     }
+    case 'duckdb': {
+      // duckdb_views().sql is `CREATE VIEW …`; macros are rebuilt as
+      // `CREATE OR REPLACE MACRO …` — both re-run in place with OR REPLACE.
+      if (/^\s*CREATE\s+OR\s+REPLACE/i.test(def)) return `${def};`
+      return `${swapLeadingCreate(def, 'CREATE OR REPLACE')};`
+    }
     default:
       return `${def};`
   }

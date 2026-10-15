@@ -1,4 +1,6 @@
 <script lang="ts">
+  import Icon from '$lib/components/Icon.svelte'
+  import Chevron from '$lib/components/Chevron.svelte'
   // Kafka Cluster Overview + Topic Browser (Phase 4 · T2+T3) — port tinh thần
   // dòng 718-765 (bảng message → topic list ở đây). Header cluster (brokers/
   // controller/counts) + danh sách topic (search, expand → partitions offsets/lag)
@@ -146,7 +148,7 @@
       {#if view === 'topics'}
         <span onclick={createTopic} onkeydown={(e) => e.key === 'Enter' && createTopic()} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-12);cursor:pointer;font-weight:600">＋ Topic</span>
       {/if}
-      <span onclick={() => { load(); if (view === 'groups') loadGroups() }} onkeydown={(e) => e.key === 'Enter' && load()} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-12);cursor:pointer">⟳ Refresh</span>
+      <span onclick={() => { load(); if (view === 'groups') loadGroups() }} onkeydown={(e) => e.key === 'Enter' && load()} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-12);cursor:pointer"><Icon name="refresh" size={12} /> Refresh</span>
     </div>
   </div>
 
@@ -233,7 +235,7 @@
           tabindex="0"
           style="display:flex;align-items:center;gap:var(--px-8);padding:var(--px-7) var(--px-8);border-radius:var(--px-6);cursor:pointer"
         >
-          <span class="mono" style="width:var(--px-10);text-align:center;font-size:var(--px-9);color:var(--muted)">{open ? '▾' : '▸'}</span>
+          <span class="mono" style="width:var(--px-10);text-align:center;font-size:var(--px-9);color:var(--muted)"><Chevron open={open} size={10} /></span>
           <span class="mono" style="font-size:var(--px-12_5);font-weight:600;color:{t.internal ? 'var(--muted)' : '#8B5CF6'}">{t.name}</span>
           <span class="mono" style="font-size:var(--px-10_5);color:var(--muted)">{t.partitions.length}p · lag {topicLag(t).toLocaleString()}</span>
           <span

@@ -34,6 +34,9 @@ struct LiveEntry {
     /// used to cancel the query *on the server* — aborting the client task
     /// leaves the server happily producing rows.
     session_id: Option<String>,
+    /// Interrupts the running statement in-process (DuckDB): its query runs on a
+    /// blocking thread that aborting the task cannot stop. `None` elsewhere.
+    interrupt: Option<Arc<::duckdb::InterruptHandle>>,
     poisoned: bool,
     latency_ms: Option<u64>,
     /// Last moment this connection was known to be usable (a statement or a
@@ -393,6 +396,7 @@ impl Registry {
             })?;
         let latency = started.elapsed().as_millis() as u64;
         let session_id = probe_session_id(&mut driver, profile.system.as_str()).await;
+        let interrupt = driver.interrupt_handle();
 
         let entry = LiveEntry {
             driver: Arc::new(tokio::sync::Mutex::new(driver)),
@@ -404,6 +408,7 @@ impl Registry {
             running: None,
             cancel: None,
             session_id,
+            interrupt,
             poisoned: false,
             latency_ms: Some(latency),
             last_ok: std::time::Instant::now(),
@@ -534,6 +539,7 @@ impl Registry {
             ));
         };
         let session_id = probe_session_id(&mut fresh, profile.system.as_str()).await;
+        let interrupt = fresh.interrupt_handle();
         // Replacing the driver drops the old connection, which closes its socket.
         // That is also what makes the server abandon whatever it was still doing
         // for us on engines without a query-scoped cancel statement.
@@ -541,6 +547,7 @@ impl Registry {
         if let Some(e) = self.entries.lock().unwrap().get_mut(id) {
             e.poisoned = false;
             e.session_id = session_id;
+            e.interrupt = interrupt;
             e.last_ok = std::time::Instant::now();
         }
         Ok(())
@@ -815,6 +822,12 @@ impl Registry {
             let mut map = self.entries.lock().unwrap();
             let Some(e) = map.get_mut(id) else { return false };
             let was_running = e.running.take().map(|h| h.abort()).is_some();
+            if was_running {
+                // In-process engines: stop the statement itself (no-op when idle).
+                if let Some(h) = &e.interrupt {
+                    h.interrupt();
+                }
+            }
             let token_fired = match e.cancel.take() {
                 Some(t) => {
                     t.cancel();

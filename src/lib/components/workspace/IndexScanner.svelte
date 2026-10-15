@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from '$lib/components/Icon.svelte'
   // Index Scanner/Analyzer (Phase 5 · T7b). Quét index toàn schema, cờ sức khỏe
   // (unused/redundant/fragmented/invalid), filter nhanh, search, panel chi tiết,
   // export CSV/JSON. Không tự DROP — chỉ gợi ý.
@@ -90,7 +91,7 @@
     <input bind:value={search} placeholder="Search…" class="mono" style="margin-left:auto;width:var(--px-150);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-9);font-size:var(--px-12);color:var(--text);outline:none" />
     <span onclick={exportCsv} onkeydown={(e) => e.key === 'Enter' && exportCsv()} role="button" tabindex="0" style="font-size:var(--px-11);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">CSV</span>
     <span onclick={exportJson} onkeydown={(e) => e.key === 'Enter' && exportJson()} role="button" tabindex="0" style="font-size:var(--px-11);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">JSON</span>
-    <span onclick={load} onkeydown={(e) => e.key === 'Enter' && load()} role="button" tabindex="0" style="font-size:var(--px-11);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">⟳</span>
+    <span onclick={load} onkeydown={(e) => e.key === 'Enter' && load()} role="button" tabindex="0" style="font-size:var(--px-11);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer"><Icon name="refresh" size={12} /></span>
   </div>
 
   <div style="flex:1;display:flex;min-height:0">

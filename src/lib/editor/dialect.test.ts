@@ -54,7 +54,7 @@ describe('monarch language ids', () => {
   it('ids are unique and all registered systems are covered', () => {
     const ids = SQL_SYSTEMS.map(editorLanguageId)
     expect(new Set(ids).size).toBe(ids.length)
-    expect(ids).toHaveLength(8)
+    expect(ids).toHaveLength(9)
   })
 })
 

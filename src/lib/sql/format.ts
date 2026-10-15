@@ -12,6 +12,8 @@ function langOf(system: string): FormatOptionsWithLanguage['language'] {
       return 'transactsql'
     case 'sqlite':
       return 'sqlite'
+    case 'duckdb':
+      return 'duckdb'
     case 'oracle':
       return 'plsql'
     case 'clickhouse':

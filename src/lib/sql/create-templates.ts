@@ -24,8 +24,8 @@ export function createTemplate(system: string, kind: CreateKind, schema: string)
       return `CREATE VIEW ${v} AS\nSELECT * FROM ${qname(system, schema, 'source_table')};`
     }
     case 'sequence': {
-      // PostgreSQL and Oracle both have first-class standalone sequences.
-      if (system !== 'postgres' && system !== 'oracle') return `-- ${label(system)} does not support standalone sequences`
+      // PostgreSQL, Oracle and DuckDB have first-class standalone sequences.
+      if (system !== 'postgres' && system !== 'oracle' && system !== 'duckdb') return `-- ${label(system)} does not support standalone sequences`
       return `CREATE SEQUENCE ${qname(system, schema, 'new_sequence')}\n  START WITH 1\n  INCREMENT BY 1;`
     }
     case 'procedure':
@@ -68,6 +68,9 @@ function functionTemplate(system: string, schema: string): string {
     case 'oracle':
       // Oracle uses RETURN (not RETURNS); PL/SQL block + `/` terminator.
       return `CREATE OR REPLACE FUNCTION ${f}\nRETURN NUMBER AS\nBEGIN\n  RETURN 0;\nEND;\n/`
+    case 'duckdb':
+      // DuckDB functions are macros: a scalar expression (or AS TABLE <query>).
+      return `CREATE OR REPLACE MACRO ${f}(a, b) AS\n  a + b;`
     default:
       return `-- ${label(system)} does not support SQL functions`
   }
@@ -113,5 +116,6 @@ function triggerTemplate(system: string, schema: string): string {
 }
 
 function label(system: string): string {
+  if (system === 'duckdb') return 'DuckDB'
   return system.charAt(0).toUpperCase() + system.slice(1)
 }

@@ -108,6 +108,11 @@ mongodb = "3"
 # dlopen'd at runtime.
 oracle = "0.6"
 
+# DuckDB — embedded analytical database (file or in-memory, like SQLite). `bundled`
+# compiles DuckDB from source with the C/C++ compiler (no runtime library to ship);
+# json + parquet are linked in statically so read_json/read_parquet work offline.
+duckdb = { version = "=1.10506.0", features = ["bundled", "json", "parquet"] }
+
 # Misc
 uuid = { version = "1", features = ["v4"] }
 thiserror = "2"

@@ -23,6 +23,8 @@ export function defaultColumnType(system: string): string {
       return 'Int64'
     case 'oracle':
       return 'NUMBER'
+    case 'duckdb':
+      return 'INTEGER'
     default:
       return 'integer' // postgres
   }
@@ -46,6 +48,8 @@ export function dataTypes(system: string): string[] {
       return ORACLE_TYPES
     case 'postgres':
       return POSTGRES_TYPES
+    case 'duckdb':
+      return DUCKDB_TYPES
     default:
       // Non-relational or unknown → no curated list.
       return []
@@ -137,6 +141,23 @@ const SQLITE_TYPES = [
   'TEXT', 'CHARACTER', 'VARCHAR', 'VARYING CHARACTER', 'NCHAR', 'NATIVE CHARACTER', 'NVARCHAR', 'CLOB',
   // BLOB affinity
   'BLOB',
+]
+
+// DuckDB — native types as DuckDB spells them, plus the common aliases and the
+// nested types (LIST via `[]`, STRUCT, MAP, UNION) people type directly.
+const DUCKDB_TYPES = [
+  // integers (signed / unsigned) + aliases
+  'TINYINT', 'SMALLINT', 'INTEGER', 'INT', 'BIGINT', 'HUGEINT',
+  'UTINYINT', 'USMALLINT', 'UINTEGER', 'UBIGINT', 'UHUGEINT', 'BIGNUM',
+  // exact / floating numeric
+  'DECIMAL', 'NUMERIC', 'FLOAT', 'REAL', 'DOUBLE',
+  // boolean / string / binary
+  'BOOLEAN', 'VARCHAR', 'TEXT', 'STRING', 'CHAR', 'BLOB', 'BYTEA', 'BIT', 'UUID', 'JSON',
+  // date / time
+  'DATE', 'TIME', 'TIMETZ', 'TIMESTAMP', 'TIMESTAMPTZ', 'TIMESTAMP_S', 'TIMESTAMP_MS', 'TIMESTAMP_NS', 'INTERVAL',
+  // nested
+  'INTEGER[]', 'BIGINT[]', 'VARCHAR[]', 'DOUBLE[]', 'STRUCT(a INTEGER, b VARCHAR)', 'MAP(VARCHAR, INTEGER)',
+  'UNION(num INTEGER, str VARCHAR)', "ENUM('a', 'b')",
 ]
 
 // Oracle Database. Types that take length/precision listed bare (VARCHAR2, NUMBER);

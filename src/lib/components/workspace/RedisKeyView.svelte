@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from '$lib/components/Icon.svelte'
   // Redis single-key viewer (opened from the sidebar key browser). Shows the value
   // per type (string editor / hash / zset / list / set / stream) with a View-JSON
   // popup + Copy on each value, Set TTL, Add item, and Delete key.
@@ -36,6 +37,39 @@
     stream: 'var(--sacc-orange)',
   }
   const typeColor = (t: string) => TYPE_COLOR[t] ?? 'var(--text2)'
+  const TYPE_LABEL: Record<string, string> = {
+    string: 'String',
+    hash: 'Hash',
+    list: 'List',
+    set: 'Set',
+    zset: 'Sorted set',
+    stream: 'Stream',
+  }
+  /** TTL in plain words for the header (the sidebar keeps the compact form). */
+  function ttlText(ttl: number): string {
+    if (ttl === -1) return 'No expiry'
+    if (ttl === -2) return 'Expired'
+    return `Expires in ${ttlLabel(ttl)}`
+  }
+  const itemCount = $derived.by(() => {
+    const val = v?.value
+    if (!val) return null
+    if (val.kind === 'hash') return val.fields.length
+    if (val.kind === 'zset') return val.members.length
+    if (val.kind === 'list') return val.items.length
+    if (val.kind === 'set') return val.members.length
+    if (val.kind === 'stream') return val.entries.length
+    return null
+  })
+  const itemNoun = $derived(
+    v?.value.kind === 'hash'
+      ? { one: 'field', many: 'fields' }
+      : v?.value.kind === 'stream'
+        ? { one: 'entry', many: 'entries' }
+        : v?.value.kind === 'zset' || v?.value.kind === 'set'
+          ? { one: 'member', many: 'members' }
+          : { one: 'item', many: 'items' },
+  )
   function ttlLabel(ttl: number): string {
     if (ttl === -1) return '∞'
     if (ttl === -2) return 'expired'
@@ -147,27 +181,28 @@
 </script>
 
 {#snippet actions(label: string, raw: string, id?: string, del?: (id: string) => void)}
-  <td style="border-bottom:var(--px-1) solid var(--border);padding:var(--px-4) var(--px-8);white-space:nowrap;text-align:right">
-    <span onclick={() => viewJson(label, raw)} onkeydown={(e) => e.key === 'Enter' && viewJson(label, raw)} role="button" tabindex="0" title="View as JSON" style="cursor:pointer;color:var(--muted);margin-right:var(--px-8)">⛶</span>
-    <span onclick={() => copy(raw)} onkeydown={(e) => e.key === 'Enter' && copy(raw)} role="button" tabindex="0" title="Copy value" style="cursor:pointer;color:var(--muted)">⧉</span>
+  <!-- row actions: quiet until the row is hovered, delete turns red only on hover -->
+  <td class="rk-act">
+    <span class="rk-ic" onclick={() => viewJson(label, raw)} onkeydown={(e) => e.key === 'Enter' && viewJson(label, raw)} role="button" tabindex="0" title="View as JSON"><Icon name="expand" size={13} /></span>
+    <span class="rk-ic" onclick={() => copy(raw)} onkeydown={(e) => e.key === 'Enter' && copy(raw)} role="button" tabindex="0" title="Copy value"><Icon name="copy" size={13} /></span>
     {#if del && id !== undefined}
-      <span onclick={() => del(id)} onkeydown={(e) => e.key === 'Enter' && del(id)} role="button" tabindex="0" title="Delete" style="cursor:pointer;color:var(--error);font-size:var(--px-13);margin-left:var(--px-8)">×</span>
+      <span class="rk-ic danger" onclick={() => del(id)} onkeydown={(e) => e.key === 'Enter' && del(id)} role="button" tabindex="0" title="Delete this item"><Icon name="trash" size={13} /></span>
     {/if}
   </td>
 {/snippet}
 
 {#snippet kvTable(h1: string, h2: string, rows: [string, string][], kind: string, del?: (id: string) => void)}
-  <table class="mono" style="border-collapse:collapse;width:100%;font-size:var(--px-12_5);table-layout:fixed">
+  <table class="rk-table">
     <thead><tr>
-      <th style="position:sticky;top:0;background:var(--header);border-bottom:var(--px-1) solid var(--border2);padding:var(--px-7) var(--px-14);text-align:left;color:var(--text2);font-weight:600;width:var(--px-200)">{h1}</th>
-      <th style="position:sticky;top:0;background:var(--header);border-bottom:var(--px-1) solid var(--border2);padding:var(--px-7) var(--px-14);text-align:left;color:var(--text2);font-weight:600">{h2}</th>
-      <th style="position:sticky;top:0;background:var(--header);border-bottom:var(--px-1) solid var(--border2);width:var(--px-90)"></th>
+      <th style="width:var(--px-240)">{h1}</th>
+      <th>{h2}</th>
+      <th class="rk-act-h"></th>
     </tr></thead>
     <tbody>
       {#each rows as row, i (i)}
         <tr>
-          <td style="padding:var(--px-7) var(--px-14);border-bottom:var(--px-1) solid var(--border);color:var(--sacc-yellow);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title={row[0]}>{row[0]}</td>
-          <td style="padding:var(--px-7) var(--px-14);border-bottom:var(--px-1) solid var(--border);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title={row[1]}>{row[1]}</td>
+          <td class="rk-k" title={row[0]}>{row[0]}</td>
+          <td class="rk-v" class:num={kind === 'zset'} title={row[1]}>{row[1]}</td>
           {@render actions(row[0], row[1], row[0], del)}
         </tr>
       {/each}
@@ -176,17 +211,17 @@
 {/snippet}
 
 {#snippet listTable(h1: string, items: string[], kind: string, del?: (id: string) => void)}
-  <table class="mono" style="border-collapse:collapse;width:100%;font-size:var(--px-12_5);table-layout:fixed">
+  <table class="rk-table">
     <thead><tr>
-      <th style="position:sticky;top:0;background:var(--header);border-bottom:var(--px-1) solid var(--border2);padding:var(--px-7) var(--px-14);text-align:left;color:var(--text2);font-weight:600;width:var(--px-60)">{h1}</th>
-      <th style="position:sticky;top:0;background:var(--header);border-bottom:var(--px-1) solid var(--border2);padding:var(--px-7) var(--px-14);text-align:left;color:var(--text2);font-weight:600">Value</th>
-      <th style="position:sticky;top:0;background:var(--header);border-bottom:var(--px-1) solid var(--border2);width:var(--px-90)"></th>
+      <th style="width:var(--px-60)">{h1}</th>
+      <th>Value</th>
+      <th class="rk-act-h"></th>
     </tr></thead>
     <tbody>
       {#each items as item, i (i)}
         <tr>
-          <td style="padding:var(--px-7) var(--px-14);border-bottom:var(--px-1) solid var(--border);color:var(--muted)">{i}</td>
-          <td style="padding:var(--px-7) var(--px-14);border-bottom:var(--px-1) solid var(--border);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title={item}>{item}</td>
+          <td class="rk-idx">{i}</td>
+          <td class="rk-v" title={item}>{item}</td>
           {@render actions(String(i), item, item, del)}
         </tr>
       {/each}
@@ -194,40 +229,44 @@
   </table>
 {/snippet}
 
-<div style="flex:1;display:flex;flex-direction:column;min-height:0;position:relative">
-  <div style="flex:none;display:flex;align-items:center;gap:var(--px-10);padding:var(--px-10) var(--px-14);border-bottom:var(--px-1) solid var(--border);background:var(--surface)">
-    <span style="width:var(--px-3);height:var(--px-20);border-radius:var(--px-2);background:{accent}"></span>
-    <span class="mono" style="font-size:var(--px-13);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{key}</span>
+<div style="flex:1;display:flex;flex-direction:column;min-height:0;position:relative;background:var(--bg)">
+  <!-- header: what the key is (type, name) and its facts in plain words -->
+  <div class="rk-head">
+    <div class="rk-title">
+      {#if v}<span class="rk-type" style="--tc:{typeColor(v.key_type)}">{TYPE_LABEL[v.key_type] ?? v.key_type}</span>{/if}
+      <span class="rk-name" title={key}>{key}</span>
+    </div>
     {#if v}
-      <span class="mono" style="flex:none;font-size:var(--px-10);font-weight:700;color:{typeColor(v.key_type)};border:var(--px-1) solid {typeColor(v.key_type)};border-radius:var(--px-4);padding:var(--px-1) var(--px-6)">{v.key_type}</span>
-      <span class="mono" style="font-size:var(--px-11);color:var(--muted)">TTL {ttlLabel(v.ttl)}</span>
-      {#if mem != null}<span class="mono" style="font-size:var(--px-11);color:var(--muted)" title="MEMORY USAGE">{fmtBytes(mem)}</span>{/if}
+      <div class="rk-meta">
+        <span class:warn={v.ttl === -2}>{ttlText(v.ttl)}</span>
+        {#if itemCount != null}<span class="dot">·</span><span>{itemCount.toLocaleString()} {itemCount === 1 ? itemNoun.one : itemNoun.many}</span>{/if}
+        {#if mem != null}<span class="dot">·</span><span title="MEMORY USAGE">{fmtBytes(mem)}</span>{/if}
+      </div>
     {/if}
-    <div style="margin-left:auto;display:flex;gap:var(--px-7)">
-      <span onclick={load} onkeydown={(e) => e.key === 'Enter' && load()} role="button" tabindex="0" class="eg-btn">⟳ Refresh</span>
+    <div class="rk-btns">
+      <span onclick={load} onkeydown={(e) => e.key === 'Enter' && load()} role="button" tabindex="0" class="eg-btn rk-btn"><Icon name="refresh" size={12} />Refresh</span>
       <span onclick={openTtl} onkeydown={(e) => e.key === 'Enter' && openTtl()} role="button" tabindex="0" class="eg-btn">Set TTL</span>
-      <span onclick={() => (confirmDel = true)} onkeydown={(e) => e.key === 'Enter' && (confirmDel = true)} role="button" tabindex="0" class="eg-btn" style="color:var(--error)">Delete</span>
+      <span onclick={() => (confirmDel = true)} onkeydown={(e) => e.key === 'Enter' && (confirmDel = true)} role="button" tabindex="0" class="eg-btn rk-del">Delete</span>
     </div>
   </div>
 
-  <div style="flex:1;overflow:auto;min-height:0">
+  <div class="rk-body">
     {#if loading}
-      <div style="padding:var(--px-14);font-size:var(--px-12);color:var(--muted)">Loading…</div>
+      <div class="rk-note">Loading…</div>
     {:else if error}
-      <div style="padding:var(--px-14);font-size:var(--px-12);color:var(--error)">{error}</div>
+      <div class="rk-note" style="color:var(--error)">{error}</div>
     {:else if v?.value.kind === 'string'}
-      <div style="padding:var(--px-14);display:flex;flex-direction:column;gap:var(--px-8);height:100%;box-sizing:border-box">
+      <div style="padding:var(--px-14);display:flex;flex-direction:column;gap:var(--px-10);height:100%;box-sizing:border-box">
         <div style="flex:none;display:flex;gap:var(--px-8);justify-content:flex-end">
-          <span onclick={() => viewJson(key, stringDraft)} onkeydown={(e) => e.key === 'Enter' && viewJson(key, stringDraft)} role="button" tabindex="0" class="eg-btn">⛶ View JSON</span>
-          <span onclick={() => copy(stringDraft)} onkeydown={(e) => e.key === 'Enter' && copy(stringDraft)} role="button" tabindex="0" class="eg-btn">⧉ Copy</span>
+          <span onclick={() => viewJson(key, stringDraft)} onkeydown={(e) => e.key === 'Enter' && viewJson(key, stringDraft)} role="button" tabindex="0" class="eg-btn rk-btn"><Icon name="expand" size={12} />View JSON</span>
+          <span onclick={() => copy(stringDraft)} onkeydown={(e) => e.key === 'Enter' && copy(stringDraft)} role="button" tabindex="0" class="eg-btn rk-btn"><Icon name="copy" size={12} />Copy</span>
         </div>
         <textarea
           bind:value={stringDraft}
-          class="mono"
-          style="flex:1;width:100%;box-sizing:border-box;resize:none;background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-8);padding:var(--px-10);font-size:var(--px-12_5);color:var(--text);outline:none"
+          class="mono rk-text"
         ></textarea>
         <div style="flex:none;display:flex;justify-content:flex-end">
-          <span onclick={() => edit({ op: 'setString', value: stringDraft }, 'SET (saved)')} onkeydown={(e) => e.key === 'Enter' && edit({ op: 'setString', value: stringDraft }, 'SET')} role="button" tabindex="0" style="font-size:var(--px-12);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-7);padding:var(--px-6) var(--px-16);cursor:pointer;font-weight:600">Save</span>
+          <span onclick={() => edit({ op: 'setString', value: stringDraft }, 'SET (saved)')} onkeydown={(e) => e.key === 'Enter' && edit({ op: 'setString', value: stringDraft }, 'SET')} role="button" tabindex="0" class="cfm-btn primary">Save</span>
         </div>
       </div>
     {:else if v?.value.kind === 'hash'}
@@ -239,25 +278,25 @@
     {:else if v?.value.kind === 'set'}
       {@render listTable('#', v.value.members, 'set', (id) => delItem('set', id))}
     {:else if v?.value.kind === 'stream'}
-      <table class="mono" style="border-collapse:collapse;width:100%;font-size:var(--px-12);table-layout:fixed">
+      <table class="rk-table">
         <thead><tr>
-          <th style="position:sticky;top:0;background:var(--header);border-bottom:var(--px-1) solid var(--border2);padding:var(--px-7) var(--px-14);text-align:left;color:var(--text2);width:var(--px-200)">ID</th>
-          <th style="position:sticky;top:0;background:var(--header);border-bottom:var(--px-1) solid var(--border2);padding:var(--px-7) var(--px-14);text-align:left;color:var(--text2)">Fields</th>
-          <th style="position:sticky;top:0;background:var(--header);border-bottom:var(--px-1) solid var(--border2);width:var(--px-90)"></th>
+          <th style="width:var(--px-200)">ID</th>
+          <th>Fields</th>
+          <th class="rk-act-h"></th>
         </tr></thead>
         <tbody>
           {#each v.value.entries as e (e.id)}
             {@const fieldsText = e.fields.map((f) => `${f[0]}=${f[1]}`).join('  ')}
             <tr>
-              <td style="padding:var(--px-6) var(--px-14);border-bottom:var(--px-1) solid var(--border);color:var(--sacc-orange);white-space:nowrap">{e.id}</td>
-              <td style="padding:var(--px-6) var(--px-14);border-bottom:var(--px-1) solid var(--border);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title={fieldsText}>{fieldsText}</td>
+              <td class="rk-k" style="white-space:nowrap">{e.id}</td>
+              <td class="rk-v" title={fieldsText}>{fieldsText}</td>
               {@render actions(e.id, JSON.stringify(Object.fromEntries(e.fields)), e.id, (id) => delItem('stream', id))}
             </tr>
           {/each}
         </tbody>
       </table>
     {:else}
-      <div style="padding:var(--px-14);font-size:var(--px-12);color:var(--muted)">(empty / key not found)</div>
+      <div class="rk-note">This key is empty or no longer exists.</div>
     {/if}
   </div>
 
@@ -355,28 +394,169 @@
 </div>
 
 <style>
-  .eg-btn {
-    font-size: var(--px-11_5);
-    color: var(--text2);
-    background: var(--panel);
-    border: var(--px-1) solid var(--border);
-    border-radius: var(--px-6);
-    padding: var(--px-4) var(--px-10);
-    cursor: pointer;
+  .rk-head {
+    flex: none;
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--px-6) var(--px-14);
+    padding: var(--px-12) var(--px-16);
+    border-bottom: var(--px-1) solid var(--border);
+    background: var(--surface);
   }
-  .eg-btn:hover {
-    background: var(--hover);
+  .rk-title {
+    display: flex;
+    align-items: center;
+    gap: var(--px-10);
+    min-width: 0;
   }
-  .eg-btn.primary {
-    color: var(--hex-fff);
-    background: var(--primary);
-    border-color: var(--primary);
+  .rk-type {
+    flex: none;
+    font-size: var(--px-11);
     font-weight: 600;
+    color: var(--tc);
+    background: color-mix(in srgb, var(--tc) 13%, transparent);
+    border-radius: var(--px-10);
+    padding: var(--px-2) var(--px-9);
   }
-  .eg-btn.danger {
-    color: var(--hex-fff);
-    background: var(--error);
+  .rk-name {
+    font-size: var(--px-15);
+    font-weight: 600;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .rk-meta {
+    display: flex;
+    align-items: center;
+    gap: var(--px-6);
+    font-size: var(--px-12);
+    color: var(--muted);
+  }
+  .rk-meta .dot {
+    opacity: 0.6;
+  }
+  .rk-meta .warn {
+    color: var(--error);
+  }
+  .rk-btns {
+    margin-left: auto;
+    display: flex;
+    gap: var(--px-7);
+  }
+  .rk-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--px-5);
+  }
+  .rk-del {
+    color: var(--error);
+  }
+  .rk-del:hover {
     border-color: var(--error);
+    background: color-mix(in srgb, var(--error) 8%, var(--raised));
+  }
+  .rk-body {
+    flex: 1;
+    overflow: auto;
+    min-height: 0;
+  }
+  .rk-note {
+    padding: var(--px-16);
+    font-size: var(--px-12_5);
+    color: var(--muted);
+  }
+  .rk-text {
+    flex: 1;
+    width: 100%;
+    box-sizing: border-box;
+    resize: none;
+    background: var(--surface);
+    border: var(--px-1) solid var(--border2);
+    border-radius: var(--px-8);
+    padding: var(--px-12);
+    font-size: var(--px-12_5);
+    line-height: 1.5;
+    color: var(--text);
+    outline: none;
+  }
+  .rk-table {
+    border-collapse: collapse;
+    width: 100%;
+    table-layout: fixed;
+    background: var(--surface);
+  }
+  .rk-table th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: var(--header);
+    border-bottom: var(--px-1) solid var(--border);
+    padding: var(--px-8) var(--px-16);
+    text-align: left;
+    font-size: var(--px-12);
     font-weight: 600;
+    color: var(--text2);
+  }
+  .rk-table th.rk-act-h {
+    width: var(--px-100);
+  }
+  .rk-table td {
+    padding: var(--px-8) var(--px-16);
+    border-bottom: var(--px-1) solid var(--border);
+    font-family: var(--font-mono);
+    font-size: var(--px-12_5);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .rk-table tbody tr:nth-child(even) {
+    background: var(--grid-zebra);
+  }
+  .rk-table tbody tr:hover {
+    background: color-mix(in srgb, var(--primary) 6%, transparent);
+  }
+  .rk-k {
+    color: var(--text);
+    font-weight: 500;
+  }
+  .rk-v {
+    color: var(--text2);
+  }
+  .rk-v.num {
+    color: var(--syntax-number);
+    font-variant-numeric: tabular-nums;
+  }
+  .rk-idx {
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
+  .rk-table td.rk-act {
+    text-align: right;
+    overflow: visible;
+  }
+  .rk-ic {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: var(--px-24);
+    height: var(--px-24);
+    border-radius: var(--px-6);
+    color: var(--muted);
+    cursor: pointer;
+    opacity: 0.35;
+  }
+  .rk-table tr:hover .rk-ic,
+  .rk-ic:focus-visible {
+    opacity: 1;
+  }
+  .rk-ic:hover {
+    color: var(--text);
+    background: color-mix(in srgb, var(--text) 7%, transparent);
+  }
+  .rk-ic.danger:hover {
+    color: var(--error);
+    background: color-mix(in srgb, var(--error) 12%, transparent);
   }
 </style>

@@ -32,12 +32,13 @@ const EXPECTED: Record<string, [badge: string, accent: string]> = {
   mongodb: ['MG', '#00ED64'],
   oracle: ['OR', '#C74634'],
   rabbitmq: ['RB', '#FF6600'],
+  duckdb: ['DK', '#FFF000'],
 }
 
 describe('SYSTEMS metadata (từ systems.gen.ts)', () => {
-  it('đủ 13 hệ + orphan', () => {
-    expect(SYSTEM_ORDER).toHaveLength(13)
-    expect(Object.keys(SYSTEMS)).toHaveLength(14)
+  it('đủ 14 hệ + orphan', () => {
+    expect(SYSTEM_ORDER).toHaveLength(14)
+    expect(Object.keys(SYSTEMS)).toHaveLength(15)
   })
 
   for (const [key, [badge, accent]] of Object.entries(EXPECTED)) {

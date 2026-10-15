@@ -1,0 +1,272 @@
+/*
+ * theme.css — the product theme (commercial look).
+ *
+ * tokens.css is generated from the design prototype and stays the single source for
+ * spacing/brand colours. This file is the ONE hand-authored place that re-skins the
+ * surfaces on top of it: a softer neutral palette, a friendlier accent, real depth
+ * (shadows) and a humanist UI font. It is loaded right after tokens.css, so every
+ * component that already references var(--bg) / var(--primary) / … picks it up with
+ * no component change. This is a deliberate, owner-requested deviation from the
+ * prototype's colours — the prototype still governs layout.
+ *
+ * Exempt from the hardcoded-style check (same status as tokens.css): it IS the token
+ * definition layer.
+ */
+
+:root {
+  /* — Light: warm-neutral greys instead of the cool blue-grey, so large areas feel
+     calm; one clear accent; hover is distinct from the page background. — */
+  --bg: #f4f5f7;
+  --surface: #ffffff;
+  --panel: #f8f9fb;
+  --raised: #ffffff;
+  --border: #e5e7eb;
+  --border2: #d6d9df;
+  --text: #1c2230;
+  --text2: #485063;
+  /* secondary text: >= 4.5:1 on white, sidebar and page (WCAG AA for small text) */
+  --muted: #646c7b;
+  --header: #f8f9fb;
+  --hover: #eceef2;
+  --primary: #4f6bed;
+  --grid-zebra: #fafbfc;
+  --grid-select: #4f6bed;
+  --sidebar: #f1f2f5;
+
+  /* depth — subtle, layered shadows; popovers and dialogs float instead of being boxed */
+  --shadow-xs: 0 1px 2px rgba(16, 24, 40, 0.05);
+  --shadow-sm: 0 1px 3px rgba(16, 24, 40, 0.08), 0 1px 2px rgba(16, 24, 40, 0.04);
+  --shadow-md: 0 6px 16px -4px rgba(16, 24, 40, 0.12), 0 2px 6px -2px rgba(16, 24, 40, 0.06);
+  --shadow-lg: 0 20px 40px -12px rgba(16, 24, 40, 0.22), 0 6px 14px -6px rgba(16, 24, 40, 0.1);
+  --ring-soft: color-mix(in srgb, var(--primary) 28%, transparent);
+
+  --font-main: 'Inter Variable', 'Inter', 'Be Vietnam Pro', 'Segoe UI', -apple-system, sans-serif;
+}
+
+.dark {
+  /* — Dark: deep neutral graphite with only a hint of blue; lower contrast between
+     panels so the chrome recedes and the data is what stands out. — */
+  --bg: #111318;
+  --surface: #16181e;
+  --panel: #1a1d24;
+  --raised: #20232b;
+  --border: #262a33;
+  --border2: #333844;
+  --text: #e8eaef;
+  --text2: #a8aebb;
+  --muted: #868d9c; /* >= 4.5:1 on every dark surface incl. hover */
+  --header: #14161b;
+  --hover: #22252e;
+  --primary: #6b84ff;
+  --grid-zebra: #181a20;
+  --grid-select: #5872f0;
+  --sidebar: #14161b;
+
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.4), 0 1px 2px rgba(0, 0, 0, 0.25);
+  --shadow-md: 0 8px 20px -6px rgba(0, 0, 0, 0.55), 0 2px 6px -2px rgba(0, 0, 0, 0.35);
+  --shadow-lg: 0 24px 48px -12px rgba(0, 0, 0, 0.7), 0 8px 16px -8px rgba(0, 0, 0, 0.45);
+}
+
+/* ---------------------------------------------------------------------------
+ * Global finishing — applies to every screen without touching components.
+ * ------------------------------------------------------------------------- */
+
+body {
+  font-feature-settings: 'cv11', 'ss01';
+  text-rendering: optimizeLegibility;
+}
+
+/* Floating surfaces get depth instead of a hard outline only. */
+[role='dialog'],
+[role='alertdialog'] {
+  box-shadow: var(--shadow-lg);
+}
+[role='menu'],
+[role='listbox'],
+[data-slot='context-menu-content'],
+[data-slot='dropdown-menu-content'],
+[data-slot='popover-content'],
+[data-slot='select-content'],
+.suggest-widget {
+  box-shadow: var(--shadow-md) !important;
+}
+
+/* Soft, consistent focus ring for keyboard users (mouse clicks stay clean). */
+:where(button, [role='button'], a, select, summary):focus-visible {
+  outline: 2px solid var(--ring-soft);
+  outline-offset: 1px;
+}
+:where(input, textarea, select):focus {
+  border-color: var(--primary) !important;
+  box-shadow: 0 0 0 3px var(--ring-soft);
+  outline: none;
+}
+
+/* Text selection in the accent colour rather than the OS default. */
+::selection {
+  background: color-mix(in srgb, var(--primary) 26%, transparent);
+}
+
+/* Gentle transitions so hover/active states don't snap. */
+:where(button, [role='button'], [role='treeitem'], [role='tab']) {
+  transition:
+    background-color 0.12s ease,
+    border-color 0.12s ease,
+    color 0.12s ease,
+    box-shadow 0.12s ease;
+}
+
+/* Slimmer, rounder scrollbars that only darken on hover. */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--muted) 35%, transparent);
+  border-radius: 999px;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--muted) 60%, transparent);
+  background-clip: padding-box;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :where(button, [role='button'], [role='treeitem'], [role='tab']) {
+    transition: none;
+  }
+}
+
+/* Placeholders read as hints, not code — even inside monospace inputs. */
+::placeholder {
+  font-family: var(--font-main);
+  color: var(--muted);
+  opacity: 1;
+}
+
+/* ---------------------------------------------------------------------------
+ * Buttons — ONE definition for the app's shared button classes. These used to be
+ * re-declared (slightly differently) inside each component; now they all look the
+ * same. Sizes stay per role: .eg-btn = compact toolbar, .pv-btn = viewer,
+ * .cfm-btn = dialog footer.
+ * ------------------------------------------------------------------------- */
+.eg-btn,
+.pv-btn,
+.cfm-btn {
+  font-family: var(--font-main);
+  font-weight: 500;
+  line-height: 1.3;
+  color: var(--text);
+  background: var(--raised);
+  border: 1px solid var(--border2);
+  border-radius: 6px;
+  box-shadow: var(--shadow-xs);
+  cursor: pointer;
+  outline: none;
+  transition:
+    background-color 0.12s ease,
+    border-color 0.12s ease,
+    color 0.12s ease;
+}
+.eg-btn {
+  font-size: 11.5px;
+  padding: 4px 10px;
+}
+.pv-btn {
+  font-size: 12px;
+  padding: 4px 12px;
+}
+.cfm-btn {
+  font-size: 12.5px;
+  padding: 6px 14px;
+}
+.eg-btn:hover,
+.pv-btn:hover,
+.cfm-btn:hover {
+  background: color-mix(in srgb, var(--primary) 7%, var(--raised));
+  border-color: color-mix(in srgb, var(--primary) 45%, var(--border2));
+}
+.eg-btn:focus-visible,
+.pv-btn:focus-visible,
+.cfm-btn:focus-visible {
+  outline: 2px solid var(--ring-soft);
+  outline-offset: 1px;
+}
+.eg-btn.primary,
+.pv-btn.primary,
+.cfm-btn.primary {
+  color: #fff;
+  font-weight: 600;
+  background: var(--primary);
+  border-color: var(--primary);
+}
+.eg-btn.primary:hover,
+.pv-btn.primary:hover,
+.cfm-btn.primary:hover {
+  background: color-mix(in srgb, var(--primary) 88%, #000);
+  border-color: color-mix(in srgb, var(--primary) 88%, #000);
+}
+.eg-btn.danger,
+.pv-btn.danger,
+.cfm-btn.danger {
+  color: #fff;
+  font-weight: 600;
+  background: #d64545;
+  border-color: #d64545;
+}
+.eg-btn.danger:hover,
+.pv-btn.danger:hover,
+.cfm-btn.danger:hover {
+  background: #bf3636;
+  border-color: #bf3636;
+}
+.eg-btn:disabled,
+.pv-btn:disabled,
+.cfm-btn:disabled,
+.eg-btn[aria-disabled='true'],
+.cfm-btn[aria-disabled='true'] {
+  opacity: 0.5;
+  cursor: default;
+  box-shadow: none;
+}
+
+/* ---------------------------------------------------------------------------
+ * Tree motion — rows that appear when a node or group expands ease in (fade +
+ * a short drop) instead of popping. Applies to every tree in the sidebar: the
+ * Connections list and the Object Explorer, including the Redis / MongoDB /
+ * RabbitMQ trees rendered inside it. Only the outermost row element animates
+ * (nested controls such as the chevron button inherit it), and only on mount,
+ * so a row that is already on screen never re-animates.
+ * ------------------------------------------------------------------------- */
+@keyframes ds-row-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+[role='tree'] :is([role='treeitem'], [role='button']):not(:is([role='treeitem'], [role='button']) *) {
+  animation: ds-row-in 0.18s cubic-bezier(0.2, 0.7, 0.3, 1) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  [role='tree'] :is([role='treeitem'], [role='button']) {
+    animation: none;
+  }
+}
+
+/* Spinner wrappers around the refresh icon: a transform only rotates a box that is
+   not plain inline, and inline-flex also centres the SVG on the text baseline. */
+.rx-spin,
+.rb-spin,
+.refresh-glyph,
+.conn-retry-glyph,
+.conn-refresh-glyph,
+.tree-refresh-glyph {
+  display: inline-flex;
+  align-items: center;
+}

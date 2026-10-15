@@ -11,6 +11,9 @@ describe('rootNodeKey', () => {
     expect(rootNodeKey('mssql')).toBe('curdb')
     expect(rootNodeKey('oracle')).toBe('curdb')
   })
+  it('DuckDB nests its schemas under the current database (ATTACHed ones sit beside it)', () => {
+    expect(rootNodeKey('duckdb')).toBe('curdb')
+  })
   it('SQLite nests under its file node', () => {
     expect(rootNodeKey('sqlite')).toBe('file')
   })

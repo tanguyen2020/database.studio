@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from '$lib/components/Icon.svelte'
   // Drop Database — confirm, run, and when the server refuses because OTHER
   // sessions hold the database, list those sessions right here so they can be
   // killed (one by one, or all at once followed by the drop) instead of leaving
@@ -204,7 +205,7 @@
     <div class="dd-actions">
       <button type="button" class="dd-btn" use:autofocus disabled={busy} onclick={close}>Cancel</button>
       {#if phase === 'in-use' || phase === 'killing'}
-        <button type="button" class="dd-btn" disabled={busy} onclick={loadSessions}>⟳ Refresh list</button>
+        <button type="button" class="dd-btn" disabled={busy} onclick={loadSessions}><Icon name="refresh" size={12} /> Refresh list</button>
         {#if sessions.length}
           <button type="button" class="dd-btn danger" disabled={busy} onclick={killAllAndDrop}>
             {phase === 'killing' ? 'Killing…' : `Kill ${sessions.length} session${sessions.length === 1 ? '' : 's'} & drop`}

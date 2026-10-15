@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from '$lib/components/Icon.svelte'
   // RabbitMQ queue tab: live stats + Messages (peek with requeue, or consume) +
   // Bindings (add / remove) + Publish + Details. One tab per (vhost, queue).
   import { untrack } from 'svelte'
@@ -220,7 +221,7 @@
       </span>
     </div>
     <div style="margin-left:auto;display:flex;gap:var(--px-8);align-items:center">
-      <span onclick={() => loadInfo()} onkeydown={(e) => e.key === 'Enter' && loadInfo()} role="button" tabindex="0" class="pv-btn" aria-busy={loading}>⟳ Refresh</span>
+      <span onclick={() => loadInfo()} onkeydown={(e) => e.key === 'Enter' && loadInfo()} role="button" tabindex="0" class="pv-btn" aria-busy={loading}><Icon name="refresh" size={12} /> Refresh</span>
       <span onclick={purge} onkeydown={(e) => e.key === 'Enter' && purge()} role="button" tabindex="0" class="pv-btn" style="color:var(--error)">Purge</span>
       <span onclick={deleteQueue} onkeydown={(e) => e.key === 'Enter' && deleteQueue()} role="button" tabindex="0" class="pv-btn" style="color:var(--error)">Delete queue</span>
     </div>

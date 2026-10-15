@@ -58,9 +58,9 @@
   {#if profile}
     <span style="display:flex;align-items:center"><SystemIcon system={profile.system} size={14} /></span>
   {/if}
-  <span class="mono">{statusObject}</span>
-  <span class="mono" style="margin-left:auto">
+  <span>{statusObject}</span>
+  <span style="margin-left:auto;font-variant-numeric:tabular-nums">
     {#if exec?.running}Processing…{:else}{latency}{/if}
   </span>
-  <span class="mono">{statusRows}</span>
+  <span style="font-variant-numeric:tabular-nums">{statusRows}</span>
 </div>

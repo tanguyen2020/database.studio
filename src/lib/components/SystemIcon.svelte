@@ -36,6 +36,13 @@
     <rect x="13" y="4" width="3.3" height="16" rx="0.6" />
     <rect x="18" y="9.5" width="3.3" height="5" rx="0.6" />
   </svg>
+{:else if key === 'duckdb'}
+  <!-- DuckDB mark: a duck's head and bill inside the yellow disc (hand-built) -->
+  <svg width={size} height={size} viewBox="0 0 24 24" stroke="none" aria-hidden="true">
+    <circle cx="12" cy="12" r="11" fill={color} />
+    <circle cx="9.6" cy="12" r="4.7" fill="var(--hex-13161f)" />
+    <rect x="13.6" y="10.4" width="6" height="3.2" rx="1.6" fill="var(--hex-13161f)" />
+  </svg>
 {:else if key === 'rabbitmq'}
   <!-- RabbitMQ mark: two "ears" on a body with the square window (svF, hand-built) -->
   <svg width={size} height={size} viewBox="0 0 24 24" fill={color} stroke="none" aria-hidden="true">

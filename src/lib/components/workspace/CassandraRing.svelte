@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from '$lib/components/Icon.svelte'
   // Cassandra Ring Topology (Phase 4b · T6) — port dòng 802-823 + buildRing()
   // dòng 3018-3033 của prototype. Node THẬT từ system.local + system.peers
   // (command cassandra_ring), KHÔNG hardcode 6 node.
@@ -67,7 +68,7 @@
       <span style="font-weight:700;font-size:var(--px-13)">Ring Topology</span>
       <span style="font-size:var(--px-11_5);color:var(--sacc-green);font-weight:600">● {up} nodes UP</span>
       <span style="font-size:var(--px-11_5);color:var(--muted)">{dcs}</span>
-      <span onclick={load} onkeydown={(e) => e.key === 'Enter' && load()} role="button" tabindex="0" style="margin-left:auto;font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-12);cursor:pointer">⟳ Refresh</span>
+      <span onclick={load} onkeydown={(e) => e.key === 'Enter' && load()} role="button" tabindex="0" style="margin-left:auto;font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-12);cursor:pointer"><Icon name="refresh" size={12} /> Refresh</span>
     </div>
     <div style="flex:1;overflow:auto;display:flex;align-items:center;justify-content:center;padding:var(--px-18);background:var(--bg);background-image:radial-gradient(var(--border) var(--px-1),transparent var(--px-1));background-size:var(--px-24) var(--px-24)">
       {#if error}

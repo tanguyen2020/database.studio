@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from '$lib/components/Icon.svelte'
   // NATS JetStream subject messages — browse existing messages of a subject within
   // a stream (server-side filtered fetch), with Clear (purge subject) + Refresh.
   import * as ipc from '$lib/ipc'
@@ -356,7 +357,7 @@
       {/if}
       <span style="font-size:var(--px-11);color:var(--muted)" title={totalKnown ? '' : 'The server could not count this subject in time — paging still works'}>{totalKnown ? `${total} record${total === 1 ? '' : 's'}` : `${messages.length}+ records`}</span>
       <span onclick={addMessage} onkeydown={(e) => e.key === 'Enter' && addMessage()} role="button" tabindex="0" class="eg-btn">＋ Add</span>
-      <span onclick={() => reload()} onkeydown={(e) => e.key === 'Enter' && reload()} role="button" tabindex="0" class="eg-btn">⟳ Refresh</span>
+      <span onclick={() => reload()} onkeydown={(e) => e.key === 'Enter' && reload()} role="button" tabindex="0" class="eg-btn"><Icon name="refresh" size={12} /> Refresh</span>
       <span onclick={clearMessages} onkeydown={(e) => e.key === 'Enter' && clearMessages()} role="button" tabindex="0" class="eg-btn" style="color:var(--error)">Clear messages</span>
     </div>
   </div>
@@ -542,22 +543,5 @@
 <style>
   .subj-hit:hover {
     background: color-mix(in srgb, var(--primary) 14%, transparent);
-  }
-  .eg-btn {
-    font-size: var(--px-11_5);
-    color: var(--text2);
-    background: var(--panel);
-    border: var(--px-1) solid var(--border);
-    border-radius: var(--px-6);
-    padding: var(--px-4) var(--px-10);
-    cursor: pointer;
-  }
-  .eg-btn:hover {
-    background: var(--hover);
-  }
-  .eg-btn.danger {
-    color: var(--hex-fff);
-    background: var(--error);
-    border-color: var(--error);
   }
 </style>

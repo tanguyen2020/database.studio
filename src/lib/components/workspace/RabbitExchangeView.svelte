@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from '$lib/components/Icon.svelte'
   // RabbitMQ exchange tab: where messages published here go (bindings, add /
   // remove), a Publish form, and the exchange's details. One tab per (vhost, exchange).
   import { untrack } from 'svelte'
@@ -136,7 +137,7 @@
       </span>
     </div>
     <div style="margin-left:auto;display:flex;gap:var(--px-8);align-items:center">
-      <span onclick={() => loadInfo()} onkeydown={(e) => e.key === 'Enter' && loadInfo()} role="button" tabindex="0" class="pv-btn" aria-busy={loading}>⟳ Refresh</span>
+      <span onclick={() => loadInfo()} onkeydown={(e) => e.key === 'Enter' && loadInfo()} role="button" tabindex="0" class="pv-btn" aria-busy={loading}><Icon name="refresh" size={12} /> Refresh</span>
       {#if !builtin}
         <span onclick={() => (confirmDelete = true)} onkeydown={(e) => e.key === 'Enter' && (confirmDelete = true)} role="button" tabindex="0" class="pv-btn" style="color:var(--error)">Delete exchange</span>
       {/if}

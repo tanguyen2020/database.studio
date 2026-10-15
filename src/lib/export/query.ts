@@ -27,7 +27,8 @@ export function supportsOffset(system: string): boolean {
     system === 'mysql' ||
     system === 'mariadb' ||
     system === 'sqlite' ||
-    system === 'clickhouse'
+    system === 'clickhouse' ||
+    system === 'duckdb'
   )
 }
 

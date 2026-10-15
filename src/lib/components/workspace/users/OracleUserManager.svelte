@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from '$lib/components/Icon.svelte'
   // Oracle User Manager (U6). Users + Roles; per-object privileges (Oracle has
   // no GRANT ON SCHEMA — presets batch over the owner's objects). Tabs: General
   // (password/lock/expire/quota/drop CASCADE) · System Privileges (checklist) ·
@@ -275,7 +276,7 @@
     <span style="font-size:var(--px-12);font-weight:700">Users</span>
     <span style="font-size:var(--px-11);color:var(--muted)">{users.length} users</span>
     <span onclick={() => cid && oraUserWizard.show(cid)} onkeydown={(e) => e.key === 'Enter' && cid && oraUserWizard.show(cid)} role="button" tabindex="0" title="Create a new Oracle user (which is also a schema)" style="font-size:var(--px-11_5);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer;font-weight:600">+ Create User</span>
-    <span onclick={refresh} onkeydown={(e) => e.key === 'Enter' && refresh()} role="button" tabindex="0" aria-busy={refreshing} title="Reload users and privileges from the database" style="margin-left:auto;font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer;opacity:{refreshing ? 0.6 : 1}">{refreshing ? '⟳ Refreshing…' : '⟳ Refresh'}</span>
+    <span onclick={refresh} onkeydown={(e) => e.key === 'Enter' && refresh()} role="button" tabindex="0" aria-busy={refreshing} title="Reload users and privileges from the database" style="margin-left:auto;font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer;opacity:{refreshing ? 0.6 : 1}"><Icon name="refresh" size={12} /> {refreshing ? 'Refreshing…' : 'Refresh'}</span>
   </div>
 
   <!-- Oracle's model in one line — a user is a schema; access = system privs + roles + object privs. -->

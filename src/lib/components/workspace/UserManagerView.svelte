@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from '$lib/components/Icon.svelte'
   // User Manager (Users / Roles & Privileges) — shell.
   // U0: framework + generic principal list read via ipc.usersView. Per-engine
   // detail panes, mutation dialogs and the privilege grid land in their phases
@@ -147,7 +148,7 @@
       tabindex="0"
       aria-busy={refreshing}
       style="margin-left:auto;font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer;opacity:{refreshing ? 0.6 : 1}"
-      >{refreshing ? '⟳ Refreshing…' : '⟳ Refresh'}</span
+      ><Icon name="refresh" size={12} /> {refreshing ? 'Refreshing…' : 'Refresh'}</span
     >
   </div>
   <div style="flex:1;display:flex;min-height:0">

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from '$lib/components/Icon.svelte'
   // Kafka Schema Registry (Phase 4 · T7) — port dòng 928-958 của prototype.
   // Trái: danh sách subjects (fmt badge + name + v{latest} · compat). Phải:
   // header (name + fmt + version toggles) + pre schema + footer compat/id.
@@ -69,7 +70,7 @@
     <div style="width:var(--px-240);flex:none;border-right:var(--px-1) solid var(--border);background:var(--surface);display:flex;flex-direction:column">
       <div style="flex:none;padding:var(--px-10) var(--px-14);border-bottom:var(--px-1) solid var(--border);font-size:var(--px-10);font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);display:flex;align-items:center">
         <span>Subjects</span>
-        <span onclick={load} onkeydown={(e) => e.key === 'Enter' && load()} role="button" tabindex="0" style="margin-left:auto;color:var(--muted);cursor:pointer;font-size:var(--px-12)">⟳</span>
+        <span onclick={load} onkeydown={(e) => e.key === 'Enter' && load()} role="button" tabindex="0" style="margin-left:auto;color:var(--muted);cursor:pointer;font-size:var(--px-12)"><Icon name="refresh" size={12} /></span>
       </div>
       <div style="flex:1;overflow:auto;min-height:0">
         {#each subjects as s (s.name)}

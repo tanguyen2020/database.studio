@@ -15,7 +15,8 @@ export function conflictSupported(system: string): boolean {
     system === 'postgres' ||
     system === 'mysql' ||
     system === 'mariadb' ||
-    system === 'sqlite'
+    system === 'sqlite' ||
+    system === 'duckdb'
   )
 }
 
@@ -26,6 +27,8 @@ export function insertPrefix(system: string, mode: ConflictMode): string {
   if (mode === 'skip') {
     if (system === 'mysql' || system === 'mariadb') return 'INSERT IGNORE INTO'
     if (system === 'sqlite') return 'INSERT OR IGNORE INTO'
+    // DuckDB: same prefix form (skips rows that hit a PRIMARY KEY / UNIQUE).
+    if (system === 'duckdb') return 'INSERT OR IGNORE INTO'
   }
   return 'INSERT INTO'
 }

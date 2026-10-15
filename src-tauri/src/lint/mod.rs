@@ -11,8 +11,8 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use sqlparser::ast::{Expr, GroupByExpr, SelectItem, SetExpr, Statement};
 use sqlparser::dialect::{
-    ClickHouseDialect, Dialect, GenericDialect, MsSqlDialect, MySqlDialect, PostgreSqlDialect,
-    SQLiteDialect,
+    ClickHouseDialect, Dialect, DuckDbDialect, GenericDialect, MsSqlDialect, MySqlDialect,
+    PostgreSqlDialect, SQLiteDialect,
 };
 use sqlparser::parser::Parser;
 
@@ -51,6 +51,7 @@ fn dialect_of(system: &str) -> Box<dyn Dialect> {
         "mssql" => Box::new(MsSqlDialect {}),
         "sqlite" => Box::new(SQLiteDialect {}),
         "clickhouse" => Box::new(ClickHouseDialect {}),
+        "duckdb" => Box::new(DuckDbDialect {}),
         _ => Box::new(GenericDialect {}),
     }
 }
@@ -98,6 +99,12 @@ fn syntax_lints(system: &str, sql: &str) -> (Vec<LintDiagnostic>, Option<Vec<Sta
     let dialect = dialect_of(system);
     match Parser::parse_sql(dialect.as_ref(), sql) {
         Ok(ast) => (Vec::new(), Some(ast)),
+        // DuckDB's grammar goes well beyond what the parser knows (FROM-first
+        // queries, SUMMARIZE, PIVOT, lambdas, `* EXCLUDE (…)`, list/struct
+        // literals…): a parse failure is no evidence of a mistake, so no syntax
+        // error is reported — DuckDB itself reports real ones, with a position,
+        // when the statement runs. Rule packs + danger checks still apply.
+        Err(_) if system == "duckdb" => (Vec::new(), None),
         Err(e) => {
             let msg = e.to_string();
             let mut out = Vec::new();
@@ -429,6 +436,20 @@ mod tests {
 
     fn rules(system: &str, sql: &str) -> Vec<String> {
         lint(system, sql).into_iter().map(|d| d.rule).collect()
+    }
+
+    #[test]
+    fn duckdb_grammar_is_not_flagged_but_danger_rules_still_apply() {
+        for sql in [
+            "FROM events SELECT kind, count(*) GROUP BY ALL",
+            "SUMMARIZE events",
+            "SELECT * EXCLUDE (payload) FROM events",
+            "PIVOT sales ON year USING sum(amount)",
+            "SELECT list_transform([1, 2], x -> x + 1)",
+        ] {
+            assert!(lint("duckdb", sql).iter().all(|d| d.rule != "syntax"), "{sql}");
+        }
+        assert!(rules("duckdb", "DELETE FROM events").iter().any(|r| r.contains("delete")));
     }
 
     #[test]

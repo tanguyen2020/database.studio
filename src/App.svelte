@@ -1,4 +1,5 @@
 <script lang="ts">
+  import WelcomeScreen from '$lib/components/workspace/WelcomeScreen.svelte'
   // App shell:
   //  TitleBar → [Sidebar: ConnectionList / ObjectExplorer] | [TabBar → Workspace] → StatusBar
   // Global keyboard shortcuts + layout resizers (all sizes persisted).
@@ -495,27 +496,8 @@
       {/snippet}
 
       {#snippet emptyPane()}
-        {#if connections.profiles.length === 0}
-          <!-- Welcome / onboarding (Phase 6 · T7) — chưa có connection nào -->
-          <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:var(--px-14);padding:var(--px-30)">
-            <div style="font-size:var(--px-30)">🗄️</div>
-            <div style="font-size:var(--px-18);font-weight:700;color:var(--text)">Welcome to Database Studio</div>
-            <div style="font-size:var(--px-13);color:var(--muted);text-align:center;max-width:var(--px-460);line-height:1.5">Connect to PostgreSQL, MySQL, MariaDB, SQL Server, SQLite, ClickHouse, Cassandra, Redis, Kafka or NATS to get started.</div>
-            <div onclick={() => (ui.pickerOpen = true)} onkeydown={(e) => e.key === 'Enter' && (ui.pickerOpen = true)} role="button" tabindex="0" style="font-size:var(--px-13);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-8);padding:var(--px-9) var(--px-20);cursor:pointer;font-weight:600">+ Add first connection</div>
-            <div style="font-size:var(--px-11_5);color:var(--muted)">Tip: press <span class="mono" style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-4);padding:var(--px-1) var(--px-6)">Ctrl+P</span> to open the Command Palette</div>
-          </div>
-        {:else}
-          <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:var(--px-8);font-size:var(--px-13);color:var(--muted)">
-            <p>No tabs open</p>
-            <div
-              onclick={() => tabs.openSqlTab({})}
-              onkeydown={(e) => e.key === 'Enter' && tabs.openSqlTab({})}
-              role="button"
-              tabindex="0"
-              style="color:var(--primary);cursor:pointer"
-            >+ New SQL tab (Ctrl+T)</div>
-          </div>
-        {/if}
+        <!-- start screen: app mark, first actions, connections, shortcuts -->
+        <WelcomeScreen />
       {/snippet}
 
       {#if !ready}

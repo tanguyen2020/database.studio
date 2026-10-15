@@ -23,6 +23,7 @@
     running = false
     const ext =
       backupWizard.system === 'sqlite' ? 'db'
+      : backupWizard.system === 'duckdb' ? 'duckdb' // in-process copy into a new DuckDB file
       : backupWizard.system === 'mongodb' ? 'archive'
       : backupWizard.system === 'mssql' ? 'bak'   // native BACKUP DATABASE (server-side)
       : backupWizard.system === 'oracle' ? 'dmp'  // Data Pump export (server-side)

@@ -46,6 +46,7 @@ async function register(m: MonacoApi) {
   const baseFor = (system: string) => {
     switch (system) {
       case 'postgres':
+      case 'duckdb': // PostgreSQL-style quoting, `::` casts and `$$` strings
         return pgsql
       case 'mysql':
       case 'mariadb':

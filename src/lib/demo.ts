@@ -5,6 +5,7 @@
 
 import type { ProfilePublic, SystemType } from './types'
 import { rabbitDemo, rabbitDemoEnabled } from './rabbitmq/demo'
+import { DUCK_DEMO_ID, duckDemo, duckDemoEnabled, isDuckConn } from './duckdb/demo'
 
 export const IS_TAURI =
   typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
@@ -478,21 +479,36 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
       return Promise.reject(String((e as Error).message ?? e))
     }
   }
+  // DuckDB (opt-in `?duckdb=1`): database/schema/macro shape of an embedded file.
+  if (duckDemoEnabled() && isDuckConn(args?.connId)) {
+    const r = duckDemo(cmd, args ?? {})
+    if (r !== undefined) return ok(r)
+  }
   switch (cmd) {
     case 'list_connections':
-      // The demo RabbitMQ connection is opt-in (`?rabbitmq=1`): every other spec
-      // relies on the connection list as it is.
-      return ok(
-        rabbitDemoEnabled()
+      // The demo RabbitMQ / DuckDB connections are opt-in (`?rabbitmq=1`,
+      // `?duckdb=1`): every other spec relies on the connection list as it is.
+      return ok([
+        ...DEMO_PROFILES,
+        ...(rabbitDemoEnabled()
           ? [
-              ...DEMO_PROFILES,
               conn('rmq1', 'RabbitMQ', 'rabbitmq', '10.0.9.4', 15672, '/', 'studio', 'Messaging', 'development', {
                 connected: true,
                 latency_ms: 4,
               }),
             ]
-          : DEMO_PROFILES,
-      )
+          : []),
+        ...(duckDemoEnabled()
+          ? [
+              conn(DUCK_DEMO_ID, 'Warehouse DuckDB', 'duckdb', '', 0, '', '', 'Embedded', 'local', {
+                sqlite_path: '/data/warehouse.duckdb',
+                connected: true,
+                latency_ms: 1,
+                has_password: false,
+              }),
+            ]
+          : []),
+      ])
     case 'load_tabs':
       return ok(DEMO_TABS)
     case 'get_app_state':

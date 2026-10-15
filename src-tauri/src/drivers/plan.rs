@@ -147,6 +147,9 @@ pub fn capability(system: &str) -> EngineCapability {
         "mssql" => (true, ActualKind::Analyze, CostBasis::Cost),
         "sqlite" => (true, ActualKind::None, CostBasis::RowsProxy),
         "clickhouse" => (true, ActualKind::None, CostBasis::RowsProxy),
+        // DuckDB: EXPLAIN (FORMAT JSON) estimated cardinalities; EXPLAIN ANALYZE
+        // runs the query and reports per-operator rows + timing. No cost numbers.
+        "duckdb" => (true, ActualKind::Analyze, CostBasis::RowsProxy),
         // Oracle: cost-based optimizer via EXPLAIN PLAN → PLAN_TABLE (estimated).
         // Actual (GATHER_PLAN_STATISTICS + DISPLAY_CURSOR) is a later refinement.
         "oracle" => (true, ActualKind::None, CostBasis::Cost),
@@ -1134,6 +1137,89 @@ fn QueryPlan_ok(
     })
 }
 
+/// DuckDB `EXPLAIN (FORMAT JSON)` (an array of `{name, extra_info, children}`) or
+/// `EXPLAIN ANALYZE (FORMAT JSON)` (one object: query totals + `children` with
+/// `operator_name / operator_cardinality / operator_timing`). Both shapes go
+/// through the same node reader; the ANALYZE wrapper node is skipped.
+pub fn parse_duckdb(json_text: &str, actual: bool) -> Result<QueryPlan, String> {
+    let v: Value = serde_json::from_str(json_text).map_err(|e| format!("DuckDB plan JSON error: {e}"))?;
+    let top = match &v {
+        Value::Array(a) => a.first().cloned().ok_or("DuckDB plan is empty")?,
+        Value::Object(_) => v.clone(),
+        _ => return Err("DuckDB plan has an unexpected shape".into()),
+    };
+    let total_ms = top.get("latency").and_then(Value::as_f64).map(|s| s * 1000.0);
+    // ANALYZE: the top object is the query (`query_name` / an EXPLAIN_ANALYZE
+    // operator), its children are the real plan.
+    let mut root_v = top.clone();
+    loop {
+        let is_wrapper = root_v.get("query_name").is_some()
+            || duck_name(&root_v).eq_ignore_ascii_case("EXPLAIN_ANALYZE");
+        let kids = root_v.get("children").and_then(Value::as_array).cloned().unwrap_or_default();
+        if is_wrapper && kids.len() == 1 {
+            root_v = kids[0].clone();
+        } else {
+            break;
+        }
+    }
+    let mut warnings = Vec::new();
+    let mut root = duck_node(&root_v, &mut warnings);
+    if duck_name(&root_v).is_empty() {
+        root.native_op = "QUERY".into();
+        root.operation = "QUERY".into();
+    }
+    QueryPlan_ok("duckdb", actual, root, total_ms, warnings, json_text)
+}
+
+fn duck_name(v: &Value) -> String {
+    ["name", "operator_name", "operator_type"]
+        .iter()
+        .find_map(|k| v.get(*k).and_then(Value::as_str))
+        .unwrap_or("")
+        .trim()
+        .to_string()
+}
+
+/// DuckDB operator → the shared operation vocabulary.
+pub fn duck_op(native: &str) -> String {
+    let n = native.trim().to_ascii_uppercase();
+    let canon = match n.as_str() {
+        "SEQ_SCAN" | "TABLE_SCAN" | "READ_PARQUET" | "READ_CSV" | "READ_JSON" => "SeqScan",
+        "INDEX_SCAN" => "IndexScan",
+        "HASH_JOIN" => "HashJoin",
+        "NESTED_LOOP_JOIN" | "BLOCKWISE_NL_JOIN" | "CROSS_PRODUCT" => "NestedLoop",
+        "PIECEWISE_MERGE_JOIN" | "IE_JOIN" | "ASOF_JOIN" => "MergeJoin",
+        "HASH_GROUP_BY" | "PERFECT_HASH_GROUP_BY" | "UNGROUPED_AGGREGATE" | "STREAMING_WINDOW" | "WINDOW" => "Aggregate",
+        "ORDER_BY" | "TOP_N" => "Sort",
+        "LIMIT" | "STREAMING_LIMIT" | "LIMIT_PERCENT" => "Limit",
+        _ => return normalize_op(native),
+    };
+    canon.to_string()
+}
+
+fn duck_node(v: &Value, warnings: &mut Vec<String>) -> PlanNode {
+    let native = duck_name(v);
+    let mut node = PlanNode::leaf(&duck_op(&native), &native);
+    if let Some(Value::Object(info)) = v.get("extra_info") {
+        for (k, val) in info {
+            node.extra.insert(k.clone(), val.clone());
+        }
+        node.estimated_rows = info
+            .get("Estimated Cardinality")
+            .and_then(|c| c.as_str().map(|s| s.trim_start_matches('~').trim().parse::<f64>().ok()).unwrap_or_else(|| c.as_f64()));
+        if let Some(t) = info.get("Table").and_then(Value::as_str) {
+            node.extra.insert("Relation Name".into(), Value::String(t.to_string()));
+        }
+    }
+    node.actual_rows = v.get("operator_cardinality").and_then(Value::as_f64);
+    node.actual_time_ms = v.get("operator_timing").and_then(Value::as_f64).map(|s| s * 1000.0);
+    for c in v.get("children").and_then(Value::as_array).into_iter().flatten() {
+        node.children.push(duck_node(c, warnings));
+    }
+    mark_hotspot(&mut node, warnings);
+    node
+}
+
 /// Oracle EXPLAIN PLAN → PLAN_TABLE rows (id/parent_id/operation/options/object/
 /// cardinality/cost) → chuẩn hóa cây theo parent_id. Cost là cumulative (đỉnh =
 /// tổng) → self-cost + % qua `assign_cost_pct`. Estimated-only (không actual).
@@ -1259,6 +1345,38 @@ fn mark_hotspot(node: &mut PlanNode, warnings: &mut Vec<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn duckdb_estimated_and_analyze_plans() {
+        assert!(capability("duckdb").supports_actual);
+        // EXPLAIN (FORMAT JSON): array of {name, extra_info, children}
+        let est = r#"[{"name":"PROJECTION","children":[{"name":"SEQ_SCAN ","children":[],
+            "extra_info":{"Table":"events","Estimated Cardinality":"125000"}}],
+            "extra_info":{"Projections":"id","Estimated Cardinality":"125000"}}]"#;
+        let p = parse_duckdb(est, false).unwrap();
+        assert_eq!(p.mode, "estimated");
+        let root = p.root.unwrap();
+        assert_eq!(root.native_op, "PROJECTION");
+        let scan = &root.children[0];
+        assert_eq!(scan.operation, "SeqScan");
+        assert_eq!(scan.estimated_rows, Some(125000.0));
+        assert!(scan.is_hotspot, "large full scan flagged");
+        assert!(p.summary.warnings.iter().any(|w| w.contains("events")));
+        // EXPLAIN ANALYZE (FORMAT JSON): the query wrapper is skipped
+        let act = r#"{"query_name":"SELECT 1","latency":0.25,"children":[{"operator_name":"EXPLAIN_ANALYZE",
+            "children":[{"operator_name":"HASH_GROUP_BY","operator_cardinality":3,"operator_timing":0.01,
+            "extra_info":{},"children":[{"operator_name":"TABLE_SCAN","operator_cardinality":40,
+            "operator_timing":0.002,"extra_info":{"Table":"t"},"children":[]}]}]}]}"#;
+        let p = parse_duckdb(act, true).unwrap();
+        assert_eq!(p.mode, "actual");
+        assert_eq!(p.summary.total_time_ms, Some(250.0));
+        let root = p.root.unwrap();
+        assert_eq!(root.operation, "Aggregate");
+        assert_eq!(root.actual_rows, Some(3.0));
+        assert_eq!(root.actual_time_ms, Some(10.0));
+        assert_eq!(root.children[0].operation, "SeqScan");
+        assert!(parse_duckdb("not json", false).is_err());
+    }
 
     #[test]
     fn capabilities() {

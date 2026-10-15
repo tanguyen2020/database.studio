@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Chevron from '$lib/components/Chevron.svelte'
   // Read-only virtualized result grid (TanStack table-core + virtual-core):
   // zebra rows, sticky header, row-number gutter, NULL badge, datetime in
   // local timezone, cell/row selection, Ctrl+C copy (TSV), CSV export.
@@ -562,7 +563,7 @@
   // numeric/decimal/money, real/double/float) via the shared classifyType, and tint
   // those columns' values with the theme-aware --syntax-number token. Selected
   // cells/rows keep their white text (see the cell color guard below).
-  const NUM_COLOR_SYSTEMS = ['postgres', 'mysql', 'mariadb', 'mssql', 'sqlite', 'mongodb', 'oracle']
+  const NUM_COLOR_SYSTEMS = ['postgres', 'mysql', 'mariadb', 'mssql', 'sqlite', 'mongodb', 'oracle', 'duckdb']
   const NUM_FAMILIES = new Set(['int', 'bigint', 'float', 'decimal'])
   const colorNumbers = $derived(NUM_COLOR_SYSTEMS.includes(system ?? editTarget?.system ?? ''))
   const numericCols = $derived(
@@ -1041,7 +1042,7 @@
           onkeydown={(e) => e.key === 'Enter' && toggleCollapsed(node.path)}
           style="display:flex;align-items:center;gap:var(--px-6);padding:var(--px-3) var(--px-12);cursor:pointer;padding-left:calc(var(--px-12) + {gr.depth} * var(--px-16));background:var(--panel);border-bottom:var(--px-1) solid var(--border)"
         >
-          <span class="mono" style="width:var(--px-10);color:var(--muted);font-size:var(--px-9)">{collapsed.has(node.path) ? '▸' : '▾'}</span>
+          <span class="mono" style="width:var(--px-10);color:var(--muted);font-size:var(--px-9)"><Chevron open={!(collapsed.has(node.path))} size={10} /></span>
           <span class="mono" style="font-weight:600;color:var(--text)">{node.key == null ? '∅' : String(node.key)}</span>
           <span class="mono" style="margin-left:auto;color:var(--muted);font-size:var(--px-10_5)">{node.count.toLocaleString()} rows</span>
           <span class="mono" style="color:var(--primary);font-size:var(--px-11)">{fmtAgg(node.agg)}</span>
@@ -1505,18 +1506,6 @@
      không xoá mất màu selection (dùng inline bg từ --grid-select). */
   .grid-row:not(.selected):hover {
     background: var(--hover) !important;
-  }
-  .eg-btn {
-    font-size: var(--px-11_5);
-    color: var(--text2);
-    background: var(--panel);
-    border: var(--px-1) solid var(--border);
-    border-radius: var(--px-6);
-    padding: var(--px-4) var(--px-10);
-    cursor: pointer;
-  }
-  .eg-btn:hover {
-    background: var(--hover);
   }
   /* column resize grip: sits on the header's right edge, invisible until it is
      hovered or dragged so the header keeps the prototype's look. */

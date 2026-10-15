@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Chevron from '$lib/components/Chevron.svelte'
   // Redis Key Explorer — port 1:1 từ Database Studio.dc.html dòng 662-678:
   // panel trái 300px (DB selector + SCAN count + cây key theo prefix ':'),
   // panel phải là Key Viewer (T4 — hiện placeholder). Key nạp qua SCAN cursor
@@ -374,7 +375,7 @@
               tabindex="0"
               style="display:flex;align-items:center;gap:var(--px-8);padding:var(--px-5) var(--px-8);border-radius:var(--px-6);cursor:pointer;padding-left:calc(var(--px-8) + {r.depth} * var(--px-14))"
             >
-              <span class="mono" style="flex:none;width:var(--px-10);text-align:center;font-size:var(--px-9);color:var(--muted)">{r.expanded ? '▾' : '▸'}</span>
+              <span class="mono" style="flex:none;width:var(--px-10);text-align:center;font-size:var(--px-9);color:var(--muted)"><Chevron open={r.expanded} size={10} /></span>
               <span class="mono" style="font-size:var(--px-12);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text2)">{r.segment}</span>
               <span class="mono" style="margin-left:auto;flex:none;font-size:var(--px-10);color:var(--muted)">{r.count}</span>
             </div>

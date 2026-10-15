@@ -12,6 +12,8 @@ export function classifyType(srcType: string): TypeFamily {
   // Oracle: BINARY_FLOAT/BINARY_DOUBLE (underscore blocks \b) matched explicitly.
   if (/binary_float|binary_double/.test(t)) return 'float'
   if (/\b(bigint|int8|bigserial|long)\b/.test(t)) return 'bigint'
+  if (/\b(hugeint|uhugeint|ubigint)\b/.test(t)) return 'bigint'
+  if (/\b(uinteger|usmallint|utinyint)\b/.test(t)) return 'int'
   if (/\b(smallint|int2|integer|int4|int|serial|mediumint|tinyint)\b/.test(t)) return 'int'
   // Oracle NUMBER folds into the decimal family.
   if (/\b(numeric|decimal|money|number)\b/.test(t)) return 'decimal'
@@ -35,6 +37,7 @@ const DIALECT_TYPES: Record<string, Record<TypeFamily, string>> = {
   mssql: { int: 'int', bigint: 'bigint', float: 'float', decimal: 'decimal(38,10)', bool: 'bit', text: 'nvarchar(max)', date: 'date', time: 'time', timestamp: 'datetime2', json: 'nvarchar(max)', uuid: 'uniqueidentifier', bytes: 'varbinary(max)' },
   sqlite: { int: 'INTEGER', bigint: 'INTEGER', float: 'REAL', decimal: 'NUMERIC', bool: 'INTEGER', text: 'TEXT', date: 'TEXT', time: 'TEXT', timestamp: 'TEXT', json: 'TEXT', uuid: 'TEXT', bytes: 'BLOB' },
   clickhouse: { int: 'Int32', bigint: 'Int64', float: 'Float64', decimal: 'Decimal(38,10)', bool: 'UInt8', text: 'String', date: 'Date', time: 'String', timestamp: 'DateTime', json: 'String', uuid: 'UUID', bytes: 'String' },
+  duckdb: { int: 'INTEGER', bigint: 'BIGINT', float: 'DOUBLE', decimal: 'DECIMAL(38,10)', bool: 'BOOLEAN', text: 'VARCHAR', date: 'DATE', time: 'TIME', timestamp: 'TIMESTAMP', json: 'JSON', uuid: 'UUID', bytes: 'BLOB' },
   oracle: { int: 'NUMBER(10)', bigint: 'NUMBER(19)', float: 'BINARY_DOUBLE', decimal: 'NUMBER(38,10)', bool: 'NUMBER(1)', text: 'VARCHAR2(4000)', date: 'DATE', time: 'VARCHAR2(30)', timestamp: 'TIMESTAMP', json: 'CLOB', uuid: 'VARCHAR2(36)', bytes: 'BLOB' },
 }
 

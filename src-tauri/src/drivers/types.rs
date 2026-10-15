@@ -21,6 +21,8 @@ pub enum SystemType {
     Mongodb,
     Oracle,
     Rabbitmq,
+    /// DuckDB — embedded analytical database (file or in-memory).
+    Duckdb,
 }
 
 impl SystemType {
@@ -39,6 +41,7 @@ impl SystemType {
             SystemType::Mongodb => "mongodb",
             SystemType::Oracle => "oracle",
             SystemType::Rabbitmq => "rabbitmq",
+            SystemType::Duckdb => "duckdb",
         }
     }
 

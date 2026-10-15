@@ -107,6 +107,29 @@ const BY_SYSTEM: Record<string, string[]> = {
 }
 BY_SYSTEM.mariadb = BY_SYSTEM.mysql
 
+// DuckDB: words that fail as a BARE column reference — duckdb_keywords()
+// categories `reserved` and `type_function` (e.g. `at`, `left`, `map`). Its
+// `column_name` and unreserved keywords (`between`, `bigint`, `schedule`, `type`…)
+// work unquoted, so it gets no lang-sql keyword list below (that would over-quote
+// everyday names). Kept in sync with the engine by the integration test
+// duckdb_keyword_categories_match_the_quoting_rules.
+BY_SYSTEM.duckdb = [
+  'all', 'analyse', 'analyze', 'and', 'anti', 'any', 'array', 'as', 'asc', 'asof',
+  'asymmetric', 'at', 'authorization', 'binary', 'both', 'by', 'case', 'cast',
+  'check', 'collate', 'collation', 'column', 'columns', 'concurrently', 'constraint',
+  'create', 'cross', 'default', 'deferrable', 'desc', 'describe', 'distinct', 'do',
+  'else', 'end', 'except', 'false', 'fetch', 'for', 'foreign', 'freeze', 'from',
+  'full', 'generated', 'glob', 'group', 'having', 'ilike', 'in',
+  'initially', 'inner', 'intersect', 'into', 'is', 'isnull', 'join', 'lambda',
+  'lateral', 'leading', 'left', 'like', 'limit', 'map', 'natural', 'not', 'notnull',
+  'null', 'offset', 'on', 'only', 'or', 'order', 'outer', 'overlaps', 'pivot',
+  'pivot_longer', 'pivot_wider', 'placing', 'positional', 'primary', 'qualify',
+  'references', 'returning', 'right', 'select', 'semi', 'show', 'similar', 'some',
+  'struct', 'summarize', 'symmetric', 'table', 'tablesample', 'then', 'to',
+  'trailing', 'true', 'try_cast', 'union', 'unique', 'unpack', 'unpivot', 'using',
+  'variadic', 'verbose', 'when', 'where', 'window', 'with',
+]
+
 // Authoritative keyword lists from `@codemirror/lang-sql` (the same lists the
 // editor highlights with) — the most complete per-dialect coverage available,
 // so an identifier that collides with ANY built-in keyword of that engine
@@ -152,7 +175,11 @@ const CACHE: Record<string, Set<string>> = {}
 
 function reservedSet(system: string): Set<string> {
   if (!CACHE[system]) {
-    const set = new Set([...CORE, ...(BY_SYSTEM[system] ?? []), ...(LANG_BY_SYSTEM[system] ?? [])])
+    // DuckDB's list is the engine's own (verified by an integration test), so it
+    // replaces the curated CORE instead of adding to it — CORE would over-quote
+    // words DuckDB accepts bare (`between`, `key`, `values`…).
+    const core = system === 'duckdb' ? [] : CORE
+    const set = new Set([...core, ...(BY_SYSTEM[system] ?? []), ...(LANG_BY_SYSTEM[system] ?? [])])
     for (const w of SAFE) set.delete(w)
     // Re-add engine-specific reserved words that SAFE would otherwise suppress.
     for (const w of SAFE_OVERRIDE_BY_SYSTEM[system] ?? []) set.add(w)

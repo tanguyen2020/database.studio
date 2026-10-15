@@ -214,6 +214,34 @@ pub fn definition_query(system: &str, kind: &str, schema: &str, name: &str) -> O
             let kw = if kind == "dictionary" { "DICTIONARY" } else { "TABLE" };
             format!("SHOW CREATE {kw} `{bs}`.`{bn}`")
         }
+        // DuckDB keeps the original CREATE statement for views and sequences.
+        // Macros keep only parameters + body, so the CREATE MACRO is rebuilt
+        // (scoped to the connection's current database).
+        ("duckdb", "view") => format!(
+            "SELECT sql FROM duckdb_views() WHERE database_name = current_database() \
+             AND schema_name = '{s}' AND view_name = '{n}'"
+        ),
+        ("duckdb", "sequence") => format!(
+            "SELECT sql FROM duckdb_sequences() WHERE database_name = current_database() \
+             AND schema_name = '{s}' AND sequence_name = '{n}'"
+        ),
+        ("duckdb", _) => {
+            // Identifiers go inside a SQL string literal: escape " then '.
+            let qs = schema.replace('"', "\"\"").replace('\'', "''");
+            let qn = name.replace('"', "\"\"").replace('\'', "''");
+            // DuckDB's catalog keeps parameter NAMES but not their defaults
+            // (`rate := 0.1`), so a rebuilt definition cannot restore them — say so
+            // in the script instead of handing back a silently different macro.
+            format!(
+                "SELECT CASE WHEN len(parameters) > 0 THEN '-- DuckDB does not keep parameter defaults \
+                 (name := value) in its catalog: re-add any the macro had before running this.' || chr(10) ELSE '' END \
+                 || 'CREATE OR REPLACE MACRO \"{qs}\".\"{qn}\"(' || array_to_string(parameters, ', ') || ') AS ' \
+                 || CASE WHEN function_type = 'table_macro' THEN 'TABLE ' ELSE '' END || macro_definition || ';' \
+                 FROM duckdb_functions() WHERE database_name = current_database() \
+                 AND schema_name = '{s}' AND function_name = '{n}' \
+                 AND function_type IN ('macro', 'table_macro') LIMIT 1"
+            )
+        }
         _ => return None,
     };
     Some(q)
@@ -283,6 +311,11 @@ pub fn index_definition_query(system: &str, schema: &str, table: &str, name: &st
         }
         // Oracle: GET_DDL('INDEX', …) → the full CLOB (no length cap on crate A).
         "oracle" => format!("SELECT DBMS_METADATA.GET_DDL('INDEX', '{n}', '{s}') AS d FROM DUAL"),
+        // DuckDB keeps the verbatim CREATE INDEX (expressions included).
+        "duckdb" => format!(
+            "SELECT sql AS d FROM duckdb_indexes() WHERE database_name = current_database() \
+             AND schema_name = '{s}' AND table_name = '{t}' AND index_name = '{n}' LIMIT 1"
+        ),
         _ => return None,
     };
     Some(q)

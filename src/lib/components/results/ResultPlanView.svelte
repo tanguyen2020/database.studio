@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from '$lib/components/Icon.svelte'
   // Query Plan rendered INSIDE the Result panel (not a separate tab). Driven by
   // ExplainState from the results store; the parent (SqlWorkspace) owns running
   // EXPLAIN and toggling Actual. Reuses PlanNodeBox for the tree.
@@ -51,7 +52,7 @@
         <span onclick={() => onToggleActual?.(!explain.actual)} onkeydown={(e) => e.key === 'Enter' && onToggleActual?.(!explain.actual)} role="button" tabindex="0" style="font-size:var(--px-11);background:{explain.actual ? 'var(--primary)' : 'var(--panel)'};color:{explain.actual ? 'var(--hex-fff)' : 'var(--text)'};border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer;font-weight:600">Actual</span>
       {/if}
       <span onclick={() => (showRaw = !showRaw)} onkeydown={(e) => e.key === 'Enter' && (showRaw = !showRaw)} role="button" tabindex="0" style="font-size:var(--px-11);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">View raw</span>
-      <span onclick={() => onReExplain?.()} onkeydown={(e) => e.key === 'Enter' && onReExplain?.()} role="button" tabindex="0" style="font-size:var(--px-11);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">⟳ Re-explain</span>
+      <span onclick={() => onReExplain?.()} onkeydown={(e) => e.key === 'Enter' && onReExplain?.()} role="button" tabindex="0" style="font-size:var(--px-11);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer"><Icon name="refresh" size={12} /> Re-explain</span>
       <span onclick={() => onClose?.()} onkeydown={(e) => e.key === 'Enter' && onClose?.()} role="button" tabindex="0" title="Close the plan" style="font-size:var(--px-14);color:var(--muted);cursor:pointer;padding:0 var(--px-4)">×</span>
     </div>
   </div>

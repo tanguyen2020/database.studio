@@ -21,6 +21,7 @@ export function rootNodeKey(system: string): 'curdb' | 'file' | null {
     case 'postgres':
     case 'mssql':
     case 'oracle':
+    case 'duckdb': // the opened file's database; ATTACHed ones are listed beside it
       return 'curdb'
     default:
       return null

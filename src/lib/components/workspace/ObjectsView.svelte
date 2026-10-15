@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from '$lib/components/Icon.svelte'
   // Objects tab — a pinned, non-closable singleton (see tabs.openObjectsTab) that
   // lists the tables of one database: # · Table Name · Data Length · Rows. Rows
   // select (blue) on click and highlight on hover; each row carries the SAME full
@@ -200,7 +201,7 @@
         aria-label="Refresh objects"
         title="Refresh"
         style="display:inline-flex;align-items:center;gap:var(--px-5);font-size:var(--px-12);font-weight:600;color:var(--text2);cursor:{refreshing ? 'default' : 'pointer'};opacity:{refreshing ? 0.6 : 1}"
-      ><span class="refresh-glyph" class:spinning={refreshing}>⟳</span>{refreshing ? 'Refreshing…' : 'Refresh'}</span>
+      ><span class="refresh-glyph" class:spinning={refreshing}><Icon name="refresh" size={12} /></span>{refreshing ? 'Refreshing…' : 'Refresh'}</span>
     </div>
   </div>
 

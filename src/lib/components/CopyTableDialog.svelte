@@ -13,7 +13,7 @@
   import { buildInsert } from '$lib/import/plan'
   import type { ColumnInfo } from '$lib/types'
 
-  const REL = ['postgres', 'mysql', 'mariadb', 'mssql', 'clickhouse', 'sqlite', 'oracle']
+  const REL = ['postgres', 'mysql', 'mariadb', 'mssql', 'clickhouse', 'sqlite', 'oracle', 'duckdb']
   const PAGE = 2000
 
   let srcCols = $state<ColumnInfo[]>([])
@@ -67,6 +67,7 @@
     destConnId = id
     const sys = connections.byId(id)?.system
     if (sys === 'sqlite') destSchema = 'main'
+    if (sys === 'duckdb') destSchema = 'main' // DuckDB's default schema
   }
 
   async function run() {

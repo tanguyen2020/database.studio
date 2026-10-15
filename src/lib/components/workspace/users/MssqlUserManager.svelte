@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from '$lib/components/Icon.svelte'
   // SQL Server User Manager (U3). Two tiers: Server (Logins + fixed server roles)
   // and Database (Users + Roles + permission grid with GRANT/DENY/REVOKE — DENY
   // wins over GRANT). Database-scoped reads/writes run on an attach_database
@@ -496,7 +497,7 @@
       {/each}
     </div>
     <span onclick={openCreate} onkeydown={(e) => e.key === 'Enter' && openCreate()} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer;font-weight:600">{scope === 'server' ? '+ New Login' : '+ New User'}</span>
-    <span onclick={refresh} onkeydown={(e) => e.key === 'Enter' && refresh()} role="button" tabindex="0" aria-busy={refreshing} style="margin-left:auto;font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer;opacity:{refreshing ? 0.6 : 1}">{refreshing ? '⟳ Refreshing…' : '⟳ Refresh'}</span>
+    <span onclick={refresh} onkeydown={(e) => e.key === 'Enter' && refresh()} role="button" tabindex="0" aria-busy={refreshing} style="margin-left:auto;font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer;opacity:{refreshing ? 0.6 : 1}"><Icon name="refresh" size={12} /> {refreshing ? 'Refreshing…' : 'Refresh'}</span>
   </div>
 
   <!-- Two-level model explainer — the #1 source of SQL Server confusion. -->
@@ -593,7 +594,7 @@
             <div style={CARD}>
               <div style="display:flex;align-items:center;gap:var(--px-8);margin-bottom:var(--px-8)">
                 <span style="font-size:var(--px-12_5);font-weight:700;color:var(--text)">Database access</span>
-                <span onclick={loadDbAccess} onkeydown={(e) => e.key === 'Enter' && loadDbAccess()} role="button" tabindex="0" aria-busy={dbAccessBusy} style="{BTN};margin-left:auto;opacity:{dbAccessBusy ? 0.6 : 1}">{dbAccessBusy ? 'Loading…' : dbAccessLoaded ? '⟳ Reload' : 'Load access'}</span>
+                <span onclick={loadDbAccess} onkeydown={(e) => e.key === 'Enter' && loadDbAccess()} role="button" tabindex="0" aria-busy={dbAccessBusy} style="{BTN};margin-left:auto;opacity:{dbAccessBusy ? 0.6 : 1}">{#if dbAccessLoaded && !dbAccessBusy}<Icon name="refresh" size={12} /> {/if}{dbAccessBusy ? 'Loading…' : dbAccessLoaded ? 'Reload' : 'Load access'}</span>
               </div>
               {#if dbAccessLoaded}
                 <div style="display:flex;flex-direction:column;gap:var(--px-6)">

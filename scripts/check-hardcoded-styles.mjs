@@ -11,7 +11,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const SRC = path.join(ROOT, 'src')
 
 // File sinh tự động / file không phải UI được miễn
-const EXEMPT = new Set(['tokens.css', 'systems.gen.ts'])
+const EXEMPT = new Set(['tokens.css', 'theme.css', 'systems.gen.ts'])
 // shadcn-svelte primitives (stack đã chốt) — style mặc định của thư viện,
 // mọi chỗ DÙNG chúng trong app đều override bằng token
 const EXEMPT_DIRS = [path.join('components', 'ui') + path.sep]

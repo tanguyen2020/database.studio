@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from '$lib/components/Icon.svelte'
   // SQL editor workspace for one tab: toolbar (connection dropdown + Run/Cancel)
   // + the Monaco editor + resizable split + result panel. Run is selection-aware (F5),
   // Ctrl+Enter runs the statement at the cursor.
@@ -95,7 +96,8 @@
     return names.map((d) => ({ value: d, label: d }))
   })
   const supportsDbSwitch = $derived(
-    !isOrphan && ['postgres', 'mysql', 'mariadb', 'mssql', 'clickhouse'].includes(tab.systemType),
+    // DuckDB: the opened file's database + every ATTACHed one (USE on the tab's connection).
+    !isOrphan && ['postgres', 'mysql', 'mariadb', 'mssql', 'clickhouse', 'duckdb'].includes(tab.systemType),
   )
   // MongoDB also picks a database — but the chosen DB is passed to mongo_exec via
   // runOpts.database (NOT a sub-connection attach like relational), so it's kept
@@ -110,7 +112,7 @@
   // autocomplete (and, for Postgres, the run-time search_path) to that schema.
   // Systems where a "database" already IS a schema (MySQL/MariaDB/ClickHouse) or
   // that have no schemas (SQLite) don't show this dropdown.
-  const supportsSchemaSwitch = $derived(!isOrphan && ['postgres', 'mssql', 'oracle'].includes(tab.systemType))
+  const supportsSchemaSwitch = $derived(!isOrphan && ['postgres', 'mssql', 'oracle', 'duckdb'].includes(tab.systemType))
   const selectedSchema = $derived(((tab.state.schema as string) || '').trim())
 
   $effect(() => {
@@ -121,7 +123,7 @@
 
   async function loadDbList(connId: string, system: string) {
     try {
-      if (system === 'postgres' || system === 'mssql' || system === 'mongodb') {
+      if (system === 'postgres' || system === 'mssql' || system === 'mongodb' || system === 'duckdb') {
         // PG/MSSQL/MongoDB: real databases via list_databases.
         dbList = (await ipc.listDatabases(connId)).map((d) => d.name)
       } else {
@@ -178,6 +180,11 @@
         const q = `"${selectedSchema.replace(/"/g, '""')}"`
         await ipc.execStatement(cid, `SET search_path TO ${q}, public`).catch(() => {})
       }
+      // DuckDB: same idea — its search_path is one comma-separated string literal.
+      if (tab.systemType === 'duckdb' && selectedSchema) {
+        const q = `'"${selectedSchema.replace(/"/g, '""').replace(/'/g, "''")}",main'`
+        await ipc.execStatement(cid, `SET search_path = ${q}`).catch(() => {})
+      }
       return cid
     } catch (e) {
       toasts.error(`Cannot open a connection for this tab: ${e}`)
@@ -206,7 +213,7 @@
   // ---- destructive-statement guard --------------------------------------------
   // A DELETE with no WHERE clause, or a TRUNCATE, wipes a whole table. Before
   // running one we pop an in-app confirm. Applies to relational SQL dialects.
-  const RELATIONAL = ['postgres', 'mysql', 'mariadb', 'mssql', 'sqlite', 'clickhouse', 'oracle']
+  const RELATIONAL = ['postgres', 'mysql', 'mariadb', 'mssql', 'sqlite', 'clickhouse', 'oracle', 'duckdb']
   let dangerPrompt = $state<{ items: DangerStmt[]; resolve: (ok: boolean) => void } | null>(null)
 
   /** Resolve true if it's safe to run, false if the user cancels. Only prompts
@@ -345,7 +352,7 @@
   // still inserts qualified (schema.table) — correct, since MSSQL can't switch the
   // session default schema. Non-schema systems fall through to the DB default.
   const defaultSchema = $derived.by(() => {
-    if (tab.systemType !== 'postgres' || !selectedSchema) return dbDefaultSchema
+    if ((tab.systemType !== 'postgres' && tab.systemType !== 'duckdb') || !selectedSchema) return dbDefaultSchema
     // The pick must exist on the connection the completion introspects. A schema
     // carried over from another database (tab bound from the tree, then the attach
     // fell back to the base connection) would otherwise become the anchor, and
@@ -910,7 +917,7 @@
         title="Open this connection again"
         style="margin-left:auto;flex:none;display:flex;align-items:center;gap:var(--px-6);background:var(--raised);border:var(--px-1) solid var(--border2);border-radius:var(--px-6);padding:var(--px-3) var(--px-10);color:var(--error);font-weight:700;font-size:var(--px-12);cursor:{reconnecting ? 'default' : 'pointer'};opacity:{reconnecting ? 0.6 : 1}"
       >
-        <span class:spin={reconnecting} style="display:inline-block">⟳</span>
+        <span class:spin={reconnecting} style="display:inline-block"><Icon name="refresh" size={12} /></span>
         {reconnecting ? 'Reconnecting…' : 'Reconnect'}
       </button>
     </div>
@@ -963,7 +970,7 @@
               <span style="flex:none;display:flex;align-items:center"><SystemIcon system={p.system} size={16} /></span>
               <div style="min-width:0">
                 <div style="font-size:var(--px-12_5);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{p.name}</div>
-                <div class="mono" style="font-size:var(--px-10);color:var(--muted)">{p.system === 'sqlite' ? p.sqlite_path || ':memory:' : `${p.host}:${p.port}`}</div>
+                <div class="mono" style="font-size:var(--px-10);color:var(--muted)">{p.system === 'sqlite' || p.system === 'duckdb' ? p.sqlite_path || ':memory:' : `${p.host}:${p.port}`}</div>
               </div>
               <span style="margin-left:auto;flex:none;color:var(--primary);font-size:var(--px-12)">{p.id === tab.connectionId ? '✓' : ''}</span>
             </div>
@@ -1221,23 +1228,5 @@
     padding: var(--px-2) var(--px-6);
     font-size: var(--px-11_5);
     color: var(--text);
-  }
-  .cfm-btn {
-    font-size: var(--px-12);
-    color: var(--text2);
-    background: var(--panel);
-    border: var(--px-1) solid var(--border);
-    border-radius: var(--px-6);
-    padding: var(--px-5) var(--px-14);
-    cursor: pointer;
-  }
-  .cfm-btn:hover {
-    background: var(--hover);
-  }
-  .cfm-btn.danger {
-    color: var(--hex-fff);
-    background: var(--error);
-    border-color: var(--error);
-    font-weight: 600;
   }
 </style>

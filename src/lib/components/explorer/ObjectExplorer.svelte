@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { armCollapse, treeOut } from '$lib/ui/tree-motion'
+  import Icon from '$lib/components/Icon.svelte'
+  import Chevron from '$lib/components/Chevron.svelte'
   // Object Explorer — port 1:1 từ Database Studio.dc.html:
   //  - header "Explorer" + icon hệ + tên connection + ⟳ (dòng 137-142)
   //  - node row: pad 6+depth*15, chev 10px/9px, glyph mono 15px/12px màu map C
@@ -85,6 +88,9 @@
   const isMssql = $derived(selected?.system === 'mssql')
   const isPg = $derived(selected?.system === 'postgres')
   const isOracle = $derived(selected?.system === 'oracle')
+  // DuckDB: database (catalog) → real schemas, like PG. No stored procedures and
+  // no triggers; user macros are its functions; ATTACHed files are other databases.
+  const isDuckdb = $derived(selected?.system === 'duckdb')
   // ClickHouse (clickhouseTree): Databases → Tables/Views — không có
   // Procs/Triggers/Sequences; Dictionaries/Functions/engine badge → Phase 5
   const isClickhouse = $derived(selected?.system === 'clickhouse')
@@ -99,11 +105,15 @@
     selected?.system === 'mysql' || selected?.system === 'mariadb' || selected?.system === 'clickhouse',
   )
   const showRoutines = $derived(!isSqlite && !isClickhouse)
-  const showTriggers = $derived(!isClickhouse)
+  const showTriggers = $derived(!isClickhouse && !isDuckdb)
+  // Stored Procedures folder: DuckDB has none (its macros live under Functions).
+  const showProcs = $derived(showRoutines && !isDuckdb)
+  const showSequences = $derived(isPg || isOracle || isDuckdb)
   // AUDIT-4 item 2 — PG/MSSQL bind one DB per connection; the tree nests schemas
   // under a current-database header, and lists other databases separately.
   const pgMssqlMultiDb = $derived(
-    (selected?.system === 'postgres' || selected?.system === 'mssql' || selected?.system === 'oracle') && (cache?.databases?.length ?? 0) > 0,
+    (selected?.system === 'postgres' || selected?.system === 'mssql' || selected?.system === 'oracle' || selected?.system === 'duckdb') &&
+      (cache?.databases?.length ?? 0) > 0,
   )
   // schema tree depth offset: SQLite nests under a file node; PG/MSSQL nest under
   // the current-database header node (see relational branch).
@@ -177,7 +187,7 @@
   // selected — and then acts on THAT connection + schema (not schemas[0]). Non-
   // relational systems have no such node → erTarget is null → the whole toolbar
   // is disabled.
-  const RELATIONAL_TOOLS = ['postgres', 'mysql', 'mariadb', 'mssql', 'sqlite', 'clickhouse', 'oracle']
+  const RELATIONAL_TOOLS = ['postgres', 'mysql', 'mariadb', 'mssql', 'sqlite', 'clickhouse', 'oracle', 'duckdb']
   const toolTarget = $derived(erTarget && RELATIONAL_TOOLS.includes(erTarget.system) ? erTarget : null)
   // User Manager target (U5): relational needs a schema (toolTarget); the
   // non-relational user-managed engines (MongoDB, Cassandra) only need the
@@ -550,7 +560,8 @@
         void explorer.loadSchemas(s.id)
         // Postgres/MSSQL: one DB per connection → list every database so the user
         // can open another. (MySQL/MariaDB already expose all DBs as schemas.)
-        if (s.system === 'postgres' || s.system === 'mssql' || s.system === 'oracle') void explorer.loadDatabases(s.id)
+        // DuckDB: the opened file + every ATTACHed database.
+        if (s.system === 'postgres' || s.system === 'mssql' || s.system === 'oracle' || s.system === 'duckdb') void explorer.loadDatabases(s.id)
       })
     }
   })
@@ -822,7 +833,7 @@
     await explorer.refresh(s.id, { kind: 'connection' }) // schema list, forced
     // force: `refresh(connection)` does not clear `databases`, so without this the
     // server's database list would never be re-read (a new database never showed up).
-    if (s.system === 'postgres' || s.system === 'mssql' || s.system === 'oracle') {
+    if (s.system === 'postgres' || s.system === 'mssql' || s.system === 'oracle' || s.system === 'duckdb') {
       await explorer.loadDatabases(s.id, true)
     }
     await applyReloadPlan(s.id, mainReloadPlan(expanded, (explorer.cache[s.id]?.schemas ?? []).map((x) => x.name)))
@@ -1597,6 +1608,9 @@
     } else if (kind === 'trigger') {
       const on = table ? ` ON ${schema && sys !== 'sqlite' ? `${q(schema)}.${q(table)}` : q(table)}` : ''
       sql = `-- Check the target table before running\nDROP TRIGGER IF EXISTS ${q(name)}${on};`
+    } else if (sys === 'duckdb') {
+      // DuckDB functions are macros (a table macro needs DROP MACRO TABLE).
+      sql = `-- Table macro: DROP MACRO TABLE IF EXISTS ${qual};\nDROP MACRO IF EXISTS ${qual};`
     } else {
       const kw = kind === 'procedure' ? 'PROCEDURE' : 'FUNCTION'
       sql = `-- PostgreSQL may need the argument signature: DROP ${kw} ${qual}(...)\nDROP ${kw} IF EXISTS ${qual};`
@@ -1785,6 +1799,7 @@
     <div
       class="tree-row"
       class:selected={sel}
+      out:treeOut|global
       onclick={() => {
         // single-click SELECTS only; expansion needs a double-click (or the chevron).
         // Leaf action rows (Kafka topic / NATS subject) open on a single click.
@@ -1793,9 +1808,14 @@
       }}
       ondblclick={() => {
         treeSel = p.key
+        if (p.expandable && expanded.has(p.key)) armCollapse()
         ;(p.onDblClick ?? p.onClick)?.()
       }}
-      onkeydown={(e) => e.key === 'Enter' && (p.onDblClick ?? p.onClick)?.()}
+      onkeydown={(e) => {
+        if (e.key !== 'Enter') return
+        if (p.expandable && expanded.has(p.key)) armCollapse()
+        ;(p.onDblClick ?? p.onClick)?.()
+      }}
       role="treeitem"
       aria-selected={sel}
       aria-expanded={p.expandable ? expanded.has(p.key) : undefined}
@@ -1815,9 +1835,9 @@
       <span
         class="mono"
         role={p.expandable ? 'button' : undefined}
-        onclick={(e) => { if (p.expandable) { e.stopPropagation(); treeSel = p.key; p.onClick?.() } }}
+        onclick={(e) => { if (p.expandable) { e.stopPropagation(); treeSel = p.key; if (expanded.has(p.key)) armCollapse(); p.onClick?.() } }}
         style="flex:none;width:var(--px-16);text-align:center;font-size:var(--px-16);color:var(--text2);cursor:{p.expandable ? 'pointer' : 'default'}"
-      >{p.expandable ? (expanded.has(p.key) ? '▾' : '▸') : ''}</span>
+      >{#if p.expandable}<Chevron open={expanded.has(p.key)} size={12} />{/if}</span>
       <span class="mono" style="flex:none;width:var(--px-15);display:flex;align-items:center;justify-content:center;font-size:var(--px-12);color:{p.color}">{#if p.svg ?? rowIcon(p.icon, p.glyph)}{@html p.svg ?? rowIcon(p.icon, p.glyph)}{:else}{p.glyph}{/if}</span>
       <!-- line-height is pinned to the mono metric the row was built around, so moving the name to the UI face keeps every row exactly the height it was -->
       <span style="font-family:var(--font-main);line-height:var(--px-17);font-size:var(--px-12_5);font-weight:{p.head ? 700 : 500};color:{p.nameColor ?? (sel || p.head ? 'var(--text)' : 'var(--text2)')};flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis">{p.name}</span>
@@ -2041,10 +2061,10 @@
 >
   <!-- header — dòng 137-142 -->
   <div style="flex:none;display:flex;align-items:center;gap:var(--px-8);padding:var(--px-9) var(--px-12) var(--px-7)">
-    <span style="font-size:var(--px-10_5);font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--muted)">Explorer</span>
+    <span style="font-size:var(--px-10_5);font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)">Explorer</span>
     {#if selected}
       <span style="display:flex;align-items:center;flex:none"><SystemIcon system={selected.system} size={16} /></span>
-      <span class="mono" style="font-size:var(--px-11_5);color:var(--text2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{selected.name}</span>
+      <span style="font-size:var(--px-12_5);font-weight:500;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{selected.name}</span>
     {/if}
     <div style="margin-left:auto;display:inline-flex;align-items:center;gap:var(--px-8);flex:none">
       <span
@@ -2057,14 +2077,14 @@
         aria-disabled={!canRefreshTree}
         title={canRefreshTree ? 'Refresh' : 'Refresh — open the connection first'}
         style="display:inline-flex;align-items:center;gap:var(--px-4);cursor:{canRefreshTree && !refreshingTree ? 'pointer' : 'default'};color:var(--muted);font-size:var(--px-11_5);font-weight:600;opacity:{canRefreshTree ? (refreshingTree ? 0.6 : 1) : 0.4}"
-      ><span class="tree-refresh-glyph" class:spinning={refreshingTree} style="font-size:var(--px-13)">⟳</span>{refreshingTree ? 'Refreshing…' : 'Refresh'}</span>
+      ><span class="tree-refresh-glyph" class:spinning={refreshingTree} style="display:inline-flex"><Icon name="refresh" size={13} /></span>{refreshingTree ? 'Refreshing…' : 'Refresh'}</span>
     </div>
   </div>
 
   <!-- filter — finds databases and objects by name (schema-tree systems) -->
-  {#if selected?.connected && ['postgres', 'mysql', 'mariadb', 'mssql', 'sqlite', 'clickhouse', 'oracle'].includes(selected.system)}
+  {#if selected?.connected && ['postgres', 'mysql', 'mariadb', 'mssql', 'sqlite', 'clickhouse', 'oracle', 'duckdb'].includes(selected.system)}
     <div style="flex:none;padding:0 var(--px-8) var(--px-6);position:relative">
-      <span style="position:absolute;left:var(--px-16);top:50%;transform:translateY(-60%);color:var(--muted);font-size:var(--px-11);pointer-events:none">⌕</span>
+      <span style="position:absolute;left:var(--px-16);top:50%;transform:translateY(-50%);color:var(--muted);display:inline-flex;pointer-events:none"><Icon name="search" size={12} /></span>
       <input
         class="mono"
         bind:value={dbFilter}
@@ -2114,7 +2134,7 @@
   <!-- filter — finds NATS JetStream streams by name -->
   {#if selected?.connected && isNats}
     <div style="flex:none;padding:var(--px-6) var(--px-8) 0;position:relative">
-      <span style="position:absolute;left:var(--px-16);top:calc(50% + var(--px-3));transform:translateY(-60%);color:var(--muted);font-size:var(--px-11);pointer-events:none">⌕</span>
+      <span style="position:absolute;left:var(--px-16);top:calc(50% + var(--px-3));transform:translateY(-50%);color:var(--muted);display:inline-flex;pointer-events:none"><Icon name="search" size={12} /></span>
       <input
         class="mono"
         bind:value={streamFilter}
@@ -2205,7 +2225,7 @@
             : 'Open this connection'}
         >
           {#if retrying || connections.connectErrors[selected.id]}
-            <span class="conn-retry-glyph" class:spinning={retrying}>⟳</span>
+            <span class="conn-retry-glyph" class:spinning={retrying}><Icon name="refresh" size={12} /></span>
           {/if}
           {retrying
             ? 'Reconnecting…'
@@ -2470,7 +2490,7 @@
         {#snippet curDbMenu()}
           <ContextMenu.Content class="w-52">
             <ContextMenu.Item onclick={() => newQuery('')}>New Query</ContextMenu.Item>
-            {#if !isSqlite}
+            {#if !isSqlite && !isDuckdb}
               <ContextMenu.Item onclick={() => newDatabase()}>New Database…</ContextMenu.Item>
             {/if}
             {#if selected && hasRealSchemas(selected.system)}
@@ -2487,7 +2507,7 @@
             <ContextMenu.Separator />
             <!-- confirm, then run. PG/MSSQL still refuse to drop the database this
                  connection sits in; that server error is surfaced as-is. -->
-            <ContextMenu.Item variant="destructive" onclick={() => dropDatabase(curDb?.name ?? selected?.database ?? '')}>Drop Database…</ContextMenu.Item>
+            <ContextMenu.Item variant="destructive" onclick={() => dropDatabase(curDb?.name ?? selected?.database ?? '')}>{isDuckdb ? 'Detach Database…' : 'Drop Database…'}</ContextMenu.Item>
           </ContextMenu.Content>
         {/snippet}
         {#if !dbFiltering || matchDb(curDbName)}
@@ -2874,6 +2894,7 @@
           {/if}
 
           {#if showRoutines}
+            {#if showProcs}
             <!-- Stored Procedures -->
             {#snippet procsFolderMenu()}
               <ContextMenu.Content class="w-48">
@@ -2918,6 +2939,7 @@
                   name: routineLabel(r),
                 }, procMenu)}
               {/each}
+            {/if}
             {/if}
 
             {#if isMssql}
@@ -3157,8 +3179,8 @@
             {/each}
           {/if}
 
-          {#if isPg || isOracle}
-            <!-- Sequences (PG / Oracle) -->
+          {#if showSequences}
+            <!-- Sequences (PG / Oracle / DuckDB) -->
             {#snippet seqsFolderMenu()}
               <ContextMenu.Content class="w-48">
                 <ContextMenu.Item onclick={() => createObject('sequence', schema.name)}>Create Sequence…</ContextMenu.Item>
@@ -3220,7 +3242,7 @@
               <ContextMenu.Item onclick={() => copyName(db.name)}>Copy Name</ContextMenu.Item>
               <ContextMenu.Item onclick={() => sub && explorer.refresh(sub, { kind: 'connection' })}>Refresh</ContextMenu.Item>
               <ContextMenu.Separator />
-              <ContextMenu.Item variant="destructive" onclick={() => dropDatabase(db.name)}>Drop Database…</ContextMenu.Item>
+              <ContextMenu.Item variant="destructive" onclick={() => dropDatabase(db.name)}>{isDuckdb ? 'Detach Database…' : 'Drop Database…'}</ContextMenu.Item>
             </ContextMenu.Content>
           {/snippet}
           {@render row({ key: fkey, depth: 0, glyph: '', icon: 'database', color: C.folder, name: db.name, meta: attaching === db.name ? 'attaching…' : 'database', head: true, expandable: true, onClick: () => toggleForeignDb(db.name) }, dbMenu)}
@@ -3237,8 +3259,10 @@
                   <ContextMenu.Item onclick={() => sub && tabs.openIndexScanner(sub, fsch.name)}>Scan Indexes</ContextMenu.Item>
                   <ContextMenu.Item onclick={() => sub && tabs.openTableDesigner(sub, fsch.name, '')}>New Table…</ContextMenu.Item>
                   <ContextMenu.Item onclick={() => createObject('view', fsch.name, db.name)}>Create View…</ContextMenu.Item>
-                  {#if showRoutines}
+                  {#if showProcs}
                     <ContextMenu.Item onclick={() => createObject('procedure', fsch.name, db.name)}>Create Procedure…</ContextMenu.Item>
+                  {/if}
+                  {#if showRoutines}
                     <ContextMenu.Item onclick={() => createObject('function', fsch.name, db.name)}>Create Function…</ContextMenu.Item>
                   {/if}
                   {#if showTriggers}
@@ -3261,7 +3285,7 @@
                 {@const fViews = fsc.tables?.filter((t) => t.kind === 'view') ?? []}
                 {@const fProcs = fsc.routines?.filter((r) => r.kind === 'procedure') ?? []}
                 {@const fFns = fsc.routines?.filter((r) => r.kind !== 'procedure') ?? []}
-                {#each [['t', 'Tables', '▤', fTables], ['v', 'Views', '◫', fViews], ['p', 'Procedures', '⚙', fProcs], ['fn', 'Functions', 'ƒ', fFns], ['tg', 'Triggers', '⚡', fsc.triggers ?? []], ...(isPg || isOracle ? [['sq', 'Sequences', '#', fsc.sequences ?? []]] : [])] as [fk, label, glyph, items] (fk)}
+                {#each [['t', 'Tables', '▤', fTables], ['v', 'Views', '◫', fViews], ...(isDuckdb ? [] : [['p', 'Procedures', '⚙', fProcs]]), ['fn', 'Functions', 'ƒ', fFns], ...(isDuckdb ? [] : [['tg', 'Triggers', '⚡', fsc.triggers ?? []]]), ...(showSequences ? [['sq', 'Sequences', '#', fsc.sequences ?? []]] : [])] as [fk, label, glyph, items] (fk)}
                   {@const folderKey = `${skey}:${fk}`}
                   {#snippet fFolderMenu()}
                     <ContextMenu.Content class="w-48">
@@ -3893,28 +3917,5 @@
   }
   .xbtn.off:hover {
     background: transparent;
-  }
-  .cfm-btn {
-    font-size: var(--px-12);
-    color: var(--text2);
-    background: var(--panel);
-    border: var(--px-1) solid var(--border);
-    border-radius: var(--px-6);
-    padding: var(--px-5) var(--px-14);
-    cursor: pointer;
-  }
-  .cfm-btn:hover {
-    background: var(--hover);
-  }
-  .cfm-btn.primary {
-    background: var(--primary);
-    border-color: var(--primary);
-    color: var(--hex-fff);
-  }
-  .cfm-btn.danger {
-    color: var(--hex-fff);
-    background: var(--error);
-    border-color: var(--error);
-    font-weight: 600;
   }
 </style>

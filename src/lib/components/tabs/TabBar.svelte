@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from '$lib/components/Icon.svelte'
   // Tab bar — port 1:1 từ Database Studio.dc.html dòng 174-189:
   // bar 40px nền --header; tab = icon hệ 15px + (connName 9px / title 12px 600),
   // underline 2px accent khi active, opacity .62 khi inactive, dirty ● màu accent,
@@ -70,11 +71,18 @@
 <!-- TAB BAR — dòng 175 -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
-  style="flex:none;display:flex;align-items:stretch;background:var(--header);border-bottom:var(--px-1) solid var(--border);height:var(--px-40);overflow-x:auto;overflow-y:hidden;{tabs.splitDir && tabs.activePane === pane ? 'box-shadow:inset 0 var(--px-2) 0 var(--primary)' : ''}"
-  bind:this={stripEl}
-  class="scrollbar-none"
+  style="flex:none;display:flex;align-items:stretch;background:var(--header);border-bottom:var(--px-1) solid var(--border);height:var(--px-40);{tabs.splitDir && tabs.activePane === pane ? 'box-shadow:inset 0 var(--px-2) 0 var(--primary)' : ''}"
   onpointerdown={() => tabs.focusPane(pane)}
 >
+  <!-- only the tabs scroll; + / split / More tabs stay pinned on the right -->
+  <div
+    bind:this={stripEl}
+    class="scrollbar-none"
+    style="flex:1;min-width:0;display:flex;align-items:stretch;overflow-x:auto;overflow-y:hidden"
+    onwheel={(e) => {
+      if (stripEl && Math.abs(e.deltaY) > Math.abs(e.deltaX)) stripEl.scrollLeft += e.deltaY
+    }}
+  >
   {#each paneTabs as tab (tab.id)}
     {@const idx = tabs.tabs.indexOf(tab)}
     {@const meta = systemMeta(tab.systemType)}
@@ -82,7 +90,7 @@
     <!-- the pinned Objects tab is a system tab: no close, no drag, no rename -->
     {@const closable = tab.contentType !== 'objects'}
     <ContextMenu.Root>
-      <ContextMenu.Trigger style="display:flex;align-items:stretch;min-width:0">
+      <ContextMenu.Trigger style="display:flex;align-items:stretch;flex:none">
         <!-- tab — dòng 177 -->
         <div
           role="tab"
@@ -103,7 +111,10 @@
             dragIdx = null
             dropIdx = null
           }}
-          style="display:flex;align-items:center;gap:var(--px-8);padding:0 var(--px-11);margin:var(--px-4) var(--px-3) 0;cursor:pointer;border-top-left-radius:var(--px-8);border-top-right-radius:var(--px-8);border-bottom:var(--px-2) solid {isActive ? meta.accent : 'transparent'};background:{isActive ? 'var(--surface)' : 'transparent'};opacity:{isActive ? 1 : 0.62};min-width:0;max-width:var(--px-220);{dropIdx === idx && dragIdx !== null && dragIdx !== idx ? 'outline:var(--px-1) solid var(--primary);' : ''}"
+          title={tab.connectionName ? `${tab.title} — ${tab.connectionName}` : tab.title}
+          class="ds-tab"
+          class:active={isActive}
+          style="--tab-accent:{meta.accent};{dropIdx === idx && dragIdx !== null && dragIdx !== idx ? 'outline:var(--px-1) solid var(--primary);' : ''}"
         >
           <span style="flex:none;display:flex;align-items:center"><SystemIcon system={tab.systemType} size={15} /></span>
           {#if renamingId === tab.id}
@@ -119,9 +130,10 @@
               }}
             />
           {:else}
-            <div style="min-width:0;display:flex;flex-direction:column;line-height:1.15">
-              <span style="font-size:var(--px-9);color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{tab.connectionName}</span>
-              <span style="font-size:var(--px-12);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text)">{tab.title}</span>
+            <!-- title only — the connection (often a host/IP) stays out of the tab strip;
+                 it is in the tooltip and in the workspace header -->
+            <div style="min-width:0;display:flex;align-items:baseline">
+              <span class="ds-tab-title">{tab.title}</span>
             </div>
           {/if}
           {#if tab.isPinned}
@@ -146,8 +158,8 @@
               tabindex="0"
               title="Close (Ctrl+W)"
               class="tab-close"
-              style="flex:none;font-size:var(--px-16);line-height:1;width:var(--px-18);height:var(--px-18);display:flex;align-items:center;justify-content:center;border-radius:var(--px-4)"
-            >×</span>
+              style="flex:none;width:var(--px-18);height:var(--px-18);display:flex;align-items:center;justify-content:center;border-radius:var(--px-4)"
+            ><Icon name="close" size={12} /></span>
           {/if}
         </div>
       </ContextMenu.Trigger>
@@ -183,6 +195,7 @@
       </ContextMenu.Content>
     </ContextMenu.Root>
   {/each}
+  </div>
 
   <!-- nút + — dòng 188 (mở trong pane hiện tại của bar) -->
   <div
@@ -191,8 +204,9 @@
     role="button"
     tabindex="0"
     title="New SQL tab (Ctrl+T)"
-    style="display:flex;align-items:center;padding:0 var(--px-12);cursor:pointer;color:var(--muted);font-size:var(--px-16)"
-  >+</div>
+    class="tb-ctl"
+    style="display:flex;align-items:center;padding:0 var(--px-10);cursor:pointer;color:var(--muted)"
+  ><Icon name="plus" size={15} /></div>
 
   {#if tabs.splitDir}
     <div
@@ -201,16 +215,17 @@
       role="button"
       tabindex="0"
       title="Close split (merge to one pane)"
-      style="display:flex;align-items:center;padding:0 var(--px-10);cursor:pointer;color:var(--muted);font-size:var(--px-13)"
-    >⊟</div>
+      class="tb-ctl"
+      style="display:flex;align-items:center;padding:0 var(--px-10);cursor:pointer;color:var(--muted)"
+    ><Icon name="merge" size={14} /></div>
   {/if}
 
   {#if hasOverflow}
     <DropdownMenu.Root>
       <DropdownMenu.Trigger
-        style="display:flex;width:var(--px-28);flex:none;align-items:center;justify-content:center;border-left:var(--px-1) solid var(--border);font-size:var(--px-11);color:var(--text2)"
+        style="display:flex;width:var(--px-28);flex:none;align-items:center;justify-content:center;border-left:var(--px-1) solid var(--border);color:var(--text2)"
         title="More tabs"
-      >⌄</DropdownMenu.Trigger>
+      ><Icon name="chevron-down" size={14} /></DropdownMenu.Trigger>
       <DropdownMenu.Content class="max-h-[50vh] w-64 overflow-y-auto" align="end">
         {#each paneTabs as tab (tab.id)}
           <DropdownMenu.Item onclick={() => tabs.activate(tab.id)}>
@@ -228,12 +243,64 @@
   .scrollbar-none::-webkit-scrollbar {
     display: none;
   }
-  .tab-close {
+  /* Tabs never collapse to an ellipsis-only stub: they keep a readable minimum and
+     the strip scrolls (the More-tabs menu lists everything). */
+  .ds-tab {
+    display: flex;
+    align-items: center;
+    gap: var(--px-8);
+    padding: 0 var(--px-8) 0 var(--px-12);
+    margin: var(--px-5) var(--px-2) 0;
+    cursor: pointer;
+    border-radius: var(--px-8) var(--px-8) 0 0;
+    min-width: var(--px-110);
+    max-width: var(--px-220);
     color: var(--text2);
-    transition: background 0.12s, color 0.12s;
+    background: transparent;
+    box-shadow: inset 0 calc(-1 * var(--px-2)) 0 transparent;
+  }
+  .ds-tab:hover {
+    background: color-mix(in srgb, var(--text) 5%, transparent);
+    color: var(--text);
+  }
+  .ds-tab.active {
+    background: var(--surface);
+    color: var(--text);
+    box-shadow:
+      inset 0 calc(-1 * var(--px-2)) 0 var(--tab-accent),
+      0 calc(-1 * var(--px-1)) var(--px-3) color-mix(in srgb, var(--text) 6%, transparent);
+  }
+  .ds-tab-title {
+    font-size: var(--px-12_5);
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex: 0 1 auto;
+    min-width: var(--px-28);
+  }
+  .ds-tab.active .ds-tab-title {
+    font-weight: 600;
+  }
+  .ds-tab:not(.active) :global(svg) {
+    opacity: 0.8;
+  }
+  .tb-ctl:hover {
+    color: var(--text);
+    background: color-mix(in srgb, var(--text) 5%, transparent);
+  }
+  .tab-close {
+    color: var(--muted);
+    opacity: 0;
+    transition: background 0.12s, color 0.12s, opacity 0.12s;
+  }
+  .ds-tab:hover .tab-close,
+  .ds-tab.active .tab-close,
+  .tab-close:focus-visible {
+    opacity: 1;
   }
   .tab-close:hover {
-    background: var(--error);
-    color: var(--hex-fff);
+    background: color-mix(in srgb, var(--error) 16%, transparent);
+    color: var(--error);
   }
 </style>

@@ -1,4 +1,7 @@
 <script lang="ts">
+  import Icon from '$lib/components/Icon.svelte'
+  import { armCollapse, treeOut } from '$lib/ui/tree-motion'
+  import Chevron from '$lib/components/Chevron.svelte'
   // Redis key browser embedded in the ObjectExplorer sidebar (moved here from the
   // standalone workspace tab): DB selector + SCAN count + Pub/Sub + Flush + Add key,
   // a pattern filter, and the prefix key tree. Clicking a key opens a per-key viewer
@@ -38,7 +41,8 @@
     stream: 'var(--sacc-orange)',
   }
   const typeColor = (t: string) => TYPE_COLOR[t] ?? 'var(--text2)'
-  const typeBadge = (t: string) => (t || '?').slice(0, 1).toUpperCase()
+  const TYPE_TAG: Record<string, string> = { string: 'STR', hash: 'HASH', list: 'LIST', set: 'SET', zset: 'ZSET', stream: 'STRM' }
+  const typeBadge = (t: string) => TYPE_TAG[t] ?? (t || '?').slice(0, 4).toUpperCase()
   function ttlLabel(ttl: number): string {
     if (ttl === -1) return '∞'
     if (ttl === -2) return 'expired'
@@ -182,7 +186,10 @@
 
   function toggle(path: string) {
     const next = new Set(expanded)
-    if (next.has(path)) next.delete(path)
+    if (next.has(path)) {
+      armCollapse()
+      next.delete(path)
+    }
     else next.add(path)
     expanded = next
   }
@@ -309,30 +316,29 @@
 
 <div style="display:flex;flex-direction:column;min-height:0">
   <!-- sticky header: DB selector + SCAN count + actions -->
-  <div style="position:sticky;top:0;z-index:2;background:var(--surface);flex:none;padding:var(--px-8) var(--px-8) var(--px-6);border-bottom:var(--px-1) solid var(--border);display:flex;align-items:center;gap:var(--px-8);flex-wrap:wrap">
-    <span style="font-size:var(--px-12);color:var(--text2)">DB</span>
-    <select value={curDb} onchange={switchDb} disabled={switching} class="mono" title="Select logical database" aria-label="Redis database" style="font-size:var(--px-11);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-3) var(--px-6);color:var(--text);cursor:pointer;outline:none{switching ? ';opacity:.6' : ''}">
+  <div style="position:sticky;top:0;z-index:2;background:var(--sidebar);flex:none;padding:var(--px-8) var(--px-10) var(--px-8);border-bottom:var(--px-1) solid var(--border);display:flex;align-items:center;gap:var(--px-8);flex-wrap:wrap">
+    <select value={curDb} onchange={switchDb} disabled={switching} title="Select logical database" aria-label="Redis database" style="font-size:var(--px-12);font-weight:500;background:var(--raised);border:var(--px-1) solid var(--border2);border-radius:var(--px-6);padding:var(--px-3) var(--px-6);color:var(--text);cursor:pointer;outline:none{switching ? ';opacity:.6' : ''}">
       {#each Array.from({ length: dbCount }, (_, i) => i) as n (n)}<option value={n}>db{n}</option>{/each}
     </select>
     {#if busy}
       <!-- Any scan in flight (mount, DB switch, pattern, Refresh, Scan more) shows a
            spinning glyph so the sidebar never looks idle while it is working. -->
-      <span class="mono" aria-live="polite" style="font-size:var(--px-10_5);color:var(--primary);display:inline-flex;align-items:center;gap:var(--px-4)">
-        <span class="rx-spin" aria-hidden="true">⟳</span> Scanning db{curDb}…
+      <span aria-live="polite" style="font-size:var(--px-11_5);color:var(--primary);display:inline-flex;align-items:center;gap:var(--px-4)">
+        <span class="rx-spin" aria-hidden="true"><Icon name="refresh" size={12} /></span> Scanning db{curDb}…
       </span>
     {:else}
-      <span class="mono" style="font-size:var(--px-10_5);color:var(--muted)">SCAN · {dbsize} keys</span>
+      <span style="font-size:var(--px-11_5);color:var(--muted)" title="Keys in this database (DBSIZE)">SCAN · {dbsize.toLocaleString()} keys</span>
     {/if}
-    <span style="margin-left:auto;display:flex;gap:var(--px-8);align-items:center">
-      <span onclick={openAdd} onkeydown={(e) => e.key === 'Enter' && openAdd()} role="button" tabindex="0" title="Add a new key" style="font-size:var(--px-10_5);color:var(--primary);cursor:pointer">＋ Key</span>
-      <span onclick={() => tabs.openRedisPubSubTab(connId)} onkeydown={(e) => e.key === 'Enter' && tabs.openRedisPubSubTab(connId)} role="button" tabindex="0" title="Pub/Sub Monitor" style="font-size:var(--px-10_5);color:var(--primary);cursor:pointer">Pub/Sub ▸</span>
-      <span onclick={() => (flushOpen = true)} onkeydown={(e) => e.key === 'Enter' && (flushOpen = true)} role="button" tabindex="0" title="FLUSHDB (clear entire DB)" style="font-size:var(--px-10_5);color:var(--error);cursor:pointer">Flush</span>
+    <span style="width:100%;display:flex;gap:var(--px-6);align-items:center">
+      <span onclick={openAdd} onkeydown={(e) => e.key === 'Enter' && openAdd()} role="button" tabindex="0" title="Add a new key" class="eg-btn primary">＋ Key</span>
+      <span onclick={() => tabs.openRedisPubSubTab(connId)} onkeydown={(e) => e.key === 'Enter' && tabs.openRedisPubSubTab(connId)} role="button" tabindex="0" title="Pub/Sub Monitor" class="eg-btn">Pub/Sub ▸</span>
+      <span onclick={() => (flushOpen = true)} onkeydown={(e) => e.key === 'Enter' && (flushOpen = true)} role="button" tabindex="0" title="FLUSHDB (clear entire DB)" class="eg-btn rx-flush">Flush</span>
     </span>
     <input
       bind:value={pattern}
       placeholder="pattern (e.g. user:*)"
       class="mono"
-      style="width:100%;background:var(--raised);border:var(--px-1) solid var(--border2);border-radius:var(--px-6);padding:var(--px-5) var(--px-8);font-size:var(--px-11_5);color:var(--text);outline:none"
+      style="width:100%;background:var(--raised);border:var(--px-1) solid var(--border2);border-radius:var(--px-6);padding:var(--px-6) var(--px-9);font-size:var(--px-12);color:var(--text);outline:none"
     />
     {#if partial}
       <!-- The walk hit its cap before the cursor came back to 0: say so rather than
@@ -368,16 +374,17 @@
       {#if r.kind === 'folder'}
         <ContextMenu.Root>
           <ContextMenu.Trigger>
-            <div
+            <div out:treeOut|global
               onclick={() => toggle(r.path)}
               onkeydown={(e) => e.key === 'Enter' && toggle(r.path)}
               role="button"
               tabindex="0"
-              style="display:flex;align-items:center;gap:var(--px-8);padding:var(--px-5) var(--px-8);border-radius:var(--px-6);cursor:pointer;padding-left:calc(var(--px-8) + {r.depth} * var(--px-14))"
+              class="rx-row"
+              style="display:flex;align-items:center;gap:var(--px-7);padding:var(--px-5) var(--px-8);border-radius:var(--px-6);cursor:pointer;padding-left:calc(var(--px-8) + {r.depth} * var(--px-14))"
             >
-              <span class="mono" style="flex:none;width:var(--px-10);text-align:center;font-size:var(--px-9);color:var(--muted)">{r.expanded ? '▾' : '▸'}</span>
-              <span class="mono" style="font-size:var(--px-12);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text2)">{r.segment}</span>
-              <span class="mono" style="margin-left:auto;flex:none;font-size:var(--px-10);color:var(--muted)">{r.count}</span>
+              <span style="flex:none;width:var(--px-12);display:flex;align-items:center;justify-content:center;color:var(--muted)"><Chevron open={r.expanded} size={11} /></span>
+              <span style="font-size:var(--px-12_5);font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text)">{r.segment}</span>
+              <span style="margin-left:auto;flex:none;font-size:var(--px-11);color:var(--muted);font-variant-numeric:tabular-nums">{r.count}</span>
             </div>
           </ContextMenu.Trigger>
           <ContextMenu.Content class="w-44">
@@ -389,17 +396,20 @@
         {@const kt = r.key?.key_type ?? 'string'}
         <ContextMenu.Root>
           <ContextMenu.Trigger>
-            <div
+            <div out:treeOut|global
               onclick={() => tabs.openRedisKey(connId, r.path)}
               onkeydown={(e) => e.key === 'Enter' && tabs.openRedisKey(connId, r.path)}
               role="button"
               tabindex="0"
               title={r.path}
-              style="display:flex;align-items:center;gap:var(--px-8);padding:var(--px-5) var(--px-8);border-radius:var(--px-6);cursor:pointer;padding-left:calc(var(--px-8) + {r.depth} * var(--px-14));background:{activeKey === r.path ? 'color-mix(in srgb, var(--primary) 26%, transparent)' : 'transparent'}"
+              class="rx-row"
+              class:active={activeKey === r.path}
+              style="display:flex;align-items:center;gap:var(--px-7);padding:var(--px-5) var(--px-8);border-radius:var(--px-6);cursor:pointer;padding-left:calc(var(--px-8) + {r.depth} * var(--px-14) + var(--px-4))"
             >
-              <span class="mono" style="flex:none;font-size:var(--px-9);font-weight:700;color:{typeColor(kt)};border:var(--px-1) solid {typeColor(kt)};border-radius:var(--px-3);padding:0 var(--px-4)">{typeBadge(kt)}</span>
-              <span class="mono" style="font-size:var(--px-12);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{r.segment}</span>
-              <span class="mono" style="margin-left:auto;flex:none;font-size:var(--px-10);color:{r.key?.ttl === -2 ? 'var(--error)' : 'var(--muted)'}">{r.key ? ttlLabel(r.key.ttl) : ''}</span>
+              <span class="rx-tag" style="--tc:{typeColor(kt)}">{typeBadge(kt)}</span>
+              <span style="font-size:var(--px-12_5);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text)">{r.segment}</span>
+              <!-- only keys that expire show a TTL; "no expiry" is the normal case and stays quiet -->
+              {#if r.key && r.key.ttl !== -1}<span style="margin-left:auto;flex:none;font-size:var(--px-11);color:{r.key.ttl === -2 ? 'var(--error)' : 'var(--muted)'};font-variant-numeric:tabular-nums">{ttlLabel(r.key.ttl)}</span>{/if}
             </div>
           </ContextMenu.Trigger>
           <ContextMenu.Content class="w-44">
@@ -506,6 +516,35 @@
 {/if}
 
 <style>
+  .rx-row:hover {
+    background: color-mix(in srgb, var(--text) 5%, transparent);
+  }
+  .rx-row.active {
+    background: color-mix(in srgb, var(--primary) 16%, transparent);
+  }
+  .rx-row.active:hover {
+    background: color-mix(in srgb, var(--primary) 20%, transparent);
+  }
+  .rx-tag {
+    flex: none;
+    min-width: var(--px-34);
+    text-align: center;
+    font-size: var(--px-9);
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    color: var(--tc);
+    background: color-mix(in srgb, var(--tc) 14%, transparent);
+    border-radius: var(--px-4);
+    padding: var(--px-1) var(--px-4);
+  }
+  .rx-flush {
+    margin-left: auto;
+    color: var(--error);
+  }
+  .rx-flush:hover {
+    border-color: var(--error);
+    background: color-mix(in srgb, var(--error) 8%, var(--raised));
+  }
   /* Scan-in-flight glyph (same affordance as the Explorer/Objects Refresh spinner). */
   .rx-spin {
     display: inline-block;
@@ -515,29 +554,5 @@
     to {
       transform: rotate(360deg);
     }
-  }
-  .eg-btn {
-    font-size: var(--px-12);
-    color: var(--text2);
-    background: var(--panel);
-    border: var(--px-1) solid var(--border);
-    border-radius: var(--px-6);
-    padding: var(--px-5) var(--px-14);
-    cursor: pointer;
-  }
-  .eg-btn:hover {
-    background: var(--hover);
-  }
-  .eg-btn.primary {
-    color: var(--hex-fff);
-    background: var(--primary);
-    border-color: var(--primary);
-    font-weight: 600;
-  }
-  .eg-btn.danger {
-    color: var(--hex-fff);
-    background: var(--error);
-    border-color: var(--error);
-    font-weight: 600;
   }
 </style>

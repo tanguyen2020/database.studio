@@ -1,4 +1,8 @@
 <script lang="ts">
+  import Icon from '$lib/components/Icon.svelte'
+  import { armCollapse, treeOut } from '$lib/ui/tree-motion'
+  import { IS_TAURI } from '$lib/demo'
+  import Chevron from '$lib/components/Chevron.svelte'
   // Sidebar "Connections" — port 1:1 từ Database Studio.dc.html dòng 73-130:
   // header CONNECTIONS + toolbar (New/Edit/Sync | NewQuery/ER/DDL/Compare/Filter,
   // gating theo selConn/selRel dòng 4783-4797) + filter box + cây My Databases
@@ -68,7 +72,7 @@
   const selConn = $derived(connections.byId(connections.selectedId ?? ''))
   // selRel: dòng 4643 chỉ liệt kê pg/mysql/mssql/clickhouse — mâu thuẫn với tab
   // dispatch dòng 2731 (có mariadb/sqlite) và README; theo dispatch + README.
-  const REL_SYSTEMS = ['postgres', 'mysql', 'mariadb', 'mssql', 'clickhouse', 'sqlite', 'oracle']
+  const REL_SYSTEMS = ['postgres', 'mysql', 'mariadb', 'mssql', 'clickhouse', 'sqlite', 'oracle', 'duckdb']
   const isRelational = (system: string) => REL_SYSTEMS.includes(system)
   // Engines with a user/privilege system (User Manager entry — §1.1).
   const USER_MGR_SYSTEMS = ['postgres', 'mysql', 'mariadb', 'mssql', 'clickhouse', 'oracle', 'cassandra', 'mongodb', 'rabbitmq']
@@ -85,9 +89,47 @@
   function toggleGroup(system: string) {
     const next = new Set(collapsed)
     if (next.has(system)) next.delete(system)
-    else next.add(system)
+    else {
+      armCollapse()
+      next.add(system)
+    }
     collapsed = next
   }
+
+  function toggleMyDb() {
+    if (myDbOpen) armCollapse()
+    myDbOpen = !myDbOpen
+  }
+
+  // The desktop app opens with every engine group / folder collapsed, so the list
+  // starts as a short overview (engine + count) instead of a long scroll. The
+  // browser build keeps them open (demo + e2e); ?collapsedStart=1 opts in there.
+  const startCollapsed = IS_TAURI || (typeof location !== 'undefined' && location.search.includes('collapsedStart=1'))
+  let startCollapseDone = false
+  $effect(() => {
+    if (!startCollapsed || startCollapseDone || !connections.loaded) return
+    untrack(() => {
+      startCollapseDone = true
+      collapsed = new Set([
+        ...connections.profiles.map((p) => p.system),
+        ...folders.map((f) => `folder:${f.name}`),
+      ])
+    })
+  })
+
+  // A connection picked from somewhere else (start screen, Command Palette, a
+  // shortcut) opens its group so the selected row is actually visible.
+  $effect(() => {
+    const id = connections.selectedId
+    if (!id) return
+    untrack(() => {
+      const p = connections.profiles.find((x) => x.id === id)
+      if (!p) return
+      myDbOpen = true
+      const key = groupKeyOf(p)
+      if (key && collapsed.has(key)) setGroupCollapsed(key, false)
+    })
+  })
 
   function select(p: ProfilePublic) {
     connections.selectedId = p.id
@@ -156,6 +198,9 @@
         return `Server=${p.host},${p.port};Database=${p.database};User Id=${p.user};`
       case 'sqlite':
         return p.sqlite_mode === 'in-memory' ? 'sqlite::memory:' : `sqlite://${p.sqlite_path}`
+      case 'duckdb':
+        // the path DuckDB itself takes (duckdb CLI / ATTACH)
+        return p.sqlite_mode === 'in-memory' || !p.sqlite_path ? ':memory:' : p.sqlite_path
       case 'rabbitmq':
         // Management UI URL on the profile's vhost (that is what host:port point at)
         return `${p.ssl ? 'https' : 'http'}://${p.user ? `${p.user}@` : ''}${p.host}:${p.port}/#/queues/${encodeURIComponent(p.database || '/')}`
@@ -305,7 +350,10 @@
   function setGroupCollapsed(key: string, isCollapsed: boolean) {
     if (!key) return
     const next = new Set(collapsed)
-    if (isCollapsed) next.add(key)
+    if (isCollapsed) {
+      if (!next.has(key)) armCollapse()
+      next.add(key)
+    }
     else next.delete(key)
     collapsed = next
   }
@@ -409,6 +457,7 @@
       <!-- connection row — dòng 116-124. Hover/selected qua class (tránh bẫy
            inline-background nuốt :hover). -->
       <div
+        out:treeOut|global
         class="conn-row"
         class:selected={connections.selectedId === p.id}
         data-conn-id={p.id}
@@ -427,7 +476,7 @@
       >
         <ConnectionIndicator system={p.system} />
         {#if refreshingId === p.id}
-          <span class="conn-refresh-glyph spinning" style="display:inline-flex;flex:none;color:var(--primary);font-size:var(--px-11)" title="Refreshing — reconnecting and reloading the tree">⟳</span>
+          <span class="conn-refresh-glyph spinning" style="display:inline-flex;flex:none;color:var(--primary);font-size:var(--px-11)" title="Refreshing — reconnecting and reloading the tree"><Icon name="refresh" size={12} /></span>
         {:else if connections.connecting.has(p.id)}
           <span style="width:var(--px-7);height:var(--px-7);border-radius:50%;flex:none;background:var(--warn)" title="Connecting…"></span>
         {:else if connections.connectErrors[p.id] && !p.connected}
@@ -436,8 +485,8 @@
           <span style="width:var(--px-7);height:var(--px-7);border-radius:50%;flex:none;background:{p.connected ? systemMeta(p.system).accent : 'var(--sys-orphan-accent)'}" title={p.connected ? `Connected · ${p.latency_ms ?? '–'} ms` : 'Disconnected'}></span>
         {/if}
         <div style="flex:1;min-width:0" aria-busy={refreshingId === p.id}>
-          <div class="conn-name mono" style="font-weight:600;font-size:var(--px-12_5);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{p.name}</div>
-          <div class="mono" style="font-size:var(--px-10);color:{refreshingId === p.id ? 'var(--primary)' : 'var(--muted)'};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{refreshingId === p.id ? 'Refreshing…' : p.system === 'sqlite' ? p.sqlite_path || ':memory:' : `${p.host}:${p.port}`}</div>
+          <div class="conn-name" style="font-weight:500;font-size:var(--px-13);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{p.name}</div>
+          <div class="mono" style="font-size:var(--px-10_5);margin-top:var(--px-1);color:{refreshingId === p.id ? 'var(--primary)' : 'var(--muted)'};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{refreshingId === p.id ? 'Refreshing…' : p.system === 'sqlite' || p.system === 'duckdb' ? p.sqlite_path || ':memory:' : `${p.host}:${p.port}`}</div>
         </div>
         {#if p.ephemeral}
           <span style="flex:none;margin-right:var(--px-6);font-size:var(--px-8_5);font-weight:700;letter-spacing:.04em;padding:var(--px-1) var(--px-5);border-radius:var(--px-4);background:var(--panel);color:var(--muted);border:var(--px-1) solid var(--border)" title="One-off · not saved">1×</span>
@@ -449,7 +498,7 @@
       {#if p.system !== 'rabbitmq'}
         <ContextMenu.Item onclick={() => newQueryConsole(p)}>New Query Console</ContextMenu.Item>
       {/if}
-      {#if (isRelational(p.system) && p.system !== 'sqlite') || p.system === 'mongodb'}
+      {#if (isRelational(p.system) && p.system !== 'sqlite' && p.system !== 'duckdb') || p.system === 'mongodb'}
         <ContextMenu.Item onclick={() => newDatabase(p)}>New Database…</ContextMenu.Item>
       {/if}
       {#if p.connected}
@@ -499,7 +548,7 @@
       : 'padding:var(--px-9) var(--px-12) var(--px-5)'}
   >
     <span
-      style="font-size:var(--px-10_5);font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--muted)"
+      style="font-size:var(--px-10_5);font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)"
       title="Ctrl+Shift+B focus list · ↑/↓ move · Enter open · F2 edit · Delete remove · ←/→ collapse/expand&#10;Ctrl+Shift+N new · Ctrl+Shift+K filter · Ctrl+Shift+O connect/disconnect"
     >Connections</span>
   </div>
@@ -575,8 +624,8 @@
   >
     <ContextMenu.Root>
       <ContextMenu.Trigger>
-        <div class="hoverable" onclick={() => (myDbOpen = !myDbOpen)} onkeydown={(e) => e.key === 'Enter' && (myDbOpen = !myDbOpen)} role="button" tabindex="0" style="display:flex;align-items:center;gap:var(--px-7);padding:var(--px-5) var(--px-6);border-radius:var(--px-6);cursor:pointer">
-          <span class="mono" style="width:var(--px-16);text-align:center;font-size:var(--px-16);color:var(--text2)">{myDbOpen ? '▾' : '▸'}</span>
+        <div class="hoverable" onclick={toggleMyDb} onkeydown={(e) => e.key === 'Enter' && toggleMyDb()} role="button" tabindex="0" style="display:flex;align-items:center;gap:var(--px-7);padding:var(--px-5) var(--px-6);border-radius:var(--px-6);cursor:pointer">
+          <span class="mono" style="width:var(--px-16);text-align:center;font-size:var(--px-16);color:var(--text2)"><Chevron open={myDbOpen} size={12} /></span>
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--muted)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path></svg>
           <span style="font-size:var(--px-11_5);font-weight:700">My Databases</span>
           <span class="mono" style="margin-left:auto;font-size:var(--px-10);color:var(--muted)">{connections.profiles.length}</span>
@@ -601,8 +650,8 @@
         {#if ui.connGroupMode === 'folder'}
           <!-- nhóm theo folder (group field) — Section 8 -->
           {#each folders as folder (folder.name)}
-            <div class="hoverable" onclick={() => toggleGroup(`folder:${folder.name}`)} onkeydown={(e) => e.key === 'Enter' && toggleGroup(`folder:${folder.name}`)} role="button" tabindex="0" style="display:flex;align-items:center;gap:var(--px-7);padding:var(--px-8) var(--px-8) var(--px-4) var(--px-4);cursor:pointer">
-              <span class="mono" style="width:var(--px-16);text-align:center;font-size:var(--px-16);color:var(--text2)">{collapsed.has(`folder:${folder.name}`) ? '▸' : '▾'}</span>
+            <div out:treeOut|global class="hoverable" onclick={() => toggleGroup(`folder:${folder.name}`)} onkeydown={(e) => e.key === 'Enter' && toggleGroup(`folder:${folder.name}`)} role="button" tabindex="0" style="display:flex;align-items:center;gap:var(--px-7);padding:var(--px-8) var(--px-8) var(--px-4) var(--px-4);cursor:pointer">
+              <span class="mono" style="width:var(--px-16);text-align:center;font-size:var(--px-16);color:var(--text2)"><Chevron open={!collapsed.has(`folder:${folder.name}`)} size={12} /></span>
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--muted)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path></svg>
               <span style="font-size:var(--px-10);font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--muted)">{folder.name}</span>
               <span class="mono" style="margin-left:auto;font-size:var(--px-10);color:var(--muted)">{folder.items.length}</span>
@@ -620,11 +669,12 @@
               <!-- outermost level (RELATIONAL / DOCUMENT / CACHE / STREAMING): a small
                    caption + a hairline rule so it reads as a section divider, staying
                    quieter than the engine band below it (category > engine > row). -->
-              <div class="cat-head"><span>{group.category}</span><span class="cat-rule"></span></div>
+              <div class="cat-head" out:treeOut|global><span>{group.category}</span><span class="cat-rule"></span></div>
             {/if}
             <!-- engine band: own background + a left bar in the engine's brand colour
                  + a bold label + a count pill, so each engine group is unmistakable. -->
             <div
+              out:treeOut|global
               class="grp-head"
               class:collapsed={collapsed.has(group.system)}
               onclick={() => toggleGroup(group.system)}
@@ -634,7 +684,7 @@
               aria-expanded={!collapsed.has(group.system)}
               style="box-shadow:inset var(--px-3) 0 0 {systemMeta(group.system).accent}"
             >
-              <span class="mono grp-chev">{collapsed.has(group.system) ? '▸' : '▾'}</span>
+              <span class="mono grp-chev"><Chevron open={!(collapsed.has(group.system))} size={12} /></span>
               <span style="display:flex;align-items:center;flex:none"><SystemIcon system={group.system} size={16} /></span>
               <span class="grp-label">{systemMeta(group.system).label}</span>
               <span class="mono grp-count">{group.items.length}</span>
@@ -687,18 +737,17 @@
      than the light-mode sidebar → nearly invisible). Selected is a stronger tint
      + a left accent bar + a bolder name, so it's unmistakable vs. a mere hover. */
   .conn-row:hover {
-    background: color-mix(in srgb, var(--primary) 12%, transparent);
+    background: color-mix(in srgb, var(--text) 5%, transparent);
   }
   .conn-row.selected {
-    background: color-mix(in srgb, var(--primary) 22%, transparent);
-    box-shadow: inset var(--px-3) 0 0 var(--primary);
+    background: color-mix(in srgb, var(--primary) 14%, transparent);
   }
   .conn-row.selected:hover {
-    background: color-mix(in srgb, var(--primary) 30%, transparent);
+    background: color-mix(in srgb, var(--primary) 18%, transparent);
   }
   .conn-row.selected .conn-name {
     color: var(--primary);
-    font-weight: 700;
+    font-weight: 600;
   }
   /* Category caption (RELATIONAL / DOCUMENT / …) — the quiet outer level. */
   .cat-head {
@@ -706,11 +755,11 @@
     align-items: center;
     gap: var(--px-8);
     padding: var(--px-10) var(--px-10) var(--px-4) var(--px-8);
-    font-size: var(--px-9);
-    font-weight: 800;
-    letter-spacing: 0.14em;
+    font-size: var(--px-10);
+    font-weight: 600;
+    letter-spacing: 0.08em;
     text-transform: uppercase;
-    color: var(--text2);
+    color: var(--muted);
   }
   .cat-rule {
     flex: 1;
@@ -726,14 +775,13 @@
     align-items: center;
     gap: var(--px-7);
     padding: var(--px-6) var(--px-8) var(--px-6) var(--px-8);
-    margin: var(--px-2) 0 var(--px-2) 0;
+    margin: var(--px-4) 0 var(--px-2) 0;
     cursor: pointer;
-    background: var(--header);
-    border-top: var(--px-1) solid var(--border);
-    border-bottom: var(--px-1) solid var(--border);
+    border-radius: var(--px-7);
+    background: color-mix(in srgb, var(--text) 4%, transparent);
   }
   .grp-head:hover {
-    background: color-mix(in srgb, var(--primary) 10%, var(--header));
+    background: color-mix(in srgb, var(--primary) 9%, transparent);
   }
   .grp-head:focus-visible {
     outline: var(--px-2) solid var(--primary);
@@ -746,10 +794,8 @@
     color: var(--text2);
   }
   .grp-label {
-    font-size: var(--px-10_5);
-    font-weight: 800;
-    letter-spacing: 0.07em;
-    text-transform: uppercase;
+    font-size: var(--px-12_5);
+    font-weight: 600;
     color: var(--text);
   }
   /* count as a pill — a bare number next to the label read as part of it */
@@ -757,11 +803,11 @@
     margin-left: auto;
     min-width: var(--px-18);
     text-align: center;
-    font-size: var(--px-9_5);
-    font-weight: 700;
-    color: var(--text2);
-    background: var(--raised);
-    border: var(--px-1) solid var(--border2);
+    font-size: var(--px-10_5);
+    font-weight: 600;
+    color: var(--muted);
+    background: transparent;
+    border: none;
     border-radius: var(--px-10);
     padding: 0 var(--px-6);
   }

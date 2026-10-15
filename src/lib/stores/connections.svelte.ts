@@ -258,7 +258,7 @@ class ConnectionsStore {
       id: '',
       name: '',
       system,
-      host: system === 'sqlite' ? '' : 'localhost',
+      host: system === 'sqlite' || system === 'duckdb' ? '' : 'localhost',
       port: 0,
       database: '',
       user: '',

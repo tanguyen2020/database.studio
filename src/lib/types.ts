@@ -16,6 +16,7 @@ export type SystemType =
   | 'mongodb'
   | 'oracle'
   | 'rabbitmq'
+  | 'duckdb'
 
 export type Environment = 'production' | 'staging' | 'development' | 'local'
 export type SqliteMode = 'read-write' | 'read-only' | 'in-memory'

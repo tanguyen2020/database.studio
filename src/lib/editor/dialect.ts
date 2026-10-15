@@ -16,6 +16,7 @@ import {
   StandardSQL,
 } from '@codemirror/lang-sql'
 import { clickHouseDialect } from '$lib/sql/ch-editor-dialect'
+import { duckDbDialect } from '$lib/sql/duckdb-editor-dialect'
 
 export function sqlDialectFor(system: string): SQLDialect {
   switch (system) {
@@ -37,6 +38,8 @@ export function sqlDialectFor(system: string): SQLDialect {
       return Cassandra
     case 'clickhouse':
       return clickHouseDialect // lang-sql has no ClickHouse dialect → our own
+    case 'duckdb':
+      return duckDbDialect // PostgreSQL-derived grammar + DuckDB's own words
     default:
       return StandardSQL
   }
@@ -61,6 +64,7 @@ export const SQL_SYSTEMS = [
   'oracle',
   'cassandra',
   'clickhouse',
+  'duckdb',
 ]
 
 /** Keywords + type names the dialect declares, lower-cased and de-duplicated. */

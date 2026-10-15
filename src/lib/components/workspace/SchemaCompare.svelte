@@ -1,4 +1,6 @@
 <script lang="ts">
+  import Icon from '$lib/components/Icon.svelte'
+  import Chevron from '$lib/components/Chevron.svelte'
   // Schema Compare (Phase 5 · T9) — port dòng 1353-1430. Chọn SOURCE/TARGET
   // (cùng system), diff cấu trúc (tables/columns), filter, migration SQL.
   import { untrack } from 'svelte'
@@ -34,7 +36,7 @@
   // Every relational connection is selectable (item 2) — not only already-open ones;
   // a picked-but-closed connection is opened on demand in compare(). Non-relational
   // systems (Redis/Kafka/NATS) have no schema to compare, so they're excluded.
-  const RELATIONAL = ['postgres', 'mysql', 'mariadb', 'mssql', 'sqlite', 'clickhouse', 'oracle']
+  const RELATIONAL = ['postgres', 'mysql', 'mariadb', 'mssql', 'sqlite', 'clickhouse', 'oracle', 'duckdb']
   const options = $derived(connections.profiles.filter((p) => RELATIONAL.includes(p.system)))
   type CmpState = { srcConn?: string | null; tgtConn?: string | null; srcDb?: string | null; tgtDb?: string | null; presetTick?: number }
   const st0 = untrack(() => tab.state) as CmpState
@@ -425,7 +427,7 @@
         <label style="display:flex;align-items:center;gap:var(--px-6);font-size:var(--px-11_5);color:var(--text2);cursor:pointer">
           <input type="checkbox" bind:checked={showIdentical} /> Show identical
         </label>
-        <span onclick={() => compare()} onkeydown={(e) => e.key === 'Enter' && compare()} role="button" tabindex="0" title="Re-run the comparison (re-read both schemas)" style="font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-11);cursor:pointer;font-weight:600;color:var(--text2);opacity:{loading ? 0.6 : 1};pointer-events:{loading ? 'none' : 'auto'}">⟳ Refresh</span>
+        <span onclick={() => compare()} onkeydown={(e) => e.key === 'Enter' && compare()} role="button" tabindex="0" title="Re-run the comparison (re-read both schemas)" style="font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-11);cursor:pointer;font-weight:600;color:var(--text2);opacity:{loading ? 0.6 : 1};pointer-events:{loading ? 'none' : 'auto'}"><Icon name="refresh" size={12} /> Refresh</span>
         <!-- item 1/2 — Execute (and Open in editor) are available in the Diff view too,
              acting on the selected objects' migration, same as the Sync Script view. -->
         <span onclick={openMigration} onkeydown={(e) => e.key === 'Enter' && openMigration()} role="button" tabindex="0" title="Open the migration in a SQL editor tab" style="font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-11);cursor:pointer;font-weight:600;opacity:{selected.size ? 1 : 0.5};pointer-events:{selected.size ? 'auto' : 'none'}">Open script</span>
@@ -448,7 +450,7 @@
           tabindex="0"
           style="display:flex;align-items:center;gap:var(--px-8);padding:var(--px-5) var(--px-14) var(--px-5) var(--px-40);background:var(--header);border-top:var(--px-1) solid var(--border2);border-bottom:var(--px-1) solid var(--border2);box-shadow:inset var(--px-3) 0 0 {kindColor(kind)};cursor:pointer"
         >
-          <span class="mono" style="width:var(--px-10);color:{kindColor(kind)};font-size:var(--px-9)">{fopen ? '▾' : '▸'}</span>
+          <span class="mono" style="width:var(--px-10);color:{kindColor(kind)};font-size:var(--px-9)"><Chevron open={fopen} size={10} /></span>
           <input type="checkbox" title="Select all in {label}" checked={keysAllSelected(keys)} onchange={() => toggleKeys(keys)} onclick={(e) => e.stopPropagation()} />
           <span class="mono" style="font-size:var(--px-12);color:{kindColor(kind)}">{kindGlyph(kind)}</span>
           <span style="font-size:var(--px-11);font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:{kindColor(kind)}">{label}</span>
@@ -488,7 +490,7 @@
         <!-- object-type group header (Tables / Views / Stored Procedures / …) with a
              select-all checkbox for the whole group -->
         <div style="display:flex;align-items:center;gap:var(--px-8);padding:var(--px-7) var(--px-14);background:var(--hover);border-top:var(--px-1) solid var(--border2);border-bottom:var(--px-1) solid var(--border2);box-shadow:inset var(--px-3) 0 0 {kindColor(group.kind)};position:sticky;top:var(--px-30);z-index:2">
-          <span onclick={() => toggleGroupOpen(group.kind)} onkeydown={(e) => e.key === 'Enter' && toggleGroupOpen(group.kind)} role="button" tabindex="0" class="mono" style="width:var(--px-10);color:{kindColor(group.kind)};font-size:var(--px-10);cursor:pointer">{gOpen ? '▾' : '▸'}</span>
+          <span onclick={() => toggleGroupOpen(group.kind)} onkeydown={(e) => e.key === 'Enter' && toggleGroupOpen(group.kind)} role="button" tabindex="0" class="mono" style="width:var(--px-10);color:{kindColor(group.kind)};font-size:var(--px-10);cursor:pointer"><Chevron open={gOpen} size={10} /></span>
           <input type="checkbox" title="Select all in this group" checked={groupAllSelected(group.items)} onchange={() => toggleGroup(group.items)} />
           <span class="mono" style="font-size:var(--px-13);color:{kindColor(group.kind)}">{kindGlyph(group.kind)}</span>
           <span style="font-size:var(--px-12);font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:{kindColor(group.kind)}">{group.label}</span>
@@ -519,7 +521,7 @@
               title={hasDdl ? 'View DDL diff' : hasChildren ? 'Show columns / indexes / triggers' : ''}
             >
               <div style="flex:1;display:flex;align-items:center;gap:var(--px-8);padding:var(--px-7) var(--px-14) var(--px-7) var(--px-26);box-shadow:inset var(--px-3) 0 0 {sm.color}">
-                <span class="mono" style="width:var(--px-10);color:var(--muted);font-size:var(--px-9)">{hasChildren && !hasDdl ? (isOpen ? '▾' : '▸') : ''}</span>
+                <span class="mono" style="width:var(--px-10);color:var(--muted);font-size:var(--px-9)">{#if hasChildren && !hasDdl}<Chevron open={isOpen} size={10} />{/if}</span>
                 <!-- every object is selectable (including drops / tgt_only) -->
                 <input type="checkbox" checked={selected.has(dkey)} onchange={() => toggleSel(dkey)} onclick={(e) => e.stopPropagation()} />
                 <span class="mono" style="font-size:var(--px-11);color:{kindColor(d.kind)}">{kindGlyph(d.kind)}</span>
@@ -590,7 +592,7 @@
   {:else}
     <div style="flex:none;display:flex;align-items:center;gap:var(--px-10);padding:var(--px-8) var(--px-14);border-bottom:var(--px-1) solid var(--border)">
       <span style="font-size:var(--px-11_5);color:var(--muted)">Migration to sync TARGET ({tgtProfile?.name}) to SOURCE — {selected.size} object(s) selected</span>
-      <span onclick={() => compare()} onkeydown={(e) => e.key === 'Enter' && compare()} role="button" tabindex="0" title="Re-run the comparison (re-read both schemas)" style="margin-left:auto;font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-12);cursor:pointer;font-weight:600;color:var(--text2);opacity:{loading ? 0.6 : 1};pointer-events:{loading ? 'none' : 'auto'}">⟳ Refresh</span>
+      <span onclick={() => compare()} onkeydown={(e) => e.key === 'Enter' && compare()} role="button" tabindex="0" title="Re-run the comparison (re-read both schemas)" style="margin-left:auto;font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-12);cursor:pointer;font-weight:600;color:var(--text2);opacity:{loading ? 0.6 : 1};pointer-events:{loading ? 'none' : 'auto'}"><Icon name="refresh" size={12} /> Refresh</span>
       <span onclick={openMigration} onkeydown={(e) => e.key === 'Enter' && openMigration()} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-12);cursor:pointer;font-weight:600">Open in editor</span>
       <span onclick={execMigration} onkeydown={(e) => e.key === 'Enter' && execMigration()} role="button" tabindex="0" title="Run this migration on the target now" style="font-size:var(--px-11_5);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-6);padding:var(--px-5) var(--px-14);cursor:pointer;font-weight:600;opacity:{executing ? 0.6 : 1}">{executing ? 'Executing…' : 'Execute'}</span>
     </div>

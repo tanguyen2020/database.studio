@@ -70,5 +70,5 @@ export function txnEffect(sql: string, system: string): TxnEffect {
 
 /** Engines where the editor tracks transactions at all (no txn → no badge). */
 export function supportsTxn(system: string): boolean {
-  return ['postgres', 'mysql', 'mariadb', 'mssql', 'sqlite', 'oracle'].includes(system)
+  return ['postgres', 'mysql', 'mariadb', 'mssql', 'sqlite', 'oracle', 'duckdb'].includes(system)
 }
