@@ -406,7 +406,7 @@ fn cql_lints(sql: &str) -> Vec<LintDiagnostic> {
 /// Entry point — chạy trên TOÀN BỘ nội dung editor (vị trí đã là toàn document).
 pub fn lint(system: &str, sql: &str) -> Vec<LintDiagnostic> {
     // Redis/Kafka/NATS: không parse SQL (addendum §1.2 dòng cuối)
-    if matches!(system, "redis" | "kafka" | "nats") {
+    if matches!(system, "redis" | "kafka" | "nats" | "rabbitmq") {
         return Vec::new();
     }
     // Cassandra: rule pack CQL riêng — KHÔNG ép qua parser SQL.

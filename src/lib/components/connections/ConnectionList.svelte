@@ -71,7 +71,7 @@
   const REL_SYSTEMS = ['postgres', 'mysql', 'mariadb', 'mssql', 'clickhouse', 'sqlite', 'oracle']
   const isRelational = (system: string) => REL_SYSTEMS.includes(system)
   // Engines with a user/privilege system (User Manager entry — §1.1).
-  const USER_MGR_SYSTEMS = ['postgres', 'mysql', 'mariadb', 'mssql', 'clickhouse', 'oracle', 'cassandra', 'mongodb']
+  const USER_MGR_SYSTEMS = ['postgres', 'mysql', 'mariadb', 'mssql', 'clickhouse', 'oracle', 'cassandra', 'mongodb', 'rabbitmq']
   const hasUserMgr = (system: string) => USER_MGR_SYSTEMS.includes(system)
   const selRel = $derived(!!selConn && isRelational(selConn.system))
   // View ER / Generate Scripts enable only when a schema/database node (public / dbo /
@@ -110,6 +110,8 @@
       // on connect (double-click a collection to open its documents; a mongosh query
       // console is still available via the context menu / New Query).
       else if (p.system === 'mongodb') { /* explorer shows collections; open per collection */ }
+      // RabbitMQ: queues/exchanges live in the ObjectExplorer sidebar — no tab on connect.
+      else if (p.system === 'rabbitmq') { /* explorer shows queues & exchanges */ }
     }
   }
 
@@ -154,6 +156,9 @@
         return `Server=${p.host},${p.port};Database=${p.database};User Id=${p.user};`
       case 'sqlite':
         return p.sqlite_mode === 'in-memory' ? 'sqlite::memory:' : `sqlite://${p.sqlite_path}`
+      case 'rabbitmq':
+        // Management UI URL on the profile's vhost (that is what host:port point at)
+        return `${p.ssl ? 'https' : 'http'}://${p.user ? `${p.user}@` : ''}${p.host}:${p.port}/#/queues/${encodeURIComponent(p.database || '/')}`
       default:
         return `${p.system}://${p.host}:${p.port}`
     }
@@ -441,7 +446,9 @@
       </div>
     </ContextMenu.Trigger>
     <ContextMenu.Content class="w-56">
-      <ContextMenu.Item onclick={() => newQueryConsole(p)}>New Query Console</ContextMenu.Item>
+      {#if p.system !== 'rabbitmq'}
+        <ContextMenu.Item onclick={() => newQueryConsole(p)}>New Query Console</ContextMenu.Item>
+      {/if}
       {#if (isRelational(p.system) && p.system !== 'sqlite') || p.system === 'mongodb'}
         <ContextMenu.Item onclick={() => newDatabase(p)}>New Database…</ContextMenu.Item>
       {/if}

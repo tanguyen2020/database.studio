@@ -36,6 +36,11 @@
     <rect x="13" y="4" width="3.3" height="16" rx="0.6" />
     <rect x="18" y="9.5" width="3.3" height="5" rx="0.6" />
   </svg>
+{:else if key === 'rabbitmq'}
+  <!-- RabbitMQ mark: two "ears" on a body with the square window (svF, hand-built) -->
+  <svg width={size} height={size} viewBox="0 0 24 24" fill={color} stroke="none" aria-hidden="true">
+    <path fill-rule="evenodd" d="M2 3a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1v6h3V3a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1v7h6a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1Zm13.5 11a1 1 0 0 0-1 1v2a1 1 0 0 0 1 1h2a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1Z" />
+  </svg>
 {:else}
   <svg
     width={size}

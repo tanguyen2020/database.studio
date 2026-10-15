@@ -940,6 +940,17 @@ impl Registry {
         }
     }
 
+    /// Clone the RabbitMQ management client of a live connection (an HTTP client —
+    /// cheap to clone), so a command makes its round trip without holding the lock.
+    pub async fn rabbit_driver(&self, id: &str) -> AppResult<crate::drivers::rabbitmq::RabbitDriver> {
+        let driver = self.driver_handle(id)?;
+        let d = driver.lock().await;
+        match &*d {
+            LiveConnection::Rabbitmq(r) => Ok(r.clone()),
+            _ => Err(AppError::Driver("Connection is not RabbitMQ".into())),
+        }
+    }
+
     /// Pings the live connection (used by the status bar / reconnect banner).
     pub async fn ping(&self, id: &str) -> bool {
         let Ok(driver) = self.driver_handle(id) else {
@@ -966,7 +977,7 @@ mod tests {
         for sys in ["postgres", "mysql", "mariadb", "mssql", "oracle", "redis"] {
             assert!(needs_keepalive(sys), "{sys} must be kept warm");
         }
-        for sys in ["sqlite", "clickhouse", "kafka", "nats", "mongodb", "cassandra", "unknown"] {
+        for sys in ["sqlite", "clickhouse", "kafka", "nats", "mongodb", "cassandra", "rabbitmq", "unknown"] {
             assert!(!needs_keepalive(sys), "{sys} must not be pinged");
         }
     }

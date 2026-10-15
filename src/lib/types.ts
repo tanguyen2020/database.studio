@@ -15,6 +15,7 @@ export type SystemType =
   | 'nats'
   | 'mongodb'
   | 'oracle'
+  | 'rabbitmq'
 
 export type Environment = 'production' | 'staging' | 'development' | 'local'
 export type SqliteMode = 'read-write' | 'read-only' | 'in-memory'
@@ -233,6 +234,8 @@ export type TabContentType =
   | 'redis-pubsub'
   | 'nats'
   | 'nats-subject'
+  | 'rabbit-queue'
+  | 'rabbit-exchange'
   | 'kafka'
   | 'kafka-consumer'
   | 'kafka-producer'

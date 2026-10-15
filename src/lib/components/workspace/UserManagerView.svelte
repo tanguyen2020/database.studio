@@ -15,6 +15,7 @@
   import MongoUserManager from './users/MongoUserManager.svelte'
   import OracleUserManager from './users/OracleUserManager.svelte'
   import CassandraUserManager from './users/CassandraUserManager.svelte'
+  import RabbitUserManager from './users/RabbitUserManager.svelte'
 
   interface Props {
     tab: TabState
@@ -106,6 +107,8 @@
   $effect(() => {
     void listView
     void tab.connectionId
+    // RabbitMQ has its own manager reading the Management API — no users_view query
+    if (tab.systemType === 'rabbitmq') return
     untrack(() => void load())
   })
 
@@ -130,6 +133,8 @@
   <OracleUserManager {tab} />
 {:else if tab.systemType === 'cassandra'}
   <CassandraUserManager {tab} />
+{:else if tab.systemType === 'rabbitmq'}
+  <RabbitUserManager {tab} />
 {:else}
 <div style="flex:1;display:flex;flex-direction:column;min-height:0">
   <div style="flex:none;display:flex;align-items:center;gap:var(--px-8);padding:var(--px-9) var(--px-14);border-bottom:var(--px-1) solid var(--border);background:var(--surface);flex-wrap:wrap">

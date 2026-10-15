@@ -254,6 +254,196 @@ pub async fn kill_session(
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Drop Database when the database is held by other sessions.
+// ---------------------------------------------------------------------------
+
+/// How long MySQL/MariaDB may wait for metadata locks during DROP DATABASE.
+/// MySQL does NOT error when another session holds a lock on a table of the
+/// database — DROP just waits `lock_wait_timeout` (default: one YEAR), freezing
+/// the connection. Bounding it turns "hangs forever" into "in use" + the list.
+pub const MYSQL_DROP_LOCK_WAIT_SECS: u32 = 8;
+
+fn lit(system: &str, s: &str) -> String {
+    crate::commands::users_admin::quote_str(system, s)
+}
+
+/// Sessions (other than our own) connected to / holding locks on `db` — the
+/// ones that keep DROP DATABASE from running. Every engine returns the same
+/// column aliases so the dialog renders one shape: pid, username, client,
+/// program, state, started, query, holds_lock. None = engine has no such notion.
+pub fn database_sessions_query(system: &str, db: &str) -> Option<String> {
+    let l = lit(system, db);
+    let sql = match system {
+        "postgres" => format!(
+            "SELECT pid, COALESCE(usename, '') AS username, \
+                    COALESCE(client_addr::text, 'local') AS client, \
+                    COALESCE(application_name, '') AS program, COALESCE(state, '') AS state, \
+                    COALESCE(to_char(backend_start, 'YYYY-MM-DD HH24:MI:SS'), '') AS started, \
+                    LEFT(COALESCE(query, ''), 200) AS query, 1 AS holds_lock \
+             FROM pg_stat_activity WHERE datname = {l} AND pid <> pg_backend_pid() \
+             ORDER BY backend_start"
+        ),
+        // Idle `USE db` sessions do not block DROP DATABASE in MySQL — sessions
+        // holding a metadata lock on one of its tables do. Both are listed;
+        // `holds_lock` tells them apart. Needs performance_schema (MySQL 5.7+,
+        // MariaDB 10.5+); `database_sessions_fallback` covers the rest.
+        "mysql" | "mariadb" => {
+            let mdl = format!(
+                "SELECT t.PROCESSLIST_ID FROM performance_schema.metadata_locks m \
+                 JOIN performance_schema.threads t ON t.THREAD_ID = m.OWNER_THREAD_ID \
+                 WHERE m.OBJECT_SCHEMA = {l} AND m.LOCK_STATUS = 'GRANTED' AND t.PROCESSLIST_ID IS NOT NULL"
+            );
+            format!(
+                "SELECT CAST(p.ID AS SIGNED) AS pid, p.USER AS username, COALESCE(p.HOST, '') AS client, \
+                        '' AS program, COALESCE(p.COMMAND, '') AS state, \
+                        CAST(COALESCE(p.TIME, 0) AS SIGNED) AS seconds, '' AS started, \
+                        LEFT(COALESCE(p.INFO, ''), 200) AS query, \
+                        CAST(CASE WHEN p.ID IN ({mdl}) THEN 1 ELSE 0 END AS SIGNED) AS holds_lock \
+                 FROM information_schema.PROCESSLIST p \
+                 WHERE p.ID <> CONNECTION_ID() AND (p.DB = {l} OR p.ID IN ({mdl})) \
+                 ORDER BY holds_lock DESC, p.ID"
+            )
+        }
+        // A session is "in" the database (database_id) or holds a lock on it from
+        // another database (dm_tran_locks). System sessions cannot be KILLed.
+        "mssql" => format!(
+            "SELECT s.session_id AS pid, COALESCE(s.login_name, '') AS username, \
+                    COALESCE(s.host_name, '') AS client, COALESCE(s.program_name, '') AS program, \
+                    COALESCE(s.status, '') AS state, CONVERT(varchar(19), s.login_time, 120) AS started, \
+                    '' AS query, 1 AS holds_lock \
+             FROM sys.dm_exec_sessions s \
+             WHERE s.is_user_process = 1 AND s.session_id <> @@SPID \
+               AND (s.database_id = DB_ID({l}) OR s.session_id IN \
+                    (SELECT request_session_id FROM sys.dm_tran_locks WHERE resource_database_id = DB_ID({l}))) \
+             ORDER BY s.session_id"
+        ),
+        // A "database" in the tree is a schema = user; DROP USER fails with
+        // ORA-01940 while that user is logged in.
+        "oracle" => format!(
+            "SELECT s.sid AS \"pid\", NVL(s.username, ' ') AS \"username\", NVL(s.machine, ' ') AS \"client\", \
+                    NVL(s.program, ' ') AS \"program\", NVL(s.status, ' ') AS \"state\", \
+                    TO_CHAR(s.logon_time, 'YYYY-MM-DD HH24:MI:SS') AS \"started\", ' ' AS \"query\", 1 AS \"holds_lock\" \
+             FROM v$session s WHERE s.username = {l} AND s.sid <> SYS_CONTEXT('USERENV', 'SID') \
+             ORDER BY s.sid"
+        ),
+        _ => return None,
+    };
+    Some(sql)
+}
+
+/// MySQL/MariaDB without a readable performance_schema: sessions whose current
+/// database is `db` (holds_lock unknown → 0).
+pub fn database_sessions_fallback(system: &str, db: &str) -> Option<String> {
+    if !matches!(system, "mysql" | "mariadb") {
+        return None;
+    }
+    let l = lit(system, db);
+    Some(format!(
+        "SELECT CAST(p.ID AS SIGNED) AS pid, p.USER AS username, COALESCE(p.HOST, '') AS client, \
+                '' AS program, COALESCE(p.COMMAND, '') AS state, \
+                CAST(COALESCE(p.TIME, 0) AS SIGNED) AS seconds, '' AS started, \
+                LEFT(COALESCE(p.INFO, ''), 200) AS query, CAST(0 AS SIGNED) AS holds_lock \
+         FROM information_schema.PROCESSLIST p \
+         WHERE p.ID <> CONNECTION_ID() AND p.DB = {l} ORDER BY p.ID"
+    ))
+}
+
+/// True when a DROP DATABASE failed because OTHER sessions use the database —
+/// the case the dialog can fix by killing them. Not "it does not exist", not a
+/// permission error, and (PostgreSQL) not "cannot drop the currently open
+/// database" (that one is us, and killing others would not help).
+pub fn database_in_use(system: &str, e: &QueryError) -> bool {
+    let m = format!("{} {}", e.message, e.raw).to_lowercase();
+    match system {
+        "postgres" => m.contains("is being accessed by other users"),
+        "mssql" => e.code.as_deref() == Some("3702") || m.contains("currently in use"),
+        "mysql" | "mariadb" => m.contains("lock wait timeout exceeded"),
+        "oracle" => m.contains("ora-01940"),
+        _ => false,
+    }
+}
+
+#[derive(serde::Serialize, Debug)]
+pub struct DropDatabaseOutcome {
+    pub dropped: bool,
+    /// Other sessions hold the database — list them (`database_sessions`),
+    /// kill (`kill_session`) and drop again.
+    pub in_use: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<QueryError>,
+}
+
+fn system_for(state: &State<'_, AppState>, conn_id: &str) -> String {
+    state
+        .registry
+        .system_of(conn_id)
+        .or_else(|| state.storage.get_connection(conn_id).ok().map(|p| p.system.as_str().to_string()))
+        .unwrap_or_default()
+}
+
+/// Runs a DROP DATABASE / DROP USER … CASCADE statement and reports whether it
+/// failed because the database is in use. MySQL/MariaDB get a bounded
+/// `lock_wait_timeout` for this one statement (restored afterwards) so a held
+/// metadata lock surfaces as "in use" instead of freezing the connection.
+#[tauri::command]
+pub async fn drop_database(
+    state: State<'_, AppState>,
+    conn_id: String,
+    statement: String,
+) -> Result<DropDatabaseOutcome, AppError> {
+    let system = system_for(&state, &conn_id);
+    let mysql = matches!(system.as_str(), "mysql" | "mariadb");
+    if mysql {
+        state
+            .registry
+            .exec_statement(&conn_id, format!("SET SESSION lock_wait_timeout = {MYSQL_DROP_LOCK_WAIT_SECS}"))
+            .await?
+            .map_err(|e| AppError::Driver(e.message))?;
+    }
+    let res = state.registry.exec_statement(&conn_id, statement).await;
+    if mysql {
+        // `DEFAULT` = the server's global value, i.e. what the session had.
+        let _ = state
+            .registry
+            .exec_statement(&conn_id, "SET SESSION lock_wait_timeout = DEFAULT".to_string())
+            .await;
+    }
+    match res? {
+        Ok(_) => Ok(DropDatabaseOutcome { dropped: true, in_use: false, error: None }),
+        Err(e) => Ok(DropDatabaseOutcome { dropped: false, in_use: database_in_use(&system, &e), error: Some(e) }),
+    }
+}
+
+/// The sessions keeping `database` from being dropped (see
+/// `database_sessions_query`). Killed one by one with `kill_session`.
+#[tauri::command]
+pub async fn database_sessions(
+    state: State<'_, AppState>,
+    conn_id: String,
+    database: String,
+) -> Result<QueryResultSet, AppError> {
+    let system = system_for(&state, &conn_id);
+    let sql = database_sessions_query(&system, &database)
+        .ok_or_else(|| AppError::Driver(format!("Listing sessions is not supported for {system}")))?;
+    let first = state.registry.exec_statement(&conn_id, sql).await?;
+    let outcome = match first {
+        Ok(o) => o,
+        Err(e) => match database_sessions_fallback(&system, &database) {
+            Some(fb) => state
+                .registry
+                .exec_statement(&conn_id, fb)
+                .await?
+                .map_err(|e2| AppError::Driver(e2.message))?,
+            None => return Err(AppError::Driver(e.message)),
+        },
+    };
+    match outcome {
+        StatementOutcome::Rows { result } => Ok(result),
+        _ => Ok(QueryResultSet { cols: Vec::new(), rows: Vec::new(), total: 0 }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -290,6 +480,40 @@ mod tests {
         assert_eq!(r.rows[0]["metric"], serde_json::json!("used_memory"));
         assert_eq!(r.rows[0]["value"], serde_json::json!("1048576"));
         assert!(r.rows.iter().any(|x| x["metric"] == serde_json::json!("maxmemory")));
+    }
+
+    fn qe(code: Option<&str>, msg: &str) -> QueryError {
+        let mut e = QueryError::new("x", msg, msg);
+        e.code = code.map(|c| c.to_string());
+        e
+    }
+
+    #[test]
+    fn database_sessions_query_per_dialect() {
+        let pg = database_sessions_query("postgres", "app's").unwrap();
+        assert!(pg.contains("pg_stat_activity") && pg.contains("datname = 'app''s'") && pg.contains("pg_backend_pid()"), "{pg}");
+        let my = database_sessions_query("mysql", r"a\b").unwrap();
+        assert!(my.contains("metadata_locks") && my.contains("CONNECTION_ID()") && my.contains(r"'a\\b'"), "{my}");
+        assert!(database_sessions_fallback("mariadb", "a").unwrap().contains("p.DB = 'a'"));
+        assert!(database_sessions_fallback("postgres", "a").is_none());
+        let ms = database_sessions_query("mssql", "Sales").unwrap();
+        assert!(ms.contains("DB_ID(N'Sales')") && ms.contains("@@SPID") && ms.contains("is_user_process = 1"), "{ms}");
+        let ora = database_sessions_query("oracle", "APP").unwrap();
+        assert!(ora.contains("v$session") && ora.contains("username = 'APP'"), "{ora}");
+        assert!(database_sessions_query("clickhouse", "a").is_none());
+        assert!(database_sessions_query("sqlite", "a").is_none());
+    }
+
+    #[test]
+    fn database_in_use_per_dialect() {
+        assert!(database_in_use("postgres", &qe(Some("55006"), "database \"x\" is being accessed by other users")));
+        // the SAME SQLSTATE for "currently open database" is NOT fixable by killing others
+        assert!(!database_in_use("postgres", &qe(Some("55006"), "cannot drop the currently open database")));
+        assert!(database_in_use("mssql", &qe(Some("3702"), "Cannot drop database \"x\" because it is currently in use.")));
+        assert!(database_in_use("mysql", &qe(Some("HY000"), "Lock wait timeout exceeded; try restarting transaction")));
+        assert!(database_in_use("oracle", &qe(None, "ORA-01940: cannot drop a user who is currently connected")));
+        assert!(!database_in_use("postgres", &qe(Some("3D000"), "database \"x\" does not exist")));
+        assert!(!database_in_use("mysql", &qe(None, "Access denied for user")));
     }
 
     #[test]

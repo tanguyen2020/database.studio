@@ -47,7 +47,7 @@ test('foreign database: Drop Database asks first, then drops and refreshes the t
   // Cancel runs nothing
   await dialog.getByRole('button', { name: 'Cancel' }).click()
   await expect(page.getByRole('dialog')).toHaveCount(0)
-  expect((await calls(page)).exec_statement ?? 0).toBe(0)
+  expect((await calls(page)).drop_database ?? 0).toBe(0)
   await expect(page.getByRole('treeitem', { name: /analytics/ }).first()).toBeVisible()
 
   // Confirm → the DROP really runs and the tree is re-read from the server
@@ -56,11 +56,11 @@ test('foreign database: Drop Database asks first, then drops and refreshes the t
   await page.waitForTimeout(200)
   await page.getByRole('menuitem', { name: 'Drop Database…' }).click()
   await page.waitForTimeout(200)
-  await page.getByRole('dialog').getByRole('button', { name: 'Confirm' }).click()
+  await page.getByRole('dialog').getByRole('button', { name: 'Drop', exact: true }).click()
   await page.waitForTimeout(1200)
 
   const after = await calls(page)
-  expect(after.exec_statement ?? 0).toBe(1)
+  expect(after.drop_database ?? 0).toBe(1)
   expect(after.close_tab_connection ?? 0).toBeGreaterThan(0) // attached session closed first
   expect(after.list_databases ?? 0).toBeGreaterThan(0)
   expect(after.list_schemas ?? 0).toBeGreaterThan(schemasBefore) // tree reloaded
@@ -92,10 +92,10 @@ test('schema-as-database engines confirm and drop too (MySQL database node)', as
 
   const dialog = page.getByRole('dialog')
   await expect(dialog).toContainText('DROP DATABASE IF EXISTS `public`;') // MySQL quoting
-  await dialog.getByRole('button', { name: 'Confirm' }).click()
+  await dialog.getByRole('button', { name: 'Drop', exact: true }).click()
   await page.waitForTimeout(1200)
 
-  expect((await calls(page)).exec_statement ?? 0).toBe(1)
+  expect((await calls(page)).drop_database ?? 0).toBe(1)
   await expect(page.getByRole('treeitem', { name: /public/ })).toHaveCount(0)
 
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])

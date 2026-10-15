@@ -1,6 +1,6 @@
 //
 // GENERATED — do not edit by hand.
-// Sinh bởi scripts/extract-tokens.mjs từ "Database Studio.dc.html" (sha256 e5dce50ef4ad).
+// Sinh bởi scripts/extract-tokens.mjs từ "Database Studio.dc.html" (sha256 4f7907996f99).
 // Chạy lại: npm run tokens
 // 
 
@@ -109,6 +109,14 @@ export const SYS_GEN = {
     "fg": "#e8917a",
     "badge": "OR",
     "label": "Oracle"
+  },
+  "rabbitmq": {
+    "accent": "#FF6600",
+    "bg": "#33190a",
+    "border": "#6b3412",
+    "fg": "#ffa366",
+    "badge": "RB",
+    "label": "RabbitMQ"
   },
   "orphan": {
     "accent": "#5b6473",

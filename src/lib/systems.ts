@@ -1,4 +1,4 @@
-// Color Identity System — metadata cho 10 hệ + trạng thái orphaned.
+// Color Identity System — metadata cho các hệ + trạng thái orphaned.
 // Màu/badge/label lấy từ src/lib/systems.gen.ts (SINH TỰ ĐỘNG từ map SYS
 // trong Database Studio.dc.html — npm run tokens). File này chỉ bổ sung
 // metadata phi-visual: category, port mặc định, quoting, phase availability.
@@ -50,6 +50,8 @@ const EXTRA: Record<
   redis: { category: 'CACHE', defaultPort: 6379, quote: null, available: true }, // Phase 3
   kafka: { category: 'STREAMING', defaultPort: 9092, quote: null, available: true }, // Phase 4
   nats: { category: 'STREAMING', defaultPort: 4222, quote: null, available: true }, // Phase 3
+  // message broker — port = Management HTTP API (the AMQP port 5672 cannot list topology)
+  rabbitmq: { category: 'STREAMING', defaultPort: 15672, quote: null, available: true },
   orphan: { category: null, defaultPort: null, quote: null, available: false },
 }
 
@@ -87,6 +89,7 @@ export const SYSTEM_ORDER: SystemKey[] = [
   'redis',
   'kafka',
   'nats',
+  'rabbitmq',
   'sqlite',
 ]
 

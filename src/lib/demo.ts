@@ -4,6 +4,7 @@
 // so được với prototype. KHÔNG bao giờ chạy trong app Tauri thật.
 
 import type { ProfilePublic, SystemType } from './types'
+import { rabbitDemo, rabbitDemoEnabled } from './rabbitmq/demo'
 
 export const IS_TAURI =
   typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
@@ -376,6 +377,49 @@ function indexesFail(): boolean {
   if (typeof window === 'undefined') return false
   return new URLSearchParams(window.location.search).get('indexesFail') === '1'
 }
+/** `?dbInUse=<n>` (demo/browser only): every database is held by n OTHER sessions,
+ *  the way a server with connected clients refuses DROP DATABASE. Killing them
+ *  (kill_session) really removes them, so the drop then succeeds. `?dbInUseRespawn=1`
+ *  makes them come back once after the first kill — a pool reconnecting. */
+function dbInUseCount(): number {
+  if (typeof window === 'undefined') return 0
+  const v = Number(new URLSearchParams(window.location.search).get('dbInUse') ?? '0')
+  return Number.isFinite(v) && v > 0 ? Math.min(v, 20) : 0
+}
+const demoKilledPids = new Set<number>()
+let demoRespawned = false
+function demoDbSessions(db: string): Record<string, unknown>[] {
+  const n = dbInUseCount()
+  const base = 5100 + [...db].reduce((a, c) => a + c.charCodeAt(0), 0) % 100 * 10
+  const out: Record<string, unknown>[] = []
+  for (let i = 0; i < n; i++) {
+    const pid = base + i
+    if (demoKilledPids.has(pid)) continue
+    out.push({
+      pid,
+      username: i === 0 ? 'app_rw' : 'report',
+      client: `10.0.7.${20 + i}`,
+      program: i === 0 ? 'api-server' : 'metabase',
+      state: i === 0 ? 'idle in transaction' : 'idle',
+      started: '2026-10-15 08:0' + i + ':00',
+      query: i === 0 ? 'UPDATE orders SET status = 2 WHERE id = 7' : 'SELECT count(*) FROM orders',
+      holds_lock: i === 0 ? 1 : 0,
+    })
+  }
+  return out
+}
+function demoInUseError(system: string, db: string): Record<string, unknown> {
+  const message =
+    system === 'mysql' || system === 'mariadb'
+      ? 'Lock wait timeout exceeded; try restarting transaction'
+      : system === 'mssql'
+        ? `Cannot drop database "${db}" because it is currently in use.`
+        : system === 'oracle'
+          ? 'ORA-01940: cannot drop a user who is currently connected'
+          : `database "${db}" is being accessed by other users`
+  return { system, code: system === 'postgres' ? '55006' : system === 'mssql' ? '3702' : undefined, message, severity: 'error', raw: message }
+}
+
 /** Test seam (demo/browser only): pretend the SERVER gained an object while the app
  *  was showing the old tree. `window.__demoExtraTable` / `__demoExtraSchema` are set
  *  mid-test, so a Refresh has something new to discover — otherwise a re-read is
@@ -426,9 +470,29 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
         : 0
   const ok = (v: unknown): Promise<T> =>
     lag > 0 ? new Promise<T>((r) => setTimeout(() => r(v as T), lag)) : Promise.resolve(v as T)
+  // RabbitMQ commands are served by their own stateful mock (rabbitmq/demo.ts).
+  if (cmd.startsWith('rabbit_')) {
+    try {
+      return ok(rabbitDemo(cmd, args ?? {}))
+    } catch (e) {
+      return Promise.reject(String((e as Error).message ?? e))
+    }
+  }
   switch (cmd) {
     case 'list_connections':
-      return ok(DEMO_PROFILES)
+      // The demo RabbitMQ connection is opt-in (`?rabbitmq=1`): every other spec
+      // relies on the connection list as it is.
+      return ok(
+        rabbitDemoEnabled()
+          ? [
+              ...DEMO_PROFILES,
+              conn('rmq1', 'RabbitMQ', 'rabbitmq', '10.0.9.4', 15672, '/', 'studio', 'Messaging', 'development', {
+                connected: true,
+                latency_ms: 4,
+              }),
+            ]
+          : DEMO_PROFILES,
+      )
     case 'load_tabs':
       return ok(DEMO_TABS)
     case 'get_app_state':
@@ -645,8 +709,36 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
         { pid: 4830, username: 'app_ro', database: 'sis_prod', state: 'idle', query: '' },
       ], total: 2 })
     }
-    case 'kill_session':
+    case 'kill_session': {
+      const pid = Number(args?.pid)
+      if (Number.isFinite(pid)) demoKilledPids.add(pid)
+      // a pool reconnecting: the killed sessions come back once
+      if (!demoRespawned && typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('dbInUseRespawn') === '1') {
+        demoRespawned = true
+        queueMicrotask(() => demoKilledPids.clear())
+      }
       return ok(null)
+    }
+    case 'database_sessions':
+      return ok((() => {
+        const rows = demoDbSessions(String(args?.database ?? ''))
+        return {
+          cols: [['pid', 'int4'], ['username', 'text'], ['client', 'text'], ['program', 'text'], ['state', 'text'], ['started', 'text'], ['query', 'text'], ['holds_lock', 'int4']],
+          rows,
+          total: rows.length,
+        }
+      })())
+    case 'drop_database': {
+      const stmt = String(args?.statement ?? '')
+      if (typeof window !== 'undefined') (window as unknown as { __ipcLastSql?: string }).__ipcLastSql = stmt
+      const m = stmt.match(/^\s*DROP\s+(?:DATABASE|USER)\s+(?:IF\s+EXISTS\s+)?(\S+)/i)
+      const name = (m?.[1] ?? '').replace(/[`"\[\];]/g, '').trim()
+      const dCid = String(args?.connId ?? '').split('::')[0].split('#')[0]
+      const dSys = DEMO_PROFILES.find((pr) => pr.id === dCid)?.system ?? 'postgres'
+      if (demoDbSessions(name).length) return ok({ dropped: false, in_use: true, error: demoInUseError(dSys, name) })
+      if (name) demoDroppedDbs.add(name)
+      return ok({ dropped: true, in_use: false })
+    }
     case 'users_view': {
       // User Manager — fixture roles/users/grants per view so the per-engine
       // managers render in the browser/e2e (no real server). View names are

@@ -13,6 +13,7 @@ pub mod mongo;
 pub mod nats;
 pub mod plan;
 pub mod query;
+pub mod rabbitmq;
 pub mod redis;
 pub mod schema;
 pub mod sqlite;

@@ -111,6 +111,8 @@ impl ConnectionProfile {
             SystemType::Nats => 4222,
             SystemType::Mongodb => 27017,
             SystemType::Oracle => 1521,
+            // Management HTTP API (the AMQP port 5672 cannot list queues/exchanges).
+            SystemType::Rabbitmq => 15672,
         }
     }
 }

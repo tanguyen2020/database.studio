@@ -695,6 +695,21 @@ export const adminView = (connId: string, view: string) =>
 export const killSession = (connId: string, pid: number) =>
   invoke<null>('kill_session', { connId, pid })
 
+// ---- Drop Database when other sessions hold it ------------------------------
+/** `in_use` = the drop failed because OTHER sessions use the database — list them
+ *  with `databaseSessions`, kill with `killSession`, then drop again. MySQL/MariaDB
+ *  run the drop with a bounded lock wait so a held lock never freezes the connection. */
+export interface DropDatabaseOutcome {
+  dropped: boolean
+  in_use: boolean
+  error?: QueryError
+}
+export const dropDatabase = (connId: string, statement: string) =>
+  invoke<DropDatabaseOutcome>('drop_database', { connId, statement })
+/** Sessions (other than ours) connected to / holding locks on `database`. */
+export const databaseSessions = (connId: string, database: string) =>
+  invoke<{ cols: [string, string][]; rows: Record<string, unknown>[]; total: number }>('database_sessions', { connId, database })
+
 // ---- Users / Roles & Privileges (User Manager) -----------------------------
 // Read-side introspection: per (system, view) → result set. `arg` = principal
 // name for per-user views (SHOW GRANTS FOR, dba_role_privs WHERE grantee, …).
@@ -986,3 +1001,311 @@ export const listSnippets = () => invoke<Snippet[]>('list_snippets')
 export const saveSnippet = (snippet: Snippet) => invoke<void>('save_snippet', { snippet })
 
 export const deleteSnippet = (id: string) => invoke<void>('delete_snippet', { id })
+
+// ---- RabbitMQ (Management HTTP API — src-tauri/src/commands/rabbitmq.rs) ----
+
+export interface RabbitOverview {
+  rabbitmq_version: string
+  erlang_version: string
+  cluster_name: string
+  node: string
+  management_version: string
+  messages: number
+  messages_ready: number
+  messages_unacknowledged: number
+  queues: number
+  exchanges: number
+  connections: number
+  channels: number
+  consumers: number
+  /** vhost the connection opened on */
+  vhost: string
+  /** exchange types the broker offers (built-ins + plugin types) */
+  exchange_types: string[]
+}
+
+export interface RabbitQueue {
+  name: string
+  vhost: string
+  /** classic | quorum | stream */
+  queue_type: string
+  durable: boolean
+  auto_delete: boolean
+  exclusive: boolean
+  state: string
+  /** null when the broker does not report it (stats not collected yet) */
+  messages: number | null
+  messages_ready: number | null
+  messages_unacknowledged: number | null
+  consumers: number | null
+  memory: number | null
+  node: string
+  policy: string
+  arguments: Record<string, unknown>
+}
+
+export interface RabbitExchange {
+  /** '' = the default exchange */
+  name: string
+  vhost: string
+  exchange_type: string
+  durable: boolean
+  auto_delete: boolean
+  internal: boolean
+  arguments: Record<string, unknown>
+}
+
+export interface RabbitBinding {
+  source: string
+  destination: string
+  destination_type: string
+  routing_key: string
+  properties_key: string
+  arguments: Record<string, unknown>
+}
+
+export interface RabbitMessage {
+  payload: string
+  /** 'string' | 'base64' */
+  payload_encoding: string
+  payload_bytes: number
+  redelivered: boolean
+  exchange: string
+  routing_key: string
+  /** messages left in the queue after this one */
+  message_count: number
+  properties: Record<string, unknown>
+}
+
+/** requeue = peek (messages stay) · ack = consume (removed) · reject = drop */
+export type RabbitGetMode = 'requeue' | 'ack' | 'reject'
+
+export const rabbitOverview = (connId: string) => invoke<RabbitOverview>('rabbit_overview', { connId })
+
+export const rabbitVhosts = (connId: string) => invoke<string[]>('rabbit_vhosts', { connId })
+
+export const rabbitQueues = (connId: string, vhost: string) =>
+  invoke<RabbitQueue[]>('rabbit_queues', { connId, vhost })
+
+export const rabbitQueue = (connId: string, vhost: string, queue: string) =>
+  invoke<RabbitQueue>('rabbit_queue', { connId, vhost, queue })
+
+export const rabbitExchanges = (connId: string, vhost: string) =>
+  invoke<RabbitExchange[]>('rabbit_exchanges', { connId, vhost })
+
+export const rabbitQueueBindings = (connId: string, vhost: string, queue: string) =>
+  invoke<RabbitBinding[]>('rabbit_queue_bindings', { connId, vhost, queue })
+
+export const rabbitExchangeBindings = (connId: string, vhost: string, exchange: string) =>
+  invoke<RabbitBinding[]>('rabbit_exchange_bindings', { connId, vhost, exchange })
+
+export const rabbitGetMessages = (connId: string, vhost: string, queue: string, count: number, mode: RabbitGetMode) =>
+  invoke<RabbitMessage[]>('rabbit_get_messages', { connId, vhost, queue, count, mode })
+
+export const rabbitPublish = (
+  connId: string,
+  vhost: string,
+  exchange: string,
+  routingKey: string,
+  payload: string,
+  properties?: Record<string, unknown>,
+  payloadEncoding: 'string' | 'base64' = 'string',
+) =>
+  invoke<{ routed: boolean }>('rabbit_publish', {
+    connId,
+    vhost,
+    exchange,
+    routingKey,
+    payload,
+    payloadEncoding,
+    properties: properties ?? {},
+  })
+
+export const rabbitPurgeQueue = (connId: string, vhost: string, queue: string) =>
+  invoke<void>('rabbit_purge_queue', { connId, vhost, queue })
+
+export const rabbitDeleteQueue = (connId: string, vhost: string, queue: string) =>
+  invoke<void>('rabbit_delete_queue', { connId, vhost, queue })
+
+export const rabbitDeleteExchange = (connId: string, vhost: string, exchange: string) =>
+  invoke<void>('rabbit_delete_exchange', { connId, vhost, exchange })
+
+export const rabbitDeclareQueue = (
+  connId: string,
+  vhost: string,
+  name: string,
+  queueType: string,
+  durable: boolean,
+  autoDelete: boolean,
+  args?: Record<string, unknown>,
+) => invoke<void>('rabbit_declare_queue', { connId, vhost, name, queueType, durable, autoDelete, arguments: args ?? {} })
+
+export const rabbitDeclareExchange = (
+  connId: string,
+  vhost: string,
+  name: string,
+  exchangeType: string,
+  durable: boolean,
+  autoDelete: boolean,
+  internal: boolean,
+  args?: Record<string, unknown>,
+) => invoke<void>('rabbit_declare_exchange', { connId, vhost, name, exchangeType, durable, autoDelete, internal, arguments: args ?? {} })
+
+export const rabbitBindQueue = (connId: string, vhost: string, exchange: string, queue: string, routingKey: string) =>
+  invoke<void>('rabbit_bind_queue', { connId, vhost, exchange, queue, routingKey })
+
+export const rabbitUnbindQueue = (connId: string, vhost: string, exchange: string, queue: string, propertiesKey: string) =>
+  invoke<void>('rabbit_unbind_queue', { connId, vhost, exchange, queue, propertiesKey })
+
+// ---- RabbitMQ live listening (watch = copy via a tap queue · consume = ack) ----
+
+export type RabbitLiveMode = 'watch' | 'consume'
+
+export interface RabbitLiveRequest {
+  session: string
+  mode: RabbitLiveMode
+  vhost: string
+  queue?: string
+  exchange?: string
+  routing_keys?: string[]
+}
+
+export interface RabbitLiveInfo {
+  session: string
+  mode: RabbitLiveMode
+  /** queue actually read: the queue itself (consume) or the tap (watch) */
+  source: string
+  tap_queue: string | null
+  /** what the tap was bound with (watch) */
+  bindings: RabbitBinding[]
+}
+
+export interface RabbitLiveBatch {
+  session: string
+  msgs: RabbitMessage[]
+  /** running total for the session */
+  received: number
+}
+
+export interface RabbitLiveStatus {
+  session: string
+  /** warn = transient, still running · error = stopped · stopped = ended normally */
+  state: 'warn' | 'error' | 'stopped'
+  message: string
+}
+
+export const rabbitLiveStart = (connId: string, request: RabbitLiveRequest) =>
+  invoke<RabbitLiveInfo>('rabbit_live_start', { connId, request })
+
+export const rabbitLiveStop = (session: string) => invoke<void>('rabbit_live_stop', { session })
+
+/** Subscribe to one live session's batches + status. In the desktop app these are
+ *  Tauri events from the backend task; in the browser demo they come from the demo
+ *  broker, so the whole flow is testable without a server. Returns an unsubscribe. */
+export async function onRabbitLive(
+  session: string,
+  onBatch: (b: RabbitLiveBatch) => void,
+  onStatus: (s: RabbitLiveStatus) => void,
+): Promise<() => void> {
+  if (!IS_TAURI) {
+    const { rabbitDemoSubscribe } = await import('./rabbitmq/demo')
+    return rabbitDemoSubscribe(session, onBatch, onStatus)
+  }
+  const { listen } = await import('@tauri-apps/api/event')
+  const off1 = await listen<RabbitLiveBatch>('rabbit-live', (e) => {
+    if (e.payload.session === session) onBatch(e.payload)
+  })
+  const off2 = await listen<RabbitLiveStatus>('rabbit-live-status', (e) => {
+    if (e.payload.session === session) onStatus(e.payload)
+  })
+  return () => {
+    off1()
+    off2()
+  }
+}
+
+// ---- RabbitMQ users · permissions · topic permissions · policies · vhosts ----
+
+export interface RabbitWhoami {
+  name: string
+  tags: string[]
+}
+
+export interface RabbitUser {
+  name: string
+  tags: string[]
+  /** false = cannot log in with a password (certificate / external auth only) */
+  has_password: boolean
+}
+
+export interface RabbitPermission {
+  user: string
+  vhost: string
+  configure: string
+  write: string
+  read: string
+}
+
+export interface RabbitTopicPermission {
+  user: string
+  vhost: string
+  exchange: string
+  write: string
+  read: string
+}
+
+export interface RabbitPolicy {
+  name: string
+  vhost: string
+  pattern: string
+  apply_to: string
+  priority: number
+  definition: Record<string, unknown>
+}
+
+export interface RabbitVhost {
+  name: string
+  description: string
+  messages: number | null
+}
+
+export const rabbitWhoami = (connId: string) => invoke<RabbitWhoami>('rabbit_whoami', { connId })
+export const rabbitVhostList = (connId: string) => invoke<RabbitVhost[]>('rabbit_vhost_list', { connId })
+export const rabbitCreateVhost = (connId: string, name: string, description: string) =>
+  invoke<void>('rabbit_create_vhost', { connId, name, description })
+export const rabbitDeleteVhost = (connId: string, name: string) => invoke<void>('rabbit_delete_vhost', { connId, name })
+
+export const rabbitUsers = (connId: string) => invoke<RabbitUser[]>('rabbit_users', { connId })
+export const rabbitCreateUser = (connId: string, name: string, password: string, tags: string[]) =>
+  invoke<void>('rabbit_create_user', { connId, name, password, tags })
+export const rabbitSetUserPassword = (connId: string, name: string, password: string) =>
+  invoke<void>('rabbit_set_user_password', { connId, name, password })
+export const rabbitSetUserTags = (connId: string, name: string, tags: string[]) =>
+  invoke<void>('rabbit_set_user_tags', { connId, name, tags })
+export const rabbitDeleteUser = (connId: string, name: string) => invoke<void>('rabbit_delete_user', { connId, name })
+
+export const rabbitPermissions = (connId: string) => invoke<RabbitPermission[]>('rabbit_permissions', { connId })
+export const rabbitSetPermission = (connId: string, vhost: string, user: string, configure: string, write: string, read: string) =>
+  invoke<void>('rabbit_set_permission', { connId, vhost, user, configure, write, read })
+export const rabbitDeletePermission = (connId: string, vhost: string, user: string) =>
+  invoke<void>('rabbit_delete_permission', { connId, vhost, user })
+
+export const rabbitTopicPermissions = (connId: string) =>
+  invoke<RabbitTopicPermission[]>('rabbit_topic_permissions', { connId })
+export const rabbitSetTopicPermission = (connId: string, vhost: string, user: string, exchange: string, write: string, read: string) =>
+  invoke<void>('rabbit_set_topic_permission', { connId, vhost, user, exchange, write, read })
+export const rabbitDeleteTopicPermissions = (connId: string, vhost: string, user: string) =>
+  invoke<void>('rabbit_delete_topic_permissions', { connId, vhost, user })
+
+export const rabbitPolicies = (connId: string, vhost: string) => invoke<RabbitPolicy[]>('rabbit_policies', { connId, vhost })
+export const rabbitSetPolicy = (
+  connId: string,
+  vhost: string,
+  name: string,
+  pattern: string,
+  applyTo: string,
+  priority: number,
+  definition: Record<string, unknown>,
+) => invoke<void>('rabbit_set_policy', { connId, vhost, name, pattern, applyTo, priority, definition })
+export const rabbitDeletePolicy = (connId: string, vhost: string, name: string) =>
+  invoke<void>('rabbit_delete_policy', { connId, vhost, name })

@@ -14,6 +14,7 @@ pub mod nats;
 pub mod oracle;
 pub mod plan;
 pub mod postgres;
+pub mod rabbitmq;
 pub mod redis;
 pub mod schema_registry;
 pub mod sqlite;
@@ -33,6 +34,7 @@ use mysql::{MySqlConnParams, MySqlDriver};
 use nats::{NatsConnParams, NatsDriver};
 use oracle::{OracleConnParams, OracleDriver};
 use postgres::{PgConnParams, PgDriver};
+use rabbitmq::{RabbitConnParams, RabbitDriver};
 use redis::{RedisConnParams, RedisDriver};
 use sqlite::{SqliteConnParams, SqliteDriver};
 
@@ -56,6 +58,8 @@ pub enum LiveConnection {
     Cassandra(CassandraDriver),
     Mongo(MongoDriver),
     Oracle(OracleDriver),
+    /// RabbitMQ via the Management HTTP API (message broker, not SQL).
+    Rabbitmq(RabbitDriver),
 }
 
 fn pg_params(p: &ConnectionProfile, ep: &Endpoint, password: &str) -> PgConnParams {
@@ -154,6 +158,29 @@ fn nats_not_sql() -> QueryError {
         "nats",
         "NATS is messaging — use Subscriber / Publish / JetStream, not SQL",
         "sql operation not applicable to nats",
+    )
+}
+
+fn rabbitmq_params(p: &ConnectionProfile, ep: &Endpoint, password: &str) -> RabbitConnParams {
+    // `database` carries the virtual host ("/" when empty); host/port = the
+    // management HTTP endpoint (15672), not the AMQP port.
+    RabbitConnParams {
+        host: ep.host.clone(),
+        port: ep.port,
+        vhost: p.database.clone(),
+        user: p.user.clone(),
+        password: password.to_string(),
+        ssl: p.ssl,
+        ssl_ca: p.ssl_ca.clone(),
+    }
+}
+
+/// Lỗi cho thao tác SQL gọi nhầm trên RabbitMQ (message broker).
+fn rabbitmq_not_sql() -> QueryError {
+    QueryError::new(
+        "rabbitmq",
+        "RabbitMQ is a message broker — use the Queue / Exchange browser, not SQL",
+        "sql operation not applicable to rabbitmq",
     )
 }
 
@@ -286,6 +313,9 @@ impl LiveConnection {
             SystemType::Oracle => Ok(Self::Oracle(
                 OracleDriver::connect(&oracle_params(profile, endpoint, password)).await?,
             )),
+            SystemType::Rabbitmq => Ok(Self::Rabbitmq(
+                RabbitDriver::connect(&rabbitmq_params(profile, endpoint, password)).await?,
+            )),
             #[allow(unreachable_patterns)]
             other => Err(QueryError::new(
                 other.as_str(),
@@ -323,6 +353,9 @@ impl LiveConnection {
             SystemType::Oracle => {
                 OracleDriver::test(&oracle_params(profile, endpoint, password)).await
             }
+            SystemType::Rabbitmq => {
+                RabbitDriver::test(&rabbitmq_params(profile, endpoint, password)).await
+            }
             #[allow(unreachable_patterns)]
             other => TestResult {
                 ok: false,
@@ -348,6 +381,7 @@ impl LiveConnection {
             Self::Clickhouse(d) => Box::pin(d.exec(sql)),
             Self::Redis(_) => Box::pin(async { Err(redis_not_sql()) }),
             Self::Nats(_) => Box::pin(async { Err(nats_not_sql()) }),
+            Self::Rabbitmq(_) => Box::pin(async { Err(rabbitmq_not_sql()) }),
             Self::Kafka(_) => Box::pin(async { Err(kafka_not_sql()) }),
             // CQL editor: first page only via generic exec (paging + warnings
             // qua command cql_exec chuyên biệt).
@@ -368,6 +402,7 @@ impl LiveConnection {
             Self::Clickhouse(d) => d.ping().await,
             Self::Redis(d) => d.ping().await,
             Self::Nats(d) => d.ping().await,
+            Self::Rabbitmq(d) => d.ping().await,
             Self::Kafka(d) => d.ping().await,
             Self::Cassandra(d) => d.ping().await,
             Self::Mongo(d) => d.ping().await,
@@ -394,6 +429,7 @@ impl LiveConnection {
             )),
             Self::Redis(_) => Err(redis_not_sql()),
             Self::Nats(_) => Err(nats_not_sql()),
+            Self::Rabbitmq(_) => Err(rabbitmq_not_sql()),
             Self::Kafka(_) => Err(kafka_not_sql()),
             // CQL không dùng positional param của filter builder ở đây; editor
             // tự viết literal, path tham số hóa (nếu có) đi qua prepared statement.
@@ -429,6 +465,7 @@ impl LiveConnection {
             )),
             Self::Redis(_) => Err(redis_not_sql()),
             Self::Nats(_) => Err(nats_not_sql()),
+            Self::Rabbitmq(_) => Err(rabbitmq_not_sql()),
             Self::Kafka(_) => Err(kafka_not_sql()),
             // Editable grid = INSERT/UPDATE/DELETE by full primary key, run as CQL
             // (no OLTP transaction — statements applied sequentially).
@@ -450,6 +487,7 @@ impl LiveConnection {
             Self::Clickhouse(d) => d.schemas().await,
             Self::Redis(_) => Ok(Vec::new()),
             Self::Nats(_) => Ok(Vec::new()),
+            Self::Rabbitmq(_) => Ok(Vec::new()),
             Self::Kafka(_) => Ok(Vec::new()),
             // Cassandra: cây keyspace lấy qua command cassandra_tree chuyên biệt.
             Self::Cassandra(_) => Ok(Vec::new()),
@@ -481,6 +519,7 @@ impl LiveConnection {
             Self::Clickhouse(d) => d.tables(schema).await,
             Self::Redis(_) => Ok(Vec::new()),
             Self::Nats(_) => Ok(Vec::new()),
+            Self::Rabbitmq(_) => Ok(Vec::new()),
             Self::Kafka(_) => Ok(Vec::new()),
             Self::Cassandra(_) => Ok(Vec::new()),
             // Mongo: "schema" = database, "table" = collection.
@@ -498,6 +537,7 @@ impl LiveConnection {
             Self::Clickhouse(d) => d.columns(schema, table).await,
             Self::Redis(_) => Ok(Vec::new()),
             Self::Nats(_) => Ok(Vec::new()),
+            Self::Rabbitmq(_) => Ok(Vec::new()),
             Self::Kafka(_) => Ok(Vec::new()),
             Self::Cassandra(_) => Ok(Vec::new()),
             Self::Mongo(d) => d.collection_fields(schema, table).await,
@@ -514,6 +554,7 @@ impl LiveConnection {
             Self::Clickhouse(_) => Ok(Vec::new()), // data-skipping index → Phase 5 Index Scanner
             Self::Redis(_) => Ok(Vec::new()),
             Self::Nats(_) => Ok(Vec::new()),
+            Self::Rabbitmq(_) => Ok(Vec::new()),
             Self::Kafka(_) => Ok(Vec::new()),
             Self::Cassandra(_) => Ok(Vec::new()),
             Self::Mongo(d) => d.indexes(schema, table).await,
@@ -531,6 +572,7 @@ impl LiveConnection {
             Self::Clickhouse(_) => Ok(Vec::new()),
             Self::Redis(_) => Ok(Vec::new()),
             Self::Nats(_) => Ok(Vec::new()),
+            Self::Rabbitmq(_) => Ok(Vec::new()),
             Self::Kafka(_) => Ok(Vec::new()),
             Self::Cassandra(_) => Ok(Vec::new()),
             Self::Mongo(_) => Ok(Vec::new()),
@@ -547,6 +589,7 @@ impl LiveConnection {
             Self::Clickhouse(_) => Ok(Vec::new()), // UDF → Phase 5
             Self::Redis(_) => Ok(Vec::new()),
             Self::Nats(_) => Ok(Vec::new()),
+            Self::Rabbitmq(_) => Ok(Vec::new()),
             Self::Kafka(_) => Ok(Vec::new()),
             Self::Cassandra(_) => Ok(Vec::new()),
             Self::Mongo(_) => Ok(Vec::new()),
@@ -567,6 +610,7 @@ impl LiveConnection {
             Self::Mssql(d) => d.functions(schema).await,
             Self::Redis(_) => Ok(Vec::new()),
             Self::Nats(_) => Ok(Vec::new()),
+            Self::Rabbitmq(_) => Ok(Vec::new()),
             Self::Kafka(_) => Ok(Vec::new()),
             Self::Cassandra(_) => Ok(Vec::new()),
             Self::Mongo(_) => Ok(Vec::new()),
@@ -583,6 +627,7 @@ impl LiveConnection {
             Self::Clickhouse(_) => Ok(Vec::new()),
             Self::Redis(_) => Ok(Vec::new()),
             Self::Nats(_) => Ok(Vec::new()),
+            Self::Rabbitmq(_) => Ok(Vec::new()),
             Self::Kafka(_) => Ok(Vec::new()),
             Self::Cassandra(_) => Ok(Vec::new()),
             Self::Mongo(_) => Ok(Vec::new()),
@@ -627,6 +672,7 @@ impl LiveConnection {
             Self::Sqlite(_) => Ok(Vec::new()),
             Self::Redis(_) => Ok(Vec::new()),
             Self::Nats(_) => Ok(Vec::new()),
+            Self::Rabbitmq(_) => Ok(Vec::new()),
             Self::Kafka(_) => Ok(Vec::new()),
             // Mongo sharding ≠ declarative partitioning (ngoài parity core).
             Self::Mongo(_) => Ok(Vec::new()),

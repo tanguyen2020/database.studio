@@ -8841,3 +8841,166 @@ async fn sqlite_empty_table_still_reports_its_columns() {
     assert_eq!(names, EMPTY_COLS);
     let _ = std::fs::remove_file(&path);
 }
+
+// ---------------------------------------------------------------------------
+// Drop Database while OTHER sessions hold it: the server refuses, the refusal is
+// classified as "in use", the blocking sessions are listed, killing them lets the
+// drop through. Runs the EXACT statements the app sends (drop_database command:
+// genDropDatabase SQL; MySQL with the bounded lock_wait_timeout).
+// ---------------------------------------------------------------------------
+
+fn pids_of(out: StatementOutcome) -> Vec<i64> {
+    let StatementOutcome::Rows { result } = out else { panic!("sessions rows") };
+    result.rows.iter().map(|r| r["pid"].as_i64().expect("pid i64")).collect()
+}
+
+#[tokio::test]
+async fn pg_drop_database_in_use_lists_kills_and_drops() {
+    use database_studio_lib::commands::admin::{database_in_use, database_sessions_query, kill_query};
+    let (_c, port) = start_pg().await;
+    let p = |db: &str| PgConnParams {
+        host: "localhost".into(), port, database: db.into(), user: "postgres".into(), password: PASS.into(),
+        ssl: false, ssl_ca: String::new(), ssl_cert: String::new(), ssl_key: String::new(),
+    };
+    let admin_p = p("testdb");
+    let mut admin = retry("postgres", || PgDriver::connect(&admin_p)).await;
+    admin.exec("CREATE DATABASE held_db").await.unwrap();
+    // two client sessions inside held_db (one idle in a transaction)
+    let c1_p = p("held_db");
+    let mut c1 = retry("postgres", || PgDriver::connect(&c1_p)).await;
+    let c2_p = p("held_db");
+    let mut c2 = retry("postgres", || PgDriver::connect(&c2_p)).await;
+    c1.exec("BEGIN").await.unwrap();
+    c1.exec("SELECT 1").await.unwrap();
+    let pid1 = pids_of(c1.exec("SELECT pg_backend_pid() AS pid").await.unwrap())[0];
+    let pid2 = pids_of(c2.exec("SELECT pg_backend_pid() AS pid").await.unwrap())[0];
+
+    // 1. the drop is refused and classified as "in use"
+    let e = admin.exec("DROP DATABASE IF EXISTS \"held_db\"").await.expect_err("held database must be refused");
+    assert!(database_in_use("postgres", &e), "classified in use: {} / {}", e.message, e.raw);
+
+    // 2. the list shows exactly those two sessions — and never our own
+    let listed = pids_of(admin.exec(&database_sessions_query("postgres", "held_db").unwrap()).await.unwrap());
+    let mut want = vec![pid1, pid2];
+    want.sort();
+    let mut got = listed.clone();
+    got.sort();
+    assert_eq!(got, want, "sessions on held_db");
+    let own = pids_of(admin.exec("SELECT pg_backend_pid() AS pid").await.unwrap())[0];
+    assert!(!listed.contains(&own));
+
+    // 3. kill them → the same DROP goes through
+    for pid in &listed {
+        admin.exec(&kill_query("postgres", *pid).unwrap()).await.unwrap();
+    }
+    admin.exec("DROP DATABASE IF EXISTS \"held_db\"").await.expect("drop after kill");
+    let StatementOutcome::Rows { result } =
+        admin.exec("SELECT count(*)::int AS n FROM pg_database WHERE datname = 'held_db'").await.unwrap()
+    else { panic!() };
+    assert_eq!(result.rows[0]["n"].as_i64(), Some(0));
+    // "cannot drop the currently open database" (same SQLSTATE) is NOT "in use"
+    let e = admin.exec("DROP DATABASE testdb").await.expect_err("own database");
+    assert!(!database_in_use("postgres", &e), "own database must not offer kill: {}", e.message);
+    eprintln!("CHK pg_drop_database_in_use OK");
+}
+
+#[tokio::test]
+async fn mysql_drop_database_lock_holder_is_listed_killed_then_dropped() {
+    use database_studio_lib::commands::admin::{database_in_use, database_sessions_query, kill_query, MYSQL_DROP_LOCK_WAIT_SECS};
+    let c = GenericImage::new("mysql", "8")
+        .with_exposed_port(3306.tcp())
+        .with_env_var("MYSQL_ROOT_PASSWORD", PASS)
+        .with_env_var("MYSQL_DATABASE", "testdb")
+        .start()
+        .await
+        .expect("start mysql container");
+    let port = c.get_host_port_ipv4(3306).await.unwrap();
+    let p = |db: &str| MySqlConnParams {
+        host: "localhost".into(), port, database: db.into(), user: "root".into(),
+        password: PASS.into(), ssl: false, ssl_ca: String::new(), ssl_cert: String::new(), ssl_key: String::new(),
+    };
+    let admin_p = p("testdb");
+    let mut admin = retry("mysql", || MySqlDriver::connect(&admin_p, "mysql")).await;
+    admin.exec("CREATE DATABASE held_db").await.unwrap();
+    admin.exec("CREATE TABLE held_db.t (id INT PRIMARY KEY)").await.unwrap();
+    admin.exec("INSERT INTO held_db.t VALUES (1)").await.unwrap();
+
+    // a session whose CURRENT database is another one, holding a metadata lock on
+    // held_db.t through an open transaction — the case `USE db` scanning misses
+    let holder_p = p("testdb");
+    let mut holder = retry("mysql", || MySqlDriver::connect(&holder_p, "mysql")).await;
+    holder.exec("START TRANSACTION").await.unwrap();
+    holder.exec("SELECT * FROM held_db.t").await.unwrap();
+    let hpid = pids_of(holder.exec("SELECT CAST(CONNECTION_ID() AS SIGNED) AS pid").await.unwrap())[0];
+    // …and an idle session merely USE-ing it (does NOT block the drop)
+    let idle_p = p("held_db");
+    let mut idle = retry("mysql", || MySqlDriver::connect(&idle_p, "mysql")).await;
+    let ipid = pids_of(idle.exec("SELECT CAST(CONNECTION_ID() AS SIGNED) AS pid").await.unwrap())[0];
+
+    // 1. DROP with the bounded lock wait → error (not a year-long hang), "in use"
+    admin.exec(&format!("SET SESSION lock_wait_timeout = {MYSQL_DROP_LOCK_WAIT_SECS}")).await.unwrap();
+    let t = std::time::Instant::now();
+    let e = admin.exec("DROP DATABASE IF EXISTS `held_db`").await.expect_err("held database must time out");
+    assert!(t.elapsed().as_secs() < (MYSQL_DROP_LOCK_WAIT_SECS as u64) + 10, "bounded wait");
+    assert!(database_in_use("mysql", &e), "classified in use: {}", e.message);
+
+    // 2. the list has the lock holder (holds_lock = 1) and the idle session (0)
+    let out = admin.exec(&database_sessions_query("mysql", "held_db").unwrap()).await.unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!("rows") };
+    let row = |pid: i64| result.rows.iter().find(|r| r["pid"].as_i64() == Some(pid)).cloned();
+    assert_eq!(row(hpid).expect("lock holder listed")["holds_lock"].as_i64(), Some(1), "{:?}", result.rows);
+    assert_eq!(row(ipid).expect("USE-ing session listed")["holds_lock"].as_i64(), Some(0));
+
+    // 3. kill the lock holder → the drop succeeds (the idle one never blocked it)
+    admin.exec(&kill_query("mysql", hpid).unwrap()).await.unwrap();
+    admin.exec("DROP DATABASE IF EXISTS `held_db`").await.expect("drop after kill");
+    admin.exec("SET SESSION lock_wait_timeout = DEFAULT").await.unwrap();
+    let StatementOutcome::Rows { result } = admin
+        .exec("SELECT CAST(COUNT(*) AS SIGNED) AS n FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = 'held_db'")
+        .await
+        .unwrap()
+    else { panic!() };
+    assert_eq!(result.rows[0]["n"].as_i64(), Some(0));
+    eprintln!("CHK mysql_drop_database_lock_holder OK");
+}
+
+#[tokio::test]
+async fn mssql_drop_database_in_use_lists_kills_and_drops() {
+    use database_studio_lib::commands::admin::{database_in_use, database_sessions_query, kill_query};
+    let c = GenericImage::new("mcr.microsoft.com/mssql/server", "2022-latest")
+        .with_exposed_port(1433.tcp())
+        .with_env_var("ACCEPT_EULA", "Y")
+        .with_env_var("MSSQL_SA_PASSWORD", MSSQL_PASS)
+        .start()
+        .await
+        .expect("start mssql container");
+    let port = c.get_host_port_ipv4(1433).await.unwrap();
+    let p = |db: &str| MssqlConnParams {
+        host: "localhost".into(), port, database: db.into(), user: "sa".into(),
+        password: MSSQL_PASS.into(), ssl: false, ssl_ca: String::new(), auth: "sql".into(),
+    };
+    let admin_p = p("");
+    let mut admin = retry("mssql", || MssqlDriver::connect(&admin_p)).await;
+    admin.exec("CREATE DATABASE held_db").await.unwrap();
+    let client_p = p("held_db");
+    let mut client = retry("mssql", || MssqlDriver::connect(&client_p)).await;
+    let cpid = pids_of(client.exec("SELECT CAST(@@SPID AS int) AS pid").await.unwrap())[0];
+
+    let e = admin.exec("DROP DATABASE IF EXISTS [held_db]").await.expect_err("held database must be refused");
+    assert!(database_in_use("mssql", &e), "classified in use: {:?} {}", e.code, e.message);
+
+    let listed = pids_of(admin.exec(&database_sessions_query("mssql", "held_db").unwrap()).await.unwrap());
+    assert!(listed.contains(&cpid), "client session listed: {listed:?} / {cpid}");
+    let own = pids_of(admin.exec("SELECT CAST(@@SPID AS int) AS pid").await.unwrap())[0];
+    assert!(!listed.contains(&own));
+
+    for pid in &listed {
+        admin.exec(&kill_query("mssql", *pid).unwrap()).await.unwrap();
+    }
+    admin.exec("DROP DATABASE IF EXISTS [held_db]").await.expect("drop after kill");
+    let StatementOutcome::Rows { result } =
+        admin.exec("SELECT COUNT(*) AS n FROM sys.databases WHERE name = 'held_db'").await.unwrap()
+    else { panic!() };
+    assert_eq!(result.rows[0]["n"].as_i64(), Some(0));
+    eprintln!("CHK mssql_drop_database_in_use OK");
+}

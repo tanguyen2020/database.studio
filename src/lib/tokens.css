@@ -1,6 +1,6 @@
 /*
  * GENERATED — do not edit by hand.
- * Sinh bởi scripts/extract-tokens.mjs từ "Database Studio.dc.html" (sha256 e5dce50ef4ad).
+ * Sinh bởi scripts/extract-tokens.mjs từ "Database Studio.dc.html" (sha256 4f7907996f99).
  * Chạy lại: npm run tokens
  */
 
@@ -89,6 +89,10 @@
   --sys-oracle-bg: #301410;
   --sys-oracle-border: #5e281f;
   --sys-oracle-fg: #e8917a;
+  --sys-rabbitmq-accent: #FF6600;
+  --sys-rabbitmq-bg: #33190a;
+  --sys-rabbitmq-border: #6b3412;
+  --sys-rabbitmq-fg: #ffa366;
   --sys-orphan-accent: #5b6473;
   --sys-orphan-bg: #2a2f3a;
   --sys-orphan-border: #3a4150;
@@ -188,7 +192,7 @@
   --px-740: 740px;
   --px-840: 840px;
 
-/* Mọi màu hex literal trong prototype (107 màu) */
+/* Mọi màu hex literal trong prototype (111 màu) */
   --hex-00ed64: #00ed64;
   --hex-04231a: #04231a;
   --hex-0a1e35: #0a1e35;
@@ -221,6 +225,7 @@
   --hex-2e1a12: #2e1a12;
   --hex-2e2600: #2e2600;
   --hex-301410: #301410;
+  --hex-33190a: #33190a;
   --hex-33290a: #33290a;
   --hex-333b4d: #333b4d;
   --hex-336791: #336791;
@@ -250,6 +255,7 @@
   --hex-665514: #665514;
   --hex-6b1515: #6b1515;
   --hex-6b1a14: #6b1a14;
+  --hex-6b3412: #6b3412;
   --hex-6b4400: #6b4400;
   --hex-6b5012: #6b5012;
   --hex-6b7486: #6b7486;
@@ -292,6 +298,8 @@
   --hex-f4f6fb: #f4f6fb;
   --hex-f5b84a: #f5b84a;
   --hex-f7f9fc: #f7f9fc;
+  --hex-ff6600: #ff6600;
+  --hex-ffa366: #ffa366;
   --hex-ffcc00: #ffcc00;
   --hex-ffe066: #ffe066;
   --hex-fff: #fff;

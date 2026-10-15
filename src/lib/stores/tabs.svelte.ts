@@ -300,6 +300,52 @@ class TabsStore {
     return tab
   }
 
+  /** RabbitMQ queue tab (details · messages · bindings · publish) — 1 tab per (vhost, queue). */
+  openRabbitQueue(connectionId: string, vhost: string, queue: string): TabState {
+    return this.openRabbitObject('rabbit-queue', connectionId, vhost, queue, `${queue} · queue`)
+  }
+
+  /** RabbitMQ exchange tab (details · bindings · publish) — 1 tab per (vhost, exchange). */
+  openRabbitExchange(connectionId: string, vhost: string, exchange: string): TabState {
+    return this.openRabbitObject('rabbit-exchange', connectionId, vhost, exchange, `${exchange || '(AMQP default)'} · exchange`)
+  }
+
+  private openRabbitObject(
+    contentType: 'rabbit-queue' | 'rabbit-exchange',
+    connectionId: string,
+    vhost: string,
+    name: string,
+    title: string,
+  ): TabState {
+    const existing = this.tabs.find(
+      (t) =>
+        t.contentType === contentType &&
+        t.connectionId === connectionId &&
+        (t.state as { vhost?: string }).vhost === vhost &&
+        (t.state as { name?: string }).name === name,
+    )
+    if (existing) {
+      this.activeTabId = existing.id
+      return existing
+    }
+    const profile = connections.byId(connectionId)
+    const tab: TabState = {
+      id: uuid(),
+      connectionId,
+      connectionName: profile?.name ?? '',
+      systemType: (profile?.system as SystemType) ?? 'orphan',
+      contentType,
+      title,
+      isPinned: false,
+      isDirty: false,
+      state: { vhost, name },
+    }
+    this.tabs.push(tab)
+    this.activeTabId = tab.id
+    this.schedulePersist()
+    return tab
+  }
+
   /** Kafka workspace tab (cluster + topic browser) — 1 tab / connection. */
   openKafkaTab(connectionId: string): TabState {
     const existing = this.tabs.find(

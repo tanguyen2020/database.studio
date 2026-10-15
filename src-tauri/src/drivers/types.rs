@@ -20,6 +20,7 @@ pub enum SystemType {
     Nats,
     Mongodb,
     Oracle,
+    Rabbitmq,
 }
 
 impl SystemType {
@@ -37,6 +38,7 @@ impl SystemType {
             SystemType::Nats => "nats",
             SystemType::Mongodb => "mongodb",
             SystemType::Oracle => "oracle",
+            SystemType::Rabbitmq => "rabbitmq",
         }
     }
 

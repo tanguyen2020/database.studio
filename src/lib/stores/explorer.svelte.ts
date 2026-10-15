@@ -62,6 +62,12 @@ class ExplorerStore {
   bumpRedis(connId: string) {
     this.redisTick[connId] = (this.redisTick[connId] ?? 0) + 1
   }
+  // RabbitMQ: queue/exchange tabs bump this after publish/purge/delete/declare so
+  // the sidebar's RabbitExplorer re-reads its lists (message counts change).
+  rabbitTick = $state<Record<string, number>>({})
+  bumpRabbit(connId: string) {
+    this.rabbitTick[connId] = (this.rabbitTick[connId] ?? 0) + 1
+  }
   // A per-connection tick the Explorer tree watches so another component can ask
   // it to reload from scratch — used by the Connections toolbar Refresh, which
   // reconnects the connection and then needs the tree re-read from the server.

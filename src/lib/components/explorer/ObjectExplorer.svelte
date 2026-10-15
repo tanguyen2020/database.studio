@@ -12,6 +12,8 @@
   import SystemIcon from '$lib/components/SystemIcon.svelte'
   import RedisExplorer from '$lib/components/explorer/RedisExplorer.svelte'
   import MongoExplorer from '$lib/components/explorer/MongoExplorer.svelte'
+  import RabbitExplorer from '$lib/components/explorer/RabbitExplorer.svelte'
+  import DropDatabaseDialog from '$lib/components/explorer/DropDatabaseDialog.svelte'
   import TableContextMenu from '$lib/components/explorer/TableContextMenu.svelte'
   import { connections } from '$lib/stores/connections.svelte'
   import { explorer } from '$lib/stores/explorer.svelte'
@@ -183,7 +185,7 @@
   const userMgrConn = $derived(
     toolTarget
       ? toolTarget.base
-      : selected && (selected.system === 'mongodb' || selected.system === 'cassandra')
+      : selected && (selected.system === 'mongodb' || selected.system === 'cassandra' || selected.system === 'rabbitmq')
         ? selected.id
         : null,
   )
@@ -775,6 +777,8 @@
         await reloadCassandra(s.id)
       } else if (s.system === 'mongodb') {
         await withChildReload(() => mongoRefresh++) // MongoExplorer watches the key
+      } else if (s.system === 'rabbitmq') {
+        await withChildReload(() => rabbitRefresh++) // RabbitExplorer watches the key
       } else {
         await reloadRelational(s)
       }
@@ -799,6 +803,7 @@
     if (s.system === 'redis') return 'Refreshed — keys re-scanned'
     if (s.system === 'mongodb') return 'Refreshed — databases re-read'
     if (s.system === 'cassandra') return 'Refreshed — keyspaces re-read'
+    if (s.system === 'rabbitmq') return 'Refreshed — queues & exchanges re-read'
     const names = (explorer.cache[s.id]?.schemas ?? []).map((x) => x.name)
     const open = mainReloadPlan(expanded, names)
     const parts = [`${names.length} schema${names.length === 1 ? '' : 's'}`]
@@ -885,6 +890,9 @@
   const isMongo = $derived(selected?.system === 'mongodb')
   // Bumped by the header Refresh button → MongoExplorer reloads its tree.
   let mongoRefresh = $state(0)
+  const isRabbit = $derived(selected?.system === 'rabbitmq')
+  // Bumped by the header Refresh button → RabbitExplorer reloads queues/exchanges.
+  let rabbitRefresh = $state(0)
   const streamCache = $derived(selected ? explorer.streaming[selected.id] : undefined)
   const topicRows = $derived(streamCache?.kafkaTopics ? kafkaTopicRows(streamCache.kafkaTopics) : [])
   // Kafka explorer filter — matches topic names (case-insensitive substring).
@@ -1273,13 +1281,12 @@
       stmtTab(`Drop database ${dbName}`, sql)
       return
     }
-    askConfirm(
-      'Drop database',
-      `Drop database "${dbName}"? Every schema, table and row it holds is deleted. This cannot be undone.`,
-      () => void runDropDatabase(dbName, sql),
-      sql,
-    )
+    dropDbState = { db: dbName, sql, cid: s.id, system: s.system }
   }
+  /** The open Drop Database dialog. It runs the drop itself and, when the server
+   *  refuses because OTHER sessions hold the database, lists those sessions so
+   *  they can be killed and the drop retried (DropDatabaseDialog). */
+  let dropDbState = $state<{ db: string; sql: string; cid: string; system: string } | null>(null)
 
   /** Runs the DROP on the BASE connection — PostgreSQL/MSSQL refuse to drop a
    *  database you are connected to, and our own attached sub-connection (`{id}::db`,
@@ -1522,24 +1529,15 @@
     }
   }
 
-  async function runDropDatabase(dbName: string, sql: string) {
-    const s = selected
-    if (!s) return
-    try {
-      await closeOurSessionsTo(s.id, dbName)
-      const r = await ipc.execStatement(s.id, sql)
-      if (r.error) {
-        toasts.error(r.error.message)
-        return
-      }
-      toasts.success(`Database "${dbName}" dropped`, s.system)
-      // Schema-as-database engines (MySQL/MariaDB/ClickHouse) list databases as
-      // schemas, so a dropped one only disappears once the schema cache is rebuilt.
-      explorer.invalidate(s.id)
-      await refreshConnection()
-    } catch (e) {
-      toasts.error(String(e))
-    }
+  async function afterDropDatabase() {
+    const st = dropDbState
+    dropDbState = null
+    if (!st) return
+    toasts.success(`Database "${st.db}" dropped`, st.system)
+    // Schema-as-database engines (MySQL/MariaDB/ClickHouse) list databases as
+    // schemas, so a dropped one only disappears once the schema cache is rebuilt.
+    explorer.invalidate(st.cid)
+    if (selected?.id === st.cid) await refreshConnection()
   }
 
   // T18 — Show Definition: lấy text định nghĩa THẬT từ server (view/trigger/proc/func).
@@ -2461,6 +2459,9 @@
     {:else if isMongo}
       <!-- MongoDB: database → collection → (fields, indexes) tree. -->
       <MongoExplorer connId={selected.id} defaultDb={selected.database} refreshKey={mongoRefresh} onReloaded={() => childReloadDone?.()} />
+    {:else if isRabbit}
+      <!-- RabbitMQ: vhost → Queues / Exchanges (Management HTTP API). -->
+      <RabbitExplorer connId={selected.id} defaultVhost={selected.database} refreshKey={rabbitRefresh} onReloaded={() => childReloadDone?.()} />
     {:else}
       {#if pgMssqlMultiDb}
         <!-- current database header (PG/MSSQL bind one DB per connection); its -->
@@ -3761,6 +3762,19 @@
       </div>
     </div>
   </div>
+{/if}
+
+{#if dropDbState}
+  {@const st = dropDbState}
+  <DropDatabaseDialog
+    connId={st.cid}
+    system={st.system}
+    db={st.db}
+    sql={st.sql}
+    beforeDrop={() => closeOurSessionsTo(st.cid, st.db)}
+    onDropped={afterDropDatabase}
+    onClose={() => (dropDbState = null)}
+  />
 {/if}
 
 {#if confirmState}

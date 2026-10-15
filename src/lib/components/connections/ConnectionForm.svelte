@@ -53,6 +53,8 @@
   const isKafka = $derived(draft?.system === 'kafka')
   const isCassandra = $derived(draft?.system === 'cassandra')
   const isOracle = $derived(draft?.system === 'oracle')
+  // RabbitMQ: host/port = Management HTTP API; `database` carries the virtual host.
+  const isRabbit = $derived(draft?.system === 'rabbitmq')
   const hostLabel = $derived(isKafka ? 'Host / Bootstrap' : isCassandra ? 'Contact points' : 'Host')
   const hostPlaceholder = $derived(
     isSqlite
@@ -415,6 +417,9 @@
                         <option value={n}>{n}</option>
                       {/each}
                     </select>
+                  {:else if isRabbit}
+                    <div class="cm-label">Virtual host</div>
+                    <input class="cm-input mono" bind:value={draft.database} placeholder="/" aria-label="Virtual host" />
                   {:else if isOracle}
                     <!-- Oracle connects by service name (default) or SID; the value goes
                          in `database` and the kind is stored in `mssql_auth` (reused). -->
@@ -455,6 +460,13 @@
               {/if}
             </div>
 
+            {#if isRabbit}
+              <!-- RabbitMQ is browsed through its Management HTTP API: say which port
+                   that is, since the AMQP port (5672) is the one people know. -->
+              <div data-testid="rabbit-port-hint" style="grid-column:1/3;font-size:var(--px-11_5);color:var(--muted);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-8);padding:var(--px-9) var(--px-11)">
+                Port is the <span class="mono" style="color:var(--text2)">Management HTTP API</span> (15672, or 15671 with SSL) — not the AMQP port 5672. The <span class="mono" style="color:var(--text2)">rabbitmq_management</span> plugin must be enabled, and the user needs the <span class="mono" style="color:var(--text2)">management</span> tag. Leave Virtual host empty for <span class="mono" style="color:var(--text2)">/</span>.
+              </div>
+            {/if}
             {#if authWindows}
               <!-- port dòng 2218-2220 -->
               <div style="grid-column:1/3;font-size:var(--px-11_5);color:var(--muted);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-8);padding:var(--px-9) var(--px-11)">
