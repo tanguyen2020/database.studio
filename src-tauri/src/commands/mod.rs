@@ -14,6 +14,7 @@ pub mod nats;
 pub mod plan;
 pub mod query;
 pub mod rabbitmq;
+pub mod elasticsearch;
 pub mod redis;
 pub mod schema;
 pub mod sqlite;

@@ -28,7 +28,7 @@ test('table viewer: footer shows records + pages (English) and Refresh has a lab
   await expect(page.getByTitle('Database').first()).toBeVisible()
 
   // footer: total record count + total pages, all in English (demo COUNT(*) = 3,842)
-  await expect(page.getByText(/of 3,842 records/)).toBeVisible()
+  await expect(page.getByText(/of 3,842 rows/)).toBeVisible()
   await expect(page.getByText(/Page 1 of/)).toBeVisible()
   // no leftover Vietnamese "trang"
   await expect(page.getByText(/trang/i)).toHaveCount(0)

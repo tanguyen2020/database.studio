@@ -146,6 +146,11 @@ pub fn run() {
             commands::nats::nats_obj_put_file,
             commands::nats::nats_obj_get_file,
             commands::nats::nats_obj_delete,
+            // elasticsearch (REST API)
+            commands::elasticsearch::es_request,
+            commands::elasticsearch::es_overview,
+            commands::elasticsearch::es_indices,
+            commands::elasticsearch::es_mapping_fields,
             // rabbitmq (Management HTTP API)
             commands::rabbitmq::rabbit_overview,
             commands::rabbitmq::rabbit_vhosts,
@@ -188,6 +193,7 @@ pub fn run() {
             commands::kafka::kafka_topics,
             commands::kafka::kafka_create_topic,
             commands::kafka::kafka_delete_topic,
+            commands::kafka::kafka_set_partitions,
             commands::kafka::kafka_purge_topic,
             commands::kafka::kafka_delete_records,
             commands::kafka::kafka_consume,
@@ -196,6 +202,7 @@ pub fn run() {
             commands::kafka::kafka_produce,
             commands::kafka::kafka_consumer_groups,
             commands::kafka::kafka_group_lag,
+            commands::kafka::kafka_group_topic_lag,
             commands::kafka::kafka_reset_offset,
             commands::kafka::kafka_sr_subjects,
             commands::kafka::kafka_sr_versions,

@@ -246,172 +246,199 @@
   }
 </script>
 
-<div style="flex:1;display:flex;flex-direction:column;min-height:0">
-  <!-- header — dòng 770-781 -->
-  <div style="flex:none;display:flex;align-items:center;gap:var(--px-10);padding:var(--px-10) var(--px-14);border-bottom:var(--px-1) solid var(--border);background:var(--surface);flex-wrap:wrap">
-    <span style="width:var(--px-3);height:var(--px-20);border-radius:var(--px-2);background:#27AE60"></span>
-    <span style="font-size:var(--px-12);color:var(--text2)">Subscribe</span>
-    <input bind:value={subject} class="mono" style="font-size:var(--px-13);font-weight:600;background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-12);color:var(--text);outline:none;min-width:var(--px-150)" />
-    <span style="display:flex;align-items:center;gap:var(--px-6);font-size:var(--px-11_5);color:{subscribed ? '#27AE60' : 'var(--muted)'};font-weight:600"><span style="width:var(--px-7);height:var(--px-7);border-radius:50%;background:{subscribed ? '#27AE60' : 'var(--border2)'}"></span>{subscribed ? 'LIVE' : 'idle'}</span>
-    <div style="margin-left:auto;display:flex;gap:var(--px-8);align-items:center">
-      {#if info}<span class="mono" style="font-size:var(--px-10_5);color:var(--muted)">NATS {info.version} · {info.server_name}</span>{/if}
-      {#each [['js', 'JetStream'], ['kv', 'KV'], ['obj', 'Object']] as [p, label] (p)}
-        <span use:captureJs={p === 'js'} onclick={() => setPanel(p as '' | 'js' | 'kv' | 'obj')} onkeydown={(e) => e.key === 'Enter' && setPanel(p as '' | 'js' | 'kv' | 'obj')} role="button" tabindex="0" style="font-size:var(--px-11_5);background:{panel === p ? 'var(--primary)' : 'var(--panel)'};color:{panel === p ? 'var(--hex-fff)' : 'var(--text)'};border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-12);cursor:pointer;font-weight:600">{label}</span>
-      {/each}
-      <span onclick={toggle} onkeydown={(e) => e.key === 'Enter' && toggle()} role="button" tabindex="0" style="font-size:var(--px-11_5);background:{subscribed ? '#27AE60' : 'var(--panel)'};color:{subscribed ? 'var(--hex-fff)' : 'var(--text)'};border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-12);cursor:pointer;font-weight:600">{subscribed ? 'Stop' : 'Subscribe'}</span>
-      <span onclick={() => (paused = !paused)} onkeydown={(e) => e.key === 'Enter' && (paused = !paused)} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-12);cursor:pointer">{paused ? 'Resume' : 'Pause'}</span>
-      <span onclick={() => (messages = [])} onkeydown={(e) => e.key === 'Enter' && (messages = [])} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-12);cursor:pointer">Clear</span>
+<div class="ds-ws">
+  <!-- header: the server, then which part of it you are looking at -->
+  <div class="ds-ws-head">
+    <span class="ds-ws-icon" style="background:color-mix(in srgb, var(--sacc-green) 12%, transparent)" aria-hidden="true">
+      <img src="/assets/db-nats.svg" width="20" height="20" alt="" style="display:block" />
+    </span>
+    <div class="ds-ws-titles">
+      <span class="ds-ws-title">{panel === 'js' ? 'JetStream' : panel === 'kv' ? 'Key-Value store' : panel === 'obj' ? 'Object store' : 'Core messaging'}</span>
+      <span class="ds-ws-sub">{#if info}NATS {info.version} · {info.server_name}{:else}NATS{/if}</span>
     </div>
+    <div class="ds-ws-actions">
+      <div class="ds-seg" role="group" aria-label="View">
+        {#each [['js', 'JetStream'], ['kv', 'KV'], ['obj', 'Object']] as [p, label] (p)}
+          <span use:captureJs={p === 'js'} onclick={() => setPanel(p as '' | 'js' | 'kv' | 'obj')} onkeydown={(e) => e.key === 'Enter' && setPanel(p as '' | 'js' | 'kv' | 'obj')} role="button" tabindex="0" aria-pressed={panel === p}>{label}</span>
+        {/each}
+      </div>
+    </div>
+  </div>
+
+  <!-- live subscription: subject + state + controls -->
+  <div class="ds-toolbar">
+    <label class="ds-field">Subject
+      <input bind:value={subject} class="ds-control mono" style="min-width:var(--px-200)" aria-label="Subscribe subject" />
+    </label>
+    <span class="ds-chip" class:live={subscribed && !paused} class:warn={subscribed && paused}>{subscribed ? (paused ? 'Paused' : 'LIVE') : 'idle'}</span>
+    <span style="margin-left:auto;display:flex;gap:var(--px-8)">
+      <span onclick={toggle} onkeydown={(e) => e.key === 'Enter' && toggle()} role="button" tabindex="0" class="cfm-btn" class:primary={!subscribed} title={subscribed ? 'Stop listening' : 'Listen to messages on this subject'}>{subscribed ? 'Stop' : 'Subscribe'}</span>
+      <span onclick={() => (paused = !paused)} onkeydown={(e) => e.key === 'Enter' && (paused = !paused)} role="button" tabindex="0" class="cfm-btn">{paused ? 'Resume' : 'Pause'}</span>
+      <span onclick={() => (messages = [])} onkeydown={(e) => e.key === 'Enter' && (messages = [])} role="button" tabindex="0" class="cfm-btn" title="Clear the message view">Clear</span>
+    </span>
   </div>
 
   {#if jsMode}
     <!-- JetStream panel (T10): streams → consumers + peek by seq -->
-    <div style="flex:1;overflow:auto;min-height:0;padding:var(--px-10) var(--px-14);display:flex;flex-direction:column;gap:var(--px-12)">
+    <div class="ds-body">
       {#if jsError}
-        <div style="font-size:var(--px-12);color:var(--error)">{jsError}</div>
+        <div class="ds-chip bad" style="height:auto;padding:var(--px-8) var(--px-12);border-radius:var(--px-8);white-space:normal">{jsError}</div>
       {/if}
-      <div style="font-size:var(--px-10_5);color:var(--muted);text-transform:uppercase;letter-spacing:.06em;font-weight:700">Streams</div>
-      <table class="mono" style="border-collapse:collapse;width:100%;font-size:var(--px-12)">
-        <thead><tr>
-          {#each ['Stream', 'Subjects', 'Retention', 'Storage', 'Messages', 'Consumers'] as h (h)}
-            <th style="text-align:left;padding:var(--px-6) var(--px-10);border-bottom:var(--px-1) solid var(--border2);color:var(--tbl-head);font-weight:600">{h}</th>
-          {/each}
-        </tr></thead>
-        <tbody>
-          {#each jsStreams as s, si (s.name)}
-            <tr class="js-row" class:zebra={si % 2 === 1} class:sel={jsSel === s.name} onclick={() => selectStream(s.name)} onkeydown={(e) => e.key === 'Enter' && selectStream(s.name)} role="button" tabindex="0" style="cursor:pointer">
-              <td style="padding:var(--px-6) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:var(--sacc-green);font-weight:700">{s.name}</td>
-              <td style="padding:var(--px-6) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:var(--sacc-amber)">{s.subjects.join(', ')}</td>
-              <td style="padding:var(--px-6) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:var(--text2)">{s.retention}</td>
-              <td style="padding:var(--px-6) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:var(--text2)">{s.storage}</td>
-              <td style="padding:var(--px-6) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:var(--syntax-number)">{s.messages.toLocaleString()}</td>
-              <td style="padding:var(--px-6) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:var(--syntax-number)">{s.consumers}</td>
-            </tr>
-          {/each}
-        </tbody>
-      </table>
-
-      {#if jsSel}
-        <div style="font-size:var(--px-10_5);color:var(--muted);text-transform:uppercase;letter-spacing:.06em;font-weight:700">Consumers · {jsSel}</div>
-        <table class="mono" style="border-collapse:collapse;width:100%;font-size:var(--px-12)">
+      <section class="ds-section">
+        <div class="ds-section-title">Streams <span class="ds-count">{jsStreams.length}</span></div>
+        <table class="ds-table">
           <thead><tr>
-            {#each ['Consumer', 'Deliver', 'Ack', 'Filter', 'Pending'] as h (h)}
-              <th style="text-align:left;padding:var(--px-6) var(--px-10);border-bottom:var(--px-1) solid var(--border2);color:var(--tbl-head);font-weight:600">{h}</th>
+            {#each ['Stream', 'Subjects', 'Retention', 'Storage', 'Messages', 'Consumers'] as h (h)}
+              <th>{h}</th>
             {/each}
           </tr></thead>
           <tbody>
-            {#each jsConsumers as c, ci (c.name)}
-              {@const pending = Number(c.num_pending ?? 0)}
-              <tr class="js-row" class:zebra={ci % 2 === 1}>
-                <!-- the identifier stays a link: hover underlines, focus is visible,
-                     and clicking copies the name (what you do with it next) -->
-                <td style="padding:var(--px-6) var(--px-10);border-bottom:var(--px-1) solid var(--border)">
-                  <span
-                    class="tbl-link"
-                    onclick={() => copyConsumer(c.name)}
-                    onkeydown={(e) => e.key === 'Enter' && copyConsumer(c.name)}
-                    role="button"
-                    tabindex="0"
-                    title="Copy consumer name"
-                  >{c.name}</span>
-                </td>
-                <!-- enum/meta columns: grey, so they do not compete with the data -->
-                <td style="padding:var(--px-6) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:var(--tbl-meta)">{c.deliver_policy}</td>
-                <td style="padding:var(--px-6) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:var(--tbl-meta)">{c.ack_policy}</td>
-                <!-- subject value: warm monospace tone; "—" stays quiet -->
-                <td style="padding:var(--px-6) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:{c.filter_subject ? 'var(--tbl-subject)' : 'var(--tbl-quiet)'}">{c.filter_subject || '—'}</td>
-                <!-- pending MEANS something: 0 is quiet, a backlog is not -->
-                <td
-                  style="padding:var(--px-6) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:{pending > 0 ? 'var(--tbl-alert)' : 'var(--tbl-quiet)'};font-weight:{pending > 0 ? 600 : 400}"
-                  title={pending > 0 ? pending + ' message(s) waiting to be acked' : 'nothing pending'}
-                >{c.num_pending}</td>
+            {#each jsStreams as s (s.name)}
+              <tr class="js-row" class:sel={jsSel === s.name} onclick={() => selectStream(s.name)} onkeydown={(e) => e.key === 'Enter' && selectStream(s.name)} role="button" tabindex="0" style="cursor:pointer">
+                <td style="color:var(--sacc-green);font-weight:600">{s.name}</td>
+                <td class="mono" style="color:var(--tbl-subject);font-size:var(--px-12)">{s.subjects.join(', ')}</td>
+                <td style="color:var(--text2)">{s.retention}</td>
+                <td style="color:var(--text2)">{s.storage}</td>
+                <td style="color:var(--syntax-number);font-variant-numeric:tabular-nums">{s.messages.toLocaleString()}</td>
+                <td style="color:var(--syntax-number);font-variant-numeric:tabular-nums">{s.consumers}</td>
               </tr>
             {/each}
           </tbody>
         </table>
+      </section>
 
-        <div style="display:flex;align-items:center;gap:var(--px-8)">
-          <span style="font-size:var(--px-11);color:var(--muted)">Peek seq</span>
-          <input type="number" bind:value={peekSeq} class="mono" style="width:var(--px-96);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-9);font-size:var(--px-12);color:var(--text);outline:none" />
-          <span onclick={peek} onkeydown={(e) => e.key === 'Enter' && peek()} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-12);cursor:pointer">Peek</span>
-        </div>
-        {#if peekResult}
-          <div class="mono" style="font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-8) var(--px-10)">
-            <div style="color:var(--muted)">#{peekResult.seq} · <span style="color:var(--sacc-amber);font-weight:600">{peekResult.subject}</span> · {peekResult.time}</div>
-            <div style="color:var(--text2);white-space:pre-wrap;word-break:break-word;margin-top:var(--px-4)">{peekResult.payload}</div>
+      {#if jsSel}
+        <section class="ds-section">
+          <div class="ds-section-title">Consumers <span style="color:var(--muted);font-weight:500">of {jsSel}</span> <span class="ds-count">{jsConsumers.length}</span></div>
+          <table class="ds-table">
+            <thead><tr>
+              {#each ['Consumer', 'Deliver', 'Ack', 'Filter', 'Pending'] as h (h)}
+                <th>{h}</th>
+              {/each}
+            </tr></thead>
+            <tbody>
+              {#each jsConsumers as c (c.name)}
+                {@const pending = Number(c.num_pending ?? 0)}
+                <tr class="js-row">
+                  <!-- the identifier stays a link: hover underlines, focus is visible,
+                       and clicking copies the name (what you do with it next) -->
+                  <td>
+                    <span
+                      class="tbl-link"
+                      onclick={() => copyConsumer(c.name)}
+                      onkeydown={(e) => e.key === 'Enter' && copyConsumer(c.name)}
+                      role="button"
+                      tabindex="0"
+                      title="Copy consumer name"
+                    >{c.name}</span>
+                  </td>
+                  <!-- enum/meta columns: grey, so they do not compete with the data -->
+                  <td style="color:var(--tbl-meta)">{c.deliver_policy}</td>
+                  <td style="color:var(--tbl-meta)">{c.ack_policy}</td>
+                  <!-- subject value: warm monospace tone; "—" stays quiet -->
+                  <td class="mono" style="font-size:var(--px-12);color:{c.filter_subject ? 'var(--tbl-subject)' : 'var(--tbl-quiet)'}">{c.filter_subject || '—'}</td>
+                  <!-- pending MEANS something: 0 is quiet, a backlog is not -->
+                  <td
+                    style="font-variant-numeric:tabular-nums;color:{pending > 0 ? 'var(--tbl-alert)' : 'var(--tbl-quiet)'};font-weight:{pending > 0 ? 600 : 400}"
+                    title={pending > 0 ? pending + ' message(s) waiting to be acked' : 'nothing pending'}
+                  >{c.num_pending}</td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        </section>
+
+        <section class="ds-section">
+          <div class="ds-section-title">Peek a message</div>
+          <div style="display:flex;align-items:center;gap:var(--px-8)">
+            <label class="ds-field">Sequence
+              <input type="number" bind:value={peekSeq} class="ds-control ds-num" style="width:var(--px-110)" aria-label="Peek seq" />
+            </label>
+            <span onclick={peek} onkeydown={(e) => e.key === 'Enter' && peek()} role="button" tabindex="0" class="cfm-btn">Peek</span>
           </div>
-        {/if}
+          {#if peekResult}
+            <div style="font-size:var(--px-12);background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-10);padding:var(--px-10) var(--px-12)">
+              <div style="color:var(--muted)">#{peekResult.seq} · <span class="mono" style="color:var(--tbl-subject);font-weight:600">{peekResult.subject}</span> · {peekResult.time}</div>
+              <div class="mono" style="color:var(--text2);white-space:pre-wrap;word-break:break-word;margin-top:var(--px-6)">{peekResult.payload}</div>
+            </div>
+          {/if}
+        </section>
       {/if}
     </div>
   {:else if panel === 'kv'}
     <!-- KV Store (T9) -->
     <div style="flex:1;display:flex;min-height:0">
-      <div style="width:var(--px-220);flex:none;border-right:var(--px-1) solid var(--border);overflow:auto;padding:var(--px-6)">
-        <div style="display:flex;align-items:center;padding:var(--px-4) var(--px-8)"><span style="font-size:var(--px-10_5);color:var(--muted);text-transform:uppercase;letter-spacing:.06em;font-weight:700">Buckets</span><span onclick={kvNewBucket} onkeydown={(e) => e.key === 'Enter' && kvNewBucket()} role="button" tabindex="0" style="margin-left:auto;color:var(--primary);cursor:pointer;font-size:var(--px-12)">＋</span></div>
+      <div class="nw-side">
+        <div class="nw-side-head"><span>Buckets</span><span onclick={kvNewBucket} onkeydown={(e) => e.key === 'Enter' && kvNewBucket()} role="button" tabindex="0" class="nw-add" title="New bucket">＋</span></div>
         {#each kvBuckets as b (b)}
-          <div onclick={() => selKvBucket(b)} onkeydown={(e) => e.key === 'Enter' && selKvBucket(b)} role="button" tabindex="0" class="mono" style="padding:var(--px-5) var(--px-8);border-radius:var(--px-5);cursor:pointer;font-size:var(--px-12);background:{kvSel === b ? 'var(--hover)' : 'transparent'}">{b}</div>
+          <div onclick={() => selKvBucket(b)} onkeydown={(e) => e.key === 'Enter' && selKvBucket(b)} role="button" tabindex="0" class="nw-item" class:on={kvSel === b}>{b}</div>
         {/each}
       </div>
-      <div style="flex:1;overflow:auto;min-width:0;padding:var(--px-8) var(--px-12)">
+      <div class="ds-body">
         {#if kvSel}
-          <div style="display:flex;align-items:center;gap:var(--px-8);margin-bottom:var(--px-8)"><span class="mono" style="font-size:var(--px-12_5);font-weight:600;color:var(--sacc-green)">{kvSel}</span><span onclick={kvPutNew} onkeydown={(e) => e.key === 'Enter' && kvPutNew()} role="button" tabindex="0" style="font-size:var(--px-11);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">＋ Key</span></div>
-          {#each kvKeys as k (k)}
-            <div class="mono" style="display:flex;align-items:center;gap:var(--px-8);padding:var(--px-4) var(--px-6);font-size:var(--px-12)">
-              <span onclick={() => kvGet(k)} onkeydown={(e) => e.key === 'Enter' && kvGet(k)} role="button" tabindex="0" style="cursor:pointer;color:var(--text2)">{k}</span>
-              <span onclick={() => kvDelKey(k)} onkeydown={(e) => e.key === 'Enter' && kvDelKey(k)} role="button" tabindex="0" style="margin-left:auto;color:var(--error);cursor:pointer">×</span>
-            </div>
-          {/each}
+          <div class="ds-section-title">{kvSel} <span class="ds-count">{kvKeys.length}</span><span onclick={kvPutNew} onkeydown={(e) => e.key === 'Enter' && kvPutNew()} role="button" tabindex="0" class="cfm-btn" style="margin-left:auto">＋ Key</span></div>
+          <table class="ds-table">
+            <thead><tr><th>Key</th><th style="width:1%"></th></tr></thead>
+            <tbody>
+              {#each kvKeys as k (k)}
+                <tr>
+                  <td class="mono" style="font-size:var(--px-12)"><span onclick={() => kvGet(k)} onkeydown={(e) => e.key === 'Enter' && kvGet(k)} role="button" tabindex="0" style="cursor:pointer;color:var(--text)">{k}</span></td>
+                  <td><span onclick={() => kvDelKey(k)} onkeydown={(e) => e.key === 'Enter' && kvDelKey(k)} role="button" tabindex="0" class="ds-act" title="Delete key">×</span></td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
           {#if kvValue}
-            <pre class="selectable mono" style="margin-top:var(--px-10);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-8);font-size:var(--px-12);white-space:pre-wrap;word-break:break-word">{kvValue.key} = {kvValue.value}</pre>
+            <pre class="selectable mono" style="margin:0;background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-10);padding:var(--px-10) var(--px-12);font-size:var(--px-12);white-space:pre-wrap;word-break:break-word">{kvValue.key} = {kvValue.value}</pre>
           {/if}
         {:else}
-          <div style="color:var(--muted);font-size:var(--px-12)">Select a bucket to view keys.</div>
+          <div class="ds-empty"><b>Pick a bucket</b>Select a bucket on the left to see its keys.</div>
         {/if}
       </div>
     </div>
   {:else if panel === 'obj'}
     <!-- Object Store (T9) -->
     <div style="flex:1;display:flex;min-height:0">
-      <div style="width:var(--px-220);flex:none;border-right:var(--px-1) solid var(--border);overflow:auto;padding:var(--px-6)">
-        <div style="display:flex;align-items:center;padding:var(--px-4) var(--px-8)"><span style="font-size:var(--px-10_5);color:var(--muted);text-transform:uppercase;letter-spacing:.06em;font-weight:700">Buckets</span><span onclick={objNewBucket} onkeydown={(e) => e.key === 'Enter' && objNewBucket()} role="button" tabindex="0" style="margin-left:auto;color:var(--primary);cursor:pointer;font-size:var(--px-12)">＋</span></div>
+      <div class="nw-side">
+        <div class="nw-side-head"><span>Buckets</span><span onclick={objNewBucket} onkeydown={(e) => e.key === 'Enter' && objNewBucket()} role="button" tabindex="0" class="nw-add" title="New bucket">＋</span></div>
         {#each objBuckets as b (b)}
-          <div onclick={() => selObjBucket(b)} onkeydown={(e) => e.key === 'Enter' && selObjBucket(b)} role="button" tabindex="0" class="mono" style="padding:var(--px-5) var(--px-8);border-radius:var(--px-5);cursor:pointer;font-size:var(--px-12);background:{objSel === b ? 'var(--hover)' : 'transparent'}">{b}</div>
+          <div onclick={() => selObjBucket(b)} onkeydown={(e) => e.key === 'Enter' && selObjBucket(b)} role="button" tabindex="0" class="nw-item" class:on={objSel === b}>{b}</div>
         {/each}
       </div>
-      <div style="flex:1;overflow:auto;min-width:0;padding:var(--px-8) var(--px-12)">
+      <div class="ds-body">
         {#if objSel}
-          <div style="display:flex;align-items:center;gap:var(--px-8);margin-bottom:var(--px-8)"><span class="mono" style="font-size:var(--px-12_5);font-weight:600;color:var(--sacc-green)">{objSel}</span><span onclick={objUpload} onkeydown={(e) => e.key === 'Enter' && objUpload()} role="button" tabindex="0" style="font-size:var(--px-11);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">⬆ Upload</span></div>
-          <table class="mono" style="border-collapse:collapse;width:100%;font-size:var(--px-12)">
-            <thead><tr>{#each ['Name', 'Size', 'Chunks', ''] as h (h)}<th style="text-align:left;padding:var(--px-5) var(--px-10);border-bottom:var(--px-1) solid var(--border2);color:var(--tbl-head);font-weight:600">{h}</th>{/each}</tr></thead>
+          <div class="ds-section-title">{objSel} <span class="ds-count">{objList.length}</span><span onclick={objUpload} onkeydown={(e) => e.key === 'Enter' && objUpload()} role="button" tabindex="0" class="cfm-btn" style="margin-left:auto">⬆ Upload</span></div>
+          <table class="ds-table">
+            <thead><tr>{#each ['Name', 'Size', 'Chunks', ''] as h (h)}<th>{h}</th>{/each}</tr></thead>
             <tbody>
               {#each objList as o (o.name)}
                 <tr>
-                  <td style="padding:var(--px-5) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:var(--text2)">{o.name}</td>
-                  <td style="padding:var(--px-5) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:var(--muted)">{o.size.toLocaleString()} B</td>
-                  <td style="padding:var(--px-5) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:var(--muted)">{o.chunks}</td>
-                  <td style="padding:var(--px-5) var(--px-10);border-bottom:var(--px-1) solid var(--border)"><span onclick={() => objDownload(o.name)} onkeydown={(e) => e.key === 'Enter' && objDownload(o.name)} role="button" tabindex="0" style="color:var(--primary);cursor:pointer;font-size:var(--px-11)">⬇</span> <span onclick={() => objDel(o.name)} onkeydown={(e) => e.key === 'Enter' && objDel(o.name)} role="button" tabindex="0" style="color:var(--error);cursor:pointer;margin-left:var(--px-8)">×</span></td>
+                  <td style="color:var(--text)">{o.name}</td>
+                  <td style="color:var(--text2);font-variant-numeric:tabular-nums">{o.size.toLocaleString()} B</td>
+                  <td style="color:var(--text2);font-variant-numeric:tabular-nums">{o.chunks}</td>
+                  <td style="white-space:nowrap;width:1%"><span onclick={() => objDownload(o.name)} onkeydown={(e) => e.key === 'Enter' && objDownload(o.name)} role="button" tabindex="0" class="ds-act" title="Download">⬇</span><span onclick={() => objDel(o.name)} onkeydown={(e) => e.key === 'Enter' && objDel(o.name)} role="button" tabindex="0" class="ds-act" title="Delete object">×</span></td>
                 </tr>
               {/each}
             </tbody>
           </table>
         {:else}
-          <div style="color:var(--muted);font-size:var(--px-12)">Select a bucket to view objects.</div>
+          <div class="ds-empty"><b>Pick a bucket</b>Select a bucket on the left to see its objects.</div>
         {/if}
       </div>
     </div>
   {:else}
   <!-- message stream — dòng 782-789 -->
-  <div style="flex:1;overflow:auto;min-height:0;padding:var(--px-8) 0">
+  <div style="flex:1;overflow:auto;min-height:0;background:var(--surface)">
     {#if messages.length === 0}
-      <div style="padding:var(--px-16);text-align:center;font-size:var(--px-12);color:var(--muted)">
+      <div class="ds-empty">
         {subscribed ? 'Waiting for messages…' : 'Enter a subject (e.g. orders.>) then Subscribe.'}
       </div>
     {:else}
       {#each messages as m, i (i)}
-        <div style="display:flex;gap:var(--px-12);padding:var(--px-7) var(--px-16);border-bottom:var(--px-1) solid var(--border);align-items:baseline">
-          <span class="mono" style="flex:none;font-size:var(--px-10_5);color:var(--muted);width:var(--px-84)">{m.ts}</span>
-          <span class="mono" style="flex:none;font-size:var(--px-11_5);color:var(--sacc-amber);font-weight:600;width:var(--px-150);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{m.subject}</span>
-          <span class="mono" style="flex:1;min-width:0;font-size:var(--px-11_5);color:var(--text2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{m.payload}</span>
+        <div class="nw-msg">
+          <span class="ds-time" style="flex:none;font-size:var(--px-12);color:var(--muted);width:var(--px-84)">{m.ts}</span>
+          <span class="mono" style="flex:none;font-size:var(--px-12);color:var(--tbl-subject);font-weight:500;width:var(--px-150);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{m.subject}</span>
+          <span class="mono" style="flex:1;min-width:0;font-size:var(--px-12);color:var(--text2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{m.payload}</span>
         </div>
       {/each}
     {/if}
@@ -420,30 +447,27 @@
 
   <!-- publish + request/reply -->
   {#if panel === ''}
-  <div style="flex:none;border-top:var(--px-1) solid var(--border);background:var(--surface);padding:var(--px-10) var(--px-14);display:flex;flex-direction:column;gap:var(--px-8)">
-    <div style="display:flex;gap:var(--px-8);align-items:center">
-      <span style="font-size:var(--px-11);color:var(--muted);flex:none;width:var(--px-60)">Publish</span>
-      <input bind:value={pubSubject} placeholder="subject" class="mono" style="flex:none;width:var(--px-170);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-6) var(--px-9);font-size:var(--px-12);color:var(--text);outline:none" />
-      <input bind:value={pubMsg} onkeydown={(e) => e.key === 'Enter' && publish()} placeholder="payload" class="mono" style="flex:1;min-width:0;background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-6) var(--px-9);font-size:var(--px-12);color:var(--text);outline:none" />
-      <span onclick={publish} onkeydown={(e) => e.key === 'Enter' && publish()} role="button" tabindex="0" style="flex:none;font-size:var(--px-11_5);background:#27AE60;color:var(--hex-fff);border-radius:var(--px-6);padding:var(--px-6) var(--px-14);cursor:pointer;font-weight:600">Publish</span>
+  <div class="nw-compose">
+    <div class="nw-compose-row">
+      <span class="nw-compose-label">Publish</span>
+      <input bind:value={pubSubject} placeholder="subject" class="ds-control mono" style="flex:none;width:var(--px-200)" />
+      <input bind:value={pubMsg} onkeydown={(e) => e.key === 'Enter' && publish()} placeholder="payload" class="ds-control mono" style="flex:1;min-width:0" />
+      <span onclick={publish} onkeydown={(e) => e.key === 'Enter' && publish()} role="button" tabindex="0" class="cfm-btn primary" style="flex:none">Publish</span>
     </div>
-    <div style="display:flex;gap:var(--px-8);align-items:center">
-      <span style="font-size:var(--px-11);color:var(--muted);flex:none;width:var(--px-60)">Request</span>
-      <input bind:value={reqSubject} placeholder="subject" class="mono" style="flex:none;width:var(--px-170);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-6) var(--px-9);font-size:var(--px-12);color:var(--text);outline:none" />
-      <input bind:value={reqMsg} onkeydown={(e) => e.key === 'Enter' && request()} placeholder="payload" class="mono" style="flex:1;min-width:0;background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-6) var(--px-9);font-size:var(--px-12);color:var(--text);outline:none" />
-      <span onclick={request} onkeydown={(e) => e.key === 'Enter' && request()} role="button" tabindex="0" style="flex:none;font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-6) var(--px-14);cursor:pointer;font-weight:600">Request ▸</span>
+    <div class="nw-compose-row">
+      <span class="nw-compose-label">Request</span>
+      <input bind:value={reqSubject} placeholder="subject" class="ds-control mono" style="flex:none;width:var(--px-200)" />
+      <input bind:value={reqMsg} onkeydown={(e) => e.key === 'Enter' && request()} placeholder="payload" class="ds-control mono" style="flex:1;min-width:0" />
+      <span onclick={request} onkeydown={(e) => e.key === 'Enter' && request()} role="button" tabindex="0" class="cfm-btn" style="flex:none">Request ▸</span>
     </div>
     {#if reqReply != null}
-      <div class="mono" style="font-size:var(--px-11_5);color:var(--text2);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-6) var(--px-9);white-space:pre-wrap;word-break:break-word">↩ {reqReply}</div>
+      <div class="mono" style="font-size:var(--px-12);color:var(--text2);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-8);padding:var(--px-8) var(--px-10);white-space:pre-wrap;word-break:break-word">↩ {reqReply}</div>
     {/if}
   </div>
   {/if}
 </div>
 
 <style>
-  .js-row.zebra {
-    background: var(--tbl-zebra);
-  }
   /* the identifier reads as a link: colour + underline on hover, visible focus */
   .tbl-link {
     color: var(--tbl-link);
@@ -463,6 +487,84 @@
     background: var(--tbl-hover);
   }
   .js-row.sel {
-    background: var(--tbl-sel);
+    background: color-mix(in srgb, var(--primary) 12%, var(--surface));
+    box-shadow: inset var(--px-3) 0 0 var(--primary);
+  }
+  .nw-side {
+    width: var(--px-220);
+    flex: none;
+    border-right: var(--px-1) solid var(--border);
+    overflow: auto;
+    padding: var(--px-10) var(--px-8);
+    background: var(--surface);
+  }
+  .nw-side-head {
+    display: flex;
+    align-items: center;
+    padding: var(--px-2) var(--px-8) var(--px-8);
+    font-size: var(--px-12);
+    font-weight: 600;
+    color: var(--text2);
+  }
+  .nw-add {
+    margin-left: auto;
+    width: var(--px-22);
+    height: var(--px-22);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--px-6);
+    color: var(--primary);
+    cursor: pointer;
+    font-size: var(--px-13);
+  }
+  .nw-add:hover {
+    background: color-mix(in srgb, var(--primary) 10%, transparent);
+  }
+  .nw-item {
+    padding: var(--px-6) var(--px-10);
+    border-radius: var(--px-6);
+    cursor: pointer;
+    font-size: var(--px-13);
+    color: var(--text);
+  }
+  .nw-item:hover {
+    background: var(--hover);
+  }
+  .nw-item.on {
+    background: color-mix(in srgb, var(--primary) 12%, transparent);
+    color: var(--primary);
+    font-weight: 600;
+  }
+  .nw-msg {
+    display: flex;
+    gap: var(--px-12);
+    padding: var(--px-8) var(--px-18);
+    border-bottom: var(--px-1) solid var(--border);
+    align-items: baseline;
+  }
+  .nw-msg:nth-child(even) {
+    background: var(--grid-zebra);
+  }
+  .nw-compose {
+    flex: none;
+    border-top: var(--px-1) solid var(--border);
+    background: var(--surface);
+    padding: var(--px-12) var(--px-18);
+    display: flex;
+    flex-direction: column;
+    gap: var(--px-8);
+  }
+  .nw-compose-row {
+    display: flex;
+    gap: var(--px-8);
+    align-items: center;
+  }
+  .nw-compose-label {
+    flex: none;
+    width: var(--px-64);
+    font-size: var(--px-12);
+    font-weight: 600;
+    color: var(--text2);
   }
 </style>

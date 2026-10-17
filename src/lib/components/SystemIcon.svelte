@@ -3,6 +3,7 @@
   // PG/MySQL/MSSQL dùng logo raster assets/; các hệ còn lại là inline SVG
   // viewBox 24, stroke accent 1.9 round (svS) hoặc fill accent (svF).
   import { systemMeta } from '$lib/systems'
+  import { ES_LOGO } from '$lib/elastic/eui-icons'
 
   interface Props {
     system: string | null | undefined
@@ -25,6 +26,10 @@
 {:else if key === 'mariadb'}
   <!-- MariaDB sea lion (brand mark), hand-built SVG -->
   <img src="/assets/db-mariadb.svg" width={size} height={size} style="object-fit:contain;display:block" alt="mariadb" />
+{:else if key === 'nats'}
+  <!-- NATS brand mark (blue speech bubble + N) — the same asset the Explorer uses
+       for NATS streams, so Connections and the message broker tree match -->
+  <img src="/assets/db-nats.svg" width={size} height={size} style="object-fit:contain;display:block" alt="nats" />
 {:else if key === 'oracle'}
   <!-- Oracle brand mark (simple-icons "O" glyph), Oracle Red -->
   <img src="/assets/db-oracle.svg" width={size} height={size} style="object-fit:contain;display:block" alt="oracle" />
@@ -43,6 +48,10 @@
     <circle cx="9.6" cy="12" r="4.7" fill="var(--hex-13161f)" />
     <rect x="13.6" y="10.4" width="6" height="3.2" rx="1.6" fill="var(--hex-13161f)" />
   </svg>
+{:else if key === 'elasticsearch'}
+  <!-- Elasticsearch logo: the official Elastic UI asset (logo_elasticsearch), copied
+       verbatim — the ink part follows the theme like EUI's fillNegative -->
+  <svg class="sys-es-logo" width={size} height={size} viewBox={ES_LOGO.vb} aria-hidden="true">{@html ES_LOGO.body}</svg>
 {:else if key === 'rabbitmq'}
   <!-- RabbitMQ mark: two "ears" on a body with the square window (svF, hand-built) -->
   <svg width={size} height={size} viewBox="0 0 24 24" fill={color} stroke="none" aria-hidden="true">
@@ -72,11 +81,6 @@
       <circle cx="18" cy="18.5" r="2.2" />
       <path d="M8 11 L16 6.5" />
       <path d="M8 13 L16 17.5" />
-    {:else if key === 'nats'}
-      <!-- radiating signal -->
-      <circle cx="12" cy="12" r="2" fill={color} stroke="none" />
-      <circle cx="12" cy="12" r="6" opacity="0.55" />
-      <circle cx="12" cy="12" r="10" opacity="0.28" />
     {:else if key === 'cassandra'}
       <circle cx="12" cy="12" r="3" />
       <circle cx="12" cy="4" r="2" />
@@ -106,3 +110,13 @@
     {/if}
   </svg>
 {/if}
+
+<style>
+  .sys-es-logo {
+    display: block;
+    flex: none;
+  }
+  .sys-es-logo :global(.euiIcon__fillNegative) {
+    fill: var(--text);
+  }
+</style>

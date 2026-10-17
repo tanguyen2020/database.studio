@@ -16,7 +16,9 @@
   import RedisExplorer from '$lib/components/explorer/RedisExplorer.svelte'
   import MongoExplorer from '$lib/components/explorer/MongoExplorer.svelte'
   import RabbitExplorer from '$lib/components/explorer/RabbitExplorer.svelte'
+  import EsExplorer from '$lib/components/explorer/EsExplorer.svelte'
   import DropDatabaseDialog from '$lib/components/explorer/DropDatabaseDialog.svelte'
+  import KafkaPartitionsDialog from '$lib/components/explorer/KafkaPartitionsDialog.svelte'
   import TableContextMenu from '$lib/components/explorer/TableContextMenu.svelte'
   import { connections } from '$lib/stores/connections.svelte'
   import { explorer } from '$lib/stores/explorer.svelte'
@@ -195,7 +197,7 @@
   const userMgrConn = $derived(
     toolTarget
       ? toolTarget.base
-      : selected && (selected.system === 'mongodb' || selected.system === 'cassandra' || selected.system === 'rabbitmq')
+      : selected && (selected.system === 'mongodb' || selected.system === 'cassandra' || selected.system === 'rabbitmq' || selected.system === 'elasticsearch')
         ? selected.id
         : null,
   )
@@ -790,6 +792,8 @@
         await withChildReload(() => mongoRefresh++) // MongoExplorer watches the key
       } else if (s.system === 'rabbitmq') {
         await withChildReload(() => rabbitRefresh++) // RabbitExplorer watches the key
+      } else if (s.system === 'elasticsearch') {
+        await withChildReload(() => esRefresh++) // EsExplorer watches the key
       } else {
         await reloadRelational(s)
       }
@@ -815,6 +819,7 @@
     if (s.system === 'mongodb') return 'Refreshed — databases re-read'
     if (s.system === 'cassandra') return 'Refreshed — keyspaces re-read'
     if (s.system === 'rabbitmq') return 'Refreshed — queues & exchanges re-read'
+    if (s.system === 'elasticsearch') return 'Refreshed — indices, data streams & aliases re-read'
     const names = (explorer.cache[s.id]?.schemas ?? []).map((x) => x.name)
     const open = mainReloadPlan(expanded, names)
     const parts = [`${names.length} schema${names.length === 1 ? '' : 's'}`]
@@ -896,6 +901,9 @@
   // Streaming (Kafka topics / NATS JetStream streams) — loaded via the explorer
   // store so the messages tabs can trigger a refresh after purge/delete.
   const isKafka = $derived(selected?.system === 'kafka')
+  // Kafka / NATS rows carry counts ("2 part · 1,930 msg"), not code: UI font with
+  // tabular figures. Relational meta (types, row counts) keeps the mono column look.
+  const streamMeta = $derived(selected?.system === 'kafka' || selected?.system === 'nats')
   const isNats = $derived(selected?.system === 'nats')
   const isRedis = $derived(selected?.system === 'redis')
   const isMongo = $derived(selected?.system === 'mongodb')
@@ -904,6 +912,9 @@
   const isRabbit = $derived(selected?.system === 'rabbitmq')
   // Bumped by the header Refresh button → RabbitExplorer reloads queues/exchanges.
   let rabbitRefresh = $state(0)
+  const isElastic = $derived(selected?.system === 'elasticsearch')
+  // Bumped by the header Refresh button → EsExplorer reloads indices / streams / aliases.
+  let esRefresh = $state(0)
   const streamCache = $derived(selected ? explorer.streaming[selected.id] : undefined)
   const topicRows = $derived(streamCache?.kafkaTopics ? kafkaTopicRows(streamCache.kafkaTopics) : [])
   // Kafka explorer filter — matches topic names (case-insensitive substring).
@@ -942,6 +953,8 @@
   // In-app confirm popup (window.confirm isn't reliable inside the Tauri webview);
   // clicking the backdrop does NOT confirm — only the Confirm button runs the action.
   let confirmState = $state<{ title: string; body: string; sql?: string; run: () => void } | null>(null)
+  // Kafka topic → "Edit partitions…" (Kafka can only add partitions)
+  let partitionsFor = $state<{ topic: string; current: number } | null>(null)
   /** `sql` (optional) is shown verbatim in the dialog so a destructive confirm can
    *  state exactly what will run without opening a script tab first. */
   function askConfirm(title: string, body: string, run: () => void, sql?: string) {
@@ -1842,7 +1855,7 @@
       <!-- line-height is pinned to the mono metric the row was built around, so moving the name to the UI face keeps every row exactly the height it was -->
       <span style="font-family:var(--font-main);line-height:var(--px-17);font-size:var(--px-12_5);font-weight:{p.head ? 700 : 500};color:{p.nameColor ?? (sel || p.head ? 'var(--text)' : 'var(--text2)')};flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis">{p.name}</span>
       {#if p.locked}<span style="font-size:var(--px-9)" title="System table — read-only">🔒</span>{/if}
-      <span class="mono" title={p.metaTitle ?? ''} style="font-size:var(--px-10);color:{p.metaTitle ? 'var(--sacc-amber)' : 'var(--muted)'};margin-left:auto;flex:0 100 auto;min-width:0;overflow:hidden;text-overflow:ellipsis">{p.meta ?? ''}</span>
+      <span class={streamMeta ? 'ds-num' : 'mono'} title={p.metaTitle ?? ''} style="font-size:{streamMeta ? 'var(--px-11)' : 'var(--px-10)'};color:{p.metaTitle ? 'var(--sacc-amber)' : 'var(--muted)'};margin-left:auto;flex:0 100 auto;min-width:0;overflow:hidden;text-overflow:ellipsis">{p.meta ?? ''}</span>
       {#if p.filterable}
         {@const active = hasFolderFilter(p.key) || folderFilterOpen[p.key]}
         <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
@@ -2391,6 +2404,8 @@
               <ContextMenu.Item onclick={() => selected && tabs.openKafkaTool(selected.id, 'kafka-consumer', t.name)}>View messages</ContextMenu.Item>
               <ContextMenu.Item onclick={() => selected && tabs.openKafkaTool(selected.id, 'kafka-producer', t.name)}>Produce message…</ContextMenu.Item>
               <ContextMenu.Separator />
+              <ContextMenu.Item onclick={() => (partitionsFor = { topic: t.name, current: t.partitions })}>Edit partitions…</ContextMenu.Item>
+              <ContextMenu.Separator />
               <ContextMenu.Item onclick={() => clearTopic(t.name)}>Clear messages</ContextMenu.Item>
               <ContextMenu.Item onclick={() => deleteTopic(t.name)}>Delete topic</ContextMenu.Item>
               <ContextMenu.Separator />
@@ -2479,6 +2494,10 @@
     {:else if isMongo}
       <!-- MongoDB: database → collection → (fields, indexes) tree. -->
       <MongoExplorer connId={selected.id} defaultDb={selected.database} refreshKey={mongoRefresh} onReloaded={() => childReloadDone?.()} />
+    {:else if isElastic}
+      <!-- Elasticsearch: Kibana-style navigation (indices, data streams, aliases,
+           Stack Management, cluster, security, dev tools) over the REST API. -->
+      <EsExplorer connId={selected.id} refreshKey={esRefresh} onReloaded={() => childReloadDone?.()} />
     {:else if isRabbit}
       <!-- RabbitMQ: vhost → Queues / Exchanges (Management HTTP API). -->
       <RabbitExplorer connId={selected.id} defaultVhost={selected.database} refreshKey={rabbitRefresh} onReloaded={() => childReloadDone?.()} />
@@ -3798,6 +3817,19 @@
     beforeDrop={() => closeOurSessionsTo(st.cid, st.db)}
     onDropped={afterDropDatabase}
     onClose={() => (dropDbState = null)}
+  />
+{/if}
+
+{#if partitionsFor && selected}
+  <KafkaPartitionsDialog
+    connId={selected.id}
+    topic={partitionsFor.topic}
+    current={partitionsFor.current}
+    onClose={() => (partitionsFor = null)}
+    onDone={() => {
+      partitionsFor = null
+      if (selected) explorer.loadStreaming(selected.id, 'kafka', true)
+    }}
   />
 {/if}
 

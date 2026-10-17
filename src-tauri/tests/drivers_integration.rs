@@ -3319,6 +3319,70 @@ async fn nats_connect_test_and_ping() {
     responder.abort();
 }
 
+/// The payload viewer tells which consumer has processed a message from each
+/// consumer's ack floor / delivered stream sequence and its subject filters. Those
+/// numbers must be the server's real positions: deliver 2 of the filtered messages,
+/// ack only the first, and read them back through the driver.
+#[tokio::test]
+async fn nats_consumer_positions_report_ack_floor_and_delivered() {
+    use async_nats::jetstream;
+    use database_studio_lib::drivers::nats::{NatsConnParams, NatsDriver};
+    use futures::StreamExt;
+
+    let c = GenericImage::new("nats", "2.10-alpine")
+        .with_exposed_port(4222.tcp())
+        .with_cmd(vec!["-js"])
+        .start()
+        .await
+        .expect("start nats -js");
+    let port = c.get_host_port_ipv4(4222).await.unwrap();
+    let params = NatsConnParams { host: "localhost".into(), port, user: String::new(), password: String::new(), ssl: false };
+    let drv = retry("nats-js", || NatsDriver::connect(&params)).await;
+    let js = jetstream::new(drv.client());
+    js.create_stream(jetstream::stream::Config { name: "POS".into(), subjects: vec!["orders.>".into()], ..Default::default() })
+        .await
+        .unwrap();
+    // stream seqs: 1 orders.eu · 2 orders.eu · 3 orders.us · 4 orders.eu
+    for subj in ["orders.eu", "orders.eu", "orders.us", "orders.eu"] {
+        js.publish(subj, bytes::Bytes::from_static(b"{}")).await.unwrap().await.unwrap();
+    }
+    let stream = js.get_stream("POS").await.unwrap();
+    let consumer: jetstream::consumer::PullConsumer = stream
+        .create_consumer(jetstream::consumer::pull::Config {
+            durable_name: Some("eu-worker".into()),
+            filter_subject: "orders.eu".into(),
+            ack_policy: jetstream::consumer::AckPolicy::Explicit,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    // deliver two (stream seq 1 and 2), ack only the first
+    let mut batch = consumer.fetch().max_messages(2).messages().await.unwrap();
+    let first = batch.next().await.unwrap().unwrap();
+    let second = batch.next().await.unwrap().unwrap();
+    assert_eq!(first.info().unwrap().stream_sequence, 1);
+    assert_eq!(second.info().unwrap().stream_sequence, 2);
+    first.double_ack().await.unwrap();
+
+    let mut seen = None;
+    for _ in 0..20 {
+        let list = drv.js_consumers("POS").await.unwrap();
+        let w = list.into_iter().find(|c| c.name == "eu-worker").expect("eu-worker listed");
+        if w.ack_floor_stream_seq == 1 && w.delivered_stream_seq == 2 {
+            seen = Some(w);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(150)).await;
+    }
+    let w = seen.expect("ack floor 1 / delivered 2 reported by the server");
+    assert_eq!(w.filter_subjects, vec!["orders.eu".to_string()]);
+    assert_eq!(w.filter_subject, "orders.eu");
+    // seq 1 processed (≤ ack floor), seq 2 in flight (≤ delivered), seq 4 not delivered
+    assert!(1 <= w.ack_floor_stream_seq);
+    assert!(2 > w.ack_floor_stream_seq && 2 <= w.delivered_stream_seq);
+    assert!(4 > w.delivered_stream_seq);
+}
+
 #[tokio::test]
 async fn nats_jetstream_streams_consumers_peek() {
     use async_nats::jetstream;
@@ -5668,6 +5732,60 @@ async fn sqlite_table_designer_create_alter_end_to_end() {
 // browse / purge-subject / remove-subject, on real containers.
 // ---------------------------------------------------------------------------
 
+/// "Edit partitions…": Kafka can only add partitions. Raise 2 → 5 on a real broker
+/// (metadata shows 5, the existing messages are still there), and a decrease or a
+/// no-op is refused with a readable message instead of a broker error.
+#[tokio::test]
+async fn kafka_set_partitions_adds_only() {
+    use database_studio_lib::drivers::kafka::{KafkaConnParams, KafkaDriver};
+    use testcontainers_modules::kafka::{Kafka, KAFKA_PORT};
+
+    let node = Kafka::default().start().await.expect("start kafka container");
+    let port = node.get_host_port_ipv4(KAFKA_PORT).await.unwrap();
+    let params = KafkaConnParams {
+        bootstrap: format!("127.0.0.1:{port}"),
+        sasl_mechanism: String::new(),
+        user: String::new(),
+        password: String::new(),
+        ssl: false,
+    };
+    let drv = retry("kafka", || KafkaDriver::connect(&params)).await;
+    drv.create_topic("grow", 2, 1).await.unwrap();
+    async fn parts(d: &KafkaDriver) -> Option<usize> {
+        d.topics().await.unwrap().into_iter().find(|t| t.name == "grow").map(|t| t.partitions.len())
+    }
+    for _ in 0..20 {
+        if parts(&drv).await == Some(2) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    for i in 0..3 {
+        drv.produce("grow", &format!("k{i}"), "v", Some(0)).await.unwrap();
+    }
+
+    let before = drv.set_partitions("grow", 5).await.unwrap();
+    assert_eq!(before, 2, "returns the count it had");
+    let mut now = None;
+    for _ in 0..20 {
+        now = parts(&drv).await;
+        if now == Some(5) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    assert_eq!(now, Some(5), "the broker reports 5 partitions");
+    let t = drv.topics().await.unwrap().into_iter().find(|t| t.name == "grow").unwrap();
+    let p0 = t.partitions.iter().find(|p| p.id == 0).unwrap();
+    assert_eq!(p0.high - p0.low, 3, "existing messages stay where they were");
+
+    let down = drv.set_partitions("grow", 3).await.unwrap_err();
+    assert!(down.message.contains("cannot reduce partitions"), "{}", down.message);
+    let same = drv.set_partitions("grow", 5).await.unwrap_err();
+    assert!(same.message.contains("already has 5"), "{}", same.message);
+    assert_eq!(parts(&drv).await, Some(5), "refused changes leave the topic alone");
+}
+
 #[tokio::test]
 async fn kafka_purge_topic_clears_messages() {
     use database_studio_lib::drivers::kafka::{KafkaConnParams, KafkaDriver};
@@ -6464,6 +6582,114 @@ fn bench_rows(o: &StatementOutcome) -> u64 {
         StatementOutcome::Rows { result } => result.total,
         _ => 0,
     }
+}
+
+/// `foreign_keys` pairs each local column with ITS referenced column. The old
+/// information_schema query cross-joined the columns of a multi-column key (a
+/// 2-column FK came back as 4 rows, two of them wrong).
+#[tokio::test]
+async fn pg_foreign_keys_pair_multi_column_keys() {
+    let (_c, port) = start_pg().await;
+    let params = PgConnParams {
+        host: "localhost".into(), port, database: "testdb".into(), user: "postgres".into(),
+        password: PASS.into(), ssl: false, ssl_ca: String::new(), ssl_cert: String::new(), ssl_key: String::new(),
+    };
+    let mut drv = retry("postgres", || PgDriver::connect(&params)).await;
+    for sql in [
+        "CREATE TABLE region (country text, code text, name text, PRIMARY KEY (country, code))",
+        "CREATE TABLE store (id int PRIMARY KEY, c text, r text, owner int,
+           CONSTRAINT fk_store_region FOREIGN KEY (c, r) REFERENCES region (country, code))",
+        "CREATE TABLE staff (id int PRIMARY KEY)",
+        "ALTER TABLE store ADD CONSTRAINT fk_store_owner FOREIGN KEY (owner) REFERENCES staff (id)",
+    ] {
+        drv.exec(sql).await.unwrap();
+    }
+    let fks = drv.foreign_keys("public").await.unwrap();
+    let pairs: Vec<(String, String, String, String)> =
+        fks.iter().map(|f| (f.name.clone(), f.from_column.clone(), f.to_table.clone(), f.to_column.clone())).collect();
+    assert_eq!(
+        pairs,
+        vec![
+            ("fk_store_owner".into(), "owner".into(), "staff".into(), "id".into()),
+            ("fk_store_region".into(), "c".into(), "region".into(), "country".into()),
+            ("fk_store_region".into(), "r".into(), "region".into(), "code".into()),
+        ],
+        "one row per column pair, in key order"
+    );
+    assert!(fks.iter().all(|f| f.from_table == "store"));
+}
+
+/// Generate Scripts on a 1,500-table schema: the server work is one column lookup
+/// per table (+ one FK list). Measured the way the app does it — one connection
+/// serially, and the desktop's 4 connections in parallel (the existing connection +
+/// 3 workers, see `extraLanes`). Ignored: run by hand.
+#[tokio::test]
+#[ignore]
+async fn bench_pg_generate_scripts_1500_tables() {
+    let (_c, port) = start_pg().await;
+    let params = PgConnParams {
+        host: "localhost".into(), port, database: "testdb".into(), user: "postgres".into(),
+        password: PASS.into(), ssl: false, ssl_ca: String::new(), ssl_cert: String::new(), ssl_key: String::new(),
+    };
+    let mut drv = retry("postgres", || PgDriver::connect(&params)).await;
+    // 1,500 tables of 8 columns, every other one with a FK to its neighbour
+    drv.exec(
+        "DO $$ BEGIN FOR i IN 1..1500 LOOP
+           EXECUTE format('CREATE TABLE t_%s (id bigint PRIMARY KEY, name text NOT NULL, code varchar(40), qty int DEFAULT 0,
+                           price numeric(12,2), active boolean DEFAULT true, created_at timestamptz DEFAULT now(), parent_id bigint)', i);
+           IF i > 1 AND i % 2 = 0 THEN
+             EXECUTE format('ALTER TABLE t_%s ADD CONSTRAINT fk_%s FOREIGN KEY (parent_id) REFERENCES t_%s(id)', i, i, i - 1);
+           END IF;
+         END LOOP; END $$",
+    )
+    .await
+    .unwrap();
+    let names: Vec<String> = (1..=1500).map(|i| format!("t_{i}")).collect();
+
+    // the one FK list per schema
+    let t = Instant::now();
+    let fks = drv.foreign_keys("public").await.unwrap();
+    let fk_ms = t.elapsed().as_millis();
+    assert_eq!(fks.len(), 750); // every even table 2..=1500
+
+    // 1 connection, one table after another
+    let t = Instant::now();
+    for n in &names {
+        let cols = drv.columns("public", n).await.unwrap();
+        assert_eq!(cols.len(), 8);
+    }
+    let serial_ms = t.elapsed().as_millis();
+
+    // 4 connections in parallel, the same split the app's pool uses (next free lane)
+    let mut lanes = Vec::new();
+    for _ in 0..4 {
+        lanes.push(retry("postgres", || PgDriver::connect(&params)).await);
+    }
+    let queue = std::sync::Arc::new(tokio::sync::Mutex::new(names.clone()));
+    let t = Instant::now();
+    let mut handles = Vec::new();
+    for mut lane in lanes {
+        let q = queue.clone();
+        handles.push(tokio::spawn(async move {
+            loop {
+                let next = q.lock().await.pop();
+                let Some(n) = next else { break };
+                let cols = lane.columns("public", &n).await.unwrap();
+                assert_eq!(cols.len(), 8);
+            }
+        }));
+    }
+    for h in handles {
+        h.await.unwrap();
+    }
+    let parallel_ms = t.elapsed().as_millis();
+    eprintln!(
+        "BENCH generate-scripts 1500 tables (postgres, localhost): foreign_keys={} ms | columns x1500 serial={} ms ({:.2} ms/table) | 4 lanes={} ms",
+        fk_ms,
+        serial_ms,
+        serial_ms as f64 / 1500.0,
+        parallel_ms
+    );
 }
 
 #[tokio::test]
@@ -9003,4 +9229,87 @@ async fn mssql_drop_database_in_use_lists_kills_and_drops() {
     else { panic!() };
     assert_eq!(result.rows[0]["n"].as_i64(), Some(0));
     eprintln!("CHK mssql_drop_database_in_use OK");
+}
+
+/// The topic tab's Consumer groups view: which groups read THIS topic comes from
+/// the live members' assignments in the one group-list call, and "view as group"
+/// reads that group's offsets on this topic only (not the whole cluster).
+#[tokio::test]
+async fn kafka_groups_report_their_assigned_topics_and_topic_lag_stays_on_one_topic() {
+    use database_studio_lib::drivers::kafka::{KafkaConnParams, KafkaDriver};
+    use rdkafka::consumer::{BaseConsumer, Consumer};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    use testcontainers_modules::kafka::{Kafka, KAFKA_PORT};
+
+    let node = Kafka::default().start().await.expect("start kafka container");
+    let port = node.get_host_port_ipv4(KAFKA_PORT).await.unwrap();
+    let bootstrap = format!("127.0.0.1:{port}");
+    let params = KafkaConnParams { bootstrap: bootstrap.clone(), sasl_mechanism: String::new(), user: String::new(), password: String::new(), ssl: false };
+    let drv = retry("kafka", || KafkaDriver::connect(&params)).await;
+    drv.create_topic("tg_a", 2, 1).await.unwrap();
+    drv.create_topic("tg_b", 1, 1).await.unwrap();
+    for _ in 0..20 {
+        let names: Vec<String> = drv.topics().await.unwrap().into_iter().map(|t| t.name).collect();
+        if names.iter().any(|n| n == "tg_a") && names.iter().any(|n| n == "tg_b") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    for i in 0..4 {
+        drv.produce("tg_b", &format!("k{i}"), "v", Some(0)).await.unwrap();
+    }
+    // an idle group with a commit on tg_b only
+    drv.reset_group_offset("idle_g".into(), "tg_b".into(), 0, "offset".into(), 1).await.unwrap();
+
+    // a live group subscribed to tg_a
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop2 = stop.clone();
+    let bs = bootstrap.clone();
+    let live = std::thread::spawn(move || {
+        let c: BaseConsumer = rdkafka::ClientConfig::new()
+            .set("bootstrap.servers", &bs)
+            .set("group.id", "live_g")
+            .set("session.timeout.ms", "6000")
+            .create()
+            .unwrap();
+        c.subscribe(&["tg_a"]).unwrap();
+        while !stop2.load(Ordering::Relaxed) {
+            let _ = c.poll(Duration::from_millis(200));
+        }
+        drop(c);
+    });
+
+    let mut live_topics = Vec::new();
+    for _ in 0..60 {
+        let groups = drv.consumer_groups().await.unwrap();
+        if let Some(g) = groups.iter().find(|g| g.name == "live_g") {
+            if !g.topics.is_empty() {
+                live_topics = g.topics.clone();
+                break;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    assert_eq!(live_topics, vec!["tg_a".to_string()], "the live group is read as a reader of tg_a only");
+    let groups = drv.consumer_groups().await.unwrap();
+    let idle = groups.iter().find(|g| g.name == "idle_g").expect("idle group listed");
+    assert!(idle.topics.is_empty(), "an idle group has no live assignment: {:?}", idle.topics);
+    eprintln!("CHK assigned topics OK");
+
+    // view-as on one topic: only that topic's partitions come back
+    let on_b = drv.group_topic_lag("idle_g".into(), "tg_b".into()).await.unwrap();
+    assert_eq!(on_b.len(), 1, "{on_b:?}");
+    assert!(on_b.iter().all(|l| l.topic == "tg_b"));
+    assert_eq!((on_b[0].committed, on_b[0].high, on_b[0].lag), (1, 4, 3));
+    let on_a = drv.group_topic_lag("idle_g".into(), "tg_a".into()).await.unwrap();
+    assert!(on_a.is_empty(), "no commit on tg_a → nothing: {on_a:?}");
+    // and it agrees with the whole-cluster read for that topic
+    let all = drv.group_lag("idle_g".into()).await.unwrap();
+    let all_b: Vec<_> = all.iter().filter(|l| l.topic == "tg_b").map(|l| (l.partition, l.committed, l.high)).collect();
+    assert_eq!(all_b, on_b.iter().map(|l| (l.partition, l.committed, l.high)).collect::<Vec<_>>());
+    eprintln!("CHK group_topic_lag OK");
+
+    stop.store(true, Ordering::Relaxed);
+    let _ = live.join();
 }

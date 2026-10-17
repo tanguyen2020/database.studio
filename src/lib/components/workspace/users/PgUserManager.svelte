@@ -752,7 +752,7 @@
       <div style="font-size:var(--px-12_5);color:var(--text2);line-height:1.45;margin-bottom:var(--px-16)">Drop role <span class="mono" style="color:var(--text);font-weight:600">{dropConfirm}</span>? This cannot be undone. (If it owns objects or holds grants, PostgreSQL will error — reassign / drop those first.)</div>
       <div style="display:flex;gap:var(--px-9);justify-content:flex-end">
         <span onclick={() => (dropConfirm = null)} onkeydown={(e) => e.key === 'Enter' && (dropConfirm = null)} role="button" tabindex="0" style="font-size:var(--px-12_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-8);padding:var(--px-8) var(--px-16);cursor:pointer">Cancel</span>
-        <span onclick={doDropRole} onkeydown={(e) => e.key === 'Enter' && doDropRole()} role="button" tabindex="0" aria-disabled={dropping} style="font-size:var(--px-12_5);background:var(--error);color:var(--hex-fff);border-radius:var(--px-8);padding:var(--px-8) var(--px-18);cursor:{dropping ? 'not-allowed' : 'pointer'};opacity:{dropping ? 0.6 : 1};font-weight:600">{dropping ? 'Dropping…' : 'Drop role'}</span>
+        <span onclick={doDropRole} onkeydown={(e) => e.key === 'Enter' && doDropRole()} role="button" tabindex="0" aria-disabled={dropping} class="ds-danger" style="font-size:var(--px-12_5);border-radius:var(--px-8);padding:var(--px-8) var(--px-18);cursor:{dropping ? 'not-allowed' : 'pointer'};opacity:{dropping ? 0.6 : 1};font-weight:600">{dropping ? 'Dropping…' : 'Drop role'}</span>
       </div>
     </div>
   </div>

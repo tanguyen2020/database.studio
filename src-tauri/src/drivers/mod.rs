@@ -5,6 +5,7 @@ pub mod cancel;
 pub mod cassandra;
 pub mod clickhouse;
 pub mod duckdb;
+pub mod elasticsearch;
 pub mod grid;
 pub mod index_scan;
 pub mod kafka;
@@ -30,6 +31,7 @@ use cassandra::{CassandraConnParams, CassandraDriver};
 use clickhouse::{ChConnParams, ChDriver};
 // `self::` — the extern crate is also called `duckdb`.
 use self::duckdb::{DuckConnParams, DuckDriver};
+use elasticsearch::{EsConnParams, EsDriver};
 use kafka::{KafkaConnParams, KafkaDriver};
 use mongo::{MongoConnParams, MongoDriver};
 use mssql::{MssqlConnParams, MssqlDriver};
@@ -65,6 +67,8 @@ pub enum LiveConnection {
     Rabbitmq(RabbitDriver),
     /// DuckDB — embedded analytical database (file or in-memory).
     Duckdb(DuckDriver),
+    /// Elasticsearch / OpenSearch via the REST API (search engine; SQL via `_sql`).
+    Elasticsearch(EsDriver),
 }
 
 fn pg_params(p: &ConnectionProfile, ep: &Endpoint, password: &str) -> PgConnParams {
@@ -190,6 +194,32 @@ fn rabbitmq_params(p: &ConnectionProfile, ep: &Endpoint, password: &str) -> Rabb
         ssl: p.ssl,
         ssl_ca: p.ssl_ca.clone(),
     }
+}
+
+fn elasticsearch_params(p: &ConnectionProfile, ep: &Endpoint, password: &str) -> EsConnParams {
+    // `host` may also be a full URL (Elastic Cloud / reverse proxy with a path);
+    // `mssql_auth` carries the auth method (basic | apikey | bearer | none).
+    EsConnParams {
+        host: ep.host.clone(),
+        port: ep.port,
+        auth: p.mssql_auth.clone(),
+        user: p.user.clone(),
+        password: password.to_string(),
+        ssl: p.ssl,
+        ssl_ca: p.ssl_ca.clone(),
+        ssl_cert: p.ssl_cert.clone(),
+        ssl_key: p.ssl_key.clone(),
+    }
+}
+
+/// Elasticsearch has no row grid to page / edit through SQL parameters: the index
+/// browser (search + document editor) covers it.
+fn elasticsearch_not_applicable() -> QueryError {
+    QueryError::new(
+        "elasticsearch",
+        "Not available for Elasticsearch — open the index to search and edit its documents",
+        "operation not applicable to elasticsearch",
+    )
 }
 
 /// Lỗi cho thao tác SQL gọi nhầm trên RabbitMQ (message broker).
@@ -334,6 +364,9 @@ impl LiveConnection {
                 RabbitDriver::connect(&rabbitmq_params(profile, endpoint, password)).await?,
             )),
             SystemType::Duckdb => Ok(Self::Duckdb(DuckDriver::connect(&duckdb_params(profile)).await?)),
+            SystemType::Elasticsearch => Ok(Self::Elasticsearch(
+                EsDriver::connect(&elasticsearch_params(profile, endpoint, password)).await?,
+            )),
             #[allow(unreachable_patterns)]
             other => Err(QueryError::new(
                 other.as_str(),
@@ -375,6 +408,9 @@ impl LiveConnection {
                 RabbitDriver::test(&rabbitmq_params(profile, endpoint, password)).await
             }
             SystemType::Duckdb => DuckDriver::test(&duckdb_params(profile)).await,
+            SystemType::Elasticsearch => {
+                EsDriver::test(&elasticsearch_params(profile, endpoint, password)).await
+            }
             #[allow(unreachable_patterns)]
             other => TestResult {
                 ok: false,
@@ -410,6 +446,8 @@ impl LiveConnection {
             Self::Mongo(d) => Box::pin(async move { d.exec_mongo(sql, None, None).await.map(|o| o.outcome) }),
             Self::Oracle(d) => Box::pin(d.exec(sql)),
             Self::Duckdb(d) => Box::pin(d.exec(sql)),
+            // Elasticsearch SQL (POST /_sql, cursor followed up to SQL_MAX_ROWS).
+            Self::Elasticsearch(d) => Box::pin(async move { d.exec_sql(sql).await }),
         }
     }
 
@@ -428,6 +466,7 @@ impl LiveConnection {
             Self::Mongo(d) => d.ping().await,
             Self::Oracle(d) => d.ping().await,
             Self::Duckdb(d) => d.ping().await,
+            Self::Elasticsearch(d) => d.ping().await,
         }
     }
 
@@ -451,6 +490,7 @@ impl LiveConnection {
             Self::Redis(_) => Err(redis_not_sql()),
             Self::Nats(_) => Err(nats_not_sql()),
             Self::Rabbitmq(_) => Err(rabbitmq_not_sql()),
+            Self::Elasticsearch(_) => Err(elasticsearch_not_applicable()),
             Self::Kafka(_) => Err(kafka_not_sql()),
             // CQL không dùng positional param của filter builder ở đây; editor
             // tự viết literal, path tham số hóa (nếu có) đi qua prepared statement.
@@ -488,6 +528,7 @@ impl LiveConnection {
             Self::Redis(_) => Err(redis_not_sql()),
             Self::Nats(_) => Err(nats_not_sql()),
             Self::Rabbitmq(_) => Err(rabbitmq_not_sql()),
+            Self::Elasticsearch(_) => Err(elasticsearch_not_applicable()),
             Self::Kafka(_) => Err(kafka_not_sql()),
             // Editable grid = INSERT/UPDATE/DELETE by full primary key, run as CQL
             // (no OLTP transaction — statements applied sequentially).
@@ -511,6 +552,7 @@ impl LiveConnection {
             Self::Redis(_) => Ok(Vec::new()),
             Self::Nats(_) => Ok(Vec::new()),
             Self::Rabbitmq(_) => Ok(Vec::new()),
+            Self::Elasticsearch(_) => Ok(Vec::new()),
             Self::Kafka(_) => Ok(Vec::new()),
             // Cassandra: cây keyspace lấy qua command cassandra_tree chuyên biệt.
             Self::Cassandra(_) => Ok(Vec::new()),
@@ -546,6 +588,8 @@ impl LiveConnection {
             Self::Redis(_) => Ok(Vec::new()),
             Self::Nats(_) => Ok(Vec::new()),
             Self::Rabbitmq(_) => Ok(Vec::new()),
+            // Elasticsearch: indices (for Query Editor / SQL autocomplete).
+            Self::Elasticsearch(d) => d.tables().await,
             Self::Kafka(_) => Ok(Vec::new()),
             Self::Cassandra(_) => Ok(Vec::new()),
             // Mongo: "schema" = database, "table" = collection.
@@ -565,6 +609,8 @@ impl LiveConnection {
             Self::Redis(_) => Ok(Vec::new()),
             Self::Nats(_) => Ok(Vec::new()),
             Self::Rabbitmq(_) => Ok(Vec::new()),
+            // Elasticsearch: mapping fields of the index.
+            Self::Elasticsearch(d) => d.columns(table).await,
             Self::Kafka(_) => Ok(Vec::new()),
             Self::Cassandra(_) => Ok(Vec::new()),
             Self::Mongo(d) => d.collection_fields(schema, table).await,
@@ -583,6 +629,7 @@ impl LiveConnection {
             Self::Redis(_) => Ok(Vec::new()),
             Self::Nats(_) => Ok(Vec::new()),
             Self::Rabbitmq(_) => Ok(Vec::new()),
+            Self::Elasticsearch(_) => Ok(Vec::new()),
             Self::Kafka(_) => Ok(Vec::new()),
             Self::Cassandra(_) => Ok(Vec::new()),
             Self::Mongo(d) => d.indexes(schema, table).await,
@@ -602,6 +649,7 @@ impl LiveConnection {
             Self::Redis(_) => Ok(Vec::new()),
             Self::Nats(_) => Ok(Vec::new()),
             Self::Rabbitmq(_) => Ok(Vec::new()),
+            Self::Elasticsearch(_) => Ok(Vec::new()),
             Self::Kafka(_) => Ok(Vec::new()),
             Self::Cassandra(_) => Ok(Vec::new()),
             Self::Mongo(_) => Ok(Vec::new()),
@@ -620,6 +668,7 @@ impl LiveConnection {
             Self::Redis(_) => Ok(Vec::new()),
             Self::Nats(_) => Ok(Vec::new()),
             Self::Rabbitmq(_) => Ok(Vec::new()),
+            Self::Elasticsearch(_) => Ok(Vec::new()),
             Self::Kafka(_) => Ok(Vec::new()),
             Self::Cassandra(_) => Ok(Vec::new()),
             Self::Mongo(_) => Ok(Vec::new()),
@@ -643,6 +692,7 @@ impl LiveConnection {
             Self::Redis(_) => Ok(Vec::new()),
             Self::Nats(_) => Ok(Vec::new()),
             Self::Rabbitmq(_) => Ok(Vec::new()),
+            Self::Elasticsearch(_) => Ok(Vec::new()),
             Self::Kafka(_) => Ok(Vec::new()),
             Self::Cassandra(_) => Ok(Vec::new()),
             Self::Mongo(_) => Ok(Vec::new()),
@@ -661,6 +711,7 @@ impl LiveConnection {
             Self::Redis(_) => Ok(Vec::new()),
             Self::Nats(_) => Ok(Vec::new()),
             Self::Rabbitmq(_) => Ok(Vec::new()),
+            Self::Elasticsearch(_) => Ok(Vec::new()),
             Self::Kafka(_) => Ok(Vec::new()),
             Self::Cassandra(_) => Ok(Vec::new()),
             Self::Mongo(_) => Ok(Vec::new()),
@@ -710,6 +761,7 @@ impl LiveConnection {
             Self::Redis(_) => Ok(Vec::new()),
             Self::Nats(_) => Ok(Vec::new()),
             Self::Rabbitmq(_) => Ok(Vec::new()),
+            Self::Elasticsearch(_) => Ok(Vec::new()),
             Self::Kafka(_) => Ok(Vec::new()),
             // Mongo sharding ≠ declarative partitioning (ngoài parity core).
             Self::Mongo(_) => Ok(Vec::new()),

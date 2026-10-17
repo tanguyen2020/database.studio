@@ -6,6 +6,7 @@
 import type { ProfilePublic, SystemType } from './types'
 import { rabbitDemo, rabbitDemoEnabled } from './rabbitmq/demo'
 import { DUCK_DEMO_ID, duckDemo, duckDemoEnabled, isDuckConn } from './duckdb/demo'
+import { ES_DEMO_ID, esDemo, esDemoEnabled } from './elastic/demo'
 
 export const IS_TAURI =
   typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
@@ -479,6 +480,14 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
       return Promise.reject(String((e as Error).message ?? e))
     }
   }
+  // Elasticsearch commands are served by a stateful in-memory cluster (elastic/demo.ts).
+  if (cmd.startsWith('es_')) {
+    try {
+      return ok(esDemo(cmd, args ?? {}))
+    } catch (e) {
+      return Promise.reject(String((e as Error).message ?? e))
+    }
+  }
   // DuckDB (opt-in `?duckdb=1`): database/schema/macro shape of an embedded file.
   if (duckDemoEnabled() && isDuckConn(args?.connId)) {
     const r = duckDemo(cmd, args ?? {})
@@ -495,6 +504,15 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
               conn('rmq1', 'RabbitMQ', 'rabbitmq', '10.0.9.4', 15672, '/', 'studio', 'Messaging', 'development', {
                 connected: true,
                 latency_ms: 4,
+              }),
+            ]
+          : []),
+        ...(esDemoEnabled()
+          ? [
+              conn(ES_DEMO_ID, 'Elasticsearch', 'elasticsearch', '10.0.12.7', 9200, '', 'elastic', 'Search', 'development', {
+                connected: true,
+                latency_ms: 6,
+                mssql_auth: 'basic',
               }),
             ]
           : []),
@@ -720,13 +738,37 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
           { metric: 'used_memory_human', value: '2.00M' },
           { metric: 'maxmemory_policy', value: 'noeviction' },
         ], total: 3 })
-      return ok({ cols: [['pid', 'int4'], ['username', 'text'], ['database', 'text'], ['state', 'text'], ['query', 'text']], rows: [
-        { pid: 4821, username: 'app_ro', database: 'sis_prod', state: 'active', query: 'SELECT * FROM students' },
-        { pid: 4830, username: 'app_ro', database: 'sis_prod', state: 'idle', query: '' },
-      ], total: 2 })
+      // Session Monitor — SQL engines return the shared shape (commands/admin.rs
+      // SESSION_COLUMNS); MongoDB keeps its own currentOp shape (generic table).
+      {
+        const avCid = String(args?.connId ?? '').split('::')[0].split('#')[0]
+        const avSys = DEMO_PROFILES.find((p) => p.id === avCid)?.system ?? 'postgres'
+        if (avSys === 'mongodb')
+          return ok({ cols: [['pid', 'int4'], ['username', 'text'], ['database', 'text'], ['state', 'text'], ['query', 'text']], rows: [
+            { pid: 4821, username: 'app_ro', database: 'sis_prod', state: 'active', query: 'db.students.find({})' },
+          ], total: 1 })
+        const S = (o: Record<string, unknown>) => ({ client: '10.0.1.20', application: 'svc-api', wait_type: '', wait_event: '', kind: 'client', query_ms: null, state_ms: 12_000, is_self: 0, query: '', ...o })
+        const all = [
+          S({ pid: 4821, username: 'app_ro', database: 'sis_prod', state: 'active', query_ms: 95_000, state_ms: 95_000, query: 'SELECT s.id, s.first_name, count(e.*) AS enrolments\nFROM students s JOIN enrollments e ON e.student_id = s.id\nGROUP BY s.id, s.first_name ORDER BY enrolments DESC' }),
+          S({ pid: 4830, username: 'billing', database: 'payment', state: 'active', wait_type: 'Lock', wait_event: 'transactionid', query_ms: 14_000, query: "UPDATE invoices SET status = 'paid' WHERE id = $1" }),
+          S({ pid: 4844, username: 'erplite', database: 'erplite', state: 'idle in transaction', wait_type: 'Client', wait_event: 'ClientRead', state_ms: 420_000, query: 'COMMIT' }),
+          S({ pid: 4850, username: 'app_ro', database: 'sis_prod', state: 'idle', wait_type: 'Client', wait_event: 'ClientRead', state_ms: 61_000, query: 'SELECT 1' }),
+          S({ pid: 4851, username: 'postgres', database: 'postgres', state: 'active', application: 'Database Studio', client: 'local', query_ms: 2, is_self: 1, query: 'SELECT pid, usename AS username FROM pg_stat_activity' }),
+          S({ pid: 44, username: '', database: '', client: '', application: '', state: '', wait_type: 'Activity', wait_event: 'CheckpointerMain', kind: 'background', state_ms: null }),
+          S({ pid: 45, username: '', database: '', client: '', application: '', state: '', wait_type: 'Activity', wait_event: 'WalWriterMain', kind: 'background', state_ms: null }),
+        ].filter((r) => !demoKilledPids.has(r.pid as number))
+        return ok({
+          cols: [['pid', 'int4'], ['username', 'text'], ['database', 'text'], ['client', 'text'], ['application', 'text'], ['state', 'text'], ['wait_type', 'text'], ['wait_event', 'text'], ['kind', 'text'], ['query_ms', 'int8'], ['state_ms', 'int8'], ['is_self', 'int4'], ['query', 'text']],
+          rows: all,
+          total: all.length,
+        })
+      }
     }
     case 'kill_session': {
       const pid = Number(args?.pid)
+      // which signal was sent ('cancel' leaves the session) — for e2e
+      if (typeof window !== 'undefined') (window as unknown as { __ipcLastKill?: string }).__ipcLastKill = `${String(args?.mode ?? 'terminate')}:${pid}`
+      if (args?.mode === 'cancel') return ok(null)
       if (Number.isFinite(pid)) demoKilledPids.add(pid)
       // a pool reconnecting: the killed sessions come back once
       if (!demoRespawned && typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('dbInUseRespawn') === '1') {
@@ -1370,9 +1412,21 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
     case 'nats_js_add_subject':
       return ok(null)
     case 'nats_js_consumers':
+      // `?manyConsumers=N` (demo only): a stream read by dozens of services
       return ok([
-        { name: 'order-processor', deliver_policy: 'All', ack_policy: 'Explicit', filter_subject: 'orders.new', num_pending: 12, num_ack_pending: 0 },
-        { name: 'audit', deliver_policy: 'New', ack_policy: 'None', filter_subject: '', num_pending: 0, num_ack_pending: 0 },
+        ...Array.from({ length: bigParam('manyConsumers') }, (_, i) => ({
+          name: `service-${String(i + 1).padStart(2, '0')}-worker`,
+          deliver_policy: 'All',
+          ack_policy: 'Explicit',
+          filter_subject: '',
+          num_pending: 0,
+          num_ack_pending: 0,
+          ack_floor_stream_seq: 1000,
+          delivered_stream_seq: 1000,
+        })),
+        { name: 'order-processor', deliver_policy: 'All', ack_policy: 'Explicit', filter_subject: 'orders.new', num_pending: 12, num_ack_pending: 0, ack_floor_stream_seq: 990, delivered_stream_seq: 990 },
+        { name: 'eu-fulfilment', deliver_policy: 'All', ack_policy: 'Explicit', filter_subject: 'orders.eu', num_pending: 10, num_ack_pending: 4, ack_floor_stream_seq: 980, delivered_stream_seq: 996 },
+        { name: 'audit', deliver_policy: 'New', ack_policy: 'None', filter_subject: '', num_pending: 0, num_ack_pending: 0, ack_floor_stream_seq: 1000, delivered_stream_seq: 1000 },
       ])
     case 'nats_js_peek':
       return ok({ seq: (args?.seq as number) ?? 1, subject: 'orders.new', payload: '{"id":1001,"total":42.5}', time: '2026-06-30T10:23:14Z', key: 'msg-1001' })
@@ -1440,6 +1494,18 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
       }
       return ok(null)
     }
+    case 'kafka_set_partitions': {
+      // mirrors the driver: only ever adds partitions, refuses a decrease / no-op
+      const t = demoKafkaTopics.find((x) => x.name === String(args?.name ?? ''))
+      const wanted = Number(args?.partitions ?? 0)
+      if (!t) return Promise.reject(`topic '${args?.name}' not found`)
+      const cur = t.partitions.length
+      if (wanted < 1) return Promise.reject('A topic needs at least 1 partition.')
+      if (wanted < cur) return Promise.reject(`Kafka cannot reduce partitions — this topic has ${cur}. To get fewer, create a new topic with the count you want and move the data.`)
+      if (wanted === cur) return Promise.reject(`The topic already has ${cur} partition${cur === 1 ? '' : 's'}.`)
+      for (let i = cur; i < wanted; i++) t.partitions.push({ id: i, leader: (i % 3) + 1, replicas: [1], isr: [1], low: 0, high: 0, lag: 0 })
+      return ok(cur)
+    }
     case 'kafka_delete_topic': {
       const name = String(args?.name ?? '')
       demoKafkaTopics = demoKafkaTopics.filter((t) => t.name !== name) // real removal
@@ -1483,13 +1549,23 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
       return ok({ partition: 0, offset: 15201 })
     case 'kafka_consumer_groups':
       return ok([
-        { name: 'payment-processor', state: 'Stable', protocol: 'range', members: [
+        { name: 'payment-processor', state: 'Stable', protocol: 'range', topics: ['payments'], members: [
           { member_id: 'consumer-1-abc', client_id: 'svc-payments', host: '/10.0.1.20' },
           { member_id: 'consumer-2-def', client_id: 'svc-payments', host: '/10.0.1.21' },
         ] },
-        { name: 'audit-log', state: 'Empty', protocol: '', members: [] },
+        { name: 'audit-log', state: 'Empty', protocol: '', topics: [], members: [] },
+        { name: 'search-indexer', state: 'Stable', protocol: 'range', topics: ['orders'], members: [
+          { member_id: 'consumer-9-xyz', client_id: 'svc-search', host: '/10.0.1.30' },
+        ] },
       ])
+    case 'kafka_group_topic_lag':
     case 'kafka_group_lag':
+      // each group sits somewhere else on the log (audit-log has caught up on p0)
+      if (args?.group === 'audit-log')
+        return ok([
+          { topic: 'payments', partition: 0, committed: 15400, high: 15400, lag: 0 },
+          { topic: 'payments', partition: 1, committed: 15301, high: 15301, lag: 0 },
+        ])
       return ok([
         { topic: 'payments', partition: 0, committed: 15100, high: 15200, lag: 100 },
         { topic: 'payments', partition: 1, committed: 15290, high: 15301, lag: 11 },

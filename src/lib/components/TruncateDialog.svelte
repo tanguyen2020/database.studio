@@ -82,7 +82,7 @@
 
       <div style="flex:none;display:flex;gap:var(--px-9);padding:var(--px-13) var(--px-18);border-top:var(--px-1) solid var(--border);background:var(--panel)">
         <span use:autofocus onclick={() => !busy && w.close()} onkeydown={(e) => e.key === 'Enter' && !busy && w.close()} role="button" tabindex="0" style="font-size:var(--px-12_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-8);padding:var(--px-8) var(--px-16);cursor:pointer">Cancel</span>
-        <span onclick={run} onkeydown={(e) => e.key === 'Enter' && run()} role="button" tabindex="0" aria-disabled={busy} style="margin-left:auto;font-size:var(--px-12_5);background:var(--error);color:var(--hex-fff);border-radius:var(--px-8);padding:var(--px-8) var(--px-18);cursor:{busy ? 'not-allowed' : 'pointer'};opacity:{busy ? 0.6 : 1};font-weight:600">{busy ? 'Truncating…' : label}</span>
+        <span onclick={run} onkeydown={(e) => e.key === 'Enter' && run()} role="button" tabindex="0" aria-disabled={busy} class="ds-danger" style="margin-left:auto;font-size:var(--px-12_5);border-radius:var(--px-8);padding:var(--px-8) var(--px-18);cursor:{busy ? 'not-allowed' : 'pointer'};opacity:{busy ? 0.6 : 1};font-weight:600">{busy ? 'Truncating…' : label}</span>
       </div>
     </div>
   </div>

@@ -4,8 +4,8 @@
   // per type (string editor / hash / zset / list / set / stream) with a View-JSON
   // popup + Copy on each value, Set TTL, Add item, and Delete key.
   import * as ipc from '$lib/ipc'
-  import CodeView from '$lib/components/editor/CodeView.svelte'
-  import { DS_JSON } from '$lib/editor/monarch'
+  import PayloadDialog from '$lib/components/viewer/PayloadDialog.svelte'
+  import PayloadPreview from '$lib/components/viewer/PayloadPreview.svelte'
   import { systemMeta } from '$lib/systems'
   import { explorer } from '$lib/stores/explorer.svelte'
   import { tabs } from '$lib/stores/tabs.svelte'
@@ -111,17 +111,9 @@
 
   // JSON viewer popup — pretty-prints the value (falls back to raw text when it isn't
   // valid JSON) with syntax coloring so large payloads (e.g. cache blobs) are readable.
-  let viewState = $state<{ label: string; text: string; isJson: boolean } | null>(null)
+  let viewState = $state<{ label: string; raw: string } | null>(null)
   function viewJson(label: string, raw: string) {
-    let text = raw
-    let isJson = false
-    try {
-      text = JSON.stringify(JSON.parse(raw), null, 2)
-      isJson = true
-    } catch {
-      // not JSON — show raw
-    }
-    viewState = { label, text, isJson }
+    viewState = { label, raw }
   }
 
   async function edit(op: ipc.RedisEditOp, okMsg: string) {
@@ -202,7 +194,7 @@
       {#each rows as row, i (i)}
         <tr>
           <td class="rk-k" title={row[0]}>{row[0]}</td>
-          <td class="rk-v" class:num={kind === 'zset'} title={row[1]}>{row[1]}</td>
+          <td class="rk-v" class:num={kind === 'zset'} title={row[1]}>{#if kind === 'zset'}{row[1]}{:else}<PayloadPreview text={row[1]} />{/if}</td>
           {@render actions(row[0], row[1], row[0], del)}
         </tr>
       {/each}
@@ -221,7 +213,7 @@
       {#each items as item, i (i)}
         <tr>
           <td class="rk-idx">{i}</td>
-          <td class="rk-v" title={item}>{item}</td>
+          <td class="rk-v" title={item}><PayloadPreview text={item} /></td>
           {@render actions(String(i), item, item, del)}
         </tr>
       {/each}
@@ -301,40 +293,18 @@
   </div>
 
   {#if viewState}
-    <div
-      role="presentation"
-      style="position:absolute;inset:0;background:var(--rgba-0-0-0-_5);display:flex;align-items:center;justify-content:center;z-index:50;padding:var(--px-20)"
-    >
-      <div
-        role="dialog"
-        aria-modal="true"
-        onclick={(e) => e.stopPropagation()}
-        onkeydown={(e) => e.key === 'Escape' && (viewState = null)}
-        tabindex="-1"
-        style="background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-14);padding:var(--px-18);width:min(var(--px-720), 100%);max-height:100%;display:flex;flex-direction:column;box-shadow:0 var(--px-24) var(--px-60) var(--rgba-0-0-0-_55)"
-      >
-        <div style="display:flex;align-items:center;gap:var(--px-8);margin-bottom:var(--px-10)">
-          <span style="font-size:var(--px-14);font-weight:600;color:var(--text)">Value</span>
-          <span class="mono" style="font-size:var(--px-11);color:var(--sacc-yellow);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{viewState.label}</span>
-          {#if !viewState.isJson}<span style="font-size:var(--px-10_5);color:var(--muted)">(not JSON — raw value)</span>{/if}
-          <span style="margin-left:auto;display:flex;gap:var(--px-8)">
-            <span onclick={() => viewState && copy(viewState.text)} onkeydown={(e) => e.key === 'Enter' && viewState && copy(viewState.text)} role="button" tabindex="0" class="pv-btn primary">Copy</span>
-            <span onclick={() => (viewState = null)} onkeydown={(e) => e.key === 'Enter' && (viewState = null)} role="button" tabindex="0" class="pv-btn">Close</span>
-          </span>
-        </div>
-        <div style="flex:1;min-height:0;display:flex">
-          <CodeView
-            value={viewState.text}
-            language={viewState.isJson ? DS_JSON : 'plaintext'}
-            readOnly
-            height="auto"
-            maxHeight={520}
-            minHeight={160}
-            ariaLabel="Payload"
-          />
-        </div>
-      </div>
-    </div>
+    <PayloadDialog
+      title="Value"
+      system="redis"
+      subtitle={`Redis ${(value?.key_type ?? 'key').toLowerCase()} · ${key}`}
+      facts={[
+        { label: 'Key', value: key ?? '', mono: true },
+        ...(viewState.label && viewState.label !== key ? [{ label: 'Item', value: viewState.label, mono: true }] : []),
+        ...(value?.key_type ? [{ label: 'Type', value: value.key_type }] : []),
+      ]}
+      text={viewState.raw}
+      onClose={() => (viewState = null)}
+    />
   {/if}
 
   {#if ttlForm}

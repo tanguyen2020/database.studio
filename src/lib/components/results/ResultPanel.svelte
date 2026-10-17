@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon, { type IconName } from '$lib/components/Icon.svelte'
   // Result panel — port 1:1 từ Database Studio.dc.html:
   //  - sub-tab strip (dòng 332-340 + logic 4967-4987): #N mono bold muted,
   //    icon › khi active / ≣ Messages, underline 2px accent, statusColor ✓/✗
@@ -155,6 +156,14 @@
   // Export the current result: pick a destination (native save dialog in the
   // desktop app; browser download otherwise), serialize with a progress bar,
   // write to disk, and report completion.
+  const EXPORT_FORMATS: { fmt: 'csv' | 'json' | 'sql' | 'xlsx' | 'xml'; label: string; desc: string; ext: string; icon: IconName }[] = [
+    { fmt: 'csv', label: 'CSV', desc: 'UTF-8 with BOM, opens cleanly in Excel', ext: '.csv', icon: 'file' },
+    { fmt: 'xlsx', label: 'Excel (.xlsx)', desc: 'A real workbook, numbers stay numbers', ext: '.xlsx', icon: 'table' },
+    { fmt: 'json', label: 'JSON', desc: 'An array of objects, one per row', ext: '.json', icon: 'braces' },
+    { fmt: 'sql', label: 'SQL INSERT', desc: 'Statements to load the rows elsewhere', ext: '.sql', icon: 'code' },
+    { fmt: 'xml', label: 'XML', desc: 'One element per row', ext: '.xml', icon: 'code' },
+  ]
+  const exportRowCount = $derived(activeResult?.kind === 'rows' && activeResult.result ? activeResult.result.rows.length : 0)
   async function doExport(fmt: 'csv' | 'json' | 'sql' | 'xlsx' | 'xml') {
     exportOpen = false
     const r = activeResult?.kind === 'rows' ? activeResult.result : undefined
@@ -316,11 +325,10 @@
   <!-- result toolbar — dòng 342-349 -->
   {#if !planActive && activeResult?.kind === 'rows' && activeResult.result}
     <div style="flex:none;display:flex;align-items:center;gap:var(--px-10);padding:var(--px-6) var(--px-12);border-bottom:var(--px-1) solid var(--border)">
-      <div style="display:flex;background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-7);overflow:hidden">
-        {#each [['grid', 'Grid'], ['json', 'JSON'], ['single', 'Single Row'], ['chart', 'Chart']] as [mode, label], i (mode)}
+      <div class="ds-seg" role="group" aria-label="Result view">
+        {#each [['grid', 'Grid'], ['json', 'JSON'], ['single', 'Single Row'], ['chart', 'Chart']] as [mode, label] (mode)}
           <span
-            class="vm-btn"
-            style="{i > 0 ? 'border-left:var(--px-1) solid var(--border);' : ''}background:{viewMode === mode ? accent : 'transparent'};color:{viewMode === mode ? 'var(--hex-fff)' : 'var(--text2)'}"
+            aria-pressed={viewMode === mode}
             onclick={() => (viewMode = mode as ViewMode)}
             onkeydown={(e) => e.key === 'Enter' && (viewMode = mode as ViewMode)}
             role="button"
@@ -336,25 +344,38 @@
           role="button"
           tabindex="0"
           title="Fetch the next page from Cassandra (paging state)"
-          style="font-size:var(--px-11);color:var(--text2);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-3) var(--px-10);cursor:pointer"
-        >↓ Load next page</span>
+          class="ds-tbtn"
+        ><Icon name="download" size={13} />Load next page</span>
       {/if}
       <div style="margin-left:auto;position:relative">
         <span
-          style="font-size:var(--px-11_5);color:var(--text2);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer"
+          class="ds-tbtn"
+          aria-haspopup="menu"
+          aria-expanded={exportOpen}
+          aria-label="Export"
+          title="Save this result to a file"
           onclick={() => (exportOpen = !exportOpen)}
           onkeydown={(e) => e.key === 'Enter' && (exportOpen = !exportOpen)}
           role="button"
           tabindex="0"
-        >Export ▾</span>
+        ><Icon name="download" size={13} />Export<Icon name="chevron-down" size={12} /></span>
         {#if exportOpen}
           <!-- click-outside backdrop: closes the Export menu (dropdown = close on outside click) -->
           <div role="presentation" style="position:fixed;inset:0;z-index:19" onclick={() => (exportOpen = false)}></div>
-          <div style="position:absolute;right:0;top:calc(100% + var(--px-4));z-index:20;background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-8);box-shadow:0 var(--px-8) var(--px-24) rgba(0,0,0,.4);overflow:hidden;min-width:var(--px-120)">
-            {#each [['csv', 'CSV'], ['json', 'JSON'], ['sql', 'SQL INSERT'], ['xlsx', 'Excel (.xlsx)'], ['xml', 'XML']] as [fmt, label] (fmt)}
-              <div class="exp-item" onclick={() => doExport(fmt as 'csv' | 'json' | 'sql' | 'xlsx' | 'xml')} onkeydown={(e) => e.key === 'Enter' && doExport(fmt as 'csv' | 'json' | 'sql' | 'xlsx' | 'xml')} role="button" tabindex="0" style="padding:var(--px-7) var(--px-12);font-size:var(--px-12);cursor:pointer;color:var(--text2)">{label}</div>
+          <div class="ds-menu" role="menu" aria-label="Export as" style="position:absolute;right:0;top:calc(100% + var(--px-6));z-index:20;width:var(--px-420)">
+            <div class="ds-menu-label">Export {exportRowCount.toLocaleString('en-US')} {exportRowCount === 1 ? 'row' : 'rows'} as</div>
+            {#each EXPORT_FORMATS as x (x.fmt)}
+              <div class="ds-menu-item rich exp-item" role="menuitem" tabindex="0" onclick={() => doExport(x.fmt)} onkeydown={(e) => e.key === 'Enter' && doExport(x.fmt)}>
+                <span class="ds-mi-icon"><Icon name={x.icon} size={14} /></span>
+                <span class="ds-mi-label"><span>{x.label}</span><span class="ds-mi-desc">{x.desc}</span></span>
+                <span class="ds-mi-hint">{x.ext}</span>
+              </div>
             {/each}
-            <div class="exp-item" onclick={openExportWizard} onkeydown={(e) => e.key === 'Enter' && openExportWizard()} role="button" tabindex="0" style="padding:var(--px-7) var(--px-12);font-size:var(--px-12);cursor:pointer;color:var(--text2);border-top:var(--px-1) solid var(--border)">Custom… (columns/limit)</div>
+            <div class="ds-menu-sep" role="separator"></div>
+            <div class="ds-menu-item rich exp-item" role="menuitem" tabindex="0" onclick={openExportWizard} onkeydown={(e) => e.key === 'Enter' && openExportWizard()}>
+              <span class="ds-mi-icon"><Icon name="sliders" size={14} /></span>
+              <span class="ds-mi-label"><span>Custom…</span><span class="ds-mi-desc">Pick columns, a row limit and the file name</span></span>
+            </div>
           </div>
         {/if}
       </div>
@@ -565,22 +586,11 @@
 {/if}
 
 <style>
-  .vm-btn {
-    padding: var(--px-4) var(--px-11);
-    font-size: var(--px-11_5);
-    font-weight: 600;
-    cursor: pointer;
-  }
   .msg-row:hover {
     background: var(--hover);
   }
   .rp-hide:hover {
     background: color-mix(in srgb, var(--error) 18%, transparent);
     color: var(--error);
-  }
-  /* Export menu — blue highlight on hover (DataGrip-style). */
-  .exp-item:hover {
-    background: var(--primary);
-    color: var(--hex-fff) !important;
   }
 </style>

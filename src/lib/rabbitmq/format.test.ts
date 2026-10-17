@@ -7,6 +7,7 @@ import {
   isBuiltinExchange,
   payloadPreview,
   payloadView,
+  payloadText,
   queueMeta,
   queueTypeBadge,
   sortExchanges,
@@ -93,5 +94,13 @@ describe('rabbitmq payloads', () => {
     expect(formatPayloadBytes(512)).toBe('512 B')
     expect(formatPayloadBytes(2048)).toBe('2.0 KB')
     expect(formatPayloadBytes(3 * 1024 * 1024)).toBe('3.0 MB')
+  })
+})
+
+describe('payloadText', () => {
+  it('keeps the payload as received; base64 text is decoded, binary stays base64', () => {
+    expect(payloadText({ payload: '{"id":1}', payload_encoding: 'string' })).toEqual({ text: '{"id":1}', binary: false })
+    expect(payloadText({ payload: btoa('hi there'), payload_encoding: 'base64' })).toEqual({ text: 'hi there', binary: false })
+    expect(payloadText({ payload: btoa(String.fromCharCode(0xff, 0xfe, 0x00)), payload_encoding: 'base64' })).toMatchObject({ binary: true })
   })
 })

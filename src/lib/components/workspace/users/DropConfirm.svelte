@@ -19,7 +19,7 @@
     <div style="font-size:var(--px-12_5);color:var(--text2);line-height:1.45;margin-bottom:var(--px-16)">Drop {kind} <span class="mono" style="color:var(--text);font-weight:600">{name}</span>? This cannot be undone.{note ? ` ${note}` : ''}</div>
     <div style="display:flex;gap:var(--px-9);justify-content:flex-end">
       <span onclick={oncancel} onkeydown={(e) => e.key === 'Enter' && oncancel()} role="button" tabindex="0" style="font-size:var(--px-12_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-8);padding:var(--px-8) var(--px-16);cursor:pointer">Cancel</span>
-      <span onclick={onconfirm} onkeydown={(e) => e.key === 'Enter' && onconfirm()} role="button" tabindex="0" aria-disabled={busy} style="font-size:var(--px-12_5);background:var(--error);color:var(--hex-fff);border-radius:var(--px-8);padding:var(--px-8) var(--px-18);cursor:{busy ? 'not-allowed' : 'pointer'};opacity:{busy ? 0.6 : 1};font-weight:600">{busy ? 'Dropping…' : `Drop ${kind}`}</span>
+      <span onclick={onconfirm} onkeydown={(e) => e.key === 'Enter' && onconfirm()} role="button" tabindex="0" aria-disabled={busy} class="ds-danger" style="font-size:var(--px-12_5);border-radius:var(--px-8);padding:var(--px-8) var(--px-18);cursor:{busy ? 'not-allowed' : 'pointer'};opacity:{busy ? 0.6 : 1};font-weight:600">{busy ? 'Dropping…' : `Drop ${kind}`}</span>
     </div>
   </div>
 </div>

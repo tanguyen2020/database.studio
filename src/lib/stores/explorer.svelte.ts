@@ -62,6 +62,13 @@ class ExplorerStore {
   bumpRedis(connId: string) {
     this.redisTick[connId] = (this.redisTick[connId] ?? 0) + 1
   }
+  // Elasticsearch: index / management tabs bump this after create / delete / docs
+  // changes so the sidebar's EsExplorer re-reads its lists (doc counts change).
+  esTick = $state<Record<string, number>>({})
+  bumpEs(connId: string) {
+    this.esTick[connId] = (this.esTick[connId] ?? 0) + 1
+  }
+
   // RabbitMQ: queue/exchange tabs bump this after publish/purge/delete/declare so
   // the sidebar's RabbitExplorer re-reads its lists (message counts change).
   rabbitTick = $state<Record<string, number>>({})

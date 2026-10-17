@@ -25,6 +25,12 @@
   import NatsSubjectMessages from '$lib/components/workspace/NatsSubjectMessages.svelte'
   import RabbitQueueView from '$lib/components/workspace/RabbitQueueView.svelte'
   import RabbitExchangeView from '$lib/components/workspace/RabbitExchangeView.svelte'
+  import EsIndexView from '$lib/components/elastic/EsIndexView.svelte'
+  import EsConsoleView from '$lib/components/elastic/EsConsoleView.svelte'
+  import EsClusterView from '$lib/components/elastic/EsClusterView.svelte'
+  import EsManageView from '$lib/components/elastic/EsManageView.svelte'
+  import EsQueryView from '$lib/components/elastic/EsQueryView.svelte'
+  import EsDevToolsView from '$lib/components/elastic/EsDevToolsView.svelte'
   import KafkaWorkspace from '$lib/components/workspace/KafkaWorkspace.svelte'
   import KafkaConsumer from '$lib/components/workspace/KafkaConsumer.svelte'
   import KafkaProducer from '$lib/components/workspace/KafkaProducer.svelte'
@@ -418,6 +424,18 @@
             <RabbitQueueView tab={t} />
           {:else if t.contentType === 'rabbit-exchange'}
             <RabbitExchangeView tab={t} />
+          {:else if t.contentType === 'es-index'}
+            <EsIndexView tab={t} />
+          {:else if t.contentType === 'es-console'}
+            <EsConsoleView tab={t} />
+          {:else if t.contentType === 'es-cluster'}
+            <EsClusterView tab={t} />
+          {:else if t.contentType === 'es-manage'}
+            <EsManageView tab={t} />
+          {:else if t.contentType === 'es-query'}
+            <EsQueryView tab={t} />
+          {:else if t.contentType === 'es-devtools'}
+            <EsDevToolsView tab={t} />
           {:else if t.contentType === 'kafka'}
             <KafkaWorkspace tab={t} />
           {:else if t.contentType === 'kafka-consumer'}

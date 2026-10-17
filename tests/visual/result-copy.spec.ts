@@ -29,12 +29,15 @@ test('result grid copy menu: raw + 6 extract formats', async ({ page }) => {
     await expect(page.getByText(label, { exact: true }).first()).toBeVisible()
   }
 
-  // the context menu uses DataGrip's font (bundled JetBrains Mono, via .mono)
-  const fontFamily = await page.evaluate(() => {
-    const el = [...document.querySelectorAll('div')].find((d) => d.textContent?.trim() === 'Copy cell')
-    return el ? getComputedStyle(el).fontFamily : ''
-  })
-  expect(fontFamily).toContain('JetBrains Mono')
+  // the context menu is app chrome: the UI font (never monospace), an icon per item,
+  // the copy shortcut on the right — the shared .ds-menu rule
+  const menu = page.getByRole('menu', { name: 'Cell actions' })
+  await expect(menu).toBeVisible()
+  const fontFamily = await menu.evaluate((el) => getComputedStyle(el).fontFamily.toLowerCase())
+  expect(fontFamily).not.toContain('mono')
+  expect(await menu.getByRole('menuitem').first().locator('svg').count()).toBe(1)
+  await expect(menu.getByRole('menuitem', { name: /Copy cell/ })).toContainText(/Ctrl\+C|⌘C/)
+  await expect(menu).toContainText('Copy 1 row as')
 
   // Copy XML actually writes well-formed XML to the clipboard (menu → formatClipboard
   // → navigator.clipboard). Read it back and parse it to prove the copy path works.
@@ -89,7 +92,7 @@ test('result grid copy menu: stays fully inside the viewport', async ({ page }) 
   await page.waitForTimeout(150)
 
   // the menu container (parent of the "Copy cell" item) fits entirely on screen
-  const menu = page.getByText('Copy cell', { exact: true }).first().locator('..')
+  const menu = page.getByRole('menu', { name: 'Cell actions' })
   const box = await menu.boundingBox()
   const vh = await page.evaluate(() => window.innerHeight)
   expect(box).not.toBeNull()

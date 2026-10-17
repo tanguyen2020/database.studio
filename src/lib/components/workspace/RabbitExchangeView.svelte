@@ -1,5 +1,6 @@
 <script lang="ts">
   import Icon from '$lib/components/Icon.svelte'
+  import SystemIcon from '$lib/components/SystemIcon.svelte'
   // RabbitMQ exchange tab: where messages published here go (bindings, add /
   // remove), a Publish form, and the exchange's details. One tab per (vhost, exchange).
   import { untrack } from 'svelte'
@@ -127,19 +128,19 @@
   }
 </script>
 
-<div style="flex:1;display:flex;flex-direction:column;min-height:0;position:relative">
-  <div style="flex:none;display:flex;align-items:center;gap:var(--px-12);padding:var(--px-9) var(--px-14);border-bottom:var(--px-1) solid var(--border);background:var(--surface)">
-    <span style="width:var(--px-3);height:var(--px-20);border-radius:var(--px-2);background:{accent}"></span>
-    <div style="display:flex;flex-direction:column;line-height:1.15;min-width:0">
-      <span class="mono" style="font-size:var(--px-13);font-weight:700;color:var(--text)">{exchangeLabel(name)}</span>
-      <span class="mono" style="font-size:var(--px-10);color:var(--muted)">
+<div class="ds-ws">
+  <div class="ds-ws-head">
+    <span class="ds-ws-icon" style="background:color-mix(in srgb, {accent} 12%, transparent)" aria-hidden="true"><SystemIcon system="rabbitmq" size={20} /></span>
+    <div class="ds-ws-titles">
+      <span class="ds-ws-title">{exchangeLabel(name)}</span>
+      <span class="ds-ws-sub">
         exchange · vhost <span style="color:var(--text2)">{vhost}</span>{#if exchange}{' · '}{exchange.exchange_type}{exchange.durable ? ' · durable' : ''}{exchange.internal ? ' · internal' : ''}{/if}
       </span>
     </div>
-    <div style="margin-left:auto;display:flex;gap:var(--px-8);align-items:center">
-      <span onclick={() => loadInfo()} onkeydown={(e) => e.key === 'Enter' && loadInfo()} role="button" tabindex="0" class="pv-btn" aria-busy={loading}><Icon name="refresh" size={12} /> Refresh</span>
+    <div class="ds-ws-actions">
+      <span onclick={() => loadInfo()} onkeydown={(e) => e.key === 'Enter' && loadInfo()} role="button" tabindex="0" class="cfm-btn" aria-busy={loading}><Icon name="refresh" size={12} /> Refresh</span>
       {#if !builtin}
-        <span onclick={() => (confirmDelete = true)} onkeydown={(e) => e.key === 'Enter' && (confirmDelete = true)} role="button" tabindex="0" class="pv-btn" style="color:var(--error)">Delete exchange</span>
+        <span onclick={() => (confirmDelete = true)} onkeydown={(e) => e.key === 'Enter' && (confirmDelete = true)} role="button" tabindex="0" class="cfm-btn ds-danger-outline">Delete exchange</span>
       {/if}
     </div>
   </div>
@@ -152,13 +153,13 @@
     {#if loadError}
       <div role="alert" style="padding:var(--px-8) var(--px-14);font-size:var(--px-11_5);color:var(--error);border-bottom:var(--px-1) solid var(--border)">{loadError}</div>
     {/if}
-    <div role="tablist" aria-label="Exchange sections" style="flex:none;display:flex;gap:var(--px-4);padding:var(--px-6) var(--px-14) 0;border-bottom:var(--px-1) solid var(--border)">
+    <div role="tablist" aria-label="Exchange sections" style="flex:none;display:flex;gap:var(--px-4);padding:0 var(--px-14);border-bottom:var(--px-1) solid var(--border);background:var(--surface)">
       {#each [['bindings', `Bindings (${bindings.length})`], ['live', 'Live'], ['publish', 'Publish'], ['details', 'Details']] as [key, label] (key)}
         <span role="tab" tabindex="0" aria-selected={section === key} class="rx-tab" class:on={section === key} onclick={() => (section = key as Section)} onkeydown={(e) => e.key === 'Enter' && (section = key as Section)}>{label}</span>
       {/each}
     </div>
 
-    <div style="flex:1;overflow:auto;min-height:0;padding:var(--px-12) var(--px-14)">
+    <div style="flex:1;overflow:auto;min-height:0;padding:var(--px-14) var(--px-18)">
       {#if section === 'bindings'}
         {#if name === ''}
           <div style="font-size:var(--px-12);color:var(--text2);line-height:1.5;max-width:var(--px-720)">
@@ -166,12 +167,12 @@
           </div>
         {:else}
           {#if bindings.length === 0}
-            <div style="font-size:var(--px-12);color:var(--muted);margin-bottom:var(--px-10)">Nothing is bound to this exchange — messages published here are dropped.</div>
+            <div class="ds-empty" style="margin-bottom:var(--px-10)"><b>No bindings</b>Nothing is bound to this exchange — messages published here are dropped.</div>
           {:else}
-            <table class="mono" style="border-collapse:collapse;width:100%;max-width:var(--px-720);font-size:var(--px-12)">
+            <table class="ds-table" style="max-width:var(--px-720);font-size:var(--px-12_5);">
               <thead><tr>
                 {#each ['To', 'Type', 'Routing key', ''] as h (h || 'x')}
-                  <th style="border-bottom:var(--px-1) solid var(--border2);padding:var(--px-7) var(--px-10);text-align:left;color:var(--tbl-head);font-weight:600">{h}</th>
+                  <th>{h}</th>
                 {/each}
               </tr></thead>
               <tbody>
@@ -185,10 +186,10 @@
                       {/if}
                     </td>
                     <td style="color:var(--tbl-meta)">{b.destination_type}</td>
-                    <td style="color:var(--tbl-subject)">{b.routing_key || '—'}</td>
+                    <td class="mono" style="font-size:var(--px-12);color:var(--tbl-subject)">{b.routing_key || '—'}</td>
                     <td style="text-align:right">
                       {#if b.destination_type === 'queue'}
-                        <span onclick={() => unbind(b)} onkeydown={(e) => e.key === 'Enter' && unbind(b)} role="button" tabindex="0" title="Remove binding" style="cursor:pointer;color:var(--error)">Unbind</span>
+                        <span onclick={() => unbind(b)} onkeydown={(e) => e.key === 'Enter' && unbind(b)} role="button" tabindex="0" title="Remove binding" class="eg-btn ds-danger-outline">Unbind</span>
                       {/if}
                     </td>
                   </tr>
@@ -199,13 +200,13 @@
           <div style="margin-top:var(--px-14);display:flex;gap:var(--px-8);align-items:flex-end;flex-wrap:wrap">
             <label class="rx-field">
               Bind to queue
-              <select class="rx-input" bind:value={bindQueue} aria-label="Bind to queue">
+              <select class="ds-control rx-input" bind:value={bindQueue} aria-label="Bind to queue">
                 {#each queues as q (q.name)}<option value={q.name}>{q.name}</option>{/each}
               </select>
             </label>
             <label class="rx-field">
               Routing key
-              <input class="mono rx-input" bind:value={bindKey} placeholder={exchange?.exchange_type === 'topic' ? 'orders.*.eu' : 'orders'} aria-label="Binding routing key" spellcheck="false" />
+              <input class="ds-control mono rx-input" bind:value={bindKey} placeholder={exchange?.exchange_type === 'topic' ? 'orders.*.eu' : 'orders'} aria-label="Binding routing key" spellcheck="false" />
             </label>
             <span onclick={bind} onkeydown={(e) => e.key === 'Enter' && bind()} role="button" tabindex="0" class="pv-btn primary" style={binding || !queues.length ? 'opacity:.6;pointer-events:none' : ''}>Bind</span>
           </div>
@@ -215,7 +216,7 @@
       {:else if section === 'details'}
         <dl class="rx-dl">
           {#each [['Type', exchange?.exchange_type], ['Durable', exchange ? String(exchange.durable) : ''], ['Auto-delete', exchange ? String(exchange.auto_delete) : ''], ['Internal', exchange ? String(exchange.internal) : ''], ['Built-in', builtin ? 'yes' : 'no']] as [k, v] (k)}
-            <dt>{k}</dt><dd class="mono">{v || '—'}</dd>
+            <dt>{k}</dt><dd>{v || '—'}</dd>
           {/each}
         </dl>
         <div style="margin-top:var(--px-12);font-size:var(--px-11_5);font-weight:600;color:var(--text2)">Arguments</div>
@@ -244,7 +245,7 @@
         <div style="font-size:var(--px-12_5);color:var(--text2);line-height:1.45;margin-bottom:var(--px-16)">Delete exchange <span class="mono" style="color:var(--text)">{name}</span>? Every binding from it is removed. This cannot be undone.</div>
         <div style="display:flex;gap:var(--px-8);justify-content:flex-end">
           <span onclick={() => (confirmDelete = false)} onkeydown={(e) => e.key === 'Enter' && (confirmDelete = false)} role="button" tabindex="0" class="pv-btn">Cancel</span>
-          <span onclick={doDelete} onkeydown={(e) => e.key === 'Enter' && doDelete()} role="button" tabindex="0" class="pv-btn primary" style="background:var(--error);border-color:var(--error);{deleting ? 'opacity:.6;pointer-events:none' : ''}">Delete</span>
+          <span onclick={doDelete} onkeydown={(e) => e.key === 'Enter' && doDelete()} role="button" tabindex="0" class="pv-btn danger" style="{deleting ? 'opacity:.6;pointer-events:none' : ''}">Delete</span>
         </div>
       </div>
     </div>
@@ -253,11 +254,16 @@
 
 <style>
   .rx-tab {
-    font-size: var(--px-12);
+    font-size: var(--px-13);
+    font-weight: 500;
     color: var(--text2);
-    padding: var(--px-6) var(--px-12);
+    padding: var(--px-10) var(--px-10);
     border-bottom: var(--px-2) solid transparent;
+    margin-bottom: calc(-1 * var(--px-1));
     cursor: pointer;
+  }
+  .rx-tab:hover {
+    color: var(--text);
   }
   .rx-tab.on {
     color: var(--text);
@@ -265,11 +271,7 @@
     border-bottom-color: var(--primary);
   }
   .rx-row td {
-    border-bottom: var(--px-1) solid var(--border);
-    padding: var(--px-6) var(--px-10);
-  }
-  .rx-row:nth-child(even) {
-    background: var(--tbl-zebra);
+    padding: var(--px-8) var(--px-12);
   }
   .rx-row:hover {
     background: var(--tbl-hover);
@@ -285,27 +287,23 @@
   .rx-field {
     display: flex;
     flex-direction: column;
-    gap: var(--px-4);
-    font-size: var(--px-11_5);
+    gap: var(--px-6);
+    font-size: var(--px-12);
     color: var(--text2);
     font-weight: 600;
-  }
-  .rx-input {
-    font-size: var(--px-12);
-    font-weight: 400;
-    background: var(--raised);
-    border: var(--px-1) solid var(--border2);
-    border-radius: var(--px-6);
-    padding: var(--px-5) var(--px-8);
-    color: var(--text);
-    outline: none;
   }
   .rx-dl {
     display: grid;
     grid-template-columns: max-content 1fr;
-    gap: var(--px-6) var(--px-16);
-    font-size: var(--px-12);
+    gap: var(--px-8) var(--px-20);
+    font-size: var(--px-13);
     margin: 0;
+    padding: var(--px-14) var(--px-16);
+    background: var(--surface);
+    border: var(--px-1) solid var(--border2);
+    border-radius: var(--px-10);
+    box-shadow: var(--shadow-xs);
+    max-width: var(--px-720);
   }
   .rx-dl dt {
     color: var(--tbl-meta);

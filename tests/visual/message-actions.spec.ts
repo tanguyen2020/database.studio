@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { APP_URL, blockRemoteFonts, previewBox } from './helpers'
+import { APP_URL, blockRemoteFonts, previewBox, showFormatted } from './helpers'
 
 // Fixed timezone so the localized Time column renders deterministically.
 test.use({ timezoneId: 'America/New_York' })
@@ -100,6 +100,8 @@ test('nats subject messages: selecting a row keeps the 3 action icons visible', 
 
   // the payload popup shows the JSON — visibly, not only in the model
   await view.click()
+  await page.waitForTimeout(600)
+  await showFormatted(page)
   await page.waitForTimeout(600)
   const natsView = await previewBox(page, 'Payload')
   expect(natsView.text).toContain('"id"')

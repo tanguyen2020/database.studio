@@ -35,73 +35,82 @@
   }
 </script>
 
-<div style="flex:1;display:flex;flex-direction:column;min-height:0;padding:var(--px-14);gap:var(--px-10);overflow:auto">
-  <div style="display:flex;align-items:center;gap:var(--px-10)">
-    <span style="width:var(--px-3);height:var(--px-20);border-radius:var(--px-2);background:#8B5CF6"></span>
-    <span style="font-weight:700;font-size:var(--px-13)">Kafka Producer</span>
-  </div>
-
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--px-10)">
-    <div>
-      <div class="pl">Topic</div>
-      <input bind:value={topic} class="pi mono" />
-    </div>
-    <div>
-      <div class="pl">Partition <span style="color:var(--muted);font-weight:400">(empty = auto)</span></div>
-      <input bind:value={partition} placeholder="auto" class="pi mono" />
-    </div>
-    <div style="grid-column:1/3">
-      <div class="pl">Key <span style="color:var(--muted);font-weight:400">(optional)</span></div>
-      <input bind:value={key} class="pi mono" />
-    </div>
-    <div style="grid-column:1/3">
-      <div class="pl">Value</div>
-      <textarea bind:value class="pi mono" style="min-height:var(--px-120);resize:vertical"></textarea>
+<div class="ds-ws">
+  <div class="ds-ws-head">
+    <span class="ds-ws-icon" style="color:var(--sacc-purple);background:color-mix(in srgb, var(--sacc-purple) 13%, transparent)" aria-hidden="true">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h12" /><path d="m12 6 6 6-6 6" /><path d="M20 5v14" /></svg>
+    </span>
+    <div class="ds-ws-titles">
+      <span class="ds-ws-title">Kafka Producer</span>
+      <span class="ds-ws-sub">Send a message to a topic</span>
     </div>
   </div>
 
-  <div style="display:flex;justify-content:flex-end">
-    <span onclick={produce} onkeydown={(e) => e.key === 'Enter' && produce()} role="button" tabindex="0" style="font-size:var(--px-12);background:#8B5CF6;color:var(--hex-fff);border-radius:var(--px-7);padding:var(--px-7) var(--px-18);cursor:pointer;font-weight:600">Produce</span>
-  </div>
+  <div class="ds-body">
+    <section class="ds-section" style="background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-12);padding:var(--px-16);box-shadow:var(--shadow-xs)">
+      <div style="display:grid;grid-template-columns:2fr 1fr;gap:var(--px-12)">
+        <label class="kp-field">
+          <span class="pl">Topic</span>
+          <input bind:value={topic} class="ds-control" style="width:100%" />
+        </label>
+        <label class="kp-field">
+          <span class="pl">Partition <span class="pl-hint">empty = auto</span></span>
+          <input bind:value={partition} placeholder="auto" class="ds-control ds-num" style="width:100%" />
+        </label>
+        <label class="kp-field" style="grid-column:1/3">
+          <span class="pl">Key <span class="pl-hint">optional</span></span>
+          <input bind:value={key} class="ds-control mono" style="width:100%" />
+        </label>
+        <label class="kp-field" style="grid-column:1/3">
+          <span class="pl">Value</span>
+          <textarea bind:value class="ds-control mono" style="width:100%;height:auto;min-height:var(--px-140);padding:var(--px-8) var(--px-10);resize:vertical;line-height:1.5"></textarea>
+        </label>
+      </div>
+      <div style="display:flex;justify-content:flex-end;margin-top:var(--px-4)">
+        <span onclick={produce} onkeydown={(e) => e.key === 'Enter' && produce()} role="button" tabindex="0" class="cfm-btn primary">Produce</span>
+      </div>
+    </section>
 
-  {#if sent.length > 0}
-    <div class="pl" style="margin-top:var(--px-8)">Sent (click to reuse)</div>
-    <table class="mono" style="border-collapse:collapse;width:100%;font-size:var(--px-11_5)">
-      <thead><tr>
-        {#each ['Partition', 'Offset', 'Key', 'Value'] as h (h)}
-          <th style="text-align:left;padding:var(--px-5) var(--px-10);border-bottom:var(--px-1) solid var(--border2);color:var(--text2);font-weight:600">{h}</th>
-        {/each}
-      </tr></thead>
-      <tbody>
-        {#each sent as m, i (i)}
-          <tr onclick={() => reuse(m)} onkeydown={(e) => e.key === 'Enter' && reuse(m)} role="button" tabindex="0" style="cursor:pointer">
-            <td style="padding:var(--px-5) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:var(--muted)">{m.partition}</td>
-            <td style="padding:var(--px-5) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:var(--syntax-number)">{m.offset}</td>
-            <td style="padding:var(--px-5) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:var(--syntax-function)">{m.key}</td>
-            <td style="padding:var(--px-5) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:var(--syntax-string);max-width:var(--px-420);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{m.value}</td>
-          </tr>
-        {/each}
-      </tbody>
-    </table>
-  {/if}
+    {#if sent.length > 0}
+      <section class="ds-section">
+        <div class="ds-section-title">Sent <span class="ds-count">{sent.length}</span><span style="font-weight:400;color:var(--muted);font-size:var(--px-12)">click a row to reuse it</span></div>
+        <table class="ds-table" style="font-size:var(--px-12)">
+          <thead><tr>
+            {#each ['Partition', 'Offset', 'Key', 'Value'] as h (h)}
+              <th>{h}</th>
+            {/each}
+          </tr></thead>
+          <tbody>
+            {#each sent as m, i (i)}
+              <tr onclick={() => reuse(m)} onkeydown={(e) => e.key === 'Enter' && reuse(m)} role="button" tabindex="0" style="cursor:pointer">
+                <td class="ds-num" style="color:var(--muted);width:1%">{m.partition}</td>
+                <td class="ds-num" style="color:var(--syntax-number);width:1%">{m.offset}</td>
+                <td class="mono" style="color:var(--syntax-function)">{m.key}</td>
+                <td class="mono" style="color:var(--syntax-string);max-width:var(--px-420);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{m.value}</td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      </section>
+    {/if}
+  </div>
 </div>
 
 <style>
+  .kp-field {
+    display: flex;
+    flex-direction: column;
+    gap: var(--px-6);
+    min-width: 0;
+  }
   .pl {
-    font-size: var(--px-11);
-    color: var(--muted);
-    margin-bottom: var(--px-4);
+    font-size: var(--px-12);
+    color: var(--text2);
     font-weight: 600;
   }
-  .pi {
-    width: 100%;
-    box-sizing: border-box;
-    background: var(--panel);
-    border: var(--px-1) solid var(--border);
-    border-radius: var(--px-8);
-    padding: var(--px-8) var(--px-10);
-    font-size: var(--px-12_5);
-    color: var(--text);
-    outline: none;
+  .pl-hint {
+    color: var(--muted);
+    font-weight: 400;
+    margin-left: var(--px-4);
   }
 </style>

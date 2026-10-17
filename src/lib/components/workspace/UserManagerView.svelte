@@ -17,6 +17,7 @@
   import OracleUserManager from './users/OracleUserManager.svelte'
   import CassandraUserManager from './users/CassandraUserManager.svelte'
   import RabbitUserManager from './users/RabbitUserManager.svelte'
+  import EsUserManager from './users/EsUserManager.svelte'
 
   interface Props {
     tab: TabState
@@ -110,6 +111,8 @@
     void tab.connectionId
     // RabbitMQ has its own manager reading the Management API — no users_view query
     if (tab.systemType === 'rabbitmq') return
+    // Elasticsearch: its own Security manager over the _security REST API
+    if (tab.systemType === 'elasticsearch') return
     untrack(() => void load())
   })
 
@@ -136,6 +139,8 @@
   <CassandraUserManager {tab} />
 {:else if tab.systemType === 'rabbitmq'}
   <RabbitUserManager {tab} />
+{:else if tab.systemType === 'elasticsearch'}
+  <EsUserManager {tab} />
 {:else}
 <div style="flex:1;display:flex;flex-direction:column;min-height:0">
   <div style="flex:none;display:flex;align-items:center;gap:var(--px-8);padding:var(--px-9) var(--px-14);border-bottom:var(--px-1) solid var(--border);background:var(--surface);flex-wrap:wrap">

@@ -364,11 +364,16 @@
   }
   .dd-btn.danger {
     color: var(--hex-fff);
-    background: var(--error);
-    border-color: var(--error);
+    background: var(--danger-solid);
+    border-color: var(--danger-solid);
     font-weight: 600;
   }
   .dd-btn.danger:hover:not(:disabled) {
-    filter: brightness(0.92);
+    background: var(--danger-solid-hover);
+    border-color: var(--danger-solid-hover);
+    box-shadow: 0 0 0 var(--px-3) var(--danger-ring);
+  }
+  .dd-btn.danger:active:not(:disabled) {
+    background: var(--danger-solid-active);
   }
 </style>

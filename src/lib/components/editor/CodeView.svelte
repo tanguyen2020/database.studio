@@ -32,6 +32,10 @@
     /** Escape inside the editor (Monaco swallows it, so dialogs need this) */
     onCancel?: () => void
     ariaLabel?: string
+    /** soft-wrap long lines (default on); a payload viewer can toggle it */
+    wrap?: boolean
+    /** show a line-number gutter (default off) */
+    lineNumbers?: boolean
   }
 
   let {
@@ -46,6 +50,8 @@
     onSubmit,
     onCancel,
     ariaLabel = 'Code',
+    wrap = true,
+    lineNumbers = false,
   }: Props = $props()
 
   let host = $state<HTMLDivElement | null>(null)
@@ -135,18 +141,18 @@
         automaticLayout: true,
         fontFamily: font.fontFamily,
         fontSize: font.fontSize - 1,
-        lineNumbers: 'off',
+        lineNumbers: lineNumbers ? 'on' : 'off',
         glyphMargin: false,
         folding: true,
         lineDecorationsWidth: 6,
-        lineNumbersMinChars: 0,
+        lineNumbersMinChars: lineNumbers ? 3 : 0,
         minimap: { enabled: false },
         scrollBeyondLastLine: false,
         renderLineHighlight: 'none',
         overviewRulerLanes: 0,
         hideCursorInOverviewRuler: true,
         scrollbar: { useShadows: false, vertical: 'auto', horizontal: 'auto' },
-        wordWrap: 'on',
+        wordWrap: wrap ? 'on' : 'off',
         // a viewer, not an IDE: nothing here suggests, lints or lightbulbs
         quickSuggestions: false,
         suggestOnTriggerCharacters: false,
@@ -220,6 +226,12 @@
 
   $effect(() => {
     editor?.updateOptions({ readOnly })
+  })
+
+  $effect(() => {
+    const w = wrap
+    editor?.updateOptions({ wordWrap: w ? 'on' : 'off' })
+    fitHeight()
   })
 
   export function focus() {

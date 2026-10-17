@@ -37,6 +37,8 @@
       // Tabs giữ nguyên nội dung editor; reconnect thất bại → banner "Disconnected · Reconnect"
       const ok = await connections.reconnect(saved.id)
       if (ok) {
+        // (reconnect drops the old session's cached tree and has the Explorer
+        // re-read it — connections.onOpened)
         toasts.success(`"${saved.name}" reconnected with the new config`, saved.system)
       }
     } finally {

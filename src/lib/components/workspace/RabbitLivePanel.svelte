@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from '$lib/components/Icon.svelte'
   // Live listening for a RabbitMQ queue or exchange. Two modes:
   //   watch   — a temporary tap queue receives a COPY of what flows (the exchange's
   //             traffic, or whatever the queue's own bindings route); nothing is
@@ -11,7 +12,8 @@
   import { onDestroy } from 'svelte'
   import * as ipc from '$lib/ipc'
   import RabbitMessageDialog from './RabbitMessageDialog.svelte'
-  import { exchangeLabel, formatPayloadBytes, payloadPreview } from '$lib/rabbitmq/format'
+  import { exchangeLabel, formatPayloadBytes, payloadPreview, payloadText } from '$lib/rabbitmq/format'
+  import PayloadPreview from '$lib/components/viewer/PayloadPreview.svelte'
   import { explorer } from '$lib/stores/explorer.svelte'
   import { toasts } from '$lib/stores/toast.svelte'
 
@@ -157,7 +159,7 @@
 <div style="display:flex;flex-direction:column;gap:var(--px-10);min-height:0">
   <div style="display:flex;align-items:center;gap:var(--px-10);flex-wrap:wrap">
     {#if kind === 'queue'}
-      <select class="lv-input" bind:value={mode} disabled={running || starting} aria-label="Live mode">
+      <select class="ds-control lv-input" bind:value={mode} disabled={running || starting} aria-label="Live mode">
         <option value="watch">Watch — copy messages, take nothing</option>
         <option value="consume">Consume — take messages off the queue</option>
       </select>
@@ -166,7 +168,7 @@
     {/if}
     {#if askKeys}
       <input
-        class="mono lv-input"
+        class="ds-control mono lv-input"
         bind:value={keysText}
         disabled={running || starting}
         placeholder={exchangeType === 'topic' ? '# (everything) — or order.*, audit.#' : 'routing key(s), comma-separated'}
@@ -176,7 +178,7 @@
       />
     {/if}
     {#if running}
-      <span onclick={stop} onkeydown={(e) => e.key === 'Enter' && stop()} role="button" tabindex="0" class="pv-btn" style="color:var(--error)">■ Stop</span>
+      <span onclick={stop} onkeydown={(e) => e.key === 'Enter' && stop()} role="button" tabindex="0" class="cfm-btn ds-danger-outline">■ Stop</span>
     {:else}
       <span
         onclick={requestStart}
@@ -184,7 +186,7 @@
         role="button"
         tabindex="0"
         aria-disabled={!!blocked}
-        class="pv-btn primary"
+        class="cfm-btn primary"
         style={starting || blocked ? 'opacity:.6;pointer-events:none' : ''}
       >{starting ? 'Starting…' : '▶ Start listening'}</span>
     {/if}
@@ -222,30 +224,30 @@
   {/if}
 
   {#if rows.length === 0}
-    <div style="font-size:var(--px-12);color:var(--muted);padding:var(--px-8) 0">
+    <div class="ds-empty">
       {running ? 'Waiting for messages…' : 'Start listening to see messages as they arrive.'}
     </div>
   {:else}
     {#if received > rows.length}
       <div style="font-size:var(--px-11);color:var(--muted)">Showing the newest {rows.length.toLocaleString('en-US')} of {received.toLocaleString('en-US')}.</div>
     {/if}
-    <table class="mono" data-testid="live-rows" style="border-collapse:collapse;width:100%;font-size:var(--px-12);table-layout:fixed;{GRID_FONT}">
+    <table class="ds-table" data-testid="live-rows" style="font-size:var(--px-12_5);table-layout:fixed;">
       <thead><tr>
         {#each [['Received', 'width:var(--px-100)'], ['Routing key', 'width:var(--px-180)'], ['Exchange', 'width:var(--px-140)'], ['Size', 'width:var(--px-80)'], ['Payload', ''], ['', 'width:var(--px-60)']] as [h, extra] (h || 'actions')}
-          <th style="position:sticky;top:0;background:var(--header);border-bottom:var(--px-1) solid var(--border2);padding:var(--px-7) var(--px-10);text-align:left;color:var(--tbl-head);font-weight:600;{extra}">{h}</th>
+          <th style={extra}>{h}</th>
         {/each}
       </tr></thead>
       <tbody>
         {#each rows as r (r.seq)}
           <tr class="lv-row">
-            <td style="color:var(--tbl-meta)">{r.at}</td>
-            <td style="color:var(--tbl-subject);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title={r.m.routing_key}>{r.m.routing_key || '—'}</td>
+            <td class="ds-time" style="color:var(--tbl-meta)">{r.at}</td>
+            <td class="mono" style="font-size:var(--px-12);color:var(--tbl-subject);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title={r.m.routing_key}>{r.m.routing_key || '—'}</td>
             <td style="color:var(--tbl-meta);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{exchangeLabel(r.m.exchange)}</td>
-            <td style="color:var(--syntax-number)">{formatPayloadBytes(r.m.payload_bytes)}</td>
-            <td style="color:var(--syntax-string);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title={r.m.payload}>{payloadPreview(r.m)}</td>
+            <td class="ds-num" style="color:var(--syntax-number)">{formatPayloadBytes(r.m.payload_bytes)}</td>
+            <td style="max-width:var(--px-560)">{#if payloadText(r.m).binary}<span class="mono" style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--px-12);color:var(--muted)" title={r.m.payload}>{payloadPreview(r.m)}</span>{:else}<PayloadPreview text={payloadText(r.m).text} />{/if}</td>
             <td style="white-space:nowrap">
-              <span onclick={() => (viewing = r)} onkeydown={(e) => e.key === 'Enter' && (viewing = r)} role="button" tabindex="0" title="View payload" style="cursor:pointer;color:var(--muted);margin-right:var(--px-8)">⛶</span>
-              <span onclick={() => copy(r.m.payload)} onkeydown={(e) => e.key === 'Enter' && copy(r.m.payload)} role="button" tabindex="0" title="Copy payload" style="cursor:pointer;color:var(--muted)">⧉</span>
+              <span onclick={() => (viewing = r)} onkeydown={(e) => e.key === 'Enter' && (viewing = r)} role="button" tabindex="0" title="View payload" class="ds-act" style="color:var(--muted)"><Icon name="expand" size={13} /></span>
+              <span onclick={() => copy(r.m.payload)} onkeydown={(e) => e.key === 'Enter' && copy(r.m.payload)} role="button" tabindex="0" title="Copy payload" class="ds-act" style="color:var(--muted)"><Icon name="copy" size={13} /></span>
             </td>
           </tr>
         {/each}
@@ -274,28 +276,15 @@
       </div>
       <div style="display:flex;gap:var(--px-8);justify-content:flex-end">
         <span onclick={() => (confirmConsume = false)} onkeydown={(e) => e.key === 'Enter' && (confirmConsume = false)} role="button" tabindex="0" class="pv-btn">Cancel</span>
-        <span onclick={start} onkeydown={(e) => e.key === 'Enter' && start()} role="button" tabindex="0" class="pv-btn primary" style="background:var(--error);border-color:var(--error)">Consume</span>
+        <span onclick={start} onkeydown={(e) => e.key === 'Enter' && start()} role="button" tabindex="0" class="pv-btn danger">Consume</span>
       </div>
     </div>
   </div>
 {/if}
 
 <style>
-  .lv-input {
-    font-size: var(--px-12);
-    background: var(--raised);
-    border: var(--px-1) solid var(--border2);
-    border-radius: var(--px-6);
-    padding: var(--px-5) var(--px-8);
-    color: var(--text);
-    outline: none;
-  }
   .lv-row td {
-    border-bottom: var(--px-1) solid var(--border);
-    padding: var(--px-6) var(--px-10);
-  }
-  .lv-row:nth-child(even) {
-    background: var(--tbl-zebra);
+    padding: var(--px-8) var(--px-12);
   }
   .lv-row:hover {
     background: var(--tbl-hover);

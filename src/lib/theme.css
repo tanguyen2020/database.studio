@@ -32,6 +32,15 @@
   --grid-zebra: #fafbfc;
   --grid-select: #4f6bed;
   --sidebar: #f1f2f5;
+  /* destructive actions (Drop / Delete / Truncate / Kill) — a real red with
+     white text, a darker hover and a matching focus ring. One palette for every
+     dialog, button and menu item, instead of the pale One-Dark --error. */
+  --danger-solid: #dc2626;
+  --danger-solid-hover: #b91c1c;
+  --danger-solid-active: #991b1b;
+  --danger-soft: #fdecec;
+  --danger-text: #b91c1c;
+  --danger-ring: rgba(220, 38, 38, 0.28);
 
   /* depth — subtle, layered shadows; popovers and dialogs float instead of being boxed */
   --shadow-xs: 0 1px 2px rgba(16, 24, 40, 0.05);
@@ -61,6 +70,12 @@
   --grid-zebra: #181a20;
   --grid-select: #5872f0;
   --sidebar: #14161b;
+  --danger-solid: #dc3e42;
+  --danger-solid-hover: #e5484d;
+  --danger-solid-active: #c4353a;
+  --danger-soft: rgba(229, 72, 77, 0.16);
+  --danger-text: #ff8b8e;
+  --danger-ring: rgba(229, 72, 77, 0.35);
 
   --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.35);
   --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.4), 0 1px 2px rgba(0, 0, 0, 0.25);
@@ -208,19 +223,55 @@ body {
   background: color-mix(in srgb, var(--primary) 88%, #000);
   border-color: color-mix(in srgb, var(--primary) 88%, #000);
 }
+/* Destructive. `.ds-danger` paints ANY element (incl. ones sized inline) the same
+   way, so every Drop / Delete / Truncate button looks and reacts alike. Hover is a
+   deeper red (never paler), active deeper still, with a red focus ring. */
 .eg-btn.danger,
 .pv-btn.danger,
-.cfm-btn.danger {
-  color: #fff;
+.cfm-btn.danger,
+.ds-danger {
+  color: #fff !important;
   font-weight: 600;
-  background: #d64545;
-  border-color: #d64545;
+  background: var(--danger-solid) !important;
+  border-color: var(--danger-solid) !important;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+  transition:
+    background-color 0.12s ease,
+    border-color 0.12s ease,
+    box-shadow 0.12s ease;
 }
 .eg-btn.danger:hover,
 .pv-btn.danger:hover,
-.cfm-btn.danger:hover {
-  background: #bf3636;
-  border-color: #bf3636;
+.cfm-btn.danger:hover,
+.ds-danger:hover {
+  background: var(--danger-solid-hover) !important;
+  border-color: var(--danger-solid-hover) !important;
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.16),
+    0 0 0 3px var(--danger-ring);
+}
+.eg-btn.danger:active,
+.pv-btn.danger:active,
+.cfm-btn.danger:active,
+.ds-danger:active {
+  background: var(--danger-solid-active) !important;
+  border-color: var(--danger-solid-active) !important;
+}
+.eg-btn.danger:focus-visible,
+.pv-btn.danger:focus-visible,
+.cfm-btn.danger:focus-visible,
+.ds-danger:focus-visible {
+  outline: 2px solid var(--danger-ring);
+  outline-offset: 1px;
+}
+.ds-danger[aria-disabled='true'],
+.ds-danger:disabled {
+  box-shadow: none;
+}
+.ds-danger[aria-disabled='true']:hover,
+.ds-danger:disabled:hover {
+  background: var(--danger-solid) !important;
+  border-color: var(--danger-solid) !important;
 }
 .eg-btn:disabled,
 .pv-btn:disabled,
@@ -269,4 +320,841 @@ body {
 .tree-refresh-glyph {
   display: inline-flex;
   align-items: center;
+}
+
+/*
+ * Elasticsearch workspace (Kibana-style). Health + field-type colours follow the
+ * Elastic UI palette: readable mid-tones on white, the brighter EUI dark-theme
+ * values on graphite. Only the ES screens use these.
+ */
+:root {
+  --es-accent: #00857e;
+  --es-accent-soft: #e6f6f5;
+  --es-green: #007e5c;
+  --es-green-soft: #e3f4ee;
+  --es-yellow: #966b03;
+  --es-yellow-soft: #fdf3d8;
+  --es-red: #bd271e;
+  --es-red-soft: #fbe9e7;
+  --es-type-text: #6f3ec7;
+  --es-type-keyword: #0077cc;
+  --es-type-number: #b05a00;
+  --es-type-date: #00857e;
+  --es-type-bool: #bd271e;
+  --es-type-ip: #845dc9;
+  --es-type-geo: #a11e5f;
+  --es-type-object: #646c7b;
+  --es-bar: #54b399;
+  --es-bar-hover: #3a8f78;
+}
+.dark {
+  --es-accent: #3ad1c6;
+  --es-accent-soft: #0d2c2a;
+  --es-green: #7de2d1;
+  --es-green-soft: #0f2b25;
+  --es-yellow: #f5c85a;
+  --es-yellow-soft: #2e2510;
+  --es-red: #f8837b;
+  --es-red-soft: #3a1714;
+  --es-type-text: #b499ff;
+  --es-type-keyword: #6db7ff;
+  --es-type-number: #ffb76b;
+  --es-type-date: #3ad1c6;
+  --es-type-bool: #f8837b;
+  --es-type-ip: #c6a8ff;
+  --es-type-geo: #f990c0;
+  --es-type-object: #98a2b3;
+  --es-bar: #54b399;
+  --es-bar-hover: #7de2d1;
+}
+
+/* ---------------------------------------------------------------------------
+ * Workspace kit — ONE look for the message-broker screens (Kafka, NATS, Schema
+ * Registry…): a header that names the thing, a toolbar of labelled controls, data
+ * in framed tables, sentence-case section titles and status chips. Data VALUES
+ * (offsets, keys, payloads, subjects) stay monospaced; everything else reads as UI.
+ * ------------------------------------------------------------------------- */
+.ds-ws {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  position: relative;
+  background: var(--bg);
+}
+.ds-ws-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 18px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.ds-ws-icon {
+  flex: none;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.ds-ws-titles {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.ds-ws-title {
+  font-size: 16px;
+  font-weight: 650;
+  color: var(--text);
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ds-ws-sub {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ds-ws-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.ds-toolbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 18px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.ds-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text2);
+}
+.ds-control {
+  height: 30px;
+  box-sizing: border-box;
+  font-family: var(--font-main);
+  font-size: 12.5px;
+  color: var(--text);
+  background: var(--raised);
+  border: 1px solid var(--border2);
+  border-radius: 8px;
+  padding: 0 10px;
+  outline: none;
+}
+.ds-control.mono {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.ds-control:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--primary) 40%, var(--border2));
+}
+.ds-control:focus {
+  border-color: var(--primary) !important;
+  box-shadow: 0 0 0 3px var(--ring-soft);
+}
+/* a search/filter box: icon + borderless input inside one frame */
+.ds-search {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 30px;
+  box-sizing: border-box;
+  padding: 0 10px;
+  min-width: 0;
+  background: var(--raised);
+  border: 1px solid var(--border2);
+  border-radius: 8px;
+  color: var(--muted);
+}
+.ds-search:focus-within {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--ring-soft);
+  color: var(--primary);
+}
+.ds-search input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  border: 0 !important;
+  outline: 0;
+  box-shadow: none !important;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font-main);
+  font-size: 12.5px;
+  padding: 0;
+}
+.ds-meta {
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.ds-meta b {
+  color: var(--text2);
+  font-weight: 600;
+}
+/* segmented group of buttons (pager, view switch) */
+.ds-seg {
+  display: inline-flex;
+  padding: 2px;
+  gap: 2px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.ds-seg > [role='button'] {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 11px;
+  border-radius: 6px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text2);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ds-seg > [role='button']:hover:not([aria-disabled='true']) {
+  color: var(--text);
+  background: var(--surface);
+}
+.ds-seg > [role='button'].on,
+.ds-seg > [role='button'][aria-pressed='true'] {
+  background: var(--surface);
+  color: var(--text);
+  font-weight: 600;
+  box-shadow: var(--shadow-xs);
+}
+.ds-seg > [role='button'][aria-disabled='true'] {
+  opacity: 0.45;
+  cursor: default;
+}
+/* status chip with a dot */
+.ds-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  padding: 0 9px;
+  border-radius: 11px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text2);
+  background: var(--panel);
+  white-space: nowrap;
+}
+.ds-chip::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.8;
+}
+.ds-chip.live {
+  color: var(--sacc-green);
+  background: color-mix(in srgb, var(--sacc-green) 13%, transparent);
+}
+.ds-chip.warn {
+  color: var(--sacc-amber);
+  background: color-mix(in srgb, var(--sacc-amber) 14%, transparent);
+}
+.ds-chip.bad {
+  color: var(--danger-text);
+  background: var(--danger-soft);
+}
+/* scroll area that holds framed tables / sections */
+.ds-body {
+  flex: 1;
+  overflow: auto;
+  min-height: 0;
+  padding: 14px 18px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.ds-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ds-section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.ds-count {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text2);
+  background: var(--panel);
+  border-radius: 9px;
+  padding: 0 7px;
+  font-variant-numeric: tabular-nums;
+}
+/* the framed data table */
+.ds-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  width: 100%;
+  font-size: 12.5px;
+  background: var(--surface);
+  border: 1px solid var(--border2);
+  border-radius: 10px;
+  box-shadow: var(--shadow-xs);
+  /* clip (not hidden) keeps the rounded corners without breaking the sticky header */
+  overflow: clip;
+}
+.ds-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--header) !important;
+  border-bottom: 1px solid var(--border2) !important;
+  padding: 9px 12px !important;
+  text-align: left;
+  font-family: var(--font-main);
+  font-size: 12px !important;
+  font-weight: 600 !important;
+  color: var(--text2) !important;
+  white-space: nowrap;
+  text-transform: none !important;
+  letter-spacing: normal !important;
+}
+.ds-table td {
+  border-bottom: 1px solid var(--border) !important;
+  padding: 8px 12px;
+}
+.ds-table tbody tr:last-child td {
+  border-bottom: none !important;
+}
+.ds-table tbody tr {
+  transition: background-color 0.1s ease;
+}
+.ds-table tbody tr:nth-child(even) {
+  background-color: var(--grid-zebra);
+}
+.ds-table tbody tr:hover {
+  background-color: color-mix(in srgb, var(--primary) 6%, var(--surface));
+}
+/* full-height table (a message log): no outer card margin, header band only */
+.ds-table.flush {
+  border-radius: 0;
+  border-left: none;
+  border-right: none;
+  border-top: none;
+  box-shadow: none;
+}
+.ds-empty {
+  padding: 36px 20px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+.ds-empty b {
+  display: block;
+  font-size: 14px;
+  color: var(--text);
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+/* row-action icons: quiet until the row is hovered */
+.ds-act {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--muted);
+  opacity: 0.55;
+}
+tr:hover .ds-act,
+.ds-act:focus-visible {
+  opacity: 1;
+}
+.ds-act:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+/* a destructive action that is not the main one (e.g. "Clear messages" in a
+   toolbar): red text + red-tinted hover, solid red stays for confirm dialogs */
+.cfm-btn.ds-danger-outline,
+.eg-btn.ds-danger-outline {
+  color: var(--danger-text);
+  border-color: color-mix(in srgb, var(--danger-solid) 35%, var(--border2));
+}
+.cfm-btn.ds-danger-outline:hover,
+.eg-btn.ds-danger-outline:hover {
+  color: var(--danger-text);
+  background: var(--danger-soft);
+  border-color: color-mix(in srgb, var(--danger-solid) 60%, var(--border2));
+}
+/* a selected row keeps its actions fully visible (they recolour to white) */
+tr[aria-selected='true'] .ds-act {
+  opacity: 1;
+}
+/* numbers in data tables (offsets, sequences, counts, partitions, times): UI font
+   with tabular figures — they line up like code without reading like code. Only
+   raw content (keys, payloads, subjects) is monospaced. */
+.ds-num {
+  font-family: var(--font-main);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+}
+.ds-time {
+  font-family: var(--font-main);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+  font-weight: 400;
+  color: var(--text2);
+}
+/* consumer status of one message (Kafka group / NATS consumer) */
+.ds-state {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 84px;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 10px;
+  font-family: var(--font-main);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  color: var(--text2);
+  background: var(--panel);
+}
+.ds-state.processed {
+  color: var(--sacc-green);
+  background: color-mix(in srgb, var(--sacc-green) 13%, transparent);
+}
+.ds-state.pending {
+  color: var(--sacc-amber);
+  background: color-mix(in srgb, var(--sacc-amber) 15%, transparent);
+}
+.ds-state.in-flight {
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+}
+.ds-state.na {
+  color: var(--muted);
+  background: transparent;
+}
+tr[aria-selected='true'] .ds-state {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.22);
+}
+/* consumer chips above a message grid: click one to see messages through its eyes */
+.ds-consumer {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 28px;
+  padding: 0 11px;
+  border: 1px solid var(--border2);
+  border-radius: 14px;
+  background: var(--raised);
+  font-size: 12.5px;
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    border-color 0.12s ease,
+    background-color 0.12s ease,
+    box-shadow 0.12s ease;
+}
+.ds-consumer:hover {
+  border-color: color-mix(in srgb, var(--primary) 45%, var(--border2));
+  box-shadow: var(--shadow-xs);
+}
+.ds-consumer[aria-pressed='true'] {
+  border-color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 10%, var(--raised));
+  box-shadow: 0 0 0 3px var(--ring-soft);
+}
+.ds-consumer .dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--sacc-amber);
+}
+.ds-consumer .dot.ok {
+  background: var(--sacc-green);
+}
+.ds-consumer .sub {
+  font-size: 11.5px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------------------------------------------------------------------------
+ * View tabs — the strip under a workspace header that switches between the
+ * screens of ONE object (a topic's Messages / Consumer groups…). Each screen
+ * loads its own data only when opened. role="tab" (not button) on purpose.
+ * ------------------------------------------------------------------------- */
+.ds-viewtabs {
+  flex: none;
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  padding: 0 18px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+.ds-viewtabs > [role='tab'] {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 36px;
+  padding: 0 12px;
+  margin-bottom: -1px;
+  border-bottom: 2px solid transparent;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text2);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 0.12s, border-color 0.12s, background 0.12s;
+}
+.ds-viewtabs > [role='tab']:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+.ds-viewtabs > [role='tab'][aria-selected='true'] {
+  color: var(--primary);
+  font-weight: 600;
+  border-bottom-color: var(--primary);
+  background: transparent;
+}
+.ds-viewtabs > [role='tab']:focus-visible {
+  outline: 2px solid var(--ring-soft);
+  outline-offset: -2px;
+}
+.ds-viewtabs .ds-count {
+  font-weight: 500;
+}
+
+/* A message / record key in a grid — a quiet monospace chip, so an id reads as
+ * an id and not as part of the value next to it. Border and tint follow the
+ * text colour, so a selected (white-text) row keeps a visible chip. */
+.ds-key {
+  display: inline-block;
+  max-width: 100%;
+  vertical-align: middle;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 1px 7px;
+  border-radius: 5px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--text2);
+  background: color-mix(in srgb, currentColor 7%, transparent);
+  border: 1px solid color-mix(in srgb, currentColor 16%, transparent);
+}
+.ds-key.none {
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+}
+
+/* ===========================================================================
+ * RULE CHUNG — menus, toolbar buttons, pagers. Every dropdown / right-click menu
+ * and every grid toolbar uses these, so all screens read the same: UI font
+ * (never monospace for chrome), an icon per action, shortcuts / hints on the
+ * right, sentence-case group labels, soft hover.
+ * ======================================================================== */
+.ds-menu {
+  min-width: 220px;
+  padding: 5px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow-md);
+  font-family: var(--font-main);
+  font-size: 13px;
+  color: var(--text);
+  outline: none;
+}
+.ds-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 30px;
+  padding: 0 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+  outline: none;
+  user-select: none;
+}
+.ds-menu-item:hover,
+.ds-menu-item:focus-visible,
+.ds-menu-item.active {
+  background: color-mix(in srgb, var(--primary) 10%, transparent);
+}
+.ds-menu-item[aria-disabled='true'] {
+  opacity: 0.45;
+  cursor: default;
+  background: transparent;
+}
+.ds-mi-icon {
+  flex: none;
+  width: 16px;
+  display: inline-flex;
+  justify-content: center;
+  color: var(--muted);
+}
+.ds-menu-item:hover .ds-mi-icon {
+  color: var(--primary);
+}
+.ds-mi-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ds-mi-desc {
+  display: block;
+  font-size: 11.5px;
+  color: var(--muted);
+  line-height: 1.3;
+}
+.ds-mi-hint {
+  flex: none;
+  margin-left: 16px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.ds-mi-hint kbd {
+  font-family: var(--font-main);
+  font-size: 11px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+}
+.ds-menu-item.danger {
+  color: var(--danger-text);
+}
+.ds-menu-item.danger .ds-mi-icon {
+  color: var(--danger-text);
+}
+.ds-menu-item.danger:hover {
+  background: var(--danger-soft);
+}
+.ds-menu-sep {
+  height: 1px;
+  margin: 5px 4px;
+  background: var(--border);
+}
+.ds-menu-label {
+  padding: 6px 10px 4px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+/* toolbar button with an icon (Filters, Insert row, Export…) */
+.ds-tbtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 7px;
+  border: 1px solid var(--border2);
+  background: var(--raised);
+  box-shadow: var(--shadow-xs);
+  font-family: var(--font-main);
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+  user-select: none;
+  outline: none;
+  transition: background-color 0.12s, border-color 0.12s, color 0.12s;
+}
+.ds-tbtn > svg {
+  color: var(--text2);
+}
+.ds-tbtn:hover:not([aria-disabled='true']) {
+  background: color-mix(in srgb, var(--primary) 7%, var(--raised));
+  border-color: color-mix(in srgb, var(--primary) 45%, var(--border2));
+}
+.ds-tbtn:hover:not([aria-disabled='true']) > svg {
+  color: var(--primary);
+}
+.ds-tbtn:focus-visible {
+  outline: 2px solid var(--ring-soft);
+  outline-offset: 1px;
+}
+.ds-tbtn[aria-pressed='true'],
+.ds-tbtn[aria-expanded='true'] {
+  border-color: var(--primary);
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 9%, var(--raised));
+}
+.ds-tbtn[aria-pressed='true'] > svg,
+.ds-tbtn[aria-expanded='true'] > svg {
+  color: var(--primary);
+}
+.ds-tbtn[aria-disabled='true'] {
+  opacity: 0.45;
+  cursor: default;
+  box-shadow: none;
+}
+.ds-tbtn.primary {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+.ds-tbtn.primary > svg {
+  color: #fff;
+}
+.ds-tbtn.primary:hover:not([aria-disabled='true']) {
+  background: color-mix(in srgb, var(--primary) 88%, #000);
+  color: #fff;
+}
+.ds-tbtn.primary:hover:not([aria-disabled='true']) > svg {
+  color: #fff;
+}
+.ds-tbtn.danger {
+  color: var(--danger-text);
+}
+.ds-tbtn.danger > svg {
+  color: var(--danger-text);
+}
+.ds-tbtn.danger:hover:not([aria-disabled='true']) {
+  background: var(--danger-soft);
+  border-color: color-mix(in srgb, var(--danger-text) 45%, var(--border2));
+}
+.ds-tbtn .ds-tbtn-badge {
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--primary);
+  color: #fff;
+  font-size: 10.5px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* pager: icon buttons + "Page 2 of 39" in the UI font */
+.ds-pager {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-main);
+  font-size: 12.5px;
+  color: var(--text2);
+  font-variant-numeric: tabular-nums;
+}
+.ds-pager > [role='button'] {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 7px;
+  border: 1px solid var(--border2);
+  background: var(--raised);
+  color: var(--text2);
+  cursor: pointer;
+  outline: none;
+}
+.ds-pager > [role='button']:hover:not([aria-disabled='true']) {
+  color: var(--primary);
+  border-color: color-mix(in srgb, var(--primary) 45%, var(--border2));
+  background: color-mix(in srgb, var(--primary) 7%, var(--raised));
+}
+.ds-pager > [role='button']:focus-visible {
+  outline: 2px solid var(--ring-soft);
+  outline-offset: 1px;
+}
+.ds-pager > [role='button'][aria-disabled='true'] {
+  opacity: 0.4;
+  cursor: default;
+}
+.ds-pager-label {
+  padding: 0 6px;
+}
+.ds-pager-label b {
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* two-line menu items (title + description): even height, an icon tile, the
+ * hint as a quiet chip. Used where each choice needs a sentence (Export). */
+.ds-menu-item.rich {
+  min-height: 46px;
+  padding: 6px 10px;
+  gap: 12px;
+}
+.ds-menu-item.rich + .ds-menu-item.rich {
+  margin-top: 2px;
+}
+.ds-menu-item.rich .ds-mi-icon {
+  width: 30px;
+  height: 30px;
+  align-items: center;
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text2);
+}
+.ds-menu-item.rich:hover .ds-mi-icon {
+  background: color-mix(in srgb, var(--primary) 14%, transparent);
+  color: var(--primary);
+}
+.ds-menu-item.rich .ds-mi-label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-weight: 600;
+  line-height: 1.25;
+}
+.ds-menu-item.rich .ds-mi-desc {
+  font-weight: 400;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ds-menu-item.rich .ds-mi-hint {
+  margin-left: 12px;
+  padding: 1px 7px;
+  border-radius: 5px;
+  background: var(--panel);
+  font-family: var(--font-mono);
+  font-size: 11px;
 }

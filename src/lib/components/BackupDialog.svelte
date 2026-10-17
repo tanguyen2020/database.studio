@@ -98,7 +98,7 @@
         {#if confirmRestore}
           <div style="display:flex;align-items:center;gap:var(--px-8);font-size:var(--px-11_5);color:var(--error)">
             Overwrite current data?
-            <span onclick={runRestore} onkeydown={(e) => e.key === 'Enter' && runRestore()} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--error);color:var(--hex-fff);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer;font-weight:600">Confirm restore</span>
+            <span onclick={runRestore} onkeydown={(e) => e.key === 'Enter' && runRestore()} role="button" tabindex="0" class="ds-danger" style="font-size:var(--px-11_5);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer;font-weight:600">Confirm restore</span>
             <span onclick={() => (confirmRestore = false)} onkeydown={(e) => e.key === 'Enter' && (confirmRestore = false)} role="button" tabindex="0" style="font-size:var(--px-11_5);color:var(--text2);cursor:pointer">Cancel</span>
           </div>
         {:else}

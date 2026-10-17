@@ -964,6 +964,17 @@ impl Registry {
         }
     }
 
+    /// Clone the Elasticsearch REST client of a live connection (cheap — an HTTP
+    /// client), so a command makes its round trip without holding the lock.
+    pub async fn es_driver(&self, id: &str) -> AppResult<crate::drivers::elasticsearch::EsDriver> {
+        let driver = self.driver_handle(id)?;
+        let d = driver.lock().await;
+        match &*d {
+            LiveConnection::Elasticsearch(e) => Ok(e.clone()),
+            _ => Err(AppError::Driver("Connection is not Elasticsearch".into())),
+        }
+    }
+
     /// Pings the live connection (used by the status bar / reconnect banner).
     pub async fn ping(&self, id: &str) -> bool {
         let Ok(driver) = self.driver_handle(id) else {
@@ -990,7 +1001,7 @@ mod tests {
         for sys in ["postgres", "mysql", "mariadb", "mssql", "oracle", "redis"] {
             assert!(needs_keepalive(sys), "{sys} must be kept warm");
         }
-        for sys in ["sqlite", "clickhouse", "kafka", "nats", "mongodb", "cassandra", "rabbitmq", "unknown"] {
+        for sys in ["sqlite", "clickhouse", "kafka", "nats", "mongodb", "cassandra", "rabbitmq", "elasticsearch", "unknown"] {
             assert!(!needs_keepalive(sys), "{sys} must not be pinged");
         }
     }

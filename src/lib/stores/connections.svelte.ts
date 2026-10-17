@@ -3,6 +3,8 @@
 import * as ipc from '$lib/ipc'
 import type { ConnectionProfile, ProfileDraft, ProfilePublic, SystemType } from '$lib/types'
 import { toasts } from './toast.svelte'
+import { explorer } from './explorer.svelte'
+import { connectionChanged } from '$lib/connection/changes'
 
 /** Runtime-only fields stripped when exporting a profile to JSON. */
 const RUNTIME_KEYS = ['has_password', 'connected', 'latency_ms', 'ephemeral'] as const
@@ -27,6 +29,19 @@ class ConnectionsStore {
    *  in the Explorer so a failed Open Connection is visible, not just a toast (item 5) */
   connectErrors = $state<Record<string, string>>({})
   loaded = $state(false)
+  /** Connections whose SAVED config no longer matches the session that is open
+   *  ("Save only" while connected). The Explorer's cached tree still describes the
+   *  old session, so it is thrown away the next time the connection (re)opens. */
+  staleConfig = new Set<string>()
+
+  /** The connection was (re)opened: if its config changed since the tree was
+   *  cached, forget that tree and have the Explorer re-read it — including the
+   *  schemas / folders / tables the user had open — from the new session. */
+  private onOpened(id: string) {
+    if (!this.staleConfig.delete(id)) return
+    explorer.invalidate(id)
+    explorer.bumpReload(id)
+  }
 
   get selected(): ProfilePublic | null {
     return this.profiles.find((p) => p.id === this.selectedId) ?? null
@@ -77,11 +92,26 @@ class ConnectionsStore {
   }
 
   async save(draft: ProfileDraft): Promise<ProfilePublic | null> {
+    // Snapshot BEFORE the save replaces the profile object.
+    const prev = this.profiles.find((p) => p.id === draft.profile.id)
+    const before = prev ? { ...prev } : null
     try {
       const saved = await ipc.saveConnection(draft)
+      // live state is not part of a save — keep it if the backend left it out
+      if (before && saved.connected === undefined) {
+        saved.connected = before.connected
+        saved.latency_ms = before.latency_ms
+      }
       const idx = this.profiles.findIndex((p) => p.id === saved.id)
       if (idx >= 0) this.profiles[idx] = saved
       else this.profiles.push(saved)
+      // Edited where/how it connects → the cached Explorer tree is of the OLD target.
+      // It is dropped (and re-read) when the next session opens: right away for
+      // "Save & Reconnect", on the next Connect for a closed one. "Save only" keeps
+      // the old session — and its tree — until then, as that dialog says.
+      if (connectionChanged(before, draft.profile, { password: draft.password, sshPassword: draft.ssh_password })) {
+        this.staleConfig.add(saved.id)
+      }
       return saved
     } catch (e) {
       toasts.error(`Failed to save connection: ${e}`)
@@ -164,6 +194,7 @@ class ConnectionsStore {
     delete this.connectErrors[id]
     try {
       const latency = await ipc.connect(id)
+      this.onOpened(id)
       profile.connected = true
       profile.latency_ms = latency
       return true
@@ -225,6 +256,7 @@ class ConnectionsStore {
     profile.connected = false
     try {
       const latency = await ipc.reconnect(id)
+      this.onOpened(id)
       profile.connected = true
       profile.latency_ms = latency
       return true
@@ -272,7 +304,7 @@ class ConnectionsStore {
       sqlite_path: '',
       sqlite_mode: 'read-write',
       // mssql_auth tái dùng làm "auth mode": mssql='sql', kafka=SASL mechanism ('' none)
-      mssql_auth: system === 'mssql' ? 'sql' : '',
+      mssql_auth: system === 'mssql' ? 'sql' : system === 'elasticsearch' ? 'basic' : '',
       schema_registry_url: '',
       cassandra_dc: system === 'cassandra' ? 'dc1' : '',
       cassandra_consistency: system === 'cassandra' ? 'LOCAL_QUORUM' : '',

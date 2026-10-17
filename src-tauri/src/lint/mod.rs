@@ -413,7 +413,9 @@ fn cql_lints(sql: &str) -> Vec<LintDiagnostic> {
 /// Entry point — chạy trên TOÀN BỘ nội dung editor (vị trí đã là toàn document).
 pub fn lint(system: &str, sql: &str) -> Vec<LintDiagnostic> {
     // Redis/Kafka/NATS: không parse SQL (addendum §1.2 dòng cuối)
-    if matches!(system, "redis" | "kafka" | "nats" | "rabbitmq") {
+    // Elasticsearch SQL is its own dialect (no DML/DDL): the generic SQL parser
+    // would only report false errors — the cluster reports real ones on Run.
+    if matches!(system, "redis" | "kafka" | "nats" | "rabbitmq" | "elasticsearch") {
         return Vec::new();
     }
     // Cassandra: rule pack CQL riêng — KHÔNG ép qua parser SQL.

@@ -18,7 +18,7 @@ async function openStudentsViewer(page: import('@playwright/test').Page) {
   await page.getByText('Tables', { exact: true }).first().dblclick()
   await page.waitForTimeout(300)
   await page.getByRole('treeitem', { name: /students/ }).first().dblclick()
-  await expect(page.getByText('＋ Insert row', { exact: true }).first()).toBeVisible({ timeout: 10_000 })
+  await expect(page.getByRole('button', { name: 'Insert row', exact: true }).first()).toBeVisible({ timeout: 10_000 })
   await page.waitForTimeout(300)
 }
 
@@ -94,7 +94,7 @@ test('json cell: double-click opens the JSON editor, validates, and saves as a p
 
   // the cell shows the new document and it is pending (not yet written)
   await expect(configCell).toContainText('solarized')
-  await expect(page.getByText(/1 unsaved change\(s\)/)).toBeVisible()
+  await expect(page.getByText(/1 unsaved change\b/)).toBeVisible()
 
   // …and it really is in the buffer Execute uses
   await page.getByText('Preview diff', { exact: true }).click()
@@ -135,7 +135,7 @@ test('json cell: NULL cells, text columns and read-only grids', async ({ page })
   await dlg.getByRole('button', { name: 'Save' }).click()
   await expect(dlg).toBeHidden()
   await expect(prefs).toContainText('{"lang":"en"}')
-  await expect(page.getByText(/2 unsaved change\(s\)/)).toBeVisible()
+  await expect(page.getByText(/2 unsaved changes/)).toBeVisible()
 
   // read-only grid (query editor result): the badge opens the VIEWER — no Save
   await page.getByTitle('New SQL tab (Ctrl+T)').first().click()

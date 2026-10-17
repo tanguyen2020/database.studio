@@ -18,6 +18,10 @@
 
   let stripEl = $state<HTMLDivElement | null>(null)
   let dragIdx = $state<number | null>(null)
+  // Middle-click closes a tab. Not via auxclick: on Windows (Chromium/WebView2) a
+  // middle press over a scrollable strip starts AUTOSCROLL and the auxclick never
+  // fires. So: block autoscroll on mousedown, close on the mouseup over the same tab.
+  let middleDownId: string | null = null
   let dropIdx = $state<number | null>(null)
   let renamingId = $state<string | null>(null)
   let renameValue = $state('')
@@ -99,9 +103,19 @@
           draggable={renamingId !== tab.id && closable}
           use:scrollActiveIntoView={isActive}
           onclick={() => tabs.activate(tab.id)}
-          onauxclick={(e) => {
-            if (e.button === 1 && closable) tabs.requestClose([tab.id])
+          onmousedown={(e) => {
+            if (e.button !== 1) return
+            e.preventDefault() // no autoscroll / paste-on-middle
+            middleDownId = tab.id
           }}
+          onmouseup={(e) => {
+            if (e.button !== 1) return
+            e.preventDefault()
+            const hit = middleDownId === tab.id
+            middleDownId = null
+            if (hit && closable) tabs.requestClose([tab.id])
+          }}
+          onauxclick={(e) => e.button === 1 && e.preventDefault()}
           ondblclick={() => closable && startRename(tab.id, tab.title)}
           onkeydown={(e) => e.key === 'Enter' && tabs.activate(tab.id)}
           ondragstart={(e) => onDragStart(e, idx)}

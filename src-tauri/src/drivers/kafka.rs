@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
+use rdkafka::admin::{AdminClient, AdminOptions, NewPartitions, NewTopic, TopicReplication};
 use rdkafka::client::DefaultClientContext;
 use rdkafka::config::ClientConfig;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
@@ -144,6 +144,29 @@ pub struct KafkaConnParams {
 
 fn err(msg: impl Into<String>, raw: impl std::fmt::Display) -> QueryError {
     QueryError::new("kafka", msg.into(), raw.to_string())
+}
+
+/// Upper bound for one change — a typo (`1000000`) must not hit the broker.
+pub const MAX_PARTITIONS: usize = 10_000;
+
+/// Can a topic go from `current` to `wanted` partitions? Kafka only ever ADDS
+/// partitions (existing ones hold data and keyed ordering); it cannot remove any.
+pub fn check_partition_change(current: usize, wanted: usize) -> Result<(), String> {
+    if wanted == 0 {
+        return Err("A topic needs at least 1 partition.".into());
+    }
+    if wanted < current {
+        return Err(format!(
+            "Kafka cannot reduce partitions — this topic has {current}. To get fewer, create a new topic with the count you want and move the data."
+        ));
+    }
+    if wanted == current {
+        return Err(format!("The topic already has {current} partition{}.", if current == 1 { "" } else { "s" }));
+    }
+    if wanted > MAX_PARTITIONS {
+        return Err(format!("{wanted} partitions is more than the {MAX_PARTITIONS} allowed in one change."));
+    }
+    Ok(())
 }
 
 impl KafkaDriver {
@@ -578,6 +601,19 @@ impl KafkaDriver {
             let gl = c.fetch_group_list(None, META_TIMEOUT).map_err(|e| e.to_string())?;
             let mut groups = Vec::new();
             for g in gl.groups() {
+                // the consumer protocol puts each member's assignment (topics +
+                // partitions) in the group list we already fetched — no extra call
+                let mut topics: Vec<String> = Vec::new();
+                if g.protocol_type() == "consumer" {
+                    for m in g.members() {
+                        for t in m.assignment().map(assignment_topics).unwrap_or_default() {
+                            if !topics.contains(&t) {
+                                topics.push(t);
+                            }
+                        }
+                    }
+                    topics.sort();
+                }
                 let members = g
                     .members()
                     .iter()
@@ -592,6 +628,7 @@ impl KafkaDriver {
                     state: g.state().to_string(),
                     protocol: g.protocol().to_string(),
                     members,
+                    topics,
                 });
             }
             Ok(groups)
@@ -605,14 +642,24 @@ impl KafkaDriver {
     /// Lag per topic-partition của 1 group: committed offset vs high watermark.
     /// Chỉ trả các partition group đã commit (committed >= 0).
     pub async fn group_lag(&self, group: String) -> Result<Vec<KafkaLag>, QueryError> {
+        self.group_lag_on(group, None).await
+    }
+
+    /// Lag of one group on ONE topic — what the topic tab needs. Reads the metadata
+    /// and committed offsets of that topic only, not of the whole cluster.
+    pub async fn group_topic_lag(&self, group: String, topic: String) -> Result<Vec<KafkaLag>, QueryError> {
+        self.group_lag_on(group, Some(topic)).await
+    }
+
+    async fn group_lag_on(&self, group: String, topic: Option<String>) -> Result<Vec<KafkaLag>, QueryError> {
         let cfg = self.config.clone();
         let meta = self.consumer.clone();
         let out = tokio::task::spawn_blocking(move || -> Result<Vec<KafkaLag>, String> {
-            // TPL tất cả partition của topic non-internal
-            let md = meta.fetch_metadata(None, META_TIMEOUT).map_err(|e| e.to_string())?;
+            // TPL tất cả partition của topic non-internal (hoặc chỉ `topic`)
+            let md = meta.fetch_metadata(topic.as_deref(), META_TIMEOUT).map_err(|e| e.to_string())?;
             let mut tpl = TopicPartitionList::new();
             for t in md.topics() {
-                if t.name().starts_with("__") {
+                if t.name().starts_with("__") || topic.as_deref().is_some_and(|w| w != t.name()) {
                     continue;
                 }
                 for p in t.partitions() {
@@ -778,6 +825,40 @@ impl KafkaDriver {
         Ok(())
     }
 
+    /// Raise a topic's partition count to `total` (Kafka CreatePartitions). Reads the
+    /// current count first so a decrease / no-op is refused with a clear message.
+    /// Returns the previous count.
+    pub async fn set_partitions(&self, name: &str, total: usize) -> Result<usize, QueryError> {
+        let consumer = self.consumer.clone();
+        let topic = name.to_string();
+        let current = tokio::task::spawn_blocking(move || -> Result<usize, String> {
+            let md = consumer.fetch_metadata(Some(&topic), META_TIMEOUT).map_err(|e| e.to_string())?;
+            let t = md
+                .topics()
+                .iter()
+                .find(|t| t.name() == topic)
+                .ok_or_else(|| format!("topic '{topic}' not found"))?;
+            Ok(t.partitions().len())
+        })
+        .await
+        .map_err(|e| err("spawn_blocking error", e))?
+        .map_err(|e| err("Failed to read the topic", e))?;
+        check_partition_change(current, total).map_err(|m| QueryError::new("kafka", m.clone(), m))?;
+
+        let admin: AdminClient<DefaultClientContext> =
+            self.config.create().map_err(|e| err("Failed to create admin client", e))?;
+        let np = NewPartitions::new(name, total);
+        let opts = AdminOptions::new().operation_timeout(Some(Duration::from_secs(30)));
+        let res = admin
+            .create_partitions([&np], &opts)
+            .await
+            .map_err(|e| err("create_partitions error", e))?;
+        for r in res {
+            r.map_err(|(t, e)| err(format!("Failed to change the partitions of '{t}'"), e))?;
+        }
+        Ok(current)
+    }
+
     /// Xóa topic (admin).
     pub async fn delete_topic(&self, name: &str) -> Result<(), QueryError> {
         let admin: AdminClient<DefaultClientContext> =
@@ -857,6 +938,37 @@ pub struct KafkaGroup {
     pub state: String,
     pub protocol: String,
     pub members: Vec<KafkaMember>,
+    /// topics assigned to the group's live members (empty when the group has no
+    /// member right now — an idle group may still have committed offsets)
+    #[serde(default)]
+    pub topics: Vec<String>,
+}
+
+/// Topics in a consumer-protocol member assignment:
+/// `int16 version, [string topic, [int32 partition]], bytes user_data`.
+/// Truncated / unknown bytes yield whatever was read so far (never panics).
+pub fn assignment_topics(bytes: &[u8]) -> Vec<String> {
+    fn i16_at(b: &[u8], at: usize) -> Option<i16> {
+        Some(i16::from_be_bytes(b.get(at..at + 2)?.try_into().ok()?))
+    }
+    fn i32_at(b: &[u8], at: usize) -> Option<i32> {
+        Some(i32::from_be_bytes(b.get(at..at + 4)?.try_into().ok()?))
+    }
+    let mut out = Vec::new();
+    let mut at = 2; // version
+    let Some(n) = i32_at(bytes, at) else { return out };
+    at += 4;
+    for _ in 0..n.max(0) {
+        let Some(len) = i16_at(bytes, at) else { break };
+        at += 2;
+        let len = len.max(0) as usize;
+        let Some(name) = bytes.get(at..at + len) else { break };
+        at += len;
+        out.push(String::from_utf8_lossy(name).into_owned());
+        let Some(parts) = i32_at(bytes, at) else { break };
+        at += 4 + 4 * parts.max(0) as usize;
+    }
+    out
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -908,6 +1020,45 @@ pub struct KafkaTopic {
 
 #[cfg(test)]
 mod tests {
+    fn assignment(topics: &[(&str, &[i32])]) -> Vec<u8> {
+        let mut b = vec![0u8, 1]; // version 1
+        b.extend((topics.len() as i32).to_be_bytes());
+        for (t, parts) in topics {
+            b.extend((t.len() as i16).to_be_bytes());
+            b.extend(t.as_bytes());
+            b.extend((parts.len() as i32).to_be_bytes());
+            for p in *parts {
+                b.extend(p.to_be_bytes());
+            }
+        }
+        b.extend((-1i32).to_be_bytes()); // null user data
+        b
+    }
+
+    #[test]
+    fn assignment_topics_reads_every_topic() {
+        use super::assignment_topics;
+        assert_eq!(assignment_topics(&assignment(&[("payments", &[0, 1, 2]), ("orders", &[])])), vec!["payments", "orders"]);
+        assert!(assignment_topics(&assignment(&[])).is_empty());
+        // garbage / truncated → no panic, keeps what it could read
+        assert!(assignment_topics(&[]).is_empty());
+        let full = assignment(&[("payments", &[0]), ("orders", &[1])]);
+        assert_eq!(assignment_topics(&full[..full.len() - 20]), vec!["payments"]);
+    }
+
+    #[test]
+    fn partition_changes_only_ever_add() {
+        use super::check_partition_change as c;
+        assert!(c(3, 5).is_ok());
+        assert!(c(1, 2).is_ok());
+        assert!(c(5, 3).unwrap_err().contains("cannot reduce partitions"));
+        assert!(c(5, 3).unwrap_err().contains("has 5"));
+        assert!(c(4, 4).unwrap_err().contains("already has 4 partitions"));
+        assert!(c(1, 1).unwrap_err().contains("already has 1 partition."));
+        assert!(c(1, 0).unwrap_err().contains("at least 1"));
+        assert!(c(1, 1_000_000).unwrap_err().contains("allowed in one change"));
+    }
+
     use super::*;
 
     const RAW: &str = "onesis-class-student-enrollment[0]: Meta data fetch error: NotLeaderForPartition";

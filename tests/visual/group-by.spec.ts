@@ -34,7 +34,7 @@ test('result grid group by: popover groups rows with a grand total', async ({ pa
   await expect(page.getByText(/3 rows/).first()).toBeVisible()
 
   // clearing grouping returns to the table
-  await page.getByText('✕').first().click()
+  await page.getByRole('button', { name: 'Clear grouping' }).first().click()
   await page.waitForTimeout(150)
   await expect(page.getByText('Σ Grand total')).toHaveCount(0)
 

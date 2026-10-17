@@ -19,6 +19,9 @@ async function openNatsPayload(page: Page, query: string) {
   await page.getByText('orders.eu', { exact: true }).first().click()
   await page.waitForTimeout(600)
   await page.locator('[title="View payload as JSON"]').first().click()
+  await page.waitForTimeout(400)
+  // JSON opens as a Tree; these tests are about the code view behind Formatted
+  await page.getByRole('dialog').getByRole('button', { name: 'Formatted', exact: true }).click()
   await page.waitForTimeout(700)
 }
 
@@ -162,3 +165,41 @@ for (const view of [
     expect(close!.border).not.toBe(close!.bg)
   })
 }
+
+test('a JSON payload opens as a Tree: keys, typed values, collapse / expand, copy', async ({ page }) => {
+  await blockRemoteFonts(page)
+  await page.goto(APP_URL)
+  await page.waitForSelector('#app > *', { timeout: 15_000 })
+  await page.waitForTimeout(300)
+  await page.getByRole('button', { name: /Events Kafka/ }).dblclick()
+  await page.getByText('payments', { exact: true }).first().click()
+  const pane = page.locator('[data-tab-pane][data-active="true"]')
+  await expect(pane.locator('tbody tr').first()).toBeVisible({ timeout: 8000 })
+  // the grid previews the value as key / value pairs, not a raw JSON string
+  const cell = pane.locator('tbody tr').first().locator('td').nth(4)
+  await expect(cell.locator('.pp-k').first()).toHaveText('messageId')
+  await expect(cell).not.toContainText('{"')
+  await pane.locator('tbody tr').first().getByTitle('View value as JSON').click()
+
+  const dialog = page.getByRole('dialog', { name: 'Message' })
+  const tree = dialog.getByRole('tree', { name: 'Payload tree' })
+  await expect(tree).toBeVisible()
+  await expect(dialog.getByRole('button', { name: 'Tree', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  const seq = tree.locator('[data-path="$.seq"]')
+  await expect(seq).toContainText('seq')
+  // numbers and strings each take their syntax colour
+  const color = (sel: string) => tree.locator(sel).evaluate((el) => getComputedStyle(el).color)
+  expect(await color('[data-path="$.seq"] .t-number')).not.toBe(await color('[data-path="$.messageId"] .t-string'))
+  // collapse the root → children gone, summary stays; expand all → back
+  await tree.locator('[data-path="$"]').click()
+  await expect(tree.locator('[data-path="$"]')).toHaveAttribute('aria-expanded', 'false')
+  await expect(seq).toHaveCount(0)
+  await expect(tree.locator('[data-path="$"]')).toContainText('2 keys')
+  await dialog.getByRole('button', { name: 'Expand all', exact: true }).click()
+  await expect(seq).toBeVisible()
+  // switching views keeps the same document
+  await dialog.getByRole('button', { name: 'Raw', exact: true }).click()
+  await expect(tree).toHaveCount(0)
+  await dialog.getByRole('button', { name: 'Tree', exact: true }).click()
+  await expect(tree).toBeVisible()
+})

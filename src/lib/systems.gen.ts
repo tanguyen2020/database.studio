@@ -1,6 +1,6 @@
 //
 // GENERATED — do not edit by hand.
-// Sinh bởi scripts/extract-tokens.mjs từ "Database Studio.dc.html" (sha256 7ddf3793893c).
+// Sinh bởi scripts/extract-tokens.mjs từ "Database Studio.dc.html" (sha256 004c107dc893).
 // Chạy lại: npm run tokens
 // 
 
@@ -125,6 +125,14 @@ export const SYS_GEN = {
     "fg": "#fff36b",
     "badge": "DK",
     "label": "DuckDB"
+  },
+  "elasticsearch": {
+    "accent": "#00BFB3",
+    "bg": "#062a28",
+    "border": "#0e5a55",
+    "fg": "#5ee7df",
+    "badge": "ES",
+    "label": "Elasticsearch"
   },
   "orphan": {
     "accent": "#5b6473",

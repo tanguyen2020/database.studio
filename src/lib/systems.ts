@@ -13,6 +13,7 @@ export type SystemCategory =
   | 'ANALYTICAL'
   | 'WIDE COLUMN'
   | 'DOCUMENT'
+  | 'SEARCH'
   | 'CACHE'
   | 'STREAMING'
   | 'EMBEDDED'
@@ -54,6 +55,8 @@ const EXTRA: Record<
   rabbitmq: { category: 'STREAMING', defaultPort: 15672, quote: null, available: true },
   // embedded analytical database — a file path (or :memory:), like SQLite
   duckdb: { category: 'EMBEDDED', defaultPort: null, quote: 'double', available: true },
+  // search engine — REST API port (9300 is node-to-node transport)
+  elasticsearch: { category: 'SEARCH', defaultPort: 9200, quote: 'double', available: true },
   orphan: { category: null, defaultPort: null, quote: null, available: false },
 }
 
@@ -74,6 +77,7 @@ export const CATEGORY_ORDER: SystemCategory[] = [
   'ANALYTICAL',
   'WIDE COLUMN',
   'DOCUMENT',
+  'SEARCH',
   'CACHE',
   'STREAMING',
   'EMBEDDED',
@@ -88,6 +92,7 @@ export const SYSTEM_ORDER: SystemKey[] = [
   'clickhouse',
   'cassandra',
   'mongodb',
+  'elasticsearch',
   'redis',
   'kafka',
   'nats',

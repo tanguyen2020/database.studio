@@ -215,15 +215,15 @@
   <!-- sticky header: vhost + broker summary + actions + filter -->
   <div style="position:sticky;top:0;z-index:2;background:var(--surface);flex:none;padding:var(--px-8) var(--px-8) var(--px-6);border-bottom:var(--px-1) solid var(--border);display:flex;align-items:center;gap:var(--px-8);flex-wrap:wrap">
     <span style="font-size:var(--px-12);color:var(--text2)">vhost</span>
-    <select value={vhost} onchange={switchVhost} disabled={loading} class="mono" title="Virtual host" aria-label="RabbitMQ virtual host" style="font-size:var(--px-11);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-3) var(--px-6);color:var(--text);cursor:pointer;outline:none;max-width:var(--px-140){loading ? ';opacity:.6' : ''}">
+    <select value={vhost} onchange={switchVhost} disabled={loading} title="Virtual host" aria-label="RabbitMQ virtual host" style="font-size:var(--px-11);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-3) var(--px-6);color:var(--text);cursor:pointer;outline:none;max-width:var(--px-140){loading ? ';opacity:.6' : ''}">
       {#each vhosts.length ? vhosts : [vhost] as v (v)}<option value={v}>{v}</option>{/each}
     </select>
     {#if loading}
-      <span class="mono" aria-live="polite" style="font-size:var(--px-10_5);color:var(--primary);display:inline-flex;align-items:center;gap:var(--px-4)">
+      <span aria-live="polite" style="font-size:var(--px-11_5);color:var(--primary);display:inline-flex;align-items:center;gap:var(--px-4)">
         <span class="rb-spin" aria-hidden="true"><Icon name="refresh" size={12} /></span> Loading…
       </span>
     {:else if overview}
-      <span class="mono" data-testid="rabbit-summary" style="font-size:var(--px-10_5);color:var(--muted)" title="Broker totals across every vhost · Erlang {overview.erlang_version}">
+      <span class="ds-num" data-testid="rabbit-summary" style="font-size:var(--px-11_5);color:var(--muted)" title="Broker totals across every vhost · Erlang {overview.erlang_version}">
         RabbitMQ {overview.rabbitmq_version} · {overview.messages.toLocaleString('en-US')} msg
       </span>
     {/if}
@@ -236,7 +236,6 @@
       bind:value={filter}
       placeholder="Filter queues & exchanges…"
       aria-label="Filter queues and exchanges"
-      class="mono"
       spellcheck="false"
       style="width:100%;background:var(--raised);border:var(--px-1) solid var(--border2);border-radius:var(--px-6);padding:var(--px-5) var(--px-8);font-size:var(--px-11_5);color:var(--text);outline:none"
     />
@@ -263,9 +262,9 @@
         aria-expanded={openQueues}
         tabindex="0"
       >
-        <span class="mono rb-chev"><Chevron open={openQueues} size={12} /></span>
+        <span class="rb-chev"><Chevron open={openQueues} size={12} /></span>
         <span style="font-size:var(--px-12);font-weight:700;color:var(--text)">Queues</span>
-        <span class="mono rb-meta">{qRows.length}{filter.trim() ? ` of ${queues.length}` : ''}</span>
+        <span class="ds-num rb-meta">{qRows.length}{filter.trim() ? ` of ${queues.length}` : ''}</span>
       </div>
       {#if openQueues}
         {#if queuesError}
@@ -289,8 +288,8 @@
                 style="padding-left:calc(var(--px-8) + var(--px-14))"
               >
                 <span class="mono rb-badge" style="color:{TYPE_COLOR[badge]};border-color:{TYPE_COLOR[badge]}" title="{q.queue_type} queue">{badge}</span>
-                <span class="mono rb-name">{q.name}</span>
-                <span class="mono rb-meta" style={q.messages ? 'color:var(--sacc-amber)' : ''}>{queueMeta(q)}</span>
+                <span class="rb-name">{q.name}</span>
+                <span class="ds-num rb-meta" style={q.messages ? 'color:var(--sacc-amber)' : ''}>{queueMeta(q)}</span>
               </div>
             </ContextMenu.Trigger>
             <ContextMenu.Content class="w-52">
@@ -316,9 +315,9 @@
         aria-expanded={openExchanges}
         tabindex="0"
       >
-        <span class="mono rb-chev"><Chevron open={openExchanges} size={12} /></span>
+        <span class="rb-chev"><Chevron open={openExchanges} size={12} /></span>
         <span style="font-size:var(--px-12);font-weight:700;color:var(--text)">Exchanges</span>
-        <span class="mono rb-meta">{xRows.length}{filter.trim() ? ` of ${exchanges.length}` : ''}</span>
+        <span class="ds-num rb-meta">{xRows.length}{filter.trim() ? ` of ${exchanges.length}` : ''}</span>
       </div>
       {#if openExchanges}
         {#if exchangesError}
@@ -341,8 +340,8 @@
                 style="padding-left:calc(var(--px-8) + var(--px-14))"
               >
                 <span class="mono rb-badge" style="color:var(--sacc-blue);border-color:var(--sacc-blue)" title="exchange">X</span>
-                <span class="mono rb-name" style={isBuiltinExchange(x.name) ? 'color:var(--text2)' : ''}>{exchangeLabel(x.name)}</span>
-                <span class="mono rb-meta">{x.exchange_type}</span>
+                <span class="rb-name" style={isBuiltinExchange(x.name) ? 'color:var(--text2)' : ''}>{exchangeLabel(x.name)}</span>
+                <span class="rb-meta">{x.exchange_type}</span>
               </div>
             </ContextMenu.Trigger>
             <ContextMenu.Content class="w-52">
@@ -430,7 +429,7 @@
     padding: 0 var(--px-4);
   }
   .rb-name {
-    font-size: var(--px-12);
+    font-size: var(--px-12_5);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -440,7 +439,7 @@
   .rb-meta {
     margin-left: auto;
     flex: 0 100 auto;
-    font-size: var(--px-10);
+    font-size: var(--px-11);
     color: var(--muted);
     white-space: nowrap;
     overflow: hidden;

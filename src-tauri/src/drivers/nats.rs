@@ -293,9 +293,12 @@ impl NatsDriver {
                 name: ci.name,
                 deliver_policy: format!("{:?}", ci.config.deliver_policy),
                 ack_policy: format!("{:?}", ci.config.ack_policy),
+                filter_subjects: consumer_filters(&ci.config.filter_subject, &[]), // filter_subjects needs async-nats "server_2_10"
                 filter_subject: ci.config.filter_subject,
                 num_pending: ci.num_pending,
                 num_ack_pending: ci.num_ack_pending as u64,
+                ack_floor_stream_seq: ci.ack_floor.stream_sequence,
+                delivered_stream_seq: ci.delivered.stream_sequence,
             });
         }
         Ok(out)
@@ -786,6 +789,18 @@ pub struct JsStream {
     pub consumers: u64,
 }
 
+/// All subject filters of a consumer, deduped: the legacy single `filter_subject` and
+/// the newer `filter_subjects` list. Empty means it reads the whole stream.
+pub fn consumer_filters(single: &str, many: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for f in std::iter::once(single.to_string()).chain(many.iter().cloned()) {
+        if !f.is_empty() && !out.contains(&f) {
+            out.push(f);
+        }
+    }
+    out
+}
+
 #[derive(Debug, serde::Serialize)]
 pub struct JsConsumer {
     pub name: String,
@@ -794,6 +809,13 @@ pub struct JsConsumer {
     pub filter_subject: String,
     pub num_pending: u64,
     pub num_ack_pending: u64,
+    /// every subject filter (`filter_subject` plus the newer `filter_subjects`); empty = the whole stream
+    pub filter_subjects: Vec<String>,
+    /// stream sequence of the last message acknowledged contiguously: every message
+    /// at or below it has been processed by this consumer
+    pub ack_floor_stream_seq: u64,
+    /// stream sequence of the last message delivered (handed out, maybe not acked yet)
+    pub delivered_stream_seq: u64,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -956,6 +978,17 @@ pub struct ObjInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn consumer_filters_merge_legacy_and_list_without_duplicates() {
+        assert!(consumer_filters("", &[]).is_empty()); // whole stream
+        assert_eq!(consumer_filters("orders.eu", &[]), vec!["orders.eu"]);
+        assert_eq!(
+            consumer_filters("orders.eu", &["orders.eu".into(), "orders.us".into(), "".into()]),
+            vec!["orders.eu", "orders.us"]
+        );
+        assert_eq!(consumer_filters("", &["a.>".into()]), vec!["a.>"]);
+    }
 
     #[test]
     fn window_step_trusts_only_a_covered_window() {

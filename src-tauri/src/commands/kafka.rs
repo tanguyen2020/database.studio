@@ -163,6 +163,28 @@ pub async fn kafka_create_topic(
     inner.map_err(|e| AppError::Driver(e.message))
 }
 
+/// Raise a topic's partition count (Kafka can only add partitions). Returns the
+/// count it had before.
+#[tauri::command]
+pub async fn kafka_set_partitions(
+    state: State<'_, AppState>,
+    conn_id: String,
+    name: String,
+    partitions: usize,
+) -> Result<usize, AppError> {
+    let inner = state
+        .registry
+        .with_driver(&conn_id, move |driver| async move {
+            let d = driver.lock().await;
+            match &*d {
+                LiveConnection::Kafka(k) => k.set_partitions(&name, partitions).await,
+                _ => Err(not_kafka()),
+            }
+        })
+        .await?;
+    inner.map_err(|e| AppError::Driver(e.message))
+}
+
 #[tauri::command]
 pub async fn kafka_delete_topic(
     state: State<'_, AppState>,
@@ -283,6 +305,27 @@ pub async fn kafka_group_lag(
             let d = driver.lock().await;
             match &*d {
                 LiveConnection::Kafka(k) => k.group_lag(group).await,
+                _ => Err(not_kafka()),
+            }
+        })
+        .await?;
+    inner.map_err(|e| AppError::Driver(e.message))
+}
+
+/// Lag of one group on one topic — the topic tab's "view as this group".
+#[tauri::command]
+pub async fn kafka_group_topic_lag(
+    state: State<'_, AppState>,
+    conn_id: String,
+    group: String,
+    topic: String,
+) -> Result<Vec<KafkaLag>, AppError> {
+    let inner = state
+        .registry
+        .with_driver(&conn_id, move |driver| async move {
+            let d = driver.lock().await;
+            match &*d {
+                LiveConnection::Kafka(k) => k.group_topic_lag(group, topic).await,
                 _ => Err(not_kafka()),
             }
         })

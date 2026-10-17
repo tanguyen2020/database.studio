@@ -189,57 +189,51 @@
       <span style="font-size:var(--px-11)">▤</span>{dbName || 'database'}
     </span>
     <span class="mono" style="color:var(--text2)" title={`${schema}.${table}`}>{schema}.{table}</span>
-    <span class="tv-btn" style="background:{filtersOpen ? 'var(--hover)' : 'var(--panel)'}" onclick={() => (filtersOpen = !filtersOpen)} onkeydown={(e) => e.key === 'Enter' && (filtersOpen = !filtersOpen)} role="button" tabindex="0">Filters {filters.length ? `(${filters.length})` : ''} ▾</span>
-    <div style="margin-left:auto;display:flex;align-items:center;gap:var(--px-8)">
-      <span class="tv-btn" style="display:inline-flex;align-items:center;gap:var(--px-5)" onclick={() => { page = 0; void load() }} onkeydown={(e) => e.key === 'Enter' && (page = 0, load())} role="button" tabindex="0" title="Refresh"><Icon name="refresh" size={12} /> Refresh</span>
+    <span class="ds-tbtn" aria-expanded={filtersOpen} onclick={() => (filtersOpen = !filtersOpen)} onkeydown={(e) => e.key === 'Enter' && (filtersOpen = !filtersOpen)} role="button" tabindex="0" title="Filter the rows of this table"><Icon name="filter" size={13} />Filters{#if filters.length}<span class="ds-tbtn-badge">{filters.length}</span>{/if}<Icon name="chevron-down" size={12} /></span>
+    <div style="margin-left:auto;display:flex;align-items:center;gap:var(--px-10)">
       {#if data}
-        <span class="mono" style="font-size:var(--px-12_5);color:var(--muted)">{durationMs} ms</span>
+        <span class="ds-meta ds-num" title="Time the last read took">{durationMs} ms</span>
       {/if}
+      <span class="ds-tbtn" onclick={() => { page = 0; void load() }} onkeydown={(e) => e.key === 'Enter' && (page = 0, load())} role="button" tabindex="0" title="Refresh"><Icon name="refresh" size={13} />Refresh</span>
     </div>
   </div>
 
   {#if filtersOpen}
     <!-- filter builder — spec §5: column/operator/value AND|OR -->
-    <div style="flex:none;padding:var(--px-8) var(--px-12);border-bottom:var(--px-1) solid var(--border);background:var(--header);display:flex;flex-direction:column;gap:var(--px-6)">
+    <div class="tv-filters">
       {#each filters as f, i (i)}
         <div style="display:flex;align-items:center;gap:var(--px-6)">
           {#if i > 0}
             <span
-              class="tv-btn"
-              style="width:var(--px-44);text-align:center"
+              class="ds-tbtn tv-comb"
+              title="Switch between AND and OR"
               onclick={() => (combinatorOr = !combinatorOr)}
               onkeydown={(e) => e.key === 'Enter' && (combinatorOr = !combinatorOr)}
               role="button"
               tabindex="0"
             >{combinatorOr ? 'OR' : 'AND'}</span>
           {:else}
-            <span style="width:var(--px-44)"></span>
+            <span class="tv-where">Where</span>
           {/if}
-          <select class="tv-sel mono" bind:value={f.col}>
+          <select class="ds-control" bind:value={f.col} aria-label="Column">
             {#each columnNames as c (c)}<option value={c}>{c}</option>{/each}
           </select>
-          <select class="tv-sel mono" bind:value={f.op}>
+          <select class="ds-control" bind:value={f.op} aria-label="Operator">
             {#each OPS as op (op)}<option value={op}>{op}</option>{/each}
           </select>
           {#if !noValue(f.op)}
-            <input class="tv-sel mono" style="flex:1" bind:value={f.value} placeholder="value" onkeydown={(e) => e.key === 'Enter' && applyFilters()} />
+            <input class="ds-control" style="flex:1" bind:value={f.value} placeholder="Value" aria-label="Value" onkeydown={(e) => e.key === 'Enter' && applyFilters()} />
           {:else}
             <span style="flex:1"></span>
           {/if}
-          <span class="tv-btn" onclick={() => removeFilter(i)} onkeydown={(e) => e.key === 'Enter' && removeFilter(i)} role="button" tabindex="0">×</span>
+          <span class="ds-act" style="opacity:1" onclick={() => removeFilter(i)} onkeydown={(e) => e.key === 'Enter' && removeFilter(i)} role="button" tabindex="0" title="Remove this condition" aria-label="Remove this condition"><Icon name="close" size={13} /></span>
         </div>
       {/each}
       <div style="display:flex;gap:var(--px-8)">
-        <span class="tv-btn" onclick={addFilter} onkeydown={(e) => e.key === 'Enter' && addFilter()} role="button" tabindex="0">＋ Add condition</span>
+        <span class="ds-tbtn" onclick={addFilter} onkeydown={(e) => e.key === 'Enter' && addFilter()} role="button" tabindex="0"><Icon name="plus" size={13} />Add condition</span>
         {#if filters.length}
-          <span class="tv-btn" style="margin-left:auto" onclick={() => { filters = []; page = 0; void load() }} onkeydown={(e) => e.key === 'Enter' && (filters = [], page = 0, load())} role="button" tabindex="0">Clear</span>
-          <span
-            onclick={applyFilters}
-            onkeydown={(e) => e.key === 'Enter' && applyFilters()}
-            role="button"
-            tabindex="0"
-            style="font-size:var(--px-11_5);font-weight:600;background:var(--primary);color:var(--hex-fff);border-radius:var(--px-6);padding:var(--px-4) var(--px-12);cursor:pointer"
-          >Apply filter</span>
+          <span class="ds-tbtn" style="margin-left:auto" onclick={() => { filters = []; page = 0; void load() }} onkeydown={(e) => e.key === 'Enter' && (filters = [], page = 0, load())} role="button" tabindex="0">Clear</span>
+          <span class="ds-tbtn primary" onclick={applyFilters} onkeydown={(e) => e.key === 'Enter' && applyFilters()} role="button" tabindex="0"><Icon name="check" size={13} />Apply filter</span>
         {/if}
       </div>
     </div>
@@ -247,12 +241,13 @@
 
   <!-- sort header bar (click cột để sort; Shift+click thêm cột) -->
   {#if data && columnNames.length > 0}
-    <div style="flex:none;display:flex;gap:var(--px-6);padding:var(--px-6) var(--px-14);border-bottom:var(--px-1) solid var(--border);background:var(--surface);overflow-x:auto">
-      <span style="font-size:var(--px-11_5);color:var(--muted);flex:none;align-self:center">Sort:</span>
+    <div class="tv-sortbar">
+      <span class="tv-sort-label" title="Click a column to sort; Shift+click to add a second sort"><Icon name="sort" size={13} />Sort</span>
       {#each columnNames as c (c)}
         <span
-          class="tv-sort mono"
-          style="{sortIndicator(c) ? 'color:var(--primary);border-color:var(--primary)' : ''}"
+          class="tv-sort"
+          class:on={!!sortIndicator(c)}
+          aria-pressed={!!sortIndicator(c)}
           onclick={(e) => toggleSort(c, e.shiftKey)}
           onkeydown={(e) => e.key === 'Enter' && toggleSort(c, false)}
           role="button"
@@ -283,11 +278,11 @@
 
   <!-- footer pager — rows/page + record + page count in English -->
   {#if data}
-    <div style="flex:none;display:flex;align-items:center;gap:var(--px-10);padding:var(--px-7) var(--px-12);border-top:var(--px-1) solid var(--border);background:var(--header)">
-      <label style="display:flex;align-items:center;gap:var(--px-5);font-size:var(--px-12_5);color:var(--text2)">
+    <div class="tv-foot">
+      <label class="ds-field">
         Page size
         <select
-          style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-5);padding:var(--px-3) var(--px-6);font-size:var(--px-12_5);color:var(--text)"
+          class="ds-control"
           bind:value={pageSize}
           onchange={() => { page = 0; void load() }}
         >
@@ -297,9 +292,9 @@
           <option value={1000}>1000</option>
         </select>
       </label>
-      <span class="mono" style="font-size:var(--px-12_5);color:var(--text2)">
+      <span class="ds-meta ds-num">
         {#if data.rows.length}
-          {(page * pageSize + 1).toLocaleString()}–{(page * pageSize + data.rows.length).toLocaleString()}
+          <b>{(page * pageSize + 1).toLocaleString()}–{(page * pageSize + data.rows.length).toLocaleString()}</b>
         {:else}
           0
         {/if}
@@ -309,15 +304,15 @@
           (filtered)
         {/if}
       </span>
-      <div style="margin-left:auto;display:flex;align-items:center;gap:var(--px-5)">
-        <span class="tv-pg" style="opacity:{page > 0 ? 1 : 0.4}" onclick={() => { if (page > 0) { page = 0; void load() } }} onkeydown={(e) => e.key === 'Enter' && page > 0 && (page = 0, load())} role="button" tabindex="0" title="First page">«</span>
-        <span class="tv-pg" style="opacity:{page > 0 ? 1 : 0.4}" onclick={() => { if (page > 0) { page--; void load() } }} onkeydown={(e) => e.key === 'Enter' && page > 0 && (page--, load())} role="button" tabindex="0" title="Previous page">‹</span>
-        <span class="mono" style="align-self:center;font-size:var(--px-12_5);color:var(--text2)">
-          Page {(page + 1).toLocaleString()}{totalPages != null ? ` of ${totalPages.toLocaleString()}` : ''}
+      <div class="ds-pager" style="margin-left:auto">
+        <span aria-disabled={page === 0} onclick={() => { if (page > 0) { page = 0; void load() } }} onkeydown={(e) => e.key === 'Enter' && page > 0 && (page = 0, load())} role="button" tabindex="0" title="First page" aria-label="First page"><Icon name="first" size={13} /></span>
+        <span aria-disabled={page === 0} onclick={() => { if (page > 0) { page--; void load() } }} onkeydown={(e) => e.key === 'Enter' && page > 0 && (page--, load())} role="button" tabindex="0" title="Previous page" aria-label="Previous page"><Icon name="chevron-left" size={13} /></span>
+        <span class="ds-pager-label">
+          Page <b>{(page + 1).toLocaleString()}</b>{totalPages != null ? ` of ${totalPages.toLocaleString()}` : ''}
         </span>
-        <span class="tv-pg" style="opacity:{canNext ? 1 : 0.4}" onclick={() => { if (canNext) { page++; void load() } }} onkeydown={(e) => e.key === 'Enter' && canNext && (page++, load())} role="button" tabindex="0" title="Next page">›</span>
+        <span aria-disabled={!canNext} onclick={() => { if (canNext) { page++; void load() } }} onkeydown={(e) => e.key === 'Enter' && canNext && (page++, load())} role="button" tabindex="0" title="Next page" aria-label="Next page"><Icon name="chevron-right" size={13} /></span>
         {#if totalPages != null}
-          <span class="tv-pg" style="opacity:{page + 1 < totalPages ? 1 : 0.4}" onclick={() => { if (totalPages != null && page + 1 < totalPages) { page = totalPages - 1; void load() } }} onkeydown={(e) => e.key === 'Enter' && totalPages != null && page + 1 < totalPages && (page = totalPages - 1, load())} role="button" tabindex="0" title="Last page">»</span>
+          <span aria-disabled={page + 1 >= totalPages} onclick={() => { if (totalPages != null && page + 1 < totalPages) { page = totalPages - 1; void load() } }} onkeydown={(e) => e.key === 'Enter' && totalPages != null && page + 1 < totalPages && (page = totalPages - 1, load())} role="button" tabindex="0" title="Last page" aria-label="Last page"><Icon name="last" size={13} /></span>
         {/if}
       </div>
     </div>
@@ -325,50 +320,87 @@
 </div>
 
 <style>
-  .tv-btn {
-    font-size: var(--px-12_5);
-    color: var(--text2);
-    background: var(--panel);
-    border: var(--px-1) solid var(--border);
-    border-radius: var(--px-6);
-    padding: var(--px-5) var(--px-11);
-    cursor: pointer;
+  /* Open Data — toolbars follow the shared rule (theme.css .ds-tbtn / .ds-control /
+     .ds-pager); only the layout lives here. */
+  .tv-filters {
+    flex: none;
+    display: flex;
+    flex-direction: column;
+    gap: var(--px-8);
+    padding: var(--px-10) var(--px-14);
+    border-bottom: var(--px-1) solid var(--border);
+    background: var(--header);
   }
-  .tv-btn:hover {
-    background: var(--hover);
+  .tv-filters > div {
+    align-items: center;
   }
-  .tv-sel {
-    background: var(--panel);
-    color: var(--text);
-    border: var(--px-1) solid var(--border);
-    border-radius: var(--px-5);
-    padding: var(--px-5) var(--px-8);
+  .tv-where,
+  .tv-comb {
+    flex: none;
+    width: var(--px-56);
+    justify-content: center;
+  }
+  .tv-where {
     font-size: var(--px-12_5);
+    color: var(--muted);
+    text-align: center;
+  }
+  .tv-sortbar {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: var(--px-6);
+    padding: var(--px-7) var(--px-14);
+    border-bottom: var(--px-1) solid var(--border);
+    background: var(--surface);
+    overflow-x: auto;
+  }
+  .tv-sort-label {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: var(--px-5);
+    margin-right: var(--px-4);
+    font-size: var(--px-12);
+    font-weight: 500;
+    color: var(--muted);
   }
   .tv-sort {
     flex: none;
-    font-size: var(--px-12);
-    color: var(--text2);
-    background: var(--panel);
+    display: inline-flex;
+    align-items: center;
+    gap: var(--px-4);
+    height: var(--px-26);
+    padding: 0 var(--px-10);
+    border-radius: var(--px-20);
     border: var(--px-1) solid var(--border);
-    border-radius: var(--px-6);
-    padding: var(--px-4) var(--px-10);
+    background: var(--panel);
+    font-size: var(--px-12_5);
+    font-weight: 500;
+    color: var(--text2);
     cursor: pointer;
     white-space: nowrap;
+    user-select: none;
+    transition: background-color 0.12s, border-color 0.12s, color 0.12s;
   }
   .tv-sort:hover {
-    background: var(--hover);
+    color: var(--text);
+    border-color: color-mix(in srgb, var(--primary) 40%, var(--border2));
+    background: color-mix(in srgb, var(--primary) 6%, var(--panel));
   }
-  .tv-pg {
-    width: var(--px-30);
-    height: var(--px-28);
+  .tv-sort.on {
+    color: var(--primary);
+    font-weight: 600;
+    border-color: color-mix(in srgb, var(--primary) 55%, transparent);
+    background: color-mix(in srgb, var(--primary) 10%, transparent);
+  }
+  .tv-foot {
+    flex: none;
     display: flex;
     align-items: center;
-    justify-content: center;
-    border: var(--px-1) solid var(--border);
-    border-radius: var(--px-6);
-    cursor: pointer;
-    font-family: var(--font-mono);
-    font-size: var(--px-13);
+    gap: var(--px-14);
+    padding: var(--px-7) var(--px-14);
+    border-top: var(--px-1) solid var(--border);
+    background: var(--header);
   }
 </style>

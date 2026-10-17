@@ -1,10 +1,12 @@
 <script lang="ts">
   import Icon from '$lib/components/Icon.svelte'
+  import StreamConsumersView from '$lib/components/stream/StreamConsumersView.svelte'
+  import PayloadPreview from '$lib/components/viewer/PayloadPreview.svelte'
   // NATS JetStream subject messages — browse existing messages of a subject within
   // a stream (server-side filtered fetch), with Clear (purge subject) + Refresh.
   import * as ipc from '$lib/ipc'
-  import CodeView from '$lib/components/editor/CodeView.svelte'
-  import { DS_JSON } from '$lib/editor/monarch'
+  import PayloadDialog from '$lib/components/viewer/PayloadDialog.svelte'
+  import { inView, natsMessageState, natsSubjectConsumers, type ConsumerState, type ConsumerView } from '$lib/stream/consumers'
   import { systemMeta } from '$lib/systems'
   import { toasts } from '$lib/stores/toast.svelte'
   import { explorer } from '$lib/stores/explorer.svelte'
@@ -93,10 +95,10 @@
   // the payload AND the three action icons stay visible (never hidden by the highlight).
   let selSeq = $state<number | null>(null)
   let hoverSeq = $state<number | null>(null)
-  const rowBg = (seq: number) => (selSeq === seq ? 'var(--grid-select)' : hoverSeq === seq ? 'var(--hover)' : 'transparent')
+  const rowBg = (seq: number) => (selSeq === seq ? 'var(--grid-select) !important' : '')
   const cellColor = (seq: number, base: string) => (selSeq === seq ? 'var(--hex-fff)' : base)
-  // Result Grid's typographic rule (rule chung): JetBrains Mono + tabular figures.
-  const GRID_FONT = "font-variant-numeric:tabular-nums;font-feature-settings:'tnum' 1,'zero' 1"
+  // numbers use the UI font with tabular figures (.ds-num / .ds-time, theme.css);
+  // only raw content (key, value, subject) is monospaced
 
   // In-app confirm popup (window.confirm isn't reliable inside the Tauri webview).
   let confirmState = $state<{ title: string; body: string; danger: boolean; run: () => void } | null>(null)
@@ -245,17 +247,80 @@
 
   // JSON viewer popup — pretty-prints the payload (falls back to raw text when it
   // isn't valid JSON) so the full message is readable, not just the row preview.
-  let viewState = $state<{ seq: number; subject: string; text: string; isJson: boolean } | null>(null)
-  function viewJson(m: ipc.NatsJsMessage) {
-    let text = m.payload
-    let isJson = false
+  let viewState = $state<ipc.NatsJsMessage | null>(null)
+  // Two screens on this tab: Messages and Consumers. Each loads ITS OWN data, and
+  // only when opened — the message grid never waits on the consumer list.
+  let mode = $state<'messages' | 'consumers'>('messages')
+  // Consumers screen: ONE list call for the stream (it already carries each
+  // consumer's filter, ack policy, pending and positions) — nothing per consumer.
+  let streamConsumers = $state<ipc.NatsJsConsumer[] | null>(null)
+  let consumersError = $state('')
+  let consumersLoading = $state(false)
+  let selConsumer = $state<string | null>(null)
+  let consumerView = $state<ConsumerView>('all')
+  const subjectConsumers = $derived(streamConsumers ? natsSubjectConsumers(subject, streamConsumers) : [])
+  const selCons = $derived(selConsumer ? (subjectConsumers.find((c) => c.name === selConsumer) ?? null) : null)
+  const stateOf = (m: ipc.NatsJsMessage): ConsumerState | 'n/a' | null => (selCons ? natsMessageState(selCons, m.subject, m.seq) : null)
+  const STATE_LABEL: Record<ConsumerState | 'n/a', string> = {
+    processed: 'Processed',
+    'in-flight': 'In flight',
+    pending: 'Not processed',
+    unknown: 'Unknown',
+    'n/a': 'Not its subject',
+  }
+  const stateClass = (st: ConsumerState | 'n/a') => (st === 'n/a' ? 'na' : st)
+  const consumerRows = $derived(
+    subjectConsumers.map((c) => {
+      const pending = c.num_pending ?? 0
+      const unacked = c.num_ack_pending ?? 0
+      const filters = c.filter_subjects?.length ? c.filter_subjects.join(', ') : c.filter_subject
+      return {
+        name: c.name,
+        ok: pending === 0 && unacked === 0,
+        cells: {
+          filter: filters || 'whole stream',
+          ack: c.ack_policy,
+          pending: pending.toLocaleString('en-US'),
+          unacked: unacked.toLocaleString('en-US'),
+        },
+        title: `${c.name} · filter ${filters || '(whole stream)'} · ack ${c.ack_policy}`,
+      }
+    }),
+  )
+  const selBacklog = $derived(selCons ? (selCons.num_pending ?? 0) : 0)
+  function setConsumerView(v: ConsumerView) {
+    consumerView = consumerView === v ? 'all' : v
+  }
+  const shownRows = $derived(selCons && consumerView !== 'all' ? rows.filter((m) => inView(stateOf(m) ?? 'unknown', consumerView)) : rows)
+  async function loadConsumers() {
+    if (!tab.connectionId || consumersLoading) return
+    consumersError = ''
+    consumersLoading = true
     try {
-      text = JSON.stringify(JSON.parse(m.payload), null, 2)
-      isJson = true
-    } catch {
-      // not JSON — show the raw payload
+      streamConsumers = await ipc.natsJsConsumers(tab.connectionId, stream)
+    } catch (e) {
+      consumersError = String(e)
+      streamConsumers = []
+    } finally {
+      consumersLoading = false
     }
-    viewState = { seq: m.seq, subject: m.subject, text, isJson }
+  }
+  function openMode(m: 'messages' | 'consumers') {
+    mode = m
+    if (m === 'consumers' && streamConsumers === null) void loadConsumers()
+  }
+  /** "View messages" on a consumer: back to Messages, seen through it */
+  function viewAs(name: string) {
+    selConsumer = name
+    consumerView = 'all'
+    mode = 'messages'
+  }
+  function stopViewAs() {
+    selConsumer = null
+    consumerView = 'all'
+  }
+  function viewJson(m: ipc.NatsJsMessage) {
+    viewState = m
   }
   // Delete a single JetStream message by sequence (real removal from the stream).
   function deleteMsg(seq: number) {
@@ -299,21 +364,23 @@
   }
 </script>
 
-<div style="flex:1;display:flex;flex-direction:column;min-height:0;position:relative">
-  <div style="flex:none;display:flex;align-items:center;gap:var(--px-12);padding:var(--px-9) var(--px-14);border-bottom:var(--px-1) solid var(--border);background:var(--surface)">
-    <span style="width:var(--px-3);height:var(--px-20);border-radius:var(--px-2);background:{accent}"></span>
-    <div style="display:flex;flex-direction:column;line-height:1.15">
-      <span class="mono" style="font-size:var(--px-13);font-weight:700;color:var(--text)">{subject}</span>
-      <span class="mono" style="font-size:var(--px-10);color:var(--sacc-green)">stream <span style="font-weight:600">{stream}</span></span>
+<div class="ds-ws">
+  <div class="ds-ws-head">
+    <span class="ds-ws-icon" style="background:color-mix(in srgb, {accent} 13%, transparent)" aria-hidden="true">
+      <img src="/assets/db-nats.svg" width="20" height="20" alt="" style="display:block" />
+    </span>
+    <div class="ds-ws-titles">
+      <span class="ds-ws-title" title={subject}>{subject}</span>
+      <span class="ds-ws-sub">Subject in stream <span style="color:var(--sacc-green);font-weight:600">{stream}</span></span>
     </div>
-    <div style="margin-left:auto;display:flex;gap:var(--px-8);align-items:center">
+    <div class="ds-ws-actions">
+      {#if mode === 'messages'}
       <!-- Subject search. Typing filters the fetched rows; a query that is a NATS
            filter narrower than this tab's subject offers "Search stream", which
            makes the SERVER filter and so covers every message, not just this page. -->
-      <div style="position:relative;display:flex;align-items:center">
-        <span style="position:absolute;left:var(--px-8);color:var(--muted);font-size:var(--px-11);pointer-events:none">⌕</span>
+      <div class="ds-search" style="width:var(--px-300)">
+        <Icon name="search" size={13} />
         <input
-          class="mono"
           bind:value={search}
           onkeydown={(e) => {
             if (e.key === 'Enter') runSearch()
@@ -322,10 +389,9 @@
           placeholder="Search subject… (Enter)"
           aria-label="Search subject"
           spellcheck="false"
-          style="width:var(--px-300);background:var(--raised);border:var(--px-1) solid var(--border2);border-radius:var(--px-6);padding:var(--px-4) var(--px-22);color:var(--text);font-size:var(--px-11_5);outline:none"
         />
         {#if query || streamFilter || applied}
-          <span onclick={clearSearch} onkeydown={(e) => e.key === 'Enter' && clearSearch()} role="button" tabindex="0" title="Clear search" style="position:absolute;right:var(--px-7);color:var(--muted);font-size:var(--px-13);cursor:pointer">×</span>
+          <span onclick={clearSearch} onkeydown={(e) => e.key === 'Enter' && clearSearch()} role="button" tabindex="0" title="Clear search" style="color:var(--muted);font-size:var(--px-14);cursor:pointer">×</span>
         {/if}
       </div>
       {#if canRun}
@@ -355,16 +421,65 @@
           title="Back to the subjects this search found"
         >{subjMatched} subject{subjMatched === 1 ? '' : 's'} match</span>
       {/if}
-      <span style="font-size:var(--px-11);color:var(--muted)" title={totalKnown ? '' : 'The server could not count this subject in time — paging still works'}>{totalKnown ? `${total} record${total === 1 ? '' : 's'}` : `${messages.length}+ records`}</span>
+      <span class="ds-meta" title={totalKnown ? '' : 'The server could not count this subject in time — paging still works'}>{totalKnown ? `${total} record${total === 1 ? '' : 's'}` : `${messages.length}+ records`}</span>
       <span onclick={addMessage} onkeydown={(e) => e.key === 'Enter' && addMessage()} role="button" tabindex="0" class="eg-btn">＋ Add</span>
       <span onclick={() => reload()} onkeydown={(e) => e.key === 'Enter' && reload()} role="button" tabindex="0" class="eg-btn"><Icon name="refresh" size={12} /> Refresh</span>
-      <span onclick={clearMessages} onkeydown={(e) => e.key === 'Enter' && clearMessages()} role="button" tabindex="0" class="eg-btn" style="color:var(--error)">Clear messages</span>
+      <span onclick={clearMessages} onkeydown={(e) => e.key === 'Enter' && clearMessages()} role="button" tabindex="0" class="eg-btn ds-danger-outline">Clear messages</span>
+      {/if}
     </div>
   </div>
 
-  <div style="flex:1;overflow:auto;min-height:0">
+  <!-- two screens of this subject; each loads its own data when opened -->
+  <div class="ds-viewtabs" role="tablist" aria-label="Subject views">
+    <span role="tab" tabindex="0" aria-selected={mode === 'messages'} onclick={() => openMode('messages')} onkeydown={(e) => e.key === 'Enter' && openMode('messages')}>
+      Messages
+    </span>
+    <span role="tab" tabindex="0" aria-selected={mode === 'consumers'} data-testid="consumers-tab" onclick={() => openMode('consumers')} onkeydown={(e) => e.key === 'Enter' && openMode('consumers')}>
+      Consumers
+      {#if streamConsumers !== null}<span class="ds-count">{subjectConsumers.length}</span>{/if}
+    </span>
+  </div>
+
+  {#if mode === 'consumers'}
+    <StreamConsumersView
+      noun="consumer"
+      attr="data-consumer"
+      columns={[
+        { key: 'filter', label: 'Filter', mono: true },
+        { key: 'ack', label: 'Ack policy' },
+        { key: 'pending', label: 'Pending', num: true },
+        { key: 'unacked', label: 'Unacked', num: true },
+      ]}
+      rows={streamConsumers === null ? null : consumerRows}
+      loading={consumersLoading}
+      error={consumersError}
+      emptyText={`No consumer of ${stream} reads this subject.`}
+      note={streamConsumers && streamConsumers.length > subjectConsumers.length ? `${(streamConsumers.length - subjectConsumers.length).toLocaleString('en-US')} other consumer(s) of ${stream} filter on subjects this tab does not cover.` : ''}
+      onOpen={viewAs}
+      onReload={() => void loadConsumers()}
+    />
+  {:else}
+
+  <!-- viewing as a consumer (picked on the Consumers screen) -->
+  {#if selConsumer}
+    <div class="ds-toolbar" role="group" aria-label="Viewing as" data-testid="subject-consumers">
+      <span class="ds-field">Viewing as</span>
+      <span class="ds-consumer" aria-pressed="true" data-consumer={selConsumer}>
+        <span class="dot" class:ok={!!selCons && selBacklog === 0 && (selCons.num_ack_pending ?? 0) === 0}></span>
+        {selConsumer}
+        <span class="sub">{selCons ? (selBacklog === 0 && !(selCons.num_ack_pending ?? 0) ? 'up to date' : `${selBacklog.toLocaleString('en-US')} pending${selCons.num_ack_pending ? ` · ${selCons.num_ack_pending} unacked` : ''}`) : 'not a consumer of this subject'}</span>
+      </span>
+      <span role="button" tabindex="0" class="ds-act" style="opacity:1" title="Stop viewing as this consumer" aria-label="Stop viewing as this consumer" onclick={stopViewAs} onkeydown={(e) => e.key === 'Enter' && stopViewAs()}><Icon name="close" size={12} /></span>
+      <div class="ds-seg" role="group" aria-label={`Messages for ${selConsumer}`} style="margin-left:auto">
+        <span role="button" tabindex="0" aria-pressed={consumerView === 'processed'} title="Show only what this consumer has processed (acked)" onclick={() => setConsumerView('processed')} onkeydown={(e) => e.key === 'Enter' && setConsumerView('processed')}>Processed</span>
+        <span role="button" tabindex="0" aria-pressed={consumerView === 'unprocessed'} title="Show only what this consumer has not processed yet (pending or awaiting ack)" onclick={() => setConsumerView('unprocessed')} onkeydown={(e) => e.key === 'Enter' && setConsumerView('unprocessed')}>Not processed</span>
+      </div>
+    </div>
+  {/if}
+
+  <div style="flex:1;overflow:auto;min-height:0;background:var(--surface)">
     {#if searching}
-      <div style="padding:var(--px-20);color:var(--muted);font-size:var(--px-12)">Searching subject names…</div>
+      <div class="ds-empty">Searching subject names…</div>
     {:else if searchMiss}
       <!-- a search that found nothing must not leave the previous list on screen:
            that reads as "search did nothing" -->
@@ -389,25 +504,30 @@
             style="display:flex;align-items:center;gap:var(--px-10);padding:var(--px-6) var(--px-8);border-radius:var(--px-6);cursor:pointer"
           >
             <span class="mono" style="flex:1;min-width:0;font-size:var(--px-12);font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title={h.subject}>{h.subject}</span>
-            <span class="mono" style="flex:none;font-size:var(--px-11);color:var(--text2)">{h.messages.toLocaleString()} msg</span>
+            <span class="ds-num" style="flex:none;font-size:var(--px-12);color:var(--text2)">{h.messages.toLocaleString()} msg</span>
           </div>
         {/each}
       </div>
     {:else if loading}
-      <div style="padding:var(--px-20);color:var(--muted);font-size:var(--px-12)">Loading…</div>
+      <div class="ds-empty">Loading…</div>
     {:else if error}
       <div style="padding:var(--px-20);color:var(--error);font-size:var(--px-12)">{error}</div>
     {:else if rows.length === 0}
-      <div style="padding:var(--px-20);color:var(--muted);font-size:var(--px-12)">No messages retained for this subject.</div>
+      <div class="ds-empty"><b>No messages</b>Nothing is retained for this subject.</div>
+    {:else if shownRows.length === 0}
+      <div class="ds-empty">
+        <b>Nothing here for {selConsumer}</b>
+        No message on this page is {consumerView === 'processed' ? 'processed' : 'still waiting'} for this consumer. Use Prev / Next to look at other pages.
+      </div>
     {:else}
-      <table class="mono" style="border-collapse:collapse;width:100%;font-size:var(--px-12);table-layout:fixed;{GRID_FONT}">
+      <table class="ds-table flush" style="font-size:var(--px-12_5);table-layout:fixed">
         <thead><tr>
-          {#each [['Seq', 'width:var(--px-90)'], ['Time', 'width:var(--px-180)'], ['Subject', 'width:var(--px-160)'], ...(hasKey ? [['Key', 'width:var(--px-140)']] : []), ['Payload', ''], ['', 'width:var(--px-90)']] as [h, extra] (h)}
-            <th style="position:sticky;top:0;background:var(--header);border-bottom:var(--px-1) solid var(--border2);padding:var(--px-7) var(--px-12);text-align:left;color:var(--text2);font-weight:600;{extra}">{h}</th>
+          {#each [['Seq', 'width:var(--px-90)'], ['Time', 'width:var(--px-180)'], ...(selCons ? [['Status', 'width:var(--px-130)']] : []), ['Subject', 'width:var(--px-160)'], ...(hasKey ? [['Key', 'width:var(--px-140)']] : []), ['Payload', ''], ['', 'width:var(--px-90)']] as [h, extra] (h)}
+            <th style={extra}>{h}</th>
           {/each}
         </tr></thead>
         <tbody>
-          {#each rows as m (m.seq)}
+          {#each shownRows as m (m.seq)}
             {@const sel = selSeq === m.seq}
             <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
             <tr
@@ -417,20 +537,24 @@
               onmouseleave={() => (hoverSeq === m.seq ? (hoverSeq = null) : null)}
               style="background:{rowBg(m.seq)};cursor:default"
             >
-              <td style="border-bottom:var(--px-1) solid var(--border);padding:var(--px-6) var(--px-12);color:{cellColor(m.seq, 'var(--muted)')}">{m.seq}</td>
-              <td style="border-bottom:var(--px-1) solid var(--border);padding:var(--px-6) var(--px-12);font-weight:700;color:{cellColor(m.seq, 'var(--sacc-amber)')}">{fmtTime(m.time)}</td>
-              <td style="border-bottom:var(--px-1) solid var(--border);padding:var(--px-6) var(--px-12);color:{cellColor(m.seq, 'var(--sacc-amber)')};white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title={m.subject}>{m.subject}</td>
+              <td class="ds-num" style="padding:var(--px-7) var(--px-12);color:{cellColor(m.seq, 'var(--muted)')}">{m.seq}</td>
+              <td class="ds-time" style="padding:var(--px-7) var(--px-12);color:{cellColor(m.seq, 'var(--text2)')}">{fmtTime(m.time)}</td>
+              {#if selCons}
+                {@const st = stateOf(m) ?? 'unknown'}
+                <td style="padding:var(--px-5) var(--px-12)"><span class="ds-state {stateClass(st)}" data-state={st}>{STATE_LABEL[st]}</span></td>
+              {/if}
+              <td class="mono" style="font-size:var(--px-12);padding:var(--px-7) var(--px-12);color:{cellColor(m.seq, 'var(--tbl-subject)')};white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title={m.subject}>{m.subject}</td>
               {#if hasKey}
-                <td style="border-bottom:var(--px-1) solid var(--border);padding:var(--px-6) var(--px-12);color:{cellColor(m.seq, 'var(--text2)')};white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title={m.key}>{m.key || '—'}</td>
+                <td style="padding:var(--px-6) var(--px-12);max-width:var(--px-200)"><span class="ds-key" class:none={!m.key} style="color:{cellColor(m.seq, m.key ? 'var(--text2)' : 'var(--muted)')}" title={m.key}>{m.key || '—'}</span></td>
               {/if}
               <!-- single-line preview trimmed to the column; hover shows the full text, Copy grabs all of it -->
-              <td style="border-bottom:var(--px-1) solid var(--border);padding:var(--px-6) var(--px-12);color:{cellColor(m.seq, 'var(--syntax-string)')};white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title={m.payload}>{m.payload}</td>
+              <td style="padding:var(--px-6) var(--px-12);max-width:var(--px-560)"><PayloadPreview text={m.payload} inverted={selSeq === m.seq} /></td>
               <!-- action icons: recolour to white when the row is selected so the blue
                    highlight never hides them (View JSON / Copy / Delete). -->
-              <td style="border-bottom:var(--px-1) solid var(--border);padding:var(--px-6) var(--px-8);white-space:nowrap">
-                <span onclick={(e) => { e.stopPropagation(); viewJson(m) }} onkeydown={(e) => e.key === 'Enter' && viewJson(m)} role="button" tabindex="0" title="View payload as JSON" style="cursor:pointer;color:{cellColor(m.seq, 'var(--muted)')};margin-right:var(--px-6)">⛶</span>
-                <span onclick={(e) => { e.stopPropagation(); copyMsg(m.payload) }} onkeydown={(e) => e.key === 'Enter' && copyMsg(m.payload)} role="button" tabindex="0" title="Copy full payload" style="cursor:pointer;color:{cellColor(m.seq, 'var(--muted)')}">⧉</span>
-                <span onclick={(e) => { e.stopPropagation(); deleteMsg(m.seq) }} onkeydown={(e) => e.key === 'Enter' && deleteMsg(m.seq)} role="button" tabindex="0" title="Delete this message (by sequence)" style="cursor:pointer;color:{cellColor(m.seq, 'var(--error)')};font-size:var(--px-13);margin-left:var(--px-6)">×</span>
+              <td style="padding:var(--px-2) var(--px-8);white-space:nowrap">
+                <span onclick={(e) => { e.stopPropagation(); viewJson(m) }} onkeydown={(e) => e.key === 'Enter' && viewJson(m)} role="button" tabindex="0" title="View payload as JSON" class="ds-act" style="color:{cellColor(m.seq, 'var(--muted)')}"><Icon name="expand" size={13} /></span>
+                <span onclick={(e) => { e.stopPropagation(); copyMsg(m.payload) }} onkeydown={(e) => e.key === 'Enter' && copyMsg(m.payload)} role="button" tabindex="0" title="Copy full payload" class="ds-act" style="color:{cellColor(m.seq, 'var(--muted)')}"><Icon name="copy" size={13} /></span>
+                <span onclick={(e) => { e.stopPropagation(); deleteMsg(m.seq) }} onkeydown={(e) => e.key === 'Enter' && deleteMsg(m.seq)} role="button" tabindex="0" title="Delete this message (by sequence)" class="ds-act" style="color:{cellColor(m.seq, 'var(--danger-text)')}"><Icon name="trash" size={13} /></span>
               </td>
             </tr>
           {/each}
@@ -441,7 +565,7 @@
 
   <!-- pagination footer: Prev/Next each fetch a fresh page from the server -->
   {#if !error && (loaded || loading)}
-    <div style="flex:none;display:flex;align-items:center;gap:var(--px-10);padding:var(--px-6) var(--px-14);border-top:var(--px-1) solid var(--border);background:var(--surface);font-size:var(--px-11_5)">
+    <div class="ds-toolbar" style="border-bottom:none;border-top:var(--px-1) solid var(--border);font-size:var(--px-12)">
       <span style="color:var(--text2)">{totalKnown ? `Page ${page} / ${totalPages}` : `Page ${page}`}</span>
       <span style="color:var(--muted)">·</span>
       <span style="color:var(--muted)">{total} record{total === 1 ? '' : 's'}</span>
@@ -451,7 +575,7 @@
         <select
           value={pageSize}
           onchange={(e) => changePageSize(Number(e.currentTarget.value))}
-          style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-5);padding:var(--px-2) var(--px-6);color:var(--text);font-size:var(--px-11_5)"
+          class="ds-control"
         >
           {#each PAGE_SIZES as n (n)}
             <option value={n}>{n}</option>
@@ -479,6 +603,8 @@
     </div>
   {/if}
 
+  {/if}
+
   {#if confirmState}
     <div
       role="presentation"
@@ -490,7 +616,7 @@
         onclick={(e) => e.stopPropagation()}
         onkeydown={(e) => { if (e.key === 'Escape') confirmState = null; if (e.key === 'Enter') runConfirm() }}
         tabindex="-1"
-        style="background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-14);padding:var(--px-18);min-width:var(--px-320);max-width:var(--px-420);box-shadow:0 var(--px-24) var(--px-60) var(--rgba-0-0-0-_55)"
+        style="background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-14);padding:var(--px-18);min-width:var(--px-340);max-width:var(--px-420);box-shadow:0 var(--px-24) var(--px-60) var(--rgba-0-0-0-_55)"
       >
         <div style="font-size:var(--px-14);font-weight:600;color:var(--text);margin-bottom:var(--px-8)">{confirmState.title}</div>
         <div style="font-size:var(--px-12_5);color:var(--text2);line-height:1.45;margin-bottom:var(--px-16)">{confirmState.body}</div>
@@ -503,40 +629,21 @@
   {/if}
 
   {#if viewState}
-    <div
-      role="presentation"
-      style="position:absolute;inset:0;background:var(--rgba-0-0-0-_5);display:flex;align-items:center;justify-content:center;z-index:50;padding:var(--px-20)"
-    >
-      <div
-        role="dialog"
-        aria-modal="true"
-        onclick={(e) => e.stopPropagation()}
-        onkeydown={(e) => e.key === 'Escape' && (viewState = null)}
-        tabindex="-1"
-        style="background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-14);padding:var(--px-18);width:min(var(--px-720), 100%);max-height:100%;display:flex;flex-direction:column;box-shadow:0 var(--px-24) var(--px-60) var(--rgba-0-0-0-_55)"
-      >
-        <div style="display:flex;align-items:center;gap:var(--px-8);margin-bottom:var(--px-10)">
-          <span style="font-size:var(--px-14);font-weight:600;color:var(--text)">Message #{viewState.seq}</span>
-          <span class="mono" style="font-size:var(--px-11);color:var(--sacc-amber)">{viewState.subject}</span>
-          {#if !viewState.isJson}<span style="font-size:var(--px-10_5);color:var(--muted)">(not JSON — raw payload)</span>{/if}
-          <span style="margin-left:auto;display:flex;gap:var(--px-8)">
-            <span onclick={() => viewState && copyMsg(viewState.text)} onkeydown={(e) => e.key === 'Enter' && viewState && copyMsg(viewState.text)} role="button" tabindex="0" class="pv-btn primary">Copy</span>
-            <span onclick={() => (viewState = null)} onkeydown={(e) => e.key === 'Enter' && (viewState = null)} role="button" tabindex="0" class="pv-btn">Close</span>
-          </span>
-        </div>
-        <div style="flex:1;min-height:0;display:flex">
-          <CodeView
-            value={viewState.text}
-            language={viewState.isJson ? DS_JSON : 'plaintext'}
-            readOnly
-            height="auto"
-            maxHeight={520}
-            minHeight={160}
-            ariaLabel="Payload"
-          />
-        </div>
-      </div>
-    </div>
+    <PayloadDialog
+      title={`Message #${viewState.seq}`}
+      system="nats"
+      subtitle={`NATS message · stream ${stream}`}
+      facts={[
+        { label: 'Stream', value: stream },
+        { label: 'Subject', value: viewState.subject, mono: true },
+        { label: 'Sequence', value: viewState.seq },
+        { label: 'Time', value: fmtTime(viewState.time) },
+        ...(viewState.key ? [{ label: 'Key', value: viewState.key, mono: true }] : []),
+        ...(selCons ? [{ label: selConsumer ?? 'Consumer', value: STATE_LABEL[stateOf(viewState) ?? 'unknown'] }] : []),
+      ]}
+      text={viewState.payload}
+      onClose={() => (viewState = null)}
+    />
   {/if}
 </div>
 

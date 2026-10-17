@@ -83,7 +83,8 @@ pub struct ConnectionProfile {
     pub sqlite_path: String,
     #[serde(default)]
     pub sqlite_mode: SqliteMode,
-    /// MSSQL only: "sql" | "windows" (Azure AD variants are out of Phase-1 scope).
+    /// Auth method. MSSQL: "sql" | "windows" | "aad-sp".
+    /// Elasticsearch: "basic" (default) | "apikey" | "bearer" | "none".
     #[serde(default)]
     pub mssql_auth: String,
     /// Kafka only: Confluent Schema Registry base URL (empty = no registry).
@@ -115,6 +116,8 @@ impl ConnectionProfile {
             SystemType::Rabbitmq => 15672,
             // Embedded (a file path, like SQLite) — no network port.
             SystemType::Duckdb => 0,
+            // REST API (9300 is the node-to-node transport port).
+            SystemType::Elasticsearch => 9200,
         }
     }
 }

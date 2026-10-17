@@ -39,6 +39,8 @@
       else if (system === 'mongodb') { /* collections shown in explorer */ }
       // RabbitMQ: queues/exchanges shown in explorer — no SQL tab (it is not SQL).
       else if (system === 'rabbitmq') { /* queues shown in explorer */ }
+      // Elasticsearch: indices & tools shown in explorer — open the cluster overview.
+      else if (system === 'elasticsearch') tabs.openEsCluster(id)
       else tabs.openSqlTab({ connectionId: id, title: 'Untitled query' })
     })
   }

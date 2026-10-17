@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { APP_URL, blockRemoteFonts, previewText } from './helpers'
+import { APP_URL, blockRemoteFonts, previewText, showFormatted } from './helpers'
 
 // Kafka topics + NATS streams/subjects render in the Explorer; clicking opens a
 // messages view; context menus offer Clear/Delete.
@@ -351,8 +351,10 @@ test('explorer: NATS subject messages show Subject and Key columns', async ({ pa
   await page.waitForTimeout(200)
   const dialog = page.getByRole('dialog')
   await expect(dialog).toBeVisible()
-  // the payload viewer is a read-only Monaco surface — read it from the model
-  expect(await previewText(page, 'Payload')).toContain('"id":')
+  // JSON opens as a Tree; the Formatted view is a read-only Monaco surface — read its model
+  await expect(dialog.getByRole('tree', { name: 'Payload tree' })).toBeVisible()
+  await showFormatted(page)
+  await expect.poll(() => previewText(page, 'Payload'), { timeout: 10_000 }).toContain('"id":')
   await dialog.getByText('Close', { exact: true }).click()
   await expect(page.getByRole('dialog')).toHaveCount(0)
 

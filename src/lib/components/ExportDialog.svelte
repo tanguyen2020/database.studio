@@ -266,7 +266,7 @@
       <div style="flex:none;display:flex;gap:var(--px-9);padding:var(--px-13) var(--px-18);border-top:var(--px-1) solid var(--border);background:var(--panel)">
         <span onclick={() => !running && exportWizard.close()} onkeydown={(e) => e.key === 'Enter' && !running && exportWizard.close()} role="button" tabindex="0" style="font-size:var(--px-12_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-8);padding:var(--px-8) var(--px-16);cursor:pointer">Close</span>
         {#if streaming}
-          <span onclick={cancelStreaming} onkeydown={(e) => e.key === 'Enter' && cancelStreaming()} role="button" tabindex="0" title="Cancel the running export" style="margin-left:auto;font-size:var(--px-12_5);background:var(--error);color:var(--hex-fff);border-radius:var(--px-8);padding:var(--px-8) var(--px-18);cursor:pointer;font-weight:600">Cancel</span>
+          <span onclick={cancelStreaming} onkeydown={(e) => e.key === 'Enter' && cancelStreaming()} role="button" tabindex="0" title="Cancel the running export" class="ds-danger" style="margin-left:auto;font-size:var(--px-12_5);border-radius:var(--px-8);padding:var(--px-8) var(--px-18);cursor:pointer;font-weight:600">Cancel</span>
         {:else}
           <span onclick={() => !running && runExport()} onkeydown={(e) => e.key === 'Enter' && !running && runExport()} role="button" tabindex="0" style="margin-left:auto;font-size:var(--px-12_5);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-8);padding:var(--px-8) var(--px-18);cursor:{running ? 'not-allowed' : 'pointer'};opacity:{running ? 0.6 : 1};font-weight:600">{running ? 'Exporting…' : canStream ? 'Export → file' : 'Export'}</span>
         {/if}

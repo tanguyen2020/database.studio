@@ -69,6 +69,14 @@ export interface PayloadView {
 
 /** What the payload viewer shows for a message: JSON pretty-printed, text as-is,
  *  binary as its base64 (the management API sends non-UTF-8 bodies base64). */
+/** The payload as received, ready for the shared viewer (which does its own
+ *  JSON formatting): base64 is decoded when it is UTF-8 text; binary stays base64. */
+export function payloadText(m: Pick<RabbitMessage, 'payload' | 'payload_encoding'>): { text: string; binary: boolean } {
+  if (m.payload_encoding !== 'base64') return { text: m.payload, binary: false }
+  const decoded = decodeBase64Utf8(m.payload)
+  return decoded == null ? { text: m.payload, binary: true } : { text: decoded, binary: false }
+}
+
 export function payloadView(m: Pick<RabbitMessage, 'payload' | 'payload_encoding'>): PayloadView {
   let text = m.payload
   if (m.payload_encoding === 'base64') {

@@ -300,6 +300,74 @@ class TabsStore {
     return tab
   }
 
+  /** Elasticsearch index tab (Discover · Mappings · Settings · Stats · Aliases) — 1 tab per index/pattern. */
+  openEsIndex(connectionId: string, index: string, section?: string): TabState {
+    return this.openEsTab('es-index', connectionId, index, index, { index, section: section ?? 'discover' })
+  }
+
+  /** Elasticsearch Dev Tools console — one per connection (more via openEsConsole(…, true)). */
+  openEsConsole(connectionId: string, fresh = false, seed?: string): TabState {
+    const key = fresh ? `console-${uuid()}` : 'console'
+    return this.openEsTab('es-console', connectionId, key, 'Dev Tools · Console', seed ? { seed } : {})
+  }
+
+  /** Cluster overview (health · nodes · shards · tasks · settings). */
+  openEsCluster(connectionId: string, section?: string): TabState {
+    return this.openEsTab('es-cluster', connectionId, 'cluster', 'Cluster overview', { section: section ?? 'overview' })
+  }
+
+  /** Stack Management page of one resource kind (templates, pipelines, ILM, snapshots…). */
+  openEsManage(connectionId: string, kind: string, label: string, select?: string): TabState {
+    return this.openEsTab('es-manage', connectionId, `manage:${kind}`, label, { kind, select: select ?? null })
+  }
+
+  /** Dev Tools besides Console: Search Profiler · Grok Debugger · Painless Lab · Analyzer (one tab). */
+  openEsDevTools(connectionId: string, tool: 'profiler' | 'grok' | 'painless' | 'analyzer' = 'profiler'): TabState {
+    return this.openEsTab('es-devtools', connectionId, 'devtools', 'Dev Tools', { tool })
+  }
+
+  /** ES|QL / SQL query tab. */
+  openEsQuery(connectionId: string, language: 'esql' | 'sql' = 'esql', query?: string): TabState {
+    return this.openEsTab('es-query', connectionId, `query-${uuid()}`, language === 'esql' ? 'ES|QL query' : 'SQL query', {
+      language,
+      query: query ?? '',
+    })
+  }
+
+  private openEsTab(
+    contentType: 'es-index' | 'es-console' | 'es-cluster' | 'es-manage' | 'es-query' | 'es-devtools',
+    connectionId: string,
+    key: string,
+    title: string,
+    state: Record<string, unknown>,
+  ): TabState {
+    const existing = this.tabs.find(
+      (t) => t.contentType === contentType && t.connectionId === connectionId && (t.state as { key?: string }).key === key,
+    )
+    if (existing) {
+      // a second open with an explicit target (section / selection) retargets the tab
+      Object.assign(existing.state as Record<string, unknown>, Object.fromEntries(Object.entries(state).filter(([k, v]) => v != null && k !== 'seed')))
+      this.activeTabId = existing.id
+      return existing
+    }
+    const profile = connections.byId(connectionId)
+    const tab: TabState = {
+      id: uuid(),
+      connectionId,
+      connectionName: profile?.name ?? '',
+      systemType: (profile?.system as SystemType) ?? 'orphan',
+      contentType,
+      title,
+      isPinned: false,
+      isDirty: false,
+      state: { key, ...state },
+    }
+    this.tabs.push(tab)
+    this.activeTabId = tab.id
+    this.schedulePersist()
+    return tab
+  }
+
   /** RabbitMQ queue tab (details · messages · bindings · publish) — 1 tab per (vhost, queue). */
   openRabbitQueue(connectionId: string, vhost: string, queue: string): TabState {
     return this.openRabbitObject('rabbit-queue', connectionId, vhost, queue, `${queue} · queue`)

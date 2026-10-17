@@ -22,7 +22,7 @@ test('result export: CSV downloads with a progress overlay + blue hover', async 
   await page.waitForTimeout(500)
 
   // open the Export dropdown
-  await page.getByText('Export ▾').first().click()
+  await page.getByRole('button', { name: 'Export', exact: true }).first().click()
   await page.waitForTimeout(150)
   const csvItem = page.locator('.exp-item', { hasText: 'CSV' }).first()
   await expect(csvItem).toBeVisible()

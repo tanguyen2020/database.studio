@@ -33,25 +33,57 @@ pub fn parse_redis_info(text: &str) -> QueryResultSet {
 /// SQL cho từng admin view theo hệ. None nếu hệ không hỗ trợ view đó.
 pub fn admin_query(system: &str, view: &str) -> Option<String> {
     let sql = match (system, view) {
-        // --- Session Monitor: phiên đang chạy ---
+        // --- Session Monitor: every engine returns ONE shape (SESSION_COLUMNS) so the
+        //     monitor renders the same way everywhere: who, where, what state, what
+        //     it waits on, how long the current query has run (query_ms) / the
+        //     session has been in its state (state_ms), client vs background, and
+        //     whether it is the app's own session (never offered to kill). ---
         ("postgres", "sessions") => {
-            "SELECT pid, usename AS username, datname AS database, state, \
-                    COALESCE(wait_event_type, '') AS wait, \
-                    LEFT(COALESCE(query, ''), 120) AS query \
-             FROM pg_stat_activity WHERE pid <> pg_backend_pid() OR pid = pg_backend_pid() \
-             ORDER BY state, pid"
+            "SELECT pid, COALESCE(usename, '') AS username, COALESCE(datname, '') AS database, \
+                    COALESCE(client_addr::text, CASE WHEN backend_type = 'client backend' THEN 'local' ELSE '' END) AS client, \
+                    COALESCE(application_name, '') AS application, COALESCE(state, '') AS state, \
+                    COALESCE(wait_event_type, '') AS wait_type, COALESCE(wait_event, '') AS wait_event, \
+                    CASE WHEN backend_type = 'client backend' THEN 'client' ELSE 'background' END AS kind, \
+                    CAST(EXTRACT(EPOCH FROM (clock_timestamp() - query_start)) * 1000 AS bigint) AS query_ms, \
+                    CAST(EXTRACT(EPOCH FROM (clock_timestamp() - state_change)) * 1000 AS bigint) AS state_ms, \
+                    CASE WHEN pid = pg_backend_pid() THEN 1 ELSE 0 END AS is_self, \
+                    LEFT(COALESCE(query, ''), 4000) AS query \
+             FROM pg_stat_activity \
+             ORDER BY (backend_type <> 'client backend'), (state = 'active') DESC, query_start NULLS LAST, pid"
         }
         ("mysql" | "mariadb", "sessions") => {
             // `database` is a reserved word → must be back-quoted as a column alias.
-            "SELECT id AS pid, user AS username, db AS `database`, command AS state, \
-                    time AS seconds, LEFT(COALESCE(info,''),120) AS query \
-             FROM information_schema.processlist ORDER BY time DESC"
+            // COMMAND is the session's state (Query / Sleep / Daemon…); STATE is
+            // what it is doing / waiting on. TIME = seconds in the current state.
+            "SELECT CAST(id AS SIGNED) AS pid, COALESCE(user, '') AS username, COALESCE(db, '') AS `database`, \
+                    COALESCE(host, '') AS client, '' AS application, COALESCE(command, '') AS state, \
+                    '' AS wait_type, COALESCE(state, '') AS wait_event, \
+                    CASE WHEN user IN ('system user', 'event_scheduler') OR command IN ('Daemon', 'Binlog Dump', 'Binlog Dump GTID') \
+                         THEN 'background' ELSE 'client' END AS kind, \
+                    CASE WHEN command = 'Sleep' THEN NULL ELSE CAST(time AS SIGNED) * 1000 END AS query_ms, \
+                    CAST(time AS SIGNED) * 1000 AS state_ms, \
+                    CAST(CASE WHEN id = CONNECTION_ID() THEN 1 ELSE 0 END AS SIGNED) AS is_self, \
+                    LEFT(COALESCE(info, ''), 4000) AS query \
+             FROM information_schema.processlist ORDER BY (command = 'Sleep'), time DESC"
         }
         ("mssql", "sessions") => {
             // `database` is a reserved keyword → must be bracket-quoted as a column alias.
-            "SELECT session_id AS pid, login_name AS username, DB_NAME(database_id) AS [database], \
-                    status AS state, cpu_time AS cpu_ms FROM sys.dm_exec_sessions WHERE is_user_process = 1 \
-             ORDER BY session_id"
+            // A session runs a request only while busy: query + its start come from
+            // dm_exec_requests / dm_exec_sql_text.
+            "SELECT s.session_id AS pid, COALESCE(s.login_name, '') AS username, \
+                    COALESCE(DB_NAME(COALESCE(r.database_id, s.database_id)), '') AS [database], \
+                    COALESCE(s.host_name, '') AS client, COALESCE(s.program_name, '') AS application, \
+                    COALESCE(r.status, s.status, '') AS state, COALESCE(r.wait_type, '') AS wait_type, \
+                    COALESCE(r.last_wait_type, '') AS wait_event, \
+                    CASE WHEN s.is_user_process = 1 THEN 'client' ELSE 'background' END AS kind, \
+                    CAST(DATEDIFF(second, r.start_time, SYSDATETIME()) AS bigint) * 1000 AS query_ms, \
+                    CAST(DATEDIFF(second, COALESCE(r.start_time, s.last_request_end_time, s.login_time), SYSDATETIME()) AS bigint) * 1000 AS state_ms, \
+                    CASE WHEN s.session_id = @@SPID THEN 1 ELSE 0 END AS is_self, \
+                    LEFT(COALESCE(t.text, ''), 4000) AS query \
+             FROM sys.dm_exec_sessions s \
+             LEFT JOIN sys.dm_exec_requests r ON r.session_id = s.session_id \
+             OUTER APPLY sys.dm_exec_sql_text(r.sql_handle) t \
+             ORDER BY s.is_user_process DESC, CASE WHEN r.session_id IS NULL THEN 1 ELSE 0 END, s.session_id"
         }
         // --- Locks ---
         ("postgres", "locks") => {
@@ -124,10 +156,18 @@ pub fn admin_query(system: &str, view: &str) -> Option<String> {
         // --- Oracle (V$/DBA views). Aliases quoted-lowercase so row keys match the
         //     frontend (`r['pid']`); Oracle would otherwise fold them to UPPERCASE. ---
         ("oracle", "sessions") => {
-            "SELECT s.sid AS \"pid\", s.username AS \"username\", s.status AS \"state\", \
-                    s.machine AS \"machine\", SUBSTR(NVL(q.sql_text, ' '), 1, 120) AS \"query\" \
-             FROM v$session s LEFT JOIN v$sql q ON s.sql_id = q.sql_id \
-             WHERE s.type = 'USER' ORDER BY s.sid"
+            // LAST_CALL_ET = seconds since the session last changed state (for an
+            // ACTIVE session: how long the current call has run).
+            "SELECT s.sid AS \"pid\", NVL(s.username, ' ') AS \"username\", NVL(s.schemaname, ' ') AS \"database\", \
+                    NVL(s.machine, ' ') AS \"client\", NVL(s.program, ' ') AS \"application\", \
+                    LOWER(s.status) AS \"state\", NVL(s.wait_class, ' ') AS \"wait_type\", NVL(s.event, ' ') AS \"wait_event\", \
+                    CASE WHEN s.type = 'USER' THEN 'client' ELSE 'background' END AS \"kind\", \
+                    CASE WHEN s.status = 'ACTIVE' THEN s.last_call_et * 1000 END AS \"query_ms\", \
+                    s.last_call_et * 1000 AS \"state_ms\", \
+                    CASE WHEN s.sid = SYS_CONTEXT('USERENV', 'SID') THEN 1 ELSE 0 END AS \"is_self\", \
+                    SUBSTR(NVL(q.sql_text, ' '), 1, 1000) AS \"query\" \
+             FROM v$session s LEFT JOIN v$sql q ON s.sql_id = q.sql_id AND s.sql_child_number = q.child_number \
+             ORDER BY CASE WHEN s.type = 'USER' THEN 0 ELSE 1 END, CASE WHEN s.status = 'ACTIVE' THEN 0 ELSE 1 END, s.sid"
         }
         ("oracle", "locks") => {
             "SELECT sid AS \"pid\", type AS \"locktype\", lmode AS \"mode\", request AS \"request\", block AS \"block\" \
@@ -140,6 +180,42 @@ pub fn admin_query(system: &str, view: &str) -> Option<String> {
         _ => return None,
     };
     Some(sql.to_string())
+}
+
+/// The column set every engine's Session Monitor query returns.
+pub const SESSION_COLUMNS: [&str; 13] = [
+    "pid", "username", "database", "client", "application", "state", "wait_type", "wait_event", "kind", "query_ms",
+    "state_ms", "is_self", "query",
+];
+
+/// Stop only the statement a session is running — the session (and its
+/// transaction) stays. None where the engine has no such command for another
+/// session (MSSQL: KILL always ends the session).
+pub fn cancel_query(system: &str, pid: i64) -> Option<String> {
+    let sql = match system {
+        "postgres" => format!("SELECT pg_cancel_backend({pid})"),
+        "mysql" | "mariadb" => format!("KILL QUERY {pid}"),
+        "oracle" => format!(
+            "BEGIN FOR s IN (SELECT sid, serial# AS sq FROM v$session WHERE sid = {pid}) LOOP \
+             EXECUTE IMMEDIATE 'ALTER SYSTEM CANCEL SQL ''' || s.sid || ',' || s.sq || ''''; END LOOP; END;"
+        ),
+        _ => return None,
+    };
+    Some(sql)
+}
+
+/// PostgreSQL's pg_cancel_backend / pg_terminate_backend answer `false` instead
+/// of failing when the signal was not sent (no permission, session gone).
+fn signal_refused(outcome: &StatementOutcome) -> bool {
+    match outcome {
+        StatementOutcome::Rows { result } => result
+            .rows
+            .first()
+            .and_then(|r| r.as_object())
+            .and_then(|o| o.values().next())
+            .is_some_and(|v| v == &serde_json::Value::Bool(false)),
+        _ => false,
+    }
 }
 
 /// Câu lệnh Kill/terminate phiên theo hệ. None nếu không hỗ trợ.
@@ -224,7 +300,9 @@ pub async fn kill_session(
     state: State<'_, AppState>,
     conn_id: String,
     pid: i64,
+    mode: Option<String>,
 ) -> Result<(), AppError> {
+    let cancel = mode.as_deref() == Some("cancel");
     let system = state
         .registry
         .system_of(&conn_id)
@@ -244,13 +322,23 @@ pub async fn kill_session(
             .await?
             .map_err(|e| AppError::Driver(e.message));
     }
-    let sql = kill_query(&system, pid)
-        .ok_or_else(|| AppError::Driver(format!("Kill session is not supported for {system}")))?;
-    state
+    let sql = if cancel {
+        cancel_query(&system, pid)
+            .ok_or_else(|| AppError::Driver(format!("Cancelling a single query is not supported for {system} — terminate the session instead")))?
+    } else {
+        kill_query(&system, pid).ok_or_else(|| AppError::Driver(format!("Kill session is not supported for {system}")))?
+    };
+    let outcome = state
         .registry
         .exec_statement(&conn_id, sql)
         .await?
         .map_err(|e| AppError::Driver(e.message))?;
+    if signal_refused(&outcome) {
+        return Err(AppError::Driver(format!(
+            "The server did not {} session {pid} — it may have ended already, or this login is not allowed to signal it",
+            if cancel { "cancel the query of" } else { "terminate" }
+        )));
+    }
     Ok(())
 }
 
@@ -514,6 +602,38 @@ mod tests {
         assert!(database_in_use("oracle", &qe(None, "ORA-01940: cannot drop a user who is currently connected")));
         assert!(!database_in_use("postgres", &qe(Some("3D000"), "database \"x\" does not exist")));
         assert!(!database_in_use("mysql", &qe(None, "Access denied for user")));
+    }
+
+    #[test]
+    fn session_monitor_returns_one_shape_everywhere() {
+        for sys in ["postgres", "mysql", "mariadb", "mssql", "oracle"] {
+            let q = admin_query(sys, "sessions").unwrap();
+            for col in SESSION_COLUMNS {
+                let alias = match sys {
+                    "oracle" => format!("AS \"{col}\""),
+                    "mysql" | "mariadb" if col == "database" => "AS `database`".to_string(),
+                    "mssql" if col == "database" => "AS [database]".to_string(),
+                    _ => format!("AS {col}"),
+                };
+                assert!(q.contains(&alias) || (col == "pid" && q.contains("pid,")), "{sys}: missing {alias}\n{q}");
+            }
+        }
+    }
+
+    #[test]
+    fn cancel_is_not_terminate() {
+        assert_eq!(cancel_query("postgres", 42).unwrap(), "SELECT pg_cancel_backend(42)");
+        assert_eq!(cancel_query("mysql", 42).unwrap(), "KILL QUERY 42");
+        assert!(cancel_query("oracle", 9).unwrap().contains("CANCEL SQL"));
+        assert!(cancel_query("mssql", 7).is_none(), "MSSQL KILL ends the session — no query-only cancel");
+        let no = StatementOutcome::Rows {
+            result: QueryResultSet { cols: vec![], rows: vec![serde_json::json!({ "pg_cancel_backend": false })], total: 1 },
+        };
+        let yes = StatementOutcome::Rows {
+            result: QueryResultSet { cols: vec![], rows: vec![serde_json::json!({ "pg_cancel_backend": true })], total: 1 },
+        };
+        assert!(signal_refused(&no));
+        assert!(!signal_refused(&yes));
     }
 
     #[test]

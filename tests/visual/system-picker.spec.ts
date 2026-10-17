@@ -37,3 +37,37 @@ test('new connection picker: footer Close button dismisses it', async ({ page })
 
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
+
+// Commercial picker: grouped cards that lift on hover, and a search box (Enter opens
+// the form when exactly one type matches).
+test('new connection picker: cards lift on hover, search narrows and Enter picks', async ({ page }) => {
+  await blockRemoteFonts(page)
+  await page.goto(APP_URL)
+  await page.waitForSelector('#app > *', { timeout: 15_000 })
+  await page.getByTitle('New connection').first().click()
+  const dialog = page.getByRole('dialog', { name: 'New Connection' })
+  await expect(dialog.getByText('Relational databases')).toBeVisible()
+  await expect(dialog.getByText('Message brokers & streaming')).toBeVisible()
+
+  const card = dialog.locator('.picker-card[title="MySQL"]')
+  const lift = () => card.evaluate((el) => new DOMMatrix(getComputedStyle(el).transform).m42)
+  const shadow = () => card.evaluate((el) => getComputedStyle(el).boxShadow)
+  const restShadow = await shadow()
+  expect(await lift()).toBe(0)
+  await card.hover()
+  await expect.poll(lift).toBeLessThan(0) // moved up
+  expect(await shadow()).not.toBe(restShadow) // and casts a bigger shadow
+
+  // search: the box has focus; typing narrows the cards
+  const search = dialog.getByLabel('Search database types')
+  await expect(search).toBeFocused()
+  await search.fill('broker')
+  await expect(dialog.locator('.picker-card')).toHaveCount(3) // Kafka, NATS, RabbitMQ
+  await search.fill('zzzz')
+  await expect(dialog.getByText(/Nothing matches/)).toBeVisible()
+  await search.fill('duck')
+  await expect(dialog.locator('.picker-card')).toHaveCount(1)
+  await search.press('Enter')
+  await expect(page.getByText('Choose database type')).toHaveCount(0)
+  await expect(page.getByRole('dialog').getByText('New connection', { exact: true })).toBeVisible()
+})

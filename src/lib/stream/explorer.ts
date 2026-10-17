@@ -3,6 +3,9 @@
 // does IPC + rendering).
 import type { KafkaTopic, NatsJsStream } from '$lib/ipc'
 
+/** Counts in the tree read like a product, not a log: 45,980 not 45980. */
+const fmtCount = (n: number) => n.toLocaleString('en-US')
+
 export interface TopicRow {
   name: string
   internal: boolean
@@ -38,7 +41,7 @@ export function kafkaTopicRows(topics: KafkaTopic[], showInternal = false): Topi
         internal: t.internal,
         partitions: parts,
         messages,
-        meta: `${parts} part · ${known ? messages : '?'} msg`,
+        meta: `${parts} part · ${known ? fmtCount(messages) : '?'} msg`,
         offsetsError: known ? undefined : (t.offsets_error ?? 'the broker did not report offsets'),
       }
     })
@@ -125,7 +128,7 @@ export function natsStreamRows(streams: NatsJsStream[]): StreamRow[] {
         name: s.name,
         subjects,
         messages: s.messages,
-        meta: `${subjects.length} subj · ${s.messages} msg`,
+        meta: `${subjects.length} subj · ${fmtCount(s.messages)} msg`,
       }
     })
     .sort((a, b) => a.name.localeCompare(b.name))

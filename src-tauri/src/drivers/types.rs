@@ -23,6 +23,8 @@ pub enum SystemType {
     Rabbitmq,
     /// DuckDB — embedded analytical database (file or in-memory).
     Duckdb,
+    /// Elasticsearch (REST API, port 9200) — search engine, also OpenSearch.
+    Elasticsearch,
 }
 
 impl SystemType {
@@ -42,6 +44,7 @@ impl SystemType {
             SystemType::Oracle => "oracle",
             SystemType::Rabbitmq => "rabbitmq",
             SystemType::Duckdb => "duckdb",
+            SystemType::Elasticsearch => "elasticsearch",
         }
     }
 

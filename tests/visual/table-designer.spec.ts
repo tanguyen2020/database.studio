@@ -215,7 +215,8 @@ test('table designer: existing table can drop a column (ALTER DROP COLUMN)', asy
   // the connection name, an ALTER badge (existing table), and a database chip
   // whose tooltip names the database.
   await expect(page.getByText('Postgres', { exact: true }).first()).toBeVisible()
-  await expect(page.getByText('ALTER', { exact: true }).first()).toBeVisible()
+  // existing table: the header says it is being edited (plain words, not 'ALTER')
+  await expect(page.getByText('Editing', { exact: true }).first()).toBeVisible()
   await expect(page.locator('[title^="Database:"]').first()).toBeVisible()
 
   // Fields tab shows the existing columns (seeded). Drop one via its × (→ ↺).

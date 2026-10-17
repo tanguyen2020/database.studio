@@ -33,12 +33,13 @@ const EXPECTED: Record<string, [badge: string, accent: string]> = {
   oracle: ['OR', '#C74634'],
   rabbitmq: ['RB', '#FF6600'],
   duckdb: ['DK', '#FFF000'],
+  elasticsearch: ['ES', '#00BFB3'],
 }
 
 describe('SYSTEMS metadata (từ systems.gen.ts)', () => {
-  it('đủ 14 hệ + orphan', () => {
-    expect(SYSTEM_ORDER).toHaveLength(14)
-    expect(Object.keys(SYSTEMS)).toHaveLength(15)
+  it('đủ 15 hệ + orphan', () => {
+    expect(SYSTEM_ORDER).toHaveLength(15)
+    expect(Object.keys(SYSTEMS)).toHaveLength(16)
   })
 
   for (const [key, [badge, accent]] of Object.entries(EXPECTED)) {
@@ -107,6 +108,7 @@ describe('SystemIcon (port dbIcon() HTML dòng 3883)', () => {
     ['mssql', 'png'],
     ['mariadb', 'svg'],
     ['oracle', 'svg'],
+    ['nats', 'svg'], // NATS brand mark — same asset as the Explorer's broker tree
   ])('%s dùng logo assets/ (%s)', (key, ext) => {
     const { container } = render(SystemIcon, { system: key, size: 16 })
     const img = container.querySelector('img')!
@@ -115,7 +117,7 @@ describe('SystemIcon (port dbIcon() HTML dòng 3883)', () => {
     expect(img.getAttribute('width')).toBe('16')
   })
 
-  it.each(['redis', 'kafka', 'nats', 'cassandra', 'sqlite', 'mongodb'])(
+  it.each(['redis', 'kafka', 'cassandra', 'sqlite', 'mongodb'])(
     '%s dùng SVG stroke accent, viewBox 24, strokeWidth 1.9',
     (key) => {
       const { container } = render(SystemIcon, { system: key })

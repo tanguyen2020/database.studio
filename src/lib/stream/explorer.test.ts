@@ -84,6 +84,11 @@ describe('natsStreamRows', () => {
     expect(orders.subjects.map((s) => s.subject)).toEqual(['orders.eu', 'orders.us'])
     expect(orders.meta).toBe('2 subj · 42 msg')
   })
+
+  it('big counts get thousands separators (45,980 msg, not 45980)', () => {
+    expect(natsStreamRows([stream('BIG', ['big.>'], 1234567)])[0].meta).toBe('1 subj · 1,234,567 msg')
+    expect(kafkaTopicRows([topic('payments', false, [[0, 45980]])])[0].meta).toBe('1 part · 45,980 msg')
+  })
 })
 
 describe('filterStreamRows', () => {

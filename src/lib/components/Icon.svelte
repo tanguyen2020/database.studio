@@ -1,9 +1,13 @@
+<script module lang="ts">
+  export type IconName = 'refresh' | 'plus' | 'close' | 'chevron-down' | 'merge' | 'search' | 'panel-right' | 'query' | 'expand' | 'copy' | 'trash'
+    | 'download' | 'filter' | 'sort' | 'chevron-left' | 'chevron-right' | 'first' | 'last' | 'paste' | 'edit' | 'table' | 'braces' | 'code' | 'file' | 'columns' | 'rows' | 'sliders' | 'check'
+</script>
+
 <script lang="ts">
   // Small UI icon set (stroke, 16-unit grid, currentColor) for chrome controls that
   // used to be Unicode glyphs (⟳ + × ⌄ ⊟ ⌕ ⇤). Fonts draw those glyphs at
   // different weights and baselines, which is what made the chrome look patched
   // together; one drawn set keeps every control the same weight.
-  export type IconName = 'refresh' | 'plus' | 'close' | 'chevron-down' | 'merge' | 'search' | 'panel-right' | 'query' | 'expand' | 'copy' | 'trash'
   let { name, size = 14 }: { name: IconName; size?: number } = $props()
 </script>
 
@@ -50,5 +54,46 @@
     <path d="M10.5 5.5V3.9a1.4 1.4 0 0 0-1.4-1.4H3.9a1.4 1.4 0 0 0-1.4 1.4v5.2a1.4 1.4 0 0 0 1.4 1.4h1.6" />
   {:else if name === 'trash'}
     <path d="M2.8 4.3h10.4M6.3 4.3V3a.8.8 0 0 1 .8-.8h1.8a.8.8 0 0 1 .8.8v1.3M4.3 4.3l.6 8.5a1 1 0 0 0 1 .9h4.2a1 1 0 0 0 1-.9l.6-8.5" />
+  {:else if name === 'download'}
+    <path d="M8 2.5v7.5M4.8 7 8 10.2 11.2 7M3 13h10" />
+  {:else if name === 'filter'}
+    <path d="M2.5 3.5h11L9.3 8.6v4.2l-2.6-1.3V8.6z" />
+  {:else if name === 'sort'}
+    <path d="M5 3v10M2.8 10.8 5 13l2.2-2.2M11 13V3M8.8 5.2 11 3l2.2 2.2" />
+  {:else if name === 'chevron-left'}
+    <path d="M10 4 6 8l4 4" />
+  {:else if name === 'chevron-right'}
+    <path d="m6 4 4 4-4 4" />
+  {:else if name === 'first'}
+    <path d="M4 3.5v9M11.5 4 7.5 8l4 4" />
+  {:else if name === 'last'}
+    <path d="M12 3.5v9M4.5 4l4 4-4 4" />
+  {:else if name === 'paste'}
+    <rect x="3.5" y="3" width="9" height="11" rx="1.6" />
+    <path d="M6 3V2.4h4V3M6 7.5h4M6 10h2.5" />
+  {:else if name === 'edit'}
+    <path d="M10.4 2.9 13.1 5.6 5.8 12.9 2.6 13.4 3.1 10.2z" />
+  {:else if name === 'table'}
+    <rect x="2.5" y="3" width="11" height="10" rx="1.6" />
+    <path d="M2.5 6.5h11M2.5 9.8h11M6.3 6.5V13" />
+  {:else if name === 'braces'}
+    <path d="M6 2.8c-1.4 0-1.9.6-1.9 1.8v1.6c0 .9-.4 1.4-1.4 1.8 1 .4 1.4.9 1.4 1.8v1.6c0 1.2.5 1.8 1.9 1.8M10 2.8c1.4 0 1.9.6 1.9 1.8v1.6c0 .9.4 1.4 1.4 1.8-1 .4-1.4.9-1.4 1.8v1.6c0 1.2-.5 1.8-1.9 1.8" />
+  {:else if name === 'code'}
+    <path d="M5.5 4.5 2.5 8l3 3.5M10.5 4.5l3 3.5-3 3.5M9 3 7 13" />
+  {:else if name === 'file'}
+    <path d="M4 2.5h5.5L12.5 5.5v8H4z" />
+    <path d="M9.5 2.5v3h3" />
+  {:else if name === 'columns'}
+    <rect x="2.5" y="3" width="11" height="10" rx="1.6" />
+    <path d="M8 3v10" />
+  {:else if name === 'rows'}
+    <rect x="2.5" y="3" width="11" height="10" rx="1.6" />
+    <path d="M2.5 8h11" />
+  {:else if name === 'sliders'}
+    <path d="M3 4.5h6M12 4.5h1M3 11.5h1M7 11.5h6" />
+    <circle cx="10.5" cy="4.5" r="1.5" />
+    <circle cx="5.5" cy="11.5" r="1.5" />
+  {:else if name === 'check'}
+    <path d="m3.5 8.5 3 3 6-7" />
   {/if}
 </svg>

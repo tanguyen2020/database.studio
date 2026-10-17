@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { pageWindow } from './paging'
+import { pageWindow, ALL_ROWS } from './paging'
 
 describe('pageWindow', () => {
   it('not paged when result fits one page', () => {
@@ -27,7 +27,11 @@ describe('pageWindow', () => {
     expect(pageWindow(0, 200, 0)).toMatchObject({ paged: false, pageCount: 1, count: 0, last: true })
   })
 
-  it('guards pageSize 0 (avoids div-by-zero)', () => {
-    expect(pageWindow(10, 0, 0).count).toBe(1)
+  // pageSize 0 used to be a div-by-zero guard (→ 1 row); it now means ALL_ROWS.
+  it('ALL_ROWS (0) puts every fetched row on one page — no div-by-zero', () => {
+    const w = pageWindow(250_000, ALL_ROWS, 7)
+    expect(w).toEqual({ paged: false, pageCount: 1, page: 0, offset: 0, count: 250_000, last: true })
+    expect(pageWindow(0, ALL_ROWS, 0).count).toBe(0)
+    expect(pageWindow(10, -5, 0).count).toBe(10)
   })
 })

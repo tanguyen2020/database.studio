@@ -1020,7 +1020,7 @@
         role="button"
         tabindex="0"
         title="Cancel (Ctrl+F5 / Esc)"
-        style="display:flex;align-items:center;gap:var(--px-7);background:var(--error);color:var(--hex-fff);border-radius:var(--px-7);padding:var(--px-5) var(--px-13);cursor:pointer;font-weight:600;font-size:var(--px-12)"
+        class="ds-danger" style="display:flex;align-items:center;gap:var(--px-7);border-radius:var(--px-7);padding:var(--px-5) var(--px-13);cursor:pointer;font-weight:600;font-size:var(--px-12)"
       >
         <span>■</span><span>{exec.cancelling ? 'Cancelling…' : 'Cancel'}</span><span
           class="mono"

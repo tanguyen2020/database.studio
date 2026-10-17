@@ -98,9 +98,16 @@ test('the popup sizes itself to the visible controls', async ({ page }) => {
   const body = panel.locator(':scope > div > div').nth(1) // header · body · footer
   const height = async () => (await panel.boundingBox())!.height
 
-  // few controls → compact, no empty band and no scrollbar
+  // few controls → compact: the body is exactly as tall as what it holds (no empty
+  // band under the last control) and has no scrollbar
   const compact = await height()
-  expect(compact).toBeLessThan(500)
+  const slack = await body.evaluate((el) => {
+    const last = el.lastElementChild!.getBoundingClientRect().bottom
+    const inner = el.getBoundingClientRect().bottom - parseFloat(getComputedStyle(el).paddingBottom)
+    return inner - last
+  })
+  expect(Math.abs(slack), 'no empty band under the last control').toBeLessThanOrEqual(2)
+  expect(compact).toBeLessThan(page.viewportSize()!.height * 0.9)
   expect(await body.evaluate((el) => el.scrollHeight - el.clientHeight)).toBeLessThanOrEqual(1)
   if (process.env.SHOT_DIR) await panel.screenshot({ path: `${process.env.SHOT_DIR}/form-compact.png` })
 
@@ -122,4 +129,25 @@ test('the popup sizes itself to the visible controls', async ({ page }) => {
   expect(await body.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true)
   await expect(dialog.getByText('Connect', { exact: true })).toBeInViewport()
   await expect(dialog.getByText('New connection', { exact: true })).toBeInViewport()
+})
+
+test('the form opens with the caret in Connection name, and the Connect label is centred', async ({ page }) => {
+  const dialog = await openForm(page, 'PostgreSQL')
+  await expect(dialog.getByRole('textbox', { name: 'Connection name' })).toBeFocused()
+  // typing goes straight into the name
+  await page.keyboard.type('Billing DB')
+  await expect(dialog.getByRole('textbox', { name: 'Connection name' })).toHaveValue('Billing DB')
+
+  // every footer button has its label in the middle (the primary one is wider)
+  for (const name of ['Test connection', 'Close', 'Connect']) {
+    const btn = dialog.getByText(name, { exact: true })
+    const off = await btn.evaluate((el) => {
+      const r = el.getBoundingClientRect()
+      const range = document.createRange()
+      range.selectNodeContents(el)
+      const t = range.getBoundingClientRect()
+      return Math.abs(t.left + t.width / 2 - (r.left + r.width / 2))
+    })
+    expect(off, `${name}: label is off-centre by ${off}px`).toBeLessThan(2)
+  }
 })

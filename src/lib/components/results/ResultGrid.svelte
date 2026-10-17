@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon, { type IconName } from '$lib/components/Icon.svelte'
   import Chevron from '$lib/components/Chevron.svelte'
   // Read-only virtualized result grid (TanStack table-core + virtual-core):
   // zebra rows, sticky header, row-number gutter, NULL badge, datetime in
@@ -17,7 +18,7 @@
     type VirtualItem,
   } from '@tanstack/virtual-core'
   import { untrack, tick, onDestroy } from 'svelte'
-  import { pageWindow } from '$lib/grid/paging'
+  import { pageWindow, ALL_ROWS } from '$lib/grid/paging'
   import { buildGroups, type AggFn, type GroupNode } from '$lib/grid/groupby'
   import { save as saveFileDialog } from '@tauri-apps/plugin-dialog'
   import { invoke } from '@tauri-apps/api/core'
@@ -613,7 +614,8 @@
   // ---- pagination (AUDIT item 1) — client-side window over the fetched rows.
   // Row indices stay ABSOLUTE (ri = pageOffset + vi.index) so edits/selection
   // keep working. Table Viewer paginates server-side; this covers query results.
-  const PAGE_SIZES = [100, 200, 500, 1000]
+  // ALL_ROWS = every fetched row on one page (virtualised → still cheap).
+  const PAGE_SIZES = [100, 200, 500, 1000, ALL_ROWS]
   let pageSize = $state(200)
   let page = $state(0)
   const win = $derived(pageWindow(rowCount, pageSize, page))
@@ -864,6 +866,7 @@
   }
 
   // ---- right-click copy menu -----------------------------------------------
+  const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform)
   let ctxMenu = $state<{ x: number; y: number; row: number; col: string } | null>(null)
 
   // Position the context menu fully inside the viewport. The menu's height varies
@@ -965,49 +968,37 @@
 <div style="display:flex;flex-direction:column;height:100%;min-height:0">
 {#if editable}
   <!-- editable toolbar: Add row / Delete / pending buffer → Preview + Apply/Discard -->
-  <div style="flex:none;display:flex;align-items:center;gap:var(--px-8);padding:var(--px-5) var(--px-12);border-bottom:var(--px-1) solid var(--border);background:var(--header);font-size:var(--px-11_5)">
-    <span class="eg-btn" onclick={addRow} onkeydown={(e) => e.key === 'Enter' && addRow()} role="button" tabindex="0">＋ Insert row</span>
-    <span class="eg-btn" onclick={toggleDeleteSelected} onkeydown={(e) => e.key === 'Enter' && toggleDeleteSelected()} role="button" tabindex="0" style="opacity:{selectedRows.size ? 1 : 0.5}">🗑 Delete row(s)</span>
+  <div class="rg-bar">
+    <span class="ds-tbtn" onclick={addRow} onkeydown={(e) => e.key === 'Enter' && addRow()} role="button" tabindex="0" title="Add an empty row at the end"><Icon name="plus" size={13} />Insert row</span>
+    <span
+      class="ds-tbtn danger"
+      onclick={() => selectedRows.size && toggleDeleteSelected()}
+      onkeydown={(e) => e.key === 'Enter' && selectedRows.size && toggleDeleteSelected()}
+      role="button"
+      tabindex="0"
+      aria-disabled={!selectedRows.size}
+      title={selectedRows.size ? 'Mark the selected rows for deletion' : 'Select rows (click the # column) to delete them'}
+    ><Icon name="trash" size={13} />{selectedRows.size > 1 ? `Delete ${selectedRows.size} rows` : 'Delete row'}</span>
     {#if isClickhouse}
-      <span style="color:var(--muted);font-size:var(--px-10_5)">ClickHouse: edits are async mutations — no OLTP commit</span>
+      <span class="ds-meta">ClickHouse: edits run as async mutations — no transaction</span>
     {/if}
     {#if pendingCount > 0}
-      <span style="color:var(--warn)">● {pendingCount} unsaved change(s)</span>
+      <span class="rg-pending"><span class="rg-pending-dot"></span>{pendingCount} unsaved {pendingCount === 1 ? 'change' : 'changes'}</span>
       <div style="margin-left:auto;display:flex;gap:var(--px-8)">
         {#if isClickhouse}
           <!-- §7 option (a): route sang Generate mutation (ALTER TABLE … UPDATE/DELETE), KHÔNG apply OLTP -->
-          <span class="eg-btn" onclick={discard} onkeydown={(e) => e.key === 'Enter' && discard()} role="button" tabindex="0">Discard</span>
-          <span
-            onclick={generateMutation}
-            onkeydown={(e) => e.key === 'Enter' && generateMutation()}
-            role="button"
-            tabindex="0"
-            style="font-size:var(--px-11_5);font-weight:600;background:#FFCC00;color:#0f1219;border-radius:var(--px-6);padding:var(--px-4) var(--px-12);cursor:pointer"
-          >Generate mutation</span>
+          <span class="ds-tbtn" onclick={discard} onkeydown={(e) => e.key === 'Enter' && discard()} role="button" tabindex="0">Discard</span>
+          <span class="ds-tbtn primary" onclick={generateMutation} onkeydown={(e) => e.key === 'Enter' && generateMutation()} role="button" tabindex="0"><Icon name="code" size={13} />Generate mutation</span>
         {:else}
-          <span class="eg-btn" onclick={openPreview} onkeydown={(e) => e.key === 'Enter' && openPreview()} role="button" tabindex="0">Preview diff</span>
+          <span class="ds-tbtn" onclick={openPreview} onkeydown={(e) => e.key === 'Enter' && openPreview()} role="button" tabindex="0" title="See the SQL that will run"><Icon name="code" size={13} />Preview diff</span>
           <!-- Reset — revert grid edits/inserts/deletes to the original values -->
-          <span class="eg-btn" onclick={discard} onkeydown={(e) => e.key === 'Enter' && discard()} role="button" tabindex="0" title="Revert all pending changes">Reset</span>
+          <span class="ds-tbtn" onclick={discard} onkeydown={(e) => e.key === 'Enter' && discard()} role="button" tabindex="0" title="Revert all pending changes"><Icon name="refresh" size={13} />Reset</span>
           {#if applying}
             <!-- Cancel — abort the running Execute -->
-            <span
-              onclick={cancelApply}
-              onkeydown={(e) => e.key === 'Enter' && cancelApply()}
-              role="button"
-              tabindex="0"
-              title="Cancel the running command"
-              style="font-size:var(--px-11_5);font-weight:600;background:var(--error);color:var(--hex-fff);border-radius:var(--px-6);padding:var(--px-4) var(--px-12);cursor:pointer"
-            >Cancel</span>
+            <span class="ds-tbtn danger" onclick={cancelApply} onkeydown={(e) => e.key === 'Enter' && cancelApply()} role="button" tabindex="0" title="Cancel the running command"><Icon name="close" size={13} />Cancel</span>
           {:else}
             <!-- Execute — write pending changes to the DB -->
-            <span
-              onclick={apply}
-              onkeydown={(e) => e.key === 'Enter' && apply()}
-              role="button"
-              tabindex="0"
-              title="Write pending changes to the database"
-              style="font-size:var(--px-11_5);font-weight:600;background:var(--primary);color:var(--hex-fff);border-radius:var(--px-6);padding:var(--px-4) var(--px-12);cursor:pointer"
-            >Execute</span>
+            <span class="ds-tbtn primary" onclick={apply} onkeydown={(e) => e.key === 'Enter' && apply()} role="button" tabindex="0" title="Write pending changes to the database"><Icon name="check" size={13} />Execute</span>
           {/if}
         {/if}
       </div>
@@ -1247,63 +1238,66 @@
 </div>
 {#if !editable && rowCount > 0}
   <!-- pager (AUDIT item 1) + Group By (T27) -->
-  <div style="flex:none;display:flex;align-items:center;gap:var(--px-10);padding:var(--px-4) var(--px-12);border-top:var(--px-1) solid var(--border);background:var(--header);font-size:var(--px-11);color:var(--text2);position:relative">
+  <div class="rg-foot">
     <span
+      class="ds-tbtn"
       role="button"
       tabindex="0"
+      aria-pressed={groupActive}
+      aria-expanded={groupOpen}
       onclick={() => (groupOpen = !groupOpen)}
       onkeydown={(e) => e.key === 'Enter' && (groupOpen = !groupOpen)}
       title="Group rows and aggregate"
-      style="cursor:pointer;padding:0 var(--px-6);border-radius:var(--px-4);color:{groupActive ? 'var(--primary)' : 'var(--text2)'};background:{groupActive ? 'var(--panel)' : 'transparent'};font-weight:{groupActive ? 600 : 400}"
-    >Σ Group by{groupActive ? ` (${groupBy.length})` : ''}</span>
+    ><Icon name="sliders" size={13} />Group by{#if groupActive}<span class="ds-tbtn-badge">{groupBy.length}</span>{/if}</span>
     {#if groupActive}
-      <span role="button" tabindex="0" onclick={clearGroup} onkeydown={(e) => e.key === 'Enter' && clearGroup()} style="cursor:pointer;color:var(--muted)" title="Clear grouping">✕</span>
+      <span role="button" tabindex="0" class="ds-act" style="opacity:1" onclick={clearGroup} onkeydown={(e) => e.key === 'Enter' && clearGroup()} title="Clear grouping" aria-label="Clear grouping"><Icon name="close" size={12} /></span>
     {/if}
     {#if groupOpen}
-      <div style="position:absolute;bottom:calc(100% + var(--px-4));left:var(--px-8);z-index:62;min-width:var(--px-220);background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-8);box-shadow:0 var(--px-12) var(--px-30) var(--rgba-0-0-0-_5);padding:var(--px-8)">
-        <div style="font-size:var(--px-10);text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:var(--px-4)">Group by columns</div>
+      <div class="ds-menu" style="position:absolute;bottom:calc(100% + var(--px-6));left:var(--px-8);z-index:62;min-width:var(--px-268);padding:var(--px-8)">
+        <div class="ds-menu-label" style="padding-left:0">Group by columns</div>
         <div style="max-height:var(--px-150);overflow:auto;display:flex;flex-direction:column;gap:var(--px-2)">
           {#each columns as c, ci (ci)}
-            <label class="mono" style="display:flex;align-items:center;gap:var(--px-6);font-size:var(--px-11_5);cursor:pointer;color:var(--text2)">
+            <label style="display:flex;align-items:center;gap:var(--px-8);font-size:var(--px-12_5);cursor:pointer;color:var(--text);padding:var(--px-3) 0">
               <input type="checkbox" checked={groupBy.includes(c)} onchange={() => toggleGroupCol(c)} /> {c}
             </label>
           {/each}
         </div>
-        <div style="display:flex;align-items:center;gap:var(--px-6);margin-top:var(--px-8);font-size:var(--px-11)">
-          <select bind:value={groupFn} class="mono" style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-4);padding:0 var(--px-4);color:var(--text)">
+        <div style="display:flex;align-items:center;gap:var(--px-6);margin-top:var(--px-8)">
+          <select bind:value={groupFn} class="ds-control">
             {#each AGG_FNS as f (f)}<option value={f}>{f}</option>{/each}
           </select>
           {#if groupFn !== 'count'}
-            <select bind:value={groupCol} class="mono" style="flex:1;background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-4);padding:0 var(--px-4);color:var(--text)">
+            <select bind:value={groupCol} class="ds-control" style="flex:1">
               <option value="">column…</option>
               {#each columns as c, ci (ci)}<option value={c}>{c}</option>{/each}
             </select>
           {/if}
         </div>
         <div style="display:flex;gap:var(--px-6);margin-top:var(--px-8);justify-content:flex-end">
-          <span class="eg-btn" role="button" tabindex="0" onclick={() => (groupOpen = false)} onkeydown={(e) => e.key === 'Enter' && (groupOpen = false)}>Close</span>
-          <span role="button" tabindex="0" onclick={applyGroup} onkeydown={(e) => e.key === 'Enter' && applyGroup()} style="font-size:var(--px-11);font-weight:600;background:var(--primary);color:var(--hex-fff);border-radius:var(--px-6);padding:var(--px-3) var(--px-12);cursor:{groupBy.length ? 'pointer' : 'not-allowed'};opacity:{groupBy.length ? 1 : 0.5}">Apply</span>
+          <span class="ds-tbtn" role="button" tabindex="0" onclick={() => (groupOpen = false)} onkeydown={(e) => e.key === 'Enter' && (groupOpen = false)}>Close</span>
+          <span class="ds-tbtn primary" role="button" tabindex="0" aria-disabled={!groupBy.length} onclick={applyGroup} onkeydown={(e) => e.key === 'Enter' && applyGroup()}>Apply</span>
         </div>
       </div>
     {/if}
-    <span class="mono" style="margin-left:var(--px-8)">Rows {(pageOffset + 1).toLocaleString()}–{(pageOffset + pageRowCount).toLocaleString()} of {rowCount.toLocaleString()}</span>
-    <label style="margin-left:auto;display:flex;align-items:center;gap:var(--px-5)">Page size
-      <select bind:value={pageSize} class="mono" style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-4);padding:0 var(--px-4);color:var(--text);font-size:var(--px-11)">
-        {#each PAGE_SIZES as s (s)}<option value={s}>{s}</option>{/each}
+    <span class="ds-meta ds-num" style="margin-left:var(--px-4)">Rows <b>{(pageOffset + 1).toLocaleString()}–{(pageOffset + pageRowCount).toLocaleString()}</b> of {rowCount.toLocaleString()}</span>
+    <label class="ds-field" style="margin-left:auto">Page size
+      <select bind:value={pageSize} class="ds-control">
+        {#each PAGE_SIZES as s (s)}<option value={s}>{s === ALL_ROWS ? `All (${rowCount.toLocaleString()})` : s}</option>{/each}
       </select>
     </label>
     {#if paged}
-      {#snippet pbtn(label: string, to: number, disabled: boolean)}
-        <span role="button" tabindex="0" aria-disabled={disabled}
+      {#snippet pbtn(icon: IconName, label: string, to: number, disabled: boolean)}
+        <span role="button" tabindex="0" aria-disabled={disabled} aria-label={label} title={label}
           onclick={() => !disabled && (page = to)}
-          onkeydown={(e) => e.key === 'Enter' && !disabled && (page = to)}
-          style="cursor:{disabled ? 'default' : 'pointer'};opacity:{disabled ? 0.35 : 1};padding:0 var(--px-5);user-select:none">{label}</span>
+          onkeydown={(e) => e.key === 'Enter' && !disabled && (page = to)}><Icon name={icon} size={13} /></span>
       {/snippet}
-      {@render pbtn('⏮', 0, page === 0)}
-      {@render pbtn('◀', page - 1, page === 0)}
-      <span class="mono">Page {page + 1} / {pageCount}</span>
-      {@render pbtn('▶', page + 1, page >= pageCount - 1)}
-      {@render pbtn('⏭', pageCount - 1, page >= pageCount - 1)}
+      <div class="ds-pager">
+        {@render pbtn('first', 'First page', 0, page === 0)}
+        {@render pbtn('chevron-left', 'Previous page', page - 1, page === 0)}
+        <span class="ds-pager-label">Page <b>{page + 1}</b> of {pageCount}</span>
+        {@render pbtn('chevron-right', 'Next page', page + 1, page >= pageCount - 1)}
+        {@render pbtn('last', 'Last page', pageCount - 1, page >= pageCount - 1)}
+      </div>
     {/if}
   </div>
 {/if}
@@ -1314,38 +1308,34 @@
   {@const m = ctxMenu}
   {@const selN = selectedRows.size || (selectedCell ? 1 : data.rows.length)}
   <div role="presentation" style="position:fixed;inset:0;z-index:60" onclick={() => (ctxMenu = null)} oncontextmenu={(e) => { e.preventDefault(); ctxMenu = null }}></div>
-  <div use:placeMenu={{ x: m.x, y: m.y }} class="mono" style="position:fixed;left:{m.x}px;top:{m.y}px;max-height:calc(100vh - var(--px-16));overflow-y:auto;z-index:61;min-width:var(--px-200);background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-8);box-shadow:0 var(--px-12) var(--px-30) var(--rgba-0-0-0-_5);padding:var(--px-4) 0;font-size:var(--px-12)">
-    {#snippet item(label: string, act: () => void)}
-      <div
-        role="button"
-        tabindex="0"
-        onclick={act}
-        onkeydown={(e) => e.key === 'Enter' && act()}
-        style="padding:var(--px-6) var(--px-14);cursor:pointer;color:var(--text);white-space:nowrap"
-        onmouseenter={(e) => (e.currentTarget.style.background = 'var(--hover)')}
-        onmouseleave={(e) => (e.currentTarget.style.background = 'transparent')}
-      >{label}</div>
+  <div use:placeMenu={{ x: m.x, y: m.y }} class="ds-menu" role="menu" aria-label="Cell actions" tabindex="-1" style="position:fixed;left:{m.x}px;top:{m.y}px;max-height:calc(100vh - var(--px-16));overflow-y:auto;z-index:61">
+    {#snippet item(label: string, act: () => void, icon: IconName, hint = '')}
+      <div class="ds-menu-item" role="menuitem" tabindex="0" onclick={act} onkeydown={(e) => e.key === 'Enter' && act()}>
+        <span class="ds-mi-icon"><Icon name={icon} size={14} /></span>
+        <span class="ds-mi-label">{label}</span>
+        {#if hint}<span class="ds-mi-hint"><kbd>{hint}</kbd></span>{/if}
+      </div>
     {/snippet}
-    {@render item('Copy cell', () => copyCell(m.row, m.col))}
-    {@render item('Copy row', () => copyRowTsv(m.row))}
-    {@render item('Copy column', () => copyColumn(m.col))}
+    {@render item('Copy cell', () => copyCell(m.row, m.col), 'copy', isMac ? '⌘C' : 'Ctrl+C')}
+    {@render item('Copy row', () => copyRowTsv(m.row), 'rows')}
+    {@render item('Copy column', () => copyColumn(m.col), 'columns')}
     {#if editable}
-      {@render item('Paste', () => { clickCell(m.row, m.col); void pasteFromClipboard() })}
+      {@render item('Paste', () => { clickCell(m.row, m.col); void pasteFromClipboard() }, 'paste', isMac ? '⌘V' : 'Ctrl+V')}
     {/if}
     {#if modeOf(m.row, m.col) !== 'none'}
-      {@render item('Edit as JSON…', () => { ctxMenu = null; openJsonCell(m.row, m.col) })}
+      {@render item('Edit as JSON…', () => { ctxMenu = null; openJsonCell(m.row, m.col) }, 'edit')}
     {:else if hasJsonBadge(colTypes[m.col], data.rows[m.row]?.[m.col])}
-      {@render item('View JSON', () => { ctxMenu = null; openJsonCell(m.row, m.col) })}
+      {@render item('View JSON', () => { ctxMenu = null; openJsonCell(m.row, m.col) }, 'braces')}
     {/if}
-    <div style="height:var(--px-1);background:var(--border);margin:var(--px-4) 0"></div>
-    <div style="padding:var(--px-3) var(--px-14);font-size:var(--px-9_5);text-transform:uppercase;letter-spacing:.06em;color:var(--muted)">Copy {selN} row(s) as</div>
-    {@render item('Tab-separated', () => copyAs('tsv'))}
-    {@render item('CSV', () => copyAs('csv'))}
-    {@render item('JSON', () => copyAs('json'))}
-    {@render item('SQL INSERT', () => copyAs('sql-insert'))}
-    {@render item('SQL UPDATE', () => copyAs('sql-update'))}
-    {@render item('Markdown table', () => copyAs('markdown'))}
-    {@render item('XML', () => copyAs('xml'))}
+    <div class="ds-menu-sep" role="separator"></div>
+    <div class="ds-menu-label">Copy {selN.toLocaleString('en-US')} {selN === 1 ? 'row' : 'rows'} as</div>
+    {@render item('Tab-separated', () => copyAs('tsv'), 'table')}
+    {@render item('CSV', () => copyAs('csv'), 'file')}
+    {@render item('JSON', () => copyAs('json'), 'braces')}
+    {@render item('SQL INSERT', () => copyAs('sql-insert'), 'code')}
+    {@render item('SQL UPDATE', () => copyAs('sql-update'), 'code')}
+    {@render item('Markdown table', () => copyAs('markdown'), 'table')}
+    {@render item('XML', () => copyAs('xml'), 'code')}
   </div>
 {/if}
 
@@ -1524,5 +1514,40 @@
   .col-grip:hover,
   .col-grip.dragging {
     background: var(--primary);
+  }
+  /* grid toolbars — shared rule (theme.css: .ds-tbtn / .ds-pager) */
+  .rg-bar,
+  .rg-foot {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: var(--px-8);
+    padding: var(--px-6) var(--px-12);
+    background: var(--header);
+    font-size: var(--px-12_5);
+    color: var(--text2);
+  }
+  .rg-bar {
+    border-bottom: var(--px-1) solid var(--border);
+  }
+  .rg-foot {
+    position: relative;
+    border-top: var(--px-1) solid var(--border);
+  }
+  .rg-pending {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--px-6);
+    padding: var(--px-2) var(--px-10);
+    border-radius: var(--px-20);
+    font-weight: 600;
+    color: var(--sacc-amber);
+    background: color-mix(in srgb, var(--sacc-amber) 12%, transparent);
+  }
+  .rg-pending-dot {
+    width: var(--px-6);
+    height: var(--px-6);
+    border-radius: 50%;
+    background: currentColor;
   }
 </style>

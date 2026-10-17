@@ -233,6 +233,12 @@ export interface NatsJsConsumer {
   filter_subject: string
   num_pending: number
   num_ack_pending: number
+  /** every subject filter (empty = the whole stream) */
+  filter_subjects?: string[]
+  /** messages at or below this stream seq are acked */
+  ack_floor_stream_seq?: number
+  /** highest stream seq handed out (maybe not acked yet) */
+  delivered_stream_seq?: number
 }
 
 export interface NatsJsMessage {
@@ -388,6 +394,9 @@ export const kafkaCreateTopic = (connId: string, name: string, partitions: numbe
   invoke<void>('kafka_create_topic', { connId, name, partitions, replication })
 export const kafkaDeleteTopic = (connId: string, name: string) =>
   invoke<void>('kafka_delete_topic', { connId, name })
+/** Raise a topic's partition count (Kafka can only add). Resolves to the old count. */
+export const kafkaSetPartitions = (connId: string, name: string, partitions: number) =>
+  invoke<number>('kafka_set_partitions', { connId, name, partitions })
 export const kafkaPurgeTopic = (connId: string, name: string) =>
   invoke<void>('kafka_purge_topic', { connId, name })
 // Delete records in one partition up to (and including) `offset` — Kafka's only
@@ -466,6 +475,8 @@ export interface KafkaGroup {
   state: string
   protocol: string
   members: KafkaMember[]
+  /** topics assigned to its live members (empty when idle) */
+  topics?: string[]
 }
 export interface KafkaLag {
   topic: string
@@ -479,6 +490,9 @@ export const kafkaConsumerGroups = (connId: string) =>
   invoke<KafkaGroup[]>('kafka_consumer_groups', { connId })
 export const kafkaGroupLag = (connId: string, group: string) =>
   invoke<KafkaLag[]>('kafka_group_lag', { connId, group })
+/** lag of one group on ONE topic (cheap: that topic's partitions only) */
+export const kafkaGroupTopicLag = (connId: string, group: string, topic: string) =>
+  invoke<KafkaLag[]>('kafka_group_topic_lag', { connId, group, topic })
 export const kafkaResetOffset = (
   connId: string,
   group: string,
@@ -692,8 +706,11 @@ export const restoreDatabase = (connId: string, src: string) =>
 /** Admin views (T23): sessions/locks/users/extensions từ system views thật. */
 export const adminView = (connId: string, view: string) =>
   invoke<{ cols: [string, string][]; rows: Record<string, unknown>[]; total: number }>('admin_view', { connId, view })
-export const killSession = (connId: string, pid: number) =>
-  invoke<null>('kill_session', { connId, pid })
+/** `mode`: 'terminate' (default) ends the session; 'cancel' stops only the
+ *  statement it is running (PG pg_cancel_backend, MySQL KILL QUERY, Oracle
+ *  CANCEL SQL). MSSQL has no query-only cancel. */
+export const killSession = (connId: string, pid: number, mode?: 'cancel' | 'terminate') =>
+  invoke<null>('kill_session', { connId, pid, mode: mode ?? null })
 
 // ---- Drop Database when other sessions hold it ------------------------------
 /** `in_use` = the drop failed because OTHER sessions use the database — list them
@@ -1309,3 +1326,74 @@ export const rabbitSetPolicy = (
 ) => invoke<void>('rabbit_set_policy', { connId, vhost, name, pattern, applyTo, priority, definition })
 export const rabbitDeletePolicy = (connId: string, vhost: string, name: string) =>
   invoke<void>('rabbit_delete_policy', { connId, vhost, name })
+
+// ---- Elasticsearch (REST API — src-tauri/src/commands/elasticsearch.rs) ----
+
+export interface EsInfo {
+  name: string
+  cluster_name: string
+  cluster_uuid: string
+  version: string
+  /** 'elasticsearch' | 'opensearch' */
+  distribution: string
+  lucene_version: string
+  build_flavor: string
+  tagline: string
+}
+
+export interface EsOverview {
+  info: EsInfo
+  /** green | yellow | red | '' (health refused) */
+  status: string
+  number_of_nodes: number
+  number_of_data_nodes: number
+  active_primary_shards: number
+  active_shards: number
+  relocating_shards: number
+  initializing_shards: number
+  unassigned_shards: number
+  number_of_pending_tasks: number
+  active_shards_percent: number
+  indices: number | null
+  docs: number | null
+  store_bytes: number | null
+  warning: string | null
+}
+
+export interface EsIndex {
+  name: string
+  health: string
+  status: string
+  uuid: string
+  primaries: number | null
+  replicas: number | null
+  docs_count: number | null
+  docs_deleted: number | null
+  store_bytes: number | null
+  pri_store_bytes: number | null
+  created: string
+  hidden: boolean
+  data_stream: string | null
+}
+
+/** Raw answer of a REST call — returned whatever the HTTP status. */
+export interface EsResponse {
+  status: number
+  ok: boolean
+  json: unknown | null
+  text: string | null
+  took_ms: number
+  content_type: string
+  warnings: string[]
+  bytes: number
+}
+
+export const esRequest = (connId: string, method: string, path: string, body?: string | null) =>
+  invoke<EsResponse>('es_request', { connId, method, path, body: body ?? null })
+
+export const esOverview = (connId: string) => invoke<EsOverview>('es_overview', { connId })
+
+export const esIndices = (connId: string) => invoke<EsIndex[]>('es_indices', { connId })
+
+export const esMappingFields = (connId: string, index: string) =>
+  invoke<[string, string][]>('es_mapping_fields', { connId, index })

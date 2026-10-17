@@ -130,6 +130,13 @@ export async function previewText(page: Page, label?: string): Promise<string> {
  * box collapsed to a few pixels shipped once (the payload popups), and reading the
  * model alone did NOT catch it.
  */
+/** The payload viewer opens JSON documents as a Tree; switch to the Formatted
+ *  (code) view when a test reads the editor surface. No-op when there is no Tree. */
+export async function showFormatted(page: Page): Promise<void> {
+  const btn = page.getByRole('dialog').last().getByRole('button', { name: 'Formatted', exact: true })
+  if (await btn.count()) await btn.first().click()
+}
+
 export async function previewBox(
   page: Page,
   label?: string,

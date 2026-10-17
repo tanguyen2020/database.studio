@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { APP_URL, blockRemoteFonts, previewBox } from './helpers'
+import { APP_URL, blockRemoteFonts, previewBox, showFormatted } from './helpers'
 
 // Kafka: connecting does NOT open a cluster tab — topics live in the ObjectExplorer
 // sidebar and clicking a topic opens its consumer.
@@ -84,6 +84,8 @@ test('kafka: topic messages are paged (Newest / Previous / Next)', async ({ page
   // the value popup SHOWS the payload: a viewer whose box collapsed to a few
   // pixels still holds the text in its model, so height is part of the contract
   await rows.first().getByTitle('View value as JSON').click()
+  await page.waitForTimeout(600)
+  await showFormatted(page)
   await page.waitForTimeout(600)
   const payload = await previewBox(page, 'Payload')
   expect(payload.text, 'kafka payload viewer is empty').not.toBe('')

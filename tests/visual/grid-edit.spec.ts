@@ -22,7 +22,7 @@ test('editable grid: single-click selects, double-click / type edits (Navicat-st
   await page.waitForTimeout(300)
   // double-click the table row → opens the editable Table Viewer grid
   await page.getByRole('treeitem', { name: /students/ }).first().dblclick()
-  await expect(page.getByText('＋ Insert row', { exact: true }).first()).toBeVisible({ timeout: 10_000 })
+  await expect(page.getByRole('button', { name: 'Insert row', exact: true }).first()).toBeVisible({ timeout: 10_000 })
   await page.waitForTimeout(300)
 
   const cell = page.locator('.grid-row td:not(:first-child)').first()
@@ -73,7 +73,7 @@ test('editable grid: Tab moves cell, Insert row focuses, paste adds records', as
   await page.getByText('Tables', { exact: true }).first().dblclick()
   await page.waitForTimeout(300)
   await page.getByRole('treeitem', { name: /students/ }).first().dblclick()
-  await expect(page.getByText('＋ Insert row', { exact: true }).first()).toBeVisible({ timeout: 10_000 })
+  await expect(page.getByRole('button', { name: 'Insert row', exact: true }).first()).toBeVisible({ timeout: 10_000 })
   await page.waitForTimeout(300)
 
   // item 1 — enter edit, Tab keeps the editor open on the next cell
@@ -88,7 +88,7 @@ test('editable grid: Tab moves cell, Insert row focuses, paste adds records', as
 
   // item 2 — clicking Insert row opens an editor on the new row straight away,
   // and the grid scrolls to the bottom so the new row is visible.
-  await page.getByText('＋ Insert row', { exact: true }).first().click()
+  await page.getByRole('button', { name: 'Insert row', exact: true }).first().click()
   await page.waitForTimeout(300)
   await expect(page.locator('input:focus')).toBeVisible()
   const atBottom = await page.evaluate(() => {
@@ -144,7 +144,7 @@ test('editable grid: copy N rows then paste yields N rows', async ({ page, conte
   await page.getByText('Tables', { exact: true }).first().dblclick()
   await page.waitForTimeout(300)
   await page.getByRole('treeitem', { name: /students/ }).first().dblclick()
-  await expect(page.getByText('＋ Insert row', { exact: true }).first()).toBeVisible({ timeout: 10_000 })
+  await expect(page.getByRole('button', { name: 'Insert row', exact: true }).first()).toBeVisible({ timeout: 10_000 })
   await page.waitForTimeout(300)
 
   // select the first 3 rows via the No. gutter (Ctrl+click to add) and copy

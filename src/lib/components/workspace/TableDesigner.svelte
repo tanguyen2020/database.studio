@@ -11,6 +11,7 @@
   import { toasts } from '$lib/stores/toast.svelte'
   import { systemMeta } from '$lib/systems'
   import SystemBadge from '$lib/components/SystemBadge.svelte'
+  import { dbIcon } from '$lib/explorer/icons'
   import { designerTypes } from '$lib/sql/ddl'
   import { defaultColumnType } from '$lib/sql/datatypes'
   import TypeSelect from '$lib/components/TypeSelect.svelte'
@@ -495,38 +496,46 @@
 
 <svelte:window onkeydown={onWinKey} />
 
-<div style="flex:1;display:flex;flex-direction:column;min-height:0">
-  <!-- header -->
-  <div style="flex:none;display:flex;align-items:center;gap:var(--px-12);padding:var(--px-9) var(--px-14);border-bottom:var(--px-1) solid var(--border);background:var(--surface)">
-    <span style="width:var(--px-3);height:var(--px-20);border-radius:var(--px-2);background:{accent}"></span>
-    <!-- Connection identity: engine badge + connection name -->
-    <SystemBadge system={system} />
-    <span style="font-size:var(--px-13);font-weight:600;color:var(--text)" title="Connection">{profile?.name ?? '—'}</span>
-    <span style="color:var(--muted);font-size:var(--px-12)">/</span>
-    <!-- Database (+ schema) this designer targets — a distinct accent chip -->
-    <span
-      class="mono"
-      title={`Database: ${dbName || '(none)'}${schema && schema !== dbName ? ` · schema: ${schema}` : ''}`}
-      style="display:inline-flex;align-items:center;gap:var(--px-5);font-size:var(--px-11_5);font-weight:600;color:{accent};background:color-mix(in srgb, {accent} 14%, transparent);border:var(--px-1) solid color-mix(in srgb, {accent} 45%, transparent);border-radius:var(--px-6);padding:var(--px-2) var(--px-8)"
-    >
-      <span style="font-size:var(--px-11)">▤</span>{dbName || 'database'}{schema && schema !== dbName ? ` · ${schema}` : ''}
-    </span>
-    {#if !isNew}<span class="mono" style="font-size:var(--px-9);font-weight:700;color:var(--hex-e8923a);border:var(--px-1) solid var(--hex-e8923a);border-radius:var(--px-3);padding:0 var(--px-5)">ALTER</span>{/if}
-    <span style="font-size:var(--px-12);color:var(--muted);margin-left:var(--px-4)">Table</span>
-    <input bind:value={name} disabled={!isNew} class="mono" style="font-size:var(--px-13_5);font-weight:600;background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-7);padding:var(--px-5) var(--px-11);color:var(--text);outline:none;width:var(--px-220);opacity:{isNew ? 1 : 0.7}" />
-    <div style="display:flex;background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-7);overflow:hidden;margin-left:var(--px-6)">
-      <span onclick={() => (mode = 'table')} onkeydown={(e) => e.key === 'Enter' && (mode = 'table')} role="button" tabindex="0" style="padding:var(--px-5) var(--px-14);font-size:var(--px-12);font-weight:600;cursor:pointer;background:{mode === 'table' ? 'var(--primary)' : 'transparent'};color:{mode === 'table' ? 'var(--hex-fff)' : 'var(--text2)'}">Table</span>
-      <span onclick={() => (mode = 'scripts')} onkeydown={(e) => e.key === 'Enter' && (mode = 'scripts')} role="button" tabindex="0" style="padding:var(--px-5) var(--px-14);font-size:var(--px-12);font-weight:600;cursor:pointer;background:{mode === 'scripts' ? 'var(--primary)' : 'transparent'};color:{mode === 'scripts' ? 'var(--hex-fff)' : 'var(--text2)'};border-left:var(--px-1) solid var(--border)">Scripts</span>
+<div class="td-root" style="flex:1;display:flex;flex-direction:column;min-height:0">
+  <!-- header — the table's name first (what you're designing), then where it
+       lives, then the actions. Plain language: "New table" / "Editing", not DDL. -->
+  <div class="td-head">
+    <span class="td-head-icon" style="color:{accent};background:color-mix(in srgb, {accent} 14%, transparent)" aria-hidden="true">{@html dbIcon('table', 18)}</span>
+    <div class="td-head-main">
+      <div class="td-name-row">
+        <input
+          bind:value={name}
+          disabled={!isNew}
+          class="td-name"
+          aria-label="Table name"
+          placeholder="table_name"
+          spellcheck="false"
+          title={isNew ? 'Table name' : 'Rename the table from the Explorer (Rename…)'}
+        />
+        {#if isNew}
+          <span class="td-badge new">New table</span>
+        {:else}
+          <span class="td-badge edit" title="Saving changes the existing table (ALTER TABLE)">Editing</span>
+        {/if}
+      </div>
+      <div class="td-crumbs">
+        <SystemBadge system={system} />
+        <span class="td-crumb-strong" title="Connection">{profile?.name ?? '—'}</span>
+        <span class="td-sep" aria-hidden="true">›</span>
+        <span title={`Database: ${dbName || '(none)'}${schema && schema !== dbName ? ` · schema: ${schema}` : ''}`}>{dbName || 'database'}{#if schema && schema !== dbName}<span class="td-sep" aria-hidden="true">›</span>{schema}{/if}</span>
+      </div>
     </div>
-    <div style="margin-left:auto;display:flex;gap:var(--px-8);align-items:center">
-      {#if execMsg}<span style="font-size:var(--px-11_5);color:var(--success);font-weight:600">{execMsg}</span>{/if}
-      <span onclick={save} onkeydown={(e) => e.key === 'Enter' && save()} role="button" tabindex="0" title="Save (Ctrl/Cmd+S)" style="font-size:var(--px-12);font-weight:600;background:var(--primary);color:var(--hex-fff);border-radius:var(--px-7);padding:var(--px-6) var(--px-16);cursor:pointer">Save</span>
+    <div class="td-seg" role="group" aria-label="View">
+      <span onclick={() => (mode = 'table')} onkeydown={(e) => e.key === 'Enter' && (mode = 'table')} role="button" tabindex="0" class:on={mode === 'table'}>Table</span>
+      <span onclick={() => (mode = 'scripts')} onkeydown={(e) => e.key === 'Enter' && (mode = 'scripts')} role="button" tabindex="0" class:on={mode === 'scripts'}>Scripts</span>
     </div>
+    {#if execMsg}<span class="td-saved">{execMsg}</span>{/if}
+    <span onclick={save} onkeydown={(e) => e.key === 'Enter' && save()} role="button" tabindex="0" title="Save (Ctrl/Cmd+S)" class="cfm-btn primary">Save</span>
   </div>
 
   {#if mode === 'table'}
     <!-- attribute tab bar (Fields · Indexes · Foreign Keys · Uniques · Checks · Triggers) -->
-    <div style="flex:none;display:flex;gap:var(--px-2);padding:0 var(--px-10);border-bottom:var(--px-1) solid var(--border);background:var(--surface)">
+    <div class="td-tabs">
       {#each TABS as [id, label] (id)}
         {@const count = id === 'fields' ? cols.length : id === 'indexes' ? indexes.length : id === 'foreign-keys' ? fks.length : id === 'uniques' ? uniques.length : id === 'checks' ? checks.length : triggers.length}
         <span
@@ -535,17 +544,19 @@
           role="tab"
           tabindex="0"
           aria-selected={activeTab === id}
-          style="padding:var(--px-8) var(--px-12);font-size:var(--px-12);font-weight:600;cursor:pointer;border-bottom:var(--px-2) solid {activeTab === id ? accent : 'transparent'};color:{activeTab === id ? 'var(--text)' : 'var(--text2)'}"
-        >{label}{#if count}<span style="margin-left:var(--px-5);font-size:var(--px-10);color:var(--muted)">{count}</span>{/if}</span>
+          class="td-tab"
+          class:on={activeTab === id}
+          style="--td-accent:{accent}"
+        >{label}{#if count}<span class="td-count">{count}</span>{/if}</span>
       {/each}
     </div>
 
     <div style="flex:1;overflow:auto;min-height:0">
       {#if activeTab === 'fields'}
-        <table style="border-collapse:collapse;width:100%;font-size:var(--px-12_5)">
+        <table class="td-grid">
           <thead><tr>
             {#each [['#', 'width:var(--px-90);text-align:center'], ['Column', ''], ['Type', 'width:var(--px-160)'], ['Length', 'width:var(--px-90)'], ['PK', 'width:var(--px-60);text-align:center'], ['Nullable', 'width:var(--px-70);text-align:center'], ['Default', 'width:var(--px-150)'], ['', 'width:var(--px-42)']] as [h, extra] (h + extra)}
-              <th style="position:sticky;top:0;background:var(--header);border-bottom:var(--px-1) solid var(--border2);padding:var(--px-8) var(--px-12);text-align:left;color:var(--text2);font-weight:600;{extra}">{h}</th>
+              <th style={extra}>{h}</th>
             {/each}
           </tr></thead>
           <tbody bind:this={fieldsBody}>
@@ -563,7 +574,7 @@
                 <td
                   onpointerdown={(e) => dragStart(i, e)}
                   title="Drag to reorder"
-                  style="border-bottom:var(--px-1) solid var(--border);cursor:{dragging ? 'grabbing' : 'grab'};user-select:none;touch-action:none;padding:0"
+                  class="td-cell" style="cursor:{dragging ? 'grabbing' : 'grab'};user-select:none;touch-action:none"
                 >
                   <div style="display:flex;align-items:center;justify-content:center;gap:var(--px-4)">
                     {#if dragging}
@@ -585,182 +596,182 @@
                     </div>
                   </div>
                 </td>
-                <td style="border-bottom:var(--px-1) solid var(--border);padding:0"><input id={`tdf-${tab.id}-${i}-name`} bind:value={col.name} onkeydown={(e) => fieldKey(e, i, 'name')} class="mono" style="width:100%;border:none;background:transparent;color:var(--text);font-size:var(--px-12_5);padding:var(--px-7) var(--px-12);outline:none" /></td>
-                <td style="border-bottom:var(--px-1) solid var(--border);padding:0;position:relative">
+                <td class="td-cell"><input id={`tdf-${tab.id}-${i}-name`} bind:value={col.name} onkeydown={(e) => fieldKey(e, i, 'name')} class="td-in" /></td>
+                <td class="td-cell" style="position:relative">
                   <!-- searchable type dropdown showing the full per-engine catalog
                        (custom combobox — reliable in WebView2, unlike <datalist>). -->
                   <TypeSelect bind:value={col.type} options={types} placeholder="type…" />
                 </td>
-                <td style="border-bottom:var(--px-1) solid var(--border);padding:0"><input id={`tdf-${tab.id}-${i}-len`} bind:value={col.len} onkeydown={(e) => fieldKey(e, i, 'len')} class="mono" style="width:100%;border:none;background:transparent;color:var(--text2);font-size:var(--px-12);padding:var(--px-7) var(--px-12);outline:none" /></td>
-                <td style="border-bottom:var(--px-1) solid var(--border);text-align:center"><span onclick={() => (col.pk = !col.pk)} onkeydown={(e) => e.key === 'Enter' && (col.pk = !col.pk)} role="button" tabindex="0" style="display:inline-flex;width:var(--px-18);height:var(--px-18);border:var(--px-1) solid var(--border2);border-radius:var(--px-5);align-items:center;justify-content:center;cursor:pointer;background:{col.pk ? 'var(--primary)' : 'transparent'};color:var(--hex-fff);font-size:var(--px-11)">{col.pk ? '✓' : ''}</span></td>
-                <td style="border-bottom:var(--px-1) solid var(--border);text-align:center"><span onclick={() => (col.nullable = !col.nullable)} onkeydown={(e) => e.key === 'Enter' && (col.nullable = !col.nullable)} role="button" tabindex="0" style="display:inline-flex;width:var(--px-18);height:var(--px-18);border:var(--px-1) solid var(--border2);border-radius:var(--px-5);align-items:center;justify-content:center;cursor:pointer;background:{col.nullable ? 'var(--primary)' : 'transparent'};color:var(--hex-fff);font-size:var(--px-11)">{col.nullable ? '✓' : ''}</span></td>
-                <td style="border-bottom:var(--px-1) solid var(--border);padding:0"><input id={`tdf-${tab.id}-${i}-dflt`} bind:value={col.dflt} onkeydown={(e) => fieldKey(e, i, 'dflt')} class="mono" style="width:100%;border:none;background:transparent;color:var(--syntax-string);font-size:var(--px-12);padding:var(--px-7) var(--px-12);outline:none" /></td>
-                <td style="border-bottom:var(--px-1) solid var(--border);text-align:center"><span onclick={() => delCol(i)} onkeydown={(e) => e.key === 'Enter' && delCol(i)} role="button" tabindex="0" title={col.existing ? (col.dropped ? 'Restore column' : 'Drop column') : 'Remove column'} style="cursor:pointer;color:{col.dropped ? 'var(--success)' : 'var(--muted)'};font-size:var(--px-14)">{col.dropped ? '↺' : '×'}</span></td>
+                <td class="td-cell"><input id={`tdf-${tab.id}-${i}-len`} bind:value={col.len} onkeydown={(e) => fieldKey(e, i, 'len')} class="td-in code" /></td>
+                <td class="td-cell" style="text-align:center"><span onclick={() => (col.pk = !col.pk)} onkeydown={(e) => e.key === 'Enter' && (col.pk = !col.pk)} role="button" tabindex="0" style="display:inline-flex;width:var(--px-18);height:var(--px-18);border:var(--px-1) solid var(--border2);border-radius:var(--px-5);align-items:center;justify-content:center;cursor:pointer;background:{col.pk ? 'var(--primary)' : 'transparent'};color:var(--hex-fff);font-size:var(--px-11)">{col.pk ? '✓' : ''}</span></td>
+                <td class="td-cell" style="text-align:center"><span onclick={() => (col.nullable = !col.nullable)} onkeydown={(e) => e.key === 'Enter' && (col.nullable = !col.nullable)} role="button" tabindex="0" style="display:inline-flex;width:var(--px-18);height:var(--px-18);border:var(--px-1) solid var(--border2);border-radius:var(--px-5);align-items:center;justify-content:center;cursor:pointer;background:{col.nullable ? 'var(--primary)' : 'transparent'};color:var(--hex-fff);font-size:var(--px-11)">{col.nullable ? '✓' : ''}</span></td>
+                <td class="td-cell"><input id={`tdf-${tab.id}-${i}-dflt`} bind:value={col.dflt} onkeydown={(e) => fieldKey(e, i, 'dflt')} class="td-in code dflt" /></td>
+                <td class="td-cell" style="text-align:center"><span onclick={() => delCol(i)} onkeydown={(e) => e.key === 'Enter' && delCol(i)} role="button" tabindex="0" title={col.existing ? (col.dropped ? 'Restore column' : 'Drop column') : 'Remove column'} class="td-del" class:restore={col.dropped}>{col.dropped ? '↺' : '×'}</span></td>
               </tr>
             {/each}
           </tbody>
         </table>
-        <div onclick={addCol} onkeydown={(e) => e.key === 'Enter' && addCol()} role="button" tabindex="0" style="display:flex;align-items:center;gap:var(--px-8);padding:var(--px-10) var(--px-14);color:var(--text2);font-size:var(--px-12_5);cursor:pointer;font-weight:600">＋ Add column</div>
+        <div onclick={addCol} onkeydown={(e) => e.key === 'Enter' && addCol()} role="button" tabindex="0" class="td-add">＋ Add column</div>
 
       {:else if activeTab === 'indexes'}
-        <table style="border-collapse:collapse;width:100%;font-size:var(--px-12_5)">
+        <table class="td-grid">
           <thead><tr>
             {#each [['Index name', ''], ['Columns', ''], ['Method', 'width:var(--px-160)'], ['', 'width:var(--px-42)']] as [h, extra] (h + extra)}
-              <th style="position:sticky;top:0;background:var(--header);border-bottom:var(--px-1) solid var(--border2);padding:var(--px-8) var(--px-12);text-align:left;color:var(--text2);font-weight:600;{extra}">{h}</th>
+              <th style={extra}>{h}</th>
             {/each}
           </tr></thead>
           <tbody>
             {#each indexes as ix, i (i)}
               <tr style={ix.dropped ? "opacity:0.5;text-decoration:line-through" : ""}>
-                <td style="border-bottom:var(--px-1) solid var(--border);padding:0"><input bind:value={ix.name} placeholder={`idx_${name}_…`} class="mono" style="width:100%;border:none;background:transparent;color:var(--text);font-size:var(--px-12_5);padding:var(--px-7) var(--px-12);outline:none" /></td>
-                <td style="border-bottom:var(--px-1) solid var(--border);padding:0;position:relative"><MultiSelect bind:values={ix.columns} options={colNames} placeholder="columns…" /></td>
-                <td style="border-bottom:var(--px-1) solid var(--border);padding:0;position:relative"><SearchSelect value={ix.method ?? null} options={idxMethodOptions} title="Index method" onChange={(v) => (ix.method = v ?? '')} /></td>
-                <td style="border-bottom:var(--px-1) solid var(--border);text-align:center"><span onclick={() => delIndex(i)} onkeydown={(e) => e.key === 'Enter' && delIndex(i)} role="button" tabindex="0" title={ix.existing ? (ix.dropped ? 'Restore' : 'Drop') : 'Remove'} style="cursor:pointer;color:{ix.dropped ? 'var(--success)' : 'var(--muted)'};font-size:var(--px-14)">{ix.dropped ? '↺' : '×'}</span></td>
+                <td class="td-cell"><input bind:value={ix.name} placeholder={`idx_${name}_…`} class="td-in" /></td>
+                <td class="td-cell" style="position:relative"><MultiSelect bind:values={ix.columns} options={colNames} placeholder="columns…" /></td>
+                <td class="td-cell" style="position:relative"><SearchSelect value={ix.method ?? null} options={idxMethodOptions} title="Index method" onChange={(v) => (ix.method = v ?? '')} /></td>
+                <td class="td-cell" style="text-align:center"><span onclick={() => delIndex(i)} onkeydown={(e) => e.key === 'Enter' && delIndex(i)} role="button" tabindex="0" title={ix.existing ? (ix.dropped ? 'Restore' : 'Drop') : 'Remove'} class="td-del" class:restore={ix.dropped}>{ix.dropped ? '↺' : '×'}</span></td>
               </tr>
             {/each}
           </tbody>
         </table>
-        <div onclick={addIndex} onkeydown={(e) => e.key === 'Enter' && addIndex()} role="button" tabindex="0" style="padding:var(--px-10) var(--px-14);color:var(--text2);font-size:var(--px-12_5);cursor:pointer;font-weight:600">＋ Add index</div>
+        <div onclick={addIndex} onkeydown={(e) => e.key === 'Enter' && addIndex()} role="button" tabindex="0" class="td-add">＋ Add index</div>
 
       {:else if activeTab === 'foreign-keys'}
-        <table style="border-collapse:collapse;width:100%;font-size:var(--px-12_5)">
+        <table class="td-grid">
           <thead><tr>
             {#each [['Name', ''], ['Columns', ''], ['Ref. table', ''], ['Ref. columns', ''], ['ON DELETE', 'width:var(--px-140)'], ['ON UPDATE', 'width:var(--px-140)'], ['', 'width:var(--px-42)']] as [h, extra] (h + extra)}
-              <th style="position:sticky;top:0;background:var(--header);border-bottom:var(--px-1) solid var(--border2);padding:var(--px-8) var(--px-12);text-align:left;color:var(--text2);font-weight:600;{extra}">{h}</th>
+              <th style={extra}>{h}</th>
             {/each}
           </tr></thead>
           <tbody>
             {#each fks as fk, i (i)}
               <tr style={fk.dropped ? "opacity:0.5;text-decoration:line-through" : ""}>
-                <td style="border-bottom:var(--px-1) solid var(--border);padding:0"><input bind:value={fk.name} placeholder={`fk_${name}_…`} class="mono" style="width:100%;border:none;background:transparent;color:var(--text);font-size:var(--px-12);padding:var(--px-7) var(--px-12);outline:none" /></td>
-                <td style="border-bottom:var(--px-1) solid var(--border);padding:0;position:relative"><MultiSelect bind:values={fk.columns} options={colNames} placeholder="columns…" /></td>
-                <td style="border-bottom:var(--px-1) solid var(--border);padding:0;position:relative"><SearchSelect value={fk.refTable || null} options={refTableOptions} title="Referenced table" onChange={(v) => { fk.refTable = v ?? ''; if (v) void loadRefCols(v) }} /></td>
-                <td style="border-bottom:var(--px-1) solid var(--border);padding:0;position:relative"><MultiSelect bind:values={fk.refColumns} options={refColsCache[fk.refTable] ?? []} placeholder="ref columns…" /></td>
-                <td style="border-bottom:var(--px-1) solid var(--border);padding:0;position:relative"><SearchSelect value={fk.onDelete || null} options={fkActionOptions} title="ON DELETE" onChange={(v) => (fk.onDelete = v ?? '')} /></td>
-                <td style="border-bottom:var(--px-1) solid var(--border);padding:0;position:relative"><SearchSelect value={fk.onUpdate || null} options={fkActionOptions} title="ON UPDATE" onChange={(v) => (fk.onUpdate = v ?? '')} /></td>
-                <td style="border-bottom:var(--px-1) solid var(--border);text-align:center"><span onclick={() => delFk(i)} onkeydown={(e) => e.key === 'Enter' && delFk(i)} role="button" tabindex="0" title={fk.existing ? (fk.dropped ? 'Restore' : 'Drop') : 'Remove'} style="cursor:pointer;color:{fk.dropped ? 'var(--success)' : 'var(--muted)'};font-size:var(--px-14)">{fk.dropped ? '↺' : '×'}</span></td>
+                <td class="td-cell"><input bind:value={fk.name} placeholder={`fk_${name}_…`} class="td-in" /></td>
+                <td class="td-cell" style="position:relative"><MultiSelect bind:values={fk.columns} options={colNames} placeholder="columns…" /></td>
+                <td class="td-cell" style="position:relative"><SearchSelect value={fk.refTable || null} options={refTableOptions} title="Referenced table" onChange={(v) => { fk.refTable = v ?? ''; if (v) void loadRefCols(v) }} /></td>
+                <td class="td-cell" style="position:relative"><MultiSelect bind:values={fk.refColumns} options={refColsCache[fk.refTable] ?? []} placeholder="ref columns…" /></td>
+                <td class="td-cell" style="position:relative"><SearchSelect value={fk.onDelete || null} options={fkActionOptions} title="ON DELETE" onChange={(v) => (fk.onDelete = v ?? '')} /></td>
+                <td class="td-cell" style="position:relative"><SearchSelect value={fk.onUpdate || null} options={fkActionOptions} title="ON UPDATE" onChange={(v) => (fk.onUpdate = v ?? '')} /></td>
+                <td class="td-cell" style="text-align:center"><span onclick={() => delFk(i)} onkeydown={(e) => e.key === 'Enter' && delFk(i)} role="button" tabindex="0" title={fk.existing ? (fk.dropped ? 'Restore' : 'Drop') : 'Remove'} class="td-del" class:restore={fk.dropped}>{fk.dropped ? '↺' : '×'}</span></td>
               </tr>
             {/each}
           </tbody>
         </table>
-        <div onclick={addFk} onkeydown={(e) => e.key === 'Enter' && addFk()} role="button" tabindex="0" style="padding:var(--px-10) var(--px-14);color:var(--text2);font-size:var(--px-12_5);cursor:pointer;font-weight:600">＋ Add foreign key</div>
+        <div onclick={addFk} onkeydown={(e) => e.key === 'Enter' && addFk()} role="button" tabindex="0" class="td-add">＋ Add foreign key</div>
 
       {:else if activeTab === 'uniques'}
-        <table style="border-collapse:collapse;width:100%;font-size:var(--px-12_5)">
+        <table class="td-grid">
           <thead><tr>
             {#each [['Constraint name', ''], ['Columns', ''], ['', 'width:var(--px-42)']] as [h, extra] (h + extra)}
-              <th style="position:sticky;top:0;background:var(--header);border-bottom:var(--px-1) solid var(--border2);padding:var(--px-8) var(--px-12);text-align:left;color:var(--text2);font-weight:600;{extra}">{h}</th>
+              <th style={extra}>{h}</th>
             {/each}
           </tr></thead>
           <tbody>
             {#each uniques as u, i (i)}
               <tr style={u.dropped ? "opacity:0.5;text-decoration:line-through" : ""}>
-                <td style="border-bottom:var(--px-1) solid var(--border);padding:0"><input bind:value={u.name} placeholder={`uq_${name}_…`} class="mono" style="width:100%;border:none;background:transparent;color:var(--text);font-size:var(--px-12_5);padding:var(--px-7) var(--px-12);outline:none" /></td>
-                <td style="border-bottom:var(--px-1) solid var(--border);padding:0;position:relative"><MultiSelect bind:values={u.columns} options={colNames} placeholder="columns…" /></td>
-                <td style="border-bottom:var(--px-1) solid var(--border);text-align:center"><span onclick={() => delUnique(i)} onkeydown={(e) => e.key === 'Enter' && delUnique(i)} role="button" tabindex="0" title={u.existing ? (u.dropped ? 'Restore' : 'Drop') : 'Remove'} style="cursor:pointer;color:{u.dropped ? 'var(--success)' : 'var(--muted)'};font-size:var(--px-14)">{u.dropped ? '↺' : '×'}</span></td>
+                <td class="td-cell"><input bind:value={u.name} placeholder={`uq_${name}_…`} class="td-in" /></td>
+                <td class="td-cell" style="position:relative"><MultiSelect bind:values={u.columns} options={colNames} placeholder="columns…" /></td>
+                <td class="td-cell" style="text-align:center"><span onclick={() => delUnique(i)} onkeydown={(e) => e.key === 'Enter' && delUnique(i)} role="button" tabindex="0" title={u.existing ? (u.dropped ? 'Restore' : 'Drop') : 'Remove'} class="td-del" class:restore={u.dropped}>{u.dropped ? '↺' : '×'}</span></td>
               </tr>
             {/each}
           </tbody>
         </table>
-        <div onclick={addUnique} onkeydown={(e) => e.key === 'Enter' && addUnique()} role="button" tabindex="0" style="padding:var(--px-10) var(--px-14);color:var(--text2);font-size:var(--px-12_5);cursor:pointer;font-weight:600">＋ Add unique</div>
+        <div onclick={addUnique} onkeydown={(e) => e.key === 'Enter' && addUnique()} role="button" tabindex="0" class="td-add">＋ Add unique</div>
 
       {:else if activeTab === 'checks'}
-        <table style="border-collapse:collapse;width:100%;font-size:var(--px-12_5)">
+        <table class="td-grid">
           <thead><tr>
             {#each [['Constraint name', 'width:var(--px-220)'], ['Expression', ''], ['', 'width:var(--px-42)']] as [h, extra] (h + extra)}
-              <th style="position:sticky;top:0;background:var(--header);border-bottom:var(--px-1) solid var(--border2);padding:var(--px-8) var(--px-12);text-align:left;color:var(--text2);font-weight:600;{extra}">{h}</th>
+              <th style={extra}>{h}</th>
             {/each}
           </tr></thead>
           <tbody>
             {#each checks as c, i (i)}
               <tr style={c.dropped ? "opacity:0.5;text-decoration:line-through" : ""}>
-                <td style="border-bottom:var(--px-1) solid var(--border);padding:0"><input value={c.name} oninput={(e) => (c.name = e.currentTarget.value)} disabled={c.existing} placeholder={`ck_${name}_…`} class="mono" style="width:100%;border:none;background:transparent;color:var(--text);font-size:var(--px-12_5);padding:var(--px-7) var(--px-12);outline:none" /></td>
-                <td style="border-bottom:var(--px-1) solid var(--border);padding:0"><input value={c.expression} oninput={(e) => (c.expression = e.currentTarget.value)} disabled={c.existing} placeholder="age >= 0" class="mono" style="width:100%;border:none;background:transparent;color:var(--text2);font-size:var(--px-12);padding:var(--px-7) var(--px-12);outline:none" /></td>
-                <td style="border-bottom:var(--px-1) solid var(--border);text-align:center"><span onclick={() => delCheck(i)} onkeydown={(e) => e.key === 'Enter' && delCheck(i)} role="button" tabindex="0" title={c.existing ? (c.dropped ? 'Restore' : 'Drop') : 'Remove'} style="cursor:pointer;color:{c.dropped ? 'var(--success)' : 'var(--muted)'};font-size:var(--px-14)">{c.dropped ? '↺' : '×'}</span></td>
+                <td class="td-cell"><input value={c.name} oninput={(e) => (c.name = e.currentTarget.value)} disabled={c.existing} placeholder={`ck_${name}_…`} class="td-in" /></td>
+                <td class="td-cell"><input value={c.expression} oninput={(e) => (c.expression = e.currentTarget.value)} disabled={c.existing} placeholder="age >= 0" class="td-in code" /></td>
+                <td class="td-cell" style="text-align:center"><span onclick={() => delCheck(i)} onkeydown={(e) => e.key === 'Enter' && delCheck(i)} role="button" tabindex="0" title={c.existing ? (c.dropped ? 'Restore' : 'Drop') : 'Remove'} class="td-del" class:restore={c.dropped}>{c.dropped ? '↺' : '×'}</span></td>
               </tr>
             {/each}
           </tbody>
         </table>
-        <div onclick={addCheck} onkeydown={(e) => e.key === 'Enter' && addCheck()} role="button" tabindex="0" style="padding:var(--px-10) var(--px-14);color:var(--text2);font-size:var(--px-12_5);cursor:pointer;font-weight:600">＋ Add check</div>
+        <div onclick={addCheck} onkeydown={(e) => e.key === 'Enter' && addCheck()} role="button" tabindex="0" class="td-add">＋ Add check</div>
 
       {:else if activeTab === 'triggers'}
         <!-- triggers -->
-        <table style="border-collapse:collapse;width:100%;font-size:var(--px-12_5)">
+        <table class="td-grid">
           <thead><tr>
             {#each [['Name', 'width:var(--px-160)'], ['Timing', 'width:var(--px-110)'], ['Event', 'width:var(--px-110)'], ['Body / function', ''], ['', 'width:var(--px-42)']] as [h, extra] (h + extra)}
-              <th style="position:sticky;top:0;background:var(--header);border-bottom:var(--px-1) solid var(--border2);padding:var(--px-8) var(--px-12);text-align:left;color:var(--text2);font-weight:600;{extra}">{h}</th>
+              <th style={extra}>{h}</th>
             {/each}
           </tr></thead>
           <tbody>
             {#each triggers as tr, i (i)}
               <tr style={tr.dropped ? "opacity:0.5;text-decoration:line-through" : ""}>
-                <td style="border-bottom:var(--px-1) solid var(--border);padding:0"><input value={tr.name} oninput={(e) => (tr.name = e.currentTarget.value)} disabled={tr.existing} placeholder={`trg_${name}`} class="mono" style="width:100%;border:none;background:transparent;color:var(--text);font-size:var(--px-12_5);padding:var(--px-7) var(--px-12);outline:none" /></td>
-                <td style="border-bottom:var(--px-1) solid var(--border);padding:0">
-                  <select value={tr.timing} onchange={(e) => (tr.timing = e.currentTarget.value)} disabled={tr.existing} class="mono" style="width:100%;border:none;background:transparent;color:var(--text2);font-size:var(--px-12);padding:var(--px-7) var(--px-8);outline:none;cursor:pointer">
+                <td class="td-cell"><input value={tr.name} oninput={(e) => (tr.name = e.currentTarget.value)} disabled={tr.existing} placeholder={`trg_${name}`} class="td-in" /></td>
+                <td class="td-cell">
+                  <select value={tr.timing} onchange={(e) => (tr.timing = e.currentTarget.value)} disabled={tr.existing} class="td-in" style="cursor:pointer">
                     {#each ['BEFORE', 'AFTER', 'INSTEAD OF'] as o (o)}<option value={o}>{o}</option>{/each}
                   </select>
                 </td>
-                <td style="border-bottom:var(--px-1) solid var(--border);padding:0">
-                  <select value={tr.event} onchange={(e) => (tr.event = e.currentTarget.value)} disabled={tr.existing} class="mono" style="width:100%;border:none;background:transparent;color:var(--text2);font-size:var(--px-12);padding:var(--px-7) var(--px-8);outline:none;cursor:pointer">
+                <td class="td-cell">
+                  <select value={tr.event} onchange={(e) => (tr.event = e.currentTarget.value)} disabled={tr.existing} class="td-in" style="cursor:pointer">
                     {#each ['INSERT', 'UPDATE', 'DELETE'] as o (o)}<option value={o}>{o}</option>{/each}
                   </select>
                 </td>
-                <td style="border-bottom:var(--px-1) solid var(--border);padding:0"><input value={tr.body} oninput={(e) => (tr.body = e.currentTarget.value)} disabled={tr.existing} placeholder={system === 'postgres' ? 'my_function()' : 'trigger body'} class="mono" style="width:100%;border:none;background:transparent;color:var(--text2);font-size:var(--px-12);padding:var(--px-7) var(--px-12);outline:none" /></td>
-                <td style="border-bottom:var(--px-1) solid var(--border);text-align:center"><span onclick={() => delTrigger(i)} onkeydown={(e) => e.key === 'Enter' && delTrigger(i)} role="button" tabindex="0" title={tr.existing ? (tr.dropped ? 'Restore' : 'Drop') : 'Remove'} style="cursor:pointer;color:{tr.dropped ? 'var(--success)' : 'var(--muted)'};font-size:var(--px-14)">{tr.dropped ? '↺' : '×'}</span></td>
+                <td class="td-cell"><input value={tr.body} oninput={(e) => (tr.body = e.currentTarget.value)} disabled={tr.existing} placeholder={system === 'postgres' ? 'my_function()' : 'trigger body'} class="td-in code" /></td>
+                <td class="td-cell" style="text-align:center"><span onclick={() => delTrigger(i)} onkeydown={(e) => e.key === 'Enter' && delTrigger(i)} role="button" tabindex="0" title={tr.existing ? (tr.dropped ? 'Restore' : 'Drop') : 'Remove'} class="td-del" class:restore={tr.dropped}>{tr.dropped ? '↺' : '×'}</span></td>
               </tr>
             {/each}
           </tbody>
         </table>
-        <div onclick={addTrigger} onkeydown={(e) => e.key === 'Enter' && addTrigger()} role="button" tabindex="0" style="padding:var(--px-10) var(--px-14);color:var(--text2);font-size:var(--px-12_5);cursor:pointer;font-weight:600">＋ Add trigger</div>
+        <div onclick={addTrigger} onkeydown={(e) => e.key === 'Enter' && addTrigger()} role="button" tabindex="0" class="td-add">＋ Add trigger</div>
 
       {:else}
         <!-- partitioning — new tables: create; existing partitioned tables: show
              current partitioning (read-only) + ADD partitions. -->
         <div style="padding:var(--px-14) var(--px-18);display:flex;flex-direction:column;gap:var(--px-12);max-width:var(--px-640)">
-          <label class="mono" style="display:flex;align-items:center;gap:var(--px-8);font-size:var(--px-13);color:var(--text);cursor:{canEnablePart && !partLocked ? 'pointer' : 'default'};opacity:{canEnablePart || partLocked ? 1 : 0.85}">
+          <label style="display:flex;align-items:center;gap:var(--px-8);font-size:var(--px-13);color:var(--text);cursor:{canEnablePart && !partLocked ? 'pointer' : 'default'};opacity:{canEnablePart || partLocked ? 1 : 0.85}">
             <input type="checkbox" bind:checked={partEnabled} disabled={partLocked || !canEnablePart} /> Partition this table
           </label>
           {#if !isNew && !partEnabled}
             {#if canConvertToPartitioned(system)}
-              <div class="mono" style="font-size:var(--px-12);color:var(--muted);line-height:1.5">
+              <div style="font-size:var(--px-12);color:var(--muted);line-height:1.5">
                 This table is not partitioned. Turn on to partition it —
                 {#if system === 'mysql' || system === 'mariadb'}MySQL/MariaDB alter it in place (<code>ALTER TABLE … PARTITION BY …</code>).{:else if system === 'postgres'}PostgreSQL recreates it (rename + create partitioned + copy + drop) — review the script.{:else if system === 'oracle'}Oracle repartitions in place (<code>ALTER TABLE … MODIFY PARTITION BY … ONLINE</code>, needs 12cR2+) — local indexes are rebuilt.{:else if system === 'clickhouse'}ClickHouse recreates it (rename + create with PARTITION BY + copy + drop) — set ENGINE/ORDER BY to match the original before running.{:else}SQL Server creates a partition function + scheme and a clustered index on it.{/if}
               </div>
             {:else}
-              <div class="mono" style="font-size:var(--px-12);color:var(--muted);line-height:1.5">
+              <div style="font-size:var(--px-12);color:var(--muted);line-height:1.5">
                 This table is not partitioned. Partitioning an existing table is not supported for this engine — use <b>New Table</b> with the Partitioning tab, then migrate the data.
               </div>
             {/if}
           {:else if partEnabled}
             {#if partLocked}
-              <div class="mono" style="font-size:var(--px-11);color:var(--muted)">Current partitioning (read-only) — you can add new partitions below.</div>
+              <div style="font-size:var(--px-11);color:var(--muted)">Current partitioning (read-only) — you can add new partitions below.</div>
             {:else if partConvert}
-              <div class="mono" style="font-size:var(--px-11);color:var(--warn)">⚠ Converting an existing table to partitioned. Review the script below before saving.</div>
+              <div style="font-size:var(--px-11);color:var(--warn)">⚠ Converting an existing table to partitioned. Review the script below before saving.</div>
             {/if}
             <div style="display:flex;align-items:center;gap:var(--px-10);flex-wrap:wrap">
-              <span class="mono" style="font-size:var(--px-12);color:var(--text2)">Strategy</span>
-              <select bind:value={partStrategy} disabled={system === 'clickhouse' || partLocked} class="mono" style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-8);color:var(--text);font-size:var(--px-12);cursor:pointer">
+              <span style="font-size:var(--px-12);color:var(--text2)">Strategy</span>
+              <select bind:value={partStrategy} disabled={system === 'clickhouse' || partLocked} style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-8);color:var(--text);font-size:var(--px-12);cursor:pointer">
                 {#each ['RANGE', 'LIST', 'HASH'] as s (s)}<option value={s}>{s}</option>{/each}
               </select>
               {#if system === 'mysql' || system === 'mariadb'}
-                <label class="mono" style="display:flex;align-items:center;gap:var(--px-6);font-size:var(--px-12);color:var(--text2);cursor:pointer">
+                <label style="display:flex;align-items:center;gap:var(--px-6);font-size:var(--px-12);color:var(--text2);cursor:pointer">
                   <input type="checkbox" bind:checked={partColumnsMode} disabled={partLocked} /> COLUMNS mode
                 </label>
               {/if}
             </div>
             <div style="display:flex;flex-direction:column;gap:var(--px-4)">
-              <span class="mono" style="font-size:var(--px-12);color:var(--text2)">{system === 'clickhouse' ? 'Partition expression' : 'Key column(s) / expression'}</span>
+              <span style="font-size:var(--px-12);color:var(--text2)">{system === 'clickhouse' ? 'Partition expression' : 'Key column(s) / expression'}</span>
               <input bind:value={partColumns} disabled={partLocked} placeholder={system === 'clickhouse' ? 'toYYYYMM(created_at)' : 'created_at'} class="mono" style="border:var(--px-1) solid var(--border);background:var(--panel);border-radius:var(--px-6);color:var(--text);font-size:var(--px-12_5);padding:var(--px-7) var(--px-11);outline:none" />
             </div>
             {#if partStrategy === 'HASH' && system !== 'clickhouse' && !partLocked}
               <div style="display:flex;align-items:center;gap:var(--px-8)">
-                <span class="mono" style="font-size:var(--px-12);color:var(--text2)">Number of partitions</span>
+                <span style="font-size:var(--px-12);color:var(--text2)">Number of partitions</span>
                 <input type="number" min="1" bind:value={partHashCount} class="mono" style="width:var(--px-80);border:var(--px-1) solid var(--border);background:var(--panel);border-radius:var(--px-6);color:var(--text);font-size:var(--px-12_5);padding:var(--px-5) var(--px-9);outline:none" />
               </div>
             {:else if system !== 'clickhouse'}
               <div style="display:flex;flex-direction:column;gap:var(--px-6)">
-                <span class="mono" style="font-size:var(--px-12);color:var(--text2)">{partLocked ? 'Partitions' : 'Initial partitions'}</span>
-                <table style="border-collapse:collapse;width:100%;font-size:var(--px-12_5)">
+                <span style="font-size:var(--px-12);color:var(--text2)">{partLocked ? 'Partitions' : 'Initial partitions'}</span>
+                <table class="td-grid">
                   <thead><tr>
                     {#each [['Partition name', 'width:var(--px-200)'], [partStrategy === 'LIST' ? 'IN values' : partStrategy === 'RANGE' && system === 'postgres' ? 'Bounds — From / To' : 'Upper bound (LESS THAN)', ''], ['', 'width:var(--px-42)']] as [h, extra] (h + extra)}
                       <th style="background:var(--header);border-bottom:var(--px-1) solid var(--border2);padding:var(--px-7) var(--px-12);text-align:left;color:var(--text2);font-weight:600;{extra}">{h}</th>
@@ -769,8 +780,8 @@
                   <tbody>
                     {#each partDefs as p, i (i)}
                       <tr style={p.existing ? 'opacity:0.7' : ''}>
-                        <td style="border-bottom:var(--px-1) solid var(--border);padding:0"><input bind:value={p.name} disabled={p.existing} placeholder={`${name}_p${i}`} class="mono" style="width:100%;border:none;background:transparent;color:var(--text);font-size:var(--px-12_5);padding:var(--px-7) var(--px-12);outline:none" /></td>
-                        <td style="border-bottom:var(--px-1) solid var(--border);padding:0">
+                        <td class="td-cell"><input bind:value={p.name} disabled={p.existing} placeholder={`${name}_p${i}`} class="td-in" /></td>
+                        <td class="td-cell">
                           {#if !p.existing && partStrategy === 'RANGE' && system === 'postgres'}
                             <!-- structured RANGE bounds: FROM (…) TO (…) built for you -->
                             <div style="display:flex;align-items:center;gap:var(--px-2)">
@@ -779,20 +790,20 @@
                               <input bind:value={p.to} placeholder="'2025-01-01'" class="mono" style="width:50%;border:none;background:transparent;color:var(--text2);font-size:var(--px-12);padding:var(--px-7) var(--px-8);outline:none" />
                             </div>
                           {:else}
-                            <input bind:value={p.bound} disabled={p.existing} placeholder={partStrategy === 'LIST' ? "1, 2, 3" : "2025"} class="mono" style="width:100%;border:none;background:transparent;color:var(--text2);font-size:var(--px-12);padding:var(--px-7) var(--px-12);outline:none" />
+                            <input bind:value={p.bound} disabled={p.existing} placeholder={partStrategy === 'LIST' ? "1, 2, 3" : "2025"} class="td-in code" />
                           {/if}
                         </td>
-                        <td style="border-bottom:var(--px-1) solid var(--border);text-align:center">{#if !p.existing}<span onclick={() => removePartDef(i)} onkeydown={(e) => e.key === 'Enter' && removePartDef(i)} role="button" tabindex="0" title="Remove" style="cursor:pointer;color:var(--muted);font-size:var(--px-14)">×</span>{:else}<span class="mono" style="color:var(--muted);font-size:var(--px-10)" title="Existing partition">●</span>{/if}</td>
+                        <td class="td-cell" style="text-align:center">{#if !p.existing}<span onclick={() => removePartDef(i)} onkeydown={(e) => e.key === 'Enter' && removePartDef(i)} role="button" tabindex="0" title="Remove" style="cursor:pointer;color:var(--muted);font-size:var(--px-14)">×</span>{:else}<span class="mono" style="color:var(--muted);font-size:var(--px-10)" title="Existing partition">●</span>{/if}</td>
                       </tr>
                     {/each}
                   </tbody>
                 </table>
                 {#if partStrategy !== 'HASH'}
-                  <div onclick={addPartDef} onkeydown={(e) => e.key === 'Enter' && addPartDef()} role="button" tabindex="0" style="color:var(--text2);font-size:var(--px-12_5);cursor:pointer;font-weight:600">＋ Add partition</div>
+                  <div onclick={addPartDef} onkeydown={(e) => e.key === 'Enter' && addPartDef()} role="button" tabindex="0" class="td-add">＋ Add partition</div>
                 {/if}
               </div>
             {/if}
-            <div class="mono" style="font-size:var(--px-11);color:var(--muted);line-height:1.5">
+            <div style="font-size:var(--px-11);color:var(--muted);line-height:1.5">
               {#if partLocked}Adding a partition{system === 'postgres' ? ' creates a child table (CREATE TABLE … PARTITION OF)' : system === 'mssql' ? ' on SQL Server needs a manual SPLIT RANGE script' : system === 'clickhouse' ? ' is automatic on INSERT for ClickHouse' : ' runs ALTER TABLE … ADD PARTITION'}.{:else if system === 'clickhouse'}ClickHouse partitions by an expression on a MergeTree engine.{:else if system === 'mssql'}SQL Server creates a partition function + scheme; the partition column must be part of the primary key.{:else if system === 'postgres'}PostgreSQL creates child tables (PARTITION OF); the partition key must be part of the primary key.{:else}MySQL/MariaDB emit an inline PARTITION BY clause.{/if}
             </div>
 
@@ -800,12 +811,12 @@
                  the rows above; this is exactly what runs on Save. -->
             {#if partScript}
               <div style="display:flex;flex-direction:column;gap:var(--px-4)">
-                <span class="mono" style="font-size:var(--px-11);text-transform:uppercase;letter-spacing:.06em;color:var(--muted)">{partLocked ? 'Add-partition script' : partConvert ? 'Convert-to-partitioned script' : 'Partition script'}</span>
+                <span style="font-size:var(--px-11);text-transform:uppercase;letter-spacing:.06em;color:var(--muted)">{partLocked ? 'Add-partition script' : partConvert ? 'Convert-to-partitioned script' : 'Partition script'}</span>
                 <CodeView value={partScript} language={editorLanguageId(system)} readOnly height="auto" maxHeight={260} ariaLabel="Partition script" />
               </div>
             {/if}
             {#each partBuild.warnings as w (w)}
-              <div class="mono" style="font-size:var(--px-11);color:var(--warn);line-height:1.4">⚠ {w}</div>
+              <div style="font-size:var(--px-11);color:var(--warn);line-height:1.4">⚠ {w}</div>
             {/each}
           {/if}
         </div>
@@ -829,3 +840,341 @@
     </div>
   {/if}
 </div>
+
+<style>
+  /* ---- header ---------------------------------------------------------- */
+  .td-head {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: var(--px-12);
+    padding: var(--px-12) var(--px-18);
+    border-bottom: var(--px-1) solid var(--border);
+    background: var(--surface);
+  }
+  .td-head-icon {
+    flex: none;
+    width: var(--px-38);
+    height: var(--px-38);
+    border-radius: var(--px-10);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .td-head-main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--px-3);
+  }
+  .td-name-row {
+    display: flex;
+    align-items: center;
+    gap: var(--px-10);
+    min-width: 0;
+  }
+  .td-name {
+    /* sized to the name, so the New table / Editing badge sits right after it */
+    field-sizing: content;
+    min-width: var(--px-120);
+    width: auto;
+    max-width: 100%;
+    font-family: var(--font-main);
+    font-size: var(--px-17);
+    font-weight: 650;
+    color: var(--text);
+    background: transparent;
+    border: var(--px-1) solid transparent;
+    border-radius: var(--px-6);
+    padding: var(--px-2) var(--px-6);
+    margin-left: calc(-1 * var(--px-7));
+    outline: none;
+  }
+  .td-name:not(:disabled):hover {
+    border-color: var(--border2);
+  }
+  .td-name:not(:disabled):focus {
+    background: var(--raised);
+  }
+  .td-name:disabled {
+    color: var(--text);
+    opacity: 1;
+    cursor: default;
+  }
+  .td-badge {
+    flex: none;
+    font-size: var(--px-11);
+    font-weight: 600;
+    border-radius: var(--px-10);
+    padding: var(--px-1) var(--px-9);
+  }
+  .td-badge.new {
+    color: var(--sacc-green);
+    background: color-mix(in srgb, var(--sacc-green) 13%, transparent);
+  }
+  .td-badge.edit {
+    color: var(--sacc-amber);
+    background: color-mix(in srgb, var(--sacc-amber) 14%, transparent);
+  }
+  .td-crumbs {
+    display: flex;
+    align-items: center;
+    gap: var(--px-6);
+    font-size: var(--px-12);
+    color: var(--muted);
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+  }
+  .td-crumb-strong {
+    color: var(--text2);
+    font-weight: 500;
+  }
+  .td-sep {
+    color: var(--border2);
+    margin: 0 var(--px-4);
+  }
+  .td-seg {
+    flex: none;
+    display: flex;
+    padding: var(--px-2);
+    gap: var(--px-2);
+    background: var(--panel);
+    border: var(--px-1) solid var(--border);
+    border-radius: var(--px-8);
+  }
+  .td-seg span {
+    padding: var(--px-4) var(--px-14);
+    font-size: var(--px-12_5);
+    font-weight: 500;
+    color: var(--text2);
+    border-radius: var(--px-6);
+    cursor: pointer;
+  }
+  .td-seg span:hover {
+    color: var(--text);
+  }
+  .td-seg span.on {
+    background: var(--surface);
+    color: var(--text);
+    font-weight: 600;
+    box-shadow: var(--shadow-xs);
+  }
+  .td-saved {
+    font-size: var(--px-12);
+    color: var(--success);
+    font-weight: 600;
+  }
+
+  /* ---- attribute tabs ---------------------------------------------------- */
+  .td-tabs {
+    flex: none;
+    display: flex;
+    gap: var(--px-4);
+    padding: 0 var(--px-14);
+    border-bottom: var(--px-1) solid var(--border);
+    background: var(--surface);
+  }
+  .td-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--px-6);
+    padding: var(--px-10) var(--px-10);
+    font-size: var(--px-13);
+    font-weight: 500;
+    color: var(--text2);
+    border-bottom: var(--px-2) solid transparent;
+    margin-bottom: calc(-1 * var(--px-1));
+    cursor: pointer;
+  }
+  .td-tab:hover {
+    color: var(--text);
+  }
+  .td-tab.on {
+    color: var(--text);
+    font-weight: 600;
+    border-bottom-color: var(--td-accent, var(--primary));
+  }
+  .td-count {
+    font-size: var(--px-11);
+    font-weight: 600;
+    color: var(--text2);
+    background: var(--panel);
+    border-radius: var(--px-8);
+    padding: 0 var(--px-6);
+    font-variant-numeric: tabular-nums;
+  }
+  .td-tab.on .td-count {
+    color: var(--primary);
+    background: color-mix(in srgb, var(--primary) 12%, transparent);
+  }
+
+  /* ---- grids (fields, indexes, keys, uniques, checks, triggers, partitions) ----
+     Drawn as a real table: a framed card with a header band, column dividers and
+     zebra rows; every cell edits in place and shows a cell-style focus ring. */
+  .td-root :global(.td-grid) {
+    border-collapse: separate;
+    border-spacing: 0;
+    width: calc(100% - 2 * var(--px-16));
+    margin: var(--px-14) var(--px-16) 0;
+    font-size: var(--px-13);
+    background: var(--surface);
+    border: var(--px-1) solid var(--border2);
+    border-radius: var(--px-10);
+    box-shadow: var(--shadow-xs);
+    /* clip (not hidden): keeps the rounded corners without breaking the sticky header */
+    overflow: clip;
+  }
+  .td-root :global(.td-grid th) {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: var(--header);
+    border-bottom: var(--px-1) solid var(--border2);
+    border-right: var(--px-1) solid var(--border);
+    padding: var(--px-9) var(--px-12);
+    text-align: left;
+    font-size: var(--px-12);
+    font-weight: 600;
+    color: var(--text2);
+    white-space: nowrap;
+  }
+  .td-root :global(.td-grid th:last-child),
+  .td-root :global(.td-grid td:last-child) {
+    border-right: none;
+  }
+  .td-root :global(.td-grid tbody tr:nth-child(even)) {
+    background: var(--grid-zebra);
+  }
+  .td-root :global(.td-grid tbody tr) {
+    transition: background-color 0.1s ease;
+  }
+  .td-root :global(.td-grid tbody tr:hover) {
+    background: color-mix(in srgb, var(--primary) 5%, var(--surface));
+  }
+  .td-root :global(.td-grid tbody tr:last-child td) {
+    border-bottom: none;
+  }
+  .td-root :global(.td-cell) {
+    border-bottom: var(--px-1) solid var(--border);
+    border-right: var(--px-1) solid var(--border);
+    padding: 0;
+    height: var(--px-38);
+  }
+  /* the # / drag column reads as a row gutter */
+  .td-root :global(.td-grid td:first-child.td-cell[title='Drag to reorder']) {
+    background: color-mix(in srgb, var(--header) 70%, transparent);
+  }
+  .td-root :global(.td-in) {
+    width: 100%;
+    height: var(--px-38);
+    box-sizing: border-box;
+    border: none;
+    border-radius: 0;
+    background: transparent;
+    color: var(--text);
+    font-family: var(--font-main);
+    font-size: var(--px-13);
+    padding: 0 var(--px-12);
+    outline: none;
+  }
+  .td-root :global(.td-in.code) {
+    font-family: var(--font-mono);
+    font-size: var(--px-12_5);
+    color: var(--text2);
+  }
+  .td-root :global(.td-in.dflt) {
+    color: var(--syntax-string);
+  }
+  .td-root :global(.td-in::placeholder) {
+    color: var(--muted);
+    opacity: 0.7;
+  }
+  .td-root :global(.td-in:hover:not(:disabled)) {
+    background: color-mix(in srgb, var(--primary) 4%, transparent);
+  }
+  /* editing a cell: ring INSIDE the cell, like a spreadsheet */
+  .td-root :global(.td-in:focus) {
+    background: var(--raised);
+    box-shadow: inset 0 0 0 var(--px-2) var(--primary) !important;
+  }
+  .td-root :global(.td-in:disabled) {
+    color: var(--text2);
+    cursor: default;
+  }
+  /* a SearchSelect (Method, Ref. table, ON DELETE…) draws its own box; inside a
+     table cell it sits flat like every other cell and fills it */
+  .td-root :global(.td-cell > span:first-child:has(> input)) {
+    display: flex !important;
+    width: 100%;
+  }
+  .td-root :global(.td-cell > span:first-child > input) {
+    width: 100% !important;
+    min-width: 0 !important;
+    height: var(--px-38);
+    box-sizing: border-box;
+    background: transparent !important;
+    border: none !important;
+    border-radius: 0 !important;
+    font-family: var(--font-main) !important;
+    font-size: var(--px-13) !important;
+    padding-left: var(--px-12) !important;
+  }
+  .td-root :global(.td-cell > span:first-child > input:focus) {
+    background: var(--raised) !important;
+    box-shadow: inset 0 0 0 var(--px-2) var(--primary) !important;
+  }
+  /* remove / restore — quiet until you look at the row */
+  .td-root :global(.td-del) {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: var(--px-26);
+    height: var(--px-26);
+    border-radius: var(--px-6);
+    font-size: var(--px-15);
+    color: var(--muted);
+    cursor: pointer;
+    opacity: 0;
+    transition:
+      opacity 0.12s ease,
+      background-color 0.12s ease,
+      color 0.12s ease;
+  }
+  .td-root :global(.td-grid tr:hover .td-del),
+  .td-root :global(.td-del:focus-visible),
+  .td-root :global(.td-del.restore) {
+    opacity: 1;
+  }
+  .td-root :global(.td-del:hover) {
+    color: var(--danger-text);
+    background: var(--danger-soft);
+  }
+  .td-root :global(.td-del.restore) {
+    color: var(--success);
+  }
+  .td-root :global(.td-del.restore:hover) {
+    color: var(--success);
+    background: color-mix(in srgb, var(--success) 12%, transparent);
+  }
+  .td-root :global(.td-add) {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--px-6);
+    margin: var(--px-10) var(--px-16);
+    padding: var(--px-6) var(--px-12);
+    border: var(--px-1) dashed var(--border2);
+    border-radius: var(--px-8);
+    color: var(--primary);
+    font-size: var(--px-12_5);
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .td-root :global(.td-add:hover) {
+    border-style: solid;
+    border-color: var(--primary);
+    background: color-mix(in srgb, var(--primary) 7%, transparent);
+  }
+
+</style>

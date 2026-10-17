@@ -64,7 +64,7 @@ test('Result Export ▾ offers XML and downloads an .xml file', async ({ page })
   await page.getByRole('button', { name: 'Run' }).first().click()
   await expect(page.getByText('Single Row', { exact: true }).first()).toBeVisible({ timeout: 10_000 })
 
-  await page.getByText('Export ▾').first().click()
+  await page.getByRole('button', { name: 'Export', exact: true }).first().click()
   await page.waitForTimeout(150)
   // XML is listed alongside CSV/JSON/SQL/Excel
   await expect(page.getByText('XML', { exact: true }).first()).toBeVisible()
@@ -92,7 +92,7 @@ test('Result custom Export: run query → Export ▾ → Custom → download', a
   await page.getByRole('button', { name: 'Run' }).first().click()
   await expect(page.getByText('Single Row', { exact: true }).first()).toBeVisible({ timeout: 10_000 })
 
-  await page.getByText('Export ▾').first().click()
+  await page.getByRole('button', { name: 'Export', exact: true }).first().click()
   await page.waitForTimeout(150)
   await page.getByText(/Custom…/).first().click()
   await page.waitForTimeout(300)
@@ -148,7 +148,7 @@ test('Excel export is a real .xlsx workbook; CSV is UTF-8 with BOM', async ({ pa
   await expect(page.getByText('Single Row', { exact: true }).first()).toBeVisible({ timeout: 10_000 })
 
   // Export ▾ → Excel (.xlsx)
-  await page.getByText('Export ▾').first().click()
+  await page.getByRole('button', { name: 'Export', exact: true }).first().click()
   await expect(page.getByText('Excel (.xls)', { exact: true })).toHaveCount(0)
   let dl = page.waitForEvent('download', { timeout: 8000 })
   await page.getByText('Excel (.xlsx)', { exact: true }).first().click()
@@ -166,7 +166,7 @@ test('Excel export is a real .xlsx workbook; CSV is UTF-8 with BOM', async ({ pa
   if (process.env.XLSX_OUT) await writeFile(process.env.XLSX_OUT, xlsx)
 
   // Export ▾ → CSV starts with the UTF-8 BOM
-  await page.getByText('Export ▾').first().click()
+  await page.getByRole('button', { name: 'Export', exact: true }).first().click()
   dl = page.waitForEvent('download', { timeout: 8000 })
   await page.getByText('CSV', { exact: true }).first().click()
   download = await dl
@@ -175,7 +175,7 @@ test('Excel export is a real .xlsx workbook; CSV is UTF-8 with BOM', async ({ pa
   expect(csv.subarray(3).toString('utf8').startsWith('id,')).toBe(true)
 
   // Custom… wizard offers Excel (.xlsx) and names the file accordingly
-  await page.getByText('Export ▾').first().click()
+  await page.getByRole('button', { name: 'Export', exact: true }).first().click()
   await page.getByText(/Custom…/).first().click()
   const dialog = page.getByRole('dialog')
   await dialog.getByText('Excel (.xlsx)').click()

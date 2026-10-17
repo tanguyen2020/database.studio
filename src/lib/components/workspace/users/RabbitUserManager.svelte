@@ -321,7 +321,7 @@
   <div style="flex:none;display:flex;align-items:center;gap:var(--px-10);padding:var(--px-9) var(--px-14);border-bottom:var(--px-1) solid var(--border);background:var(--surface);flex-wrap:wrap">
     <span style="font-size:var(--px-13);font-weight:700;color:var(--text)">Users &amp; access</span>
     {#if me}
-      <span style="font-size:var(--px-11_5);color:var(--muted)">logged in as <span class="mono" style="color:var(--text2)">{me.name}</span>{#if me.tags.length}{' · ' + me.tags.join(', ')}{/if}</span>
+      <span style="font-size:var(--px-11_5);color:var(--muted)">logged in as <b style="color:var(--text2);font-weight:600">{me.name}</b>{#if me.tags.length}{' · ' + me.tags.join(', ')}{/if}</span>
     {/if}
     <span style="margin-left:auto;display:flex;gap:var(--px-8)">
       <span onclick={openCreate} onkeydown={(e) => e.key === 'Enter' && openCreate()} role="button" tabindex="0" class="pv-btn primary">＋ New user</span>
@@ -331,7 +331,7 @@
 
   {#if me && !isAdmin}
     <div role="note" style="flex:none;padding:var(--px-8) var(--px-14);font-size:var(--px-11_5);color:var(--sacc-amber);border-bottom:var(--px-1) solid var(--border)">
-      <span class="mono">{me.name}</span> does not have the <b>administrator</b> tag — the broker will refuse changes to users, permissions and vhosts (policies need <b>policymaker</b>).
+      <b>{me.name}</b> does not have the <b>administrator</b> tag — the broker will refuse changes to users, permissions and vhosts (policies need <b>policymaker</b>).
     </div>
   {/if}
   {#if error}
@@ -348,13 +348,13 @@
     {#if section === 'users' && usersError}
       <div role="alert" data-testid="users-error" style="padding:var(--px-14);font-size:var(--px-12);color:var(--error);line-height:1.5">
         {usersError}
-        {#if me}<div style="color:var(--muted);margin-top:var(--px-6)">Logged in as <span class="mono">{me.name}</span> ({me.tags.join(', ') || 'no tags'}). Policies and Virtual hosts can still be read.</div>{/if}
+        {#if me}<div style="color:var(--muted);margin-top:var(--px-6)">Logged in as <b>{me.name}</b> ({me.tags.join(', ') || 'no tags'}). Policies and Virtual hosts can still be read.</div>{/if}
       </div>
     {:else if section === 'users'}
       <div style="display:flex;min-height:100%">
         <!-- user list -->
         <div style="flex:none;width:var(--px-240);max-width:40%;border-right:var(--px-1) solid var(--border);padding:var(--px-8)">
-          <input bind:value={userFilter} placeholder="Filter users…" aria-label="Filter users" class="mono ru-input" style="width:100%;margin-bottom:var(--px-6)" spellcheck="false" />
+          <input bind:value={userFilter} placeholder="Filter users…" aria-label="Filter users" class="ru-input" style="width:100%;margin-bottom:var(--px-6)" spellcheck="false" />
           {#each shownUsers as u (u.name)}
             <div
               class="ru-user"
@@ -365,7 +365,7 @@
               aria-selected={u.name === selected}
               tabindex="0"
             >
-              <span class="mono" style="font-weight:600;color:var(--tbl-link)">{u.name}</span>
+              <span style="font-weight:600;color:var(--text)">{u.name}</span>
               {#if me?.name === u.name}<span class="ru-badge">you</span>{/if}
               {#if !u.has_password}<span class="ru-badge" title="Cannot log in with a password (certificate / external auth only)">no password</span>{/if}
               <span style="margin-left:auto;font-size:var(--px-10_5);color:var(--tbl-meta);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{u.tags.join(', ') || 'no tags'}</span>
@@ -380,7 +380,7 @@
             <div style="font-size:var(--px-12);color:var(--muted)">Pick a user.</div>
           {:else}
             <div style="display:flex;align-items:center;gap:var(--px-10)">
-              <span class="mono" style="font-size:var(--px-15);font-weight:700;color:var(--text)">{current.name}</span>
+              <span style="font-size:var(--px-17);font-weight:650;color:var(--text)">{current.name}</span>
               <span
                 onclick={() => current && askConfirm('Delete user', `Delete RabbitMQ user "${current.name}"? Its permissions go with it, and anything logged in as it is disconnected.`, 'Delete', async () => { await apply(`Deleted user ${current!.name}`, () => ipc.rabbitDeleteUser(connId, current!.name)) })}
                 onkeydown={(e) => e.key === 'Enter' && (e.currentTarget as HTMLElement).click()}
@@ -401,11 +401,11 @@
                   <label class="ru-check" title={k.hint}><input type="checkbox" checked={tagDraft.includes(k.tag)} onchange={() => toggleTag(k.tag)} /> {k.tag}</label>
                 {/each}
                 {#each customTags as t (t)}
-                  <label class="ru-check"><input type="checkbox" checked onchange={() => toggleTag(t)} /> <span class="mono">{t}</span></label>
+                  <label class="ru-check"><input type="checkbox" checked onchange={() => toggleTag(t)} /> <span>{t}</span></label>
                 {/each}
               </div>
               <div style="display:flex;gap:var(--px-8);margin-top:var(--px-8);align-items:center">
-                <input class="mono ru-input" bind:value={customTag} placeholder="custom tag" aria-label="Custom tag" onkeydown={(e) => e.key === 'Enter' && addCustomTag()} style="width:var(--px-160)" />
+                <input class="ru-input" bind:value={customTag} placeholder="custom tag" aria-label="Custom tag" onkeydown={(e) => e.key === 'Enter' && addCustomTag()} style="width:var(--px-160)" />
                 <span onclick={addCustomTag} onkeydown={(e) => e.key === 'Enter' && addCustomTag()} role="button" tabindex="0" class="pv-btn">Add tag</span>
                 <span
                   onclick={() => current && apply(`Tags saved for ${current.name}`, () => ipc.rabbitSetUserTags(connId, current!.name, tagDraft))}
@@ -422,7 +422,7 @@
             <section aria-label="Password">
               <div class="ru-h">Password</div>
               <div style="display:flex;gap:var(--px-8);align-items:center;flex-wrap:wrap">
-                <input class="mono ru-input" type={showPassword ? 'text' : 'password'} bind:value={newPassword} placeholder="new password" aria-label="New password" autocomplete="new-password" style="width:var(--px-240)" />
+                <input class="ru-input" type={showPassword ? 'text' : 'password'} bind:value={newPassword} placeholder="new password" aria-label="New password" autocomplete="new-password" style="width:var(--px-240)" />
                 <span onclick={() => (showPassword = !showPassword)} onkeydown={(e) => e.key === 'Enter' && (showPassword = !showPassword)} role="button" tabindex="0" class="pv-btn">{showPassword ? 'Hide' : 'Show'}</span>
                 <span onclick={() => { newPassword = generatePassword(); showPassword = true }} onkeydown={(e) => e.key === 'Enter' && (e.currentTarget as HTMLElement).click()} role="button" tabindex="0" class="pv-btn">Generate</span>
                 <span
@@ -442,7 +442,7 @@
               {#if !userPerms.length}
                 <div style="font-size:var(--px-12);color:var(--muted)">No access to any virtual host — this user can log in but cannot use any vhost.</div>
               {:else}
-                <table class="mono ru-table">
+                <table class="ds-table ru-table mono">
                   <thead><tr>{#each ['Virtual host', 'Access', 'Configure', 'Write', 'Read', ''] as h (h || 'x')}<th>{h}</th>{/each}</tr></thead>
                   <tbody>
                     {#each userPerms as p (p.vhost)}
@@ -506,7 +506,7 @@
             <section aria-label="Topic permissions">
               <div class="ru-h">Topic permissions <span style="font-weight:400;color:var(--muted)">— limit which routing keys this user may publish / consume on topic exchanges</span></div>
               {#if userTopicPerms.length}
-                <table class="mono ru-table">
+                <table class="ds-table ru-table mono">
                   <thead><tr>{#each ['Virtual host', 'Exchange', 'Write keys', 'Read keys', ''] as h (h || 'x')}<th>{h}</th>{/each}</tr></thead>
                   <tbody>
                     {#each userTopicPerms as t (t.vhost + '|' + t.exchange)}
@@ -555,7 +555,7 @@
       <div style="padding:var(--px-12) var(--px-14)">
         {#if permsError}<div role="alert" style="font-size:var(--px-12);color:var(--error);margin-bottom:var(--px-8)">{permsError}</div>{/if}
         <div style="font-size:var(--px-11_5);color:var(--muted);margin-bottom:var(--px-8)">Each cell is the user's access to that virtual host. Click a cell to edit it.</div>
-        <table class="mono ru-table" aria-label="Permission matrix">
+        <table class="ds-table ru-table" aria-label="Permission matrix">
           <thead><tr><th>User</th>{#each vhostNames as v (v)}<th>{v}</th>{/each}</tr></thead>
           <tbody>
             {#each users as u (u.name)}
@@ -590,7 +590,7 @@
         {#if !policies.length}
           <div style="font-size:var(--px-12);color:var(--muted)">No policies in this virtual host.</div>
         {:else}
-          <table class="mono ru-table" aria-label="Policies">
+          <table class="ds-table ru-table mono" aria-label="Policies">
             <thead><tr>{#each ['Name', 'Pattern', 'Applies to', 'Priority', 'Definition', ''] as h (h || 'x')}<th>{h}</th>{/each}</tr></thead>
             <tbody>
               {#each policies as p (p.name)}
@@ -620,7 +620,7 @@
     {:else}
       <div style="padding:var(--px-12) var(--px-14);display:flex;flex-direction:column;gap:var(--px-10)">
         {#if vhostsError}<div role="alert" style="font-size:var(--px-12);color:var(--error)">{vhostsError}</div>{/if}
-        <table class="mono ru-table" aria-label="Virtual hosts">
+        <table class="ds-table ru-table" aria-label="Virtual hosts">
           <thead><tr>{#each ['Name', 'Description', 'Messages', ''] as h (h || 'x')}<th>{h}</th>{/each}</tr></thead>
           <tbody>
             {#each vhosts as v (v.name)}
@@ -645,7 +645,7 @@
           </tbody>
         </table>
         <div style="display:flex;gap:var(--px-8);flex-wrap:wrap;align-items:flex-end">
-          <label class="ru-field">New virtual host<input class="mono ru-input" bind:value={newVhost.name} placeholder="staging" aria-label="New virtual host name" spellcheck="false" /></label>
+          <label class="ru-field">New virtual host<input class="ru-input" bind:value={newVhost.name} placeholder="staging" aria-label="New virtual host name" spellcheck="false" /></label>
           <label class="ru-field" style="flex:1 1 var(--px-200)">Description<input class="ru-input" bind:value={newVhost.description} aria-label="New virtual host description" /></label>
           <span
             onclick={() => apply(`Created virtual host ${newVhost.name.trim()}`, () => ipc.rabbitCreateVhost(connId, newVhost.name.trim(), newVhost.description)).then((ok) => ok && (newVhost = { name: '', description: '' }))}
@@ -673,11 +673,11 @@
         style="background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-14);padding:var(--px-18);width:min(var(--px-520), 94%);box-shadow:0 var(--px-24) var(--px-60) var(--rgba-0-0-0-_55);display:flex;flex-direction:column;gap:var(--px-10)"
       >
         <div style="font-size:var(--px-14);font-weight:600;color:var(--text)">New user</div>
-        <label class="ru-field">User name<input class="mono ru-input" bind:value={nu.name} use:autofocus aria-label="User name" spellcheck="false" /></label>
+        <label class="ru-field">User name<input class="ru-input" bind:value={nu.name} use:autofocus aria-label="User name" spellcheck="false" /></label>
         {#if nameTaken}<div style="font-size:var(--px-11_5);color:var(--error)">A user with this name already exists.</div>{/if}
         <label class="ru-field">Password
           <span style="display:flex;gap:var(--px-6)">
-            <input class="mono ru-input" style="flex:1" type={nu.show ? 'text' : 'password'} bind:value={nu.password} aria-label="Password" autocomplete="new-password" />
+            <input class="ru-input" style="flex:1" type={nu.show ? 'text' : 'password'} bind:value={nu.password} aria-label="Password" autocomplete="new-password" />
             <span onclick={() => (nu.show = !nu.show)} onkeydown={(e) => e.key === 'Enter' && (e.currentTarget as HTMLElement).click()} role="button" tabindex="0" class="pv-btn">{nu.show ? 'Hide' : 'Show'}</span>
             <span onclick={() => { nu.password = generatePassword(); nu.show = true }} onkeydown={(e) => e.key === 'Enter' && (e.currentTarget as HTMLElement).click()} role="button" tabindex="0" class="pv-btn">Generate</span>
           </span>
@@ -729,12 +729,12 @@
       >
         <div style="font-size:var(--px-14);font-weight:600;color:var(--text)">{policyEdit.isNew ? 'New policy' : `Edit policy ${policyEdit.name}`} <span style="font-weight:400;font-size:var(--px-11_5);color:var(--muted)">in {policyVhost}</span></div>
         <div style="display:flex;gap:var(--px-10);flex-wrap:wrap">
-          <label class="ru-field" style="flex:1 1 var(--px-160)">Name<input class="mono ru-input" bind:value={policyEdit.name} disabled={!policyEdit.isNew} use:autofocus aria-label="Policy name" spellcheck="false" /></label>
+          <label class="ru-field" style="flex:1 1 var(--px-160)">Name<input class="ru-input" bind:value={policyEdit.name} disabled={!policyEdit.isNew} use:autofocus aria-label="Policy name" spellcheck="false" /></label>
           <label class="ru-field" style="flex:1 1 var(--px-200)">Pattern (regex on names)<input class="mono ru-input" bind:value={policyEdit.pattern} aria-label="Policy pattern" spellcheck="false" /></label>
           <label class="ru-field">Applies to
             <select class="ru-input" bind:value={policyEdit.applyTo} aria-label="Applies to">{#each APPLY_TO as a (a)}<option value={a}>{a}</option>{/each}</select>
           </label>
-          <label class="ru-field" style="width:var(--px-90)">Priority<input class="mono ru-input" type="number" bind:value={policyEdit.priority} aria-label="Priority" /></label>
+          <label class="ru-field" style="width:var(--px-90)">Priority<input class="ru-input ds-num" type="number" bind:value={policyEdit.priority} aria-label="Priority" /></label>
         </div>
         {#if policyPatternError}<div role="alert" style="font-size:var(--px-11_5);color:var(--error)">pattern: {policyPatternError}</div>{/if}
         <div class="ru-field">Definition
@@ -776,7 +776,7 @@
         <div style="font-size:var(--px-12_5);color:var(--text2);line-height:1.45;margin-bottom:var(--px-16)">{confirmState.body}</div>
         <div style="display:flex;gap:var(--px-8);justify-content:flex-end">
           <span onclick={() => (confirmState = null)} onkeydown={(e) => e.key === 'Enter' && (confirmState = null)} role="button" tabindex="0" class="pv-btn">Cancel</span>
-          <span onclick={runConfirm} onkeydown={(e) => e.key === 'Enter' && runConfirm()} role="button" tabindex="0" class="pv-btn primary" style="background:var(--error);border-color:var(--error);{confirmBusy ? 'opacity:.6;pointer-events:none' : ''}">{confirmState.action}</span>
+          <span onclick={runConfirm} onkeydown={(e) => e.key === 'Enter' && runConfirm()} role="button" tabindex="0" class="pv-btn danger" style="{confirmBusy ? 'opacity:.6;pointer-events:none' : ''}">{confirmState.action}</span>
         </div>
       </div>
     </div>
@@ -785,11 +785,16 @@
 
 <style>
   .ru-tab {
-    font-size: var(--px-12);
+    font-size: var(--px-13);
+    font-weight: 500;
     color: var(--text2);
-    padding: var(--px-6) var(--px-12);
+    padding: var(--px-10) var(--px-10);
     border-bottom: var(--px-2) solid transparent;
+    margin-bottom: calc(-1 * var(--px-1));
     cursor: pointer;
+  }
+  .ru-tab:hover {
+    color: var(--text);
   }
   .ru-tab.on {
     color: var(--text);
@@ -797,14 +802,26 @@
     border-bottom-color: var(--primary);
   }
   .ru-input {
-    font-size: var(--px-12);
+    font-family: var(--font-main);
+    font-size: var(--px-12_5);
+    min-height: var(--px-30);
+    box-sizing: border-box;
     background: var(--raised);
     border: var(--px-1) solid var(--border2);
-    border-radius: var(--px-6);
-    padding: var(--px-5) var(--px-8);
+    border-radius: var(--px-8);
+    padding: var(--px-5) var(--px-10);
     color: var(--text);
     outline: none;
     resize: vertical;
+  }
+  /* regexes, patterns and JSON definitions are raw content */
+  .ru-input:global(.mono) {
+    font-family: var(--font-mono);
+    font-size: var(--px-12);
+  }
+  .ru-input:focus {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 var(--px-3) var(--ring-soft);
   }
   .ru-input:disabled {
     color: var(--text2);
@@ -813,18 +830,19 @@
   .ru-user {
     display: flex;
     align-items: center;
-    gap: var(--px-6);
-    padding: var(--px-6) var(--px-8);
-    border-radius: var(--px-6);
+    gap: var(--px-8);
+    padding: var(--px-8) var(--px-10);
+    border-radius: var(--px-8);
     cursor: pointer;
-    font-size: var(--px-12);
+    font-size: var(--px-13);
     min-width: 0;
   }
   .ru-user:hover:not(.sel) {
     background: var(--tbl-hover);
   }
   .ru-user.sel {
-    background: color-mix(in srgb, var(--primary) 22%, transparent);
+    background: color-mix(in srgb, var(--primary) 12%, transparent);
+    box-shadow: inset var(--px-3) 0 0 var(--primary);
   }
   .ru-badge {
     flex: none;
@@ -836,38 +854,26 @@
     padding: 0 var(--px-4);
   }
   .ru-h {
-    font-size: var(--px-12);
-    font-weight: 700;
-    color: var(--tbl-head);
+    font-size: var(--px-13);
+    font-weight: 600;
+    color: var(--text);
     margin-bottom: var(--px-8);
   }
   .ru-check {
-    font-size: var(--px-12);
+    font-size: var(--px-12_5);
     color: var(--text2);
     display: inline-flex;
     align-items: center;
     gap: var(--px-5);
   }
   .ru-table {
-    border-collapse: collapse;
-    font-size: var(--px-12);
+    font-size: var(--px-12_5);
     width: 100%;
-    max-width: var(--px-720);
-  }
-  .ru-table th {
-    text-align: left;
-    color: var(--tbl-head);
-    font-weight: 600;
-    padding: var(--px-6) var(--px-10);
-    border-bottom: var(--px-1) solid var(--border2);
+    max-width: var(--px-740);
   }
   .ru-table td {
-    padding: var(--px-6) var(--px-10);
-    border-bottom: var(--px-1) solid var(--border);
+    padding: var(--px-8) var(--px-12);
     color: var(--text2);
-  }
-  .ru-table tbody tr:nth-child(even) {
-    background: var(--tbl-zebra);
   }
   .ru-cell {
     cursor: pointer;

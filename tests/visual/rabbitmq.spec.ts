@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
-import { APP_URL, blockRemoteFonts, previewBox, previewText } from './helpers'
+import { APP_URL, blockRemoteFonts, previewBox, previewText, showFormatted } from './helpers'
 
 // RabbitMQ (Management HTTP API) — browsed from the ObjectExplorer sidebar: vhost →
 // Queues / Exchanges; a queue tab peeks / consumes / publishes / binds / purges.
@@ -78,6 +78,7 @@ test('rabbitmq: queue tab — peek keeps messages, consume removes, payload view
 
   // payload viewer: pretty JSON, really rendered (not just in the model)
   await rows.first().getByTitle('View payload').click()
+  await showFormatted(page)
   // Monaco loads lazily — wait for the viewer's model before measuring it
   await expect.poll(async () => (await previewBox(page, 'Payload')).text, { timeout: 10_000 }).toContain('"order_id": 1042')
   const box = await previewBox(page, 'Payload')

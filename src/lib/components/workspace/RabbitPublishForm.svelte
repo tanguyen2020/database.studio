@@ -101,7 +101,7 @@
     <div role="alert" style="font-size:var(--px-11_5);color:var(--error)">{formError}</div>
   {/if}
   <div style="display:flex;align-items:center;gap:var(--px-10)">
-    <span onclick={publish} onkeydown={(e) => e.key === 'Enter' && publish()} role="button" tabindex="0" class="pv-btn primary" aria-busy={busy} style={busy ? 'opacity:.6;pointer-events:none' : ''}>{busy ? 'Publishing…' : 'Publish message'}</span>
+    <span onclick={publish} onkeydown={(e) => e.key === 'Enter' && publish()} role="button" tabindex="0" class="cfm-btn primary" aria-busy={busy} style={busy ? 'opacity:.6;pointer-events:none' : ''}>{busy ? 'Publishing…' : 'Publish message'}</span>
     {#if last}
       <span data-testid="publish-result" style="font-size:var(--px-11_5);color:{last.routed ? 'var(--sacc-green)' : 'var(--error)'}">
         {last.routed ? `✓ Routed · ${last.at}` : `✕ Not routed — no binding matched · ${last.at}`}
@@ -114,8 +114,8 @@
   .pf-field {
     display: flex;
     flex-direction: column;
-    gap: var(--px-4);
-    font-size: var(--px-11_5);
+    gap: var(--px-6);
+    font-size: var(--px-12);
     font-weight: 600;
     color: var(--text2);
     min-width: 0;
@@ -123,15 +123,29 @@
   .pf-field input,
   .pf-field select,
   .pf-field textarea {
-    font-size: var(--px-12);
+    font-family: var(--font-main);
+    font-size: var(--px-12_5);
     font-weight: 400;
+    min-height: var(--px-30);
+    box-sizing: border-box;
     background: var(--raised);
     border: var(--px-1) solid var(--border2);
-    border-radius: var(--px-6);
-    padding: var(--px-6) var(--px-8);
+    border-radius: var(--px-8);
+    padding: var(--px-6) var(--px-10);
     color: var(--text);
     outline: none;
     resize: vertical;
+  }
+  /* routing key, payload and headers are raw content */
+  .pf-field :global(.mono) {
+    font-family: var(--font-mono);
+    font-size: var(--px-12);
+  }
+  .pf-field input:focus,
+  .pf-field select:focus,
+  .pf-field textarea:focus {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 var(--px-3) var(--ring-soft);
   }
   .pf-field input:disabled {
     color: var(--text2);

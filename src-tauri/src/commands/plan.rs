@@ -27,7 +27,7 @@ pub async fn explain_plan(
         .unwrap_or_else(|| "unknown".into());
 
     // Hệ không áp dụng: trả not_applicable (nút Explain disabled ở UI, không lỗi).
-    if matches!(system.as_str(), "redis" | "kafka" | "nats" | "rabbitmq") {
+    if matches!(system.as_str(), "redis" | "kafka" | "nats" | "rabbitmq" | "elasticsearch") {
         return Ok(QueryPlan::not_applicable(&system));
     }
 

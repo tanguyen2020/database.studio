@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { APP_URL, blockRemoteFonts, previewBox } from './helpers'
+import { APP_URL, blockRemoteFonts, previewBox, showFormatted } from './helpers'
 
 // Redis key browser lives in the ObjectExplorer sidebar (no workspace tab on
 // connect). Clicking a key opens a per-key viewer tab with View JSON + Copy.
@@ -33,6 +33,8 @@ test('redis: key browser in explorer, click key opens viewer with View JSON/Copy
   // open the JSON viewer popup: the value must be VISIBLE, not just held in the
   // model — a collapsed viewer box (a few pixels tall) is the regression here
   await page.getByTitle('View as JSON').first().click()
+  await page.waitForTimeout(600)
+  await showFormatted(page)
   await page.waitForTimeout(600)
   const redisView = await previewBox(page, 'Payload')
   expect(redisView.text, 'payload viewer is empty').not.toBe('')

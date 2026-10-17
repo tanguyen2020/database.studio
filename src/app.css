@@ -34,7 +34,7 @@
   --muted-foreground: var(--muted);
   --accent: var(--hover);
   --accent-foreground: var(--text);
-  --destructive: var(--error);
+  --destructive: var(--danger-solid);
   --destructive-foreground: var(--text);
   --input: var(--border2);
   --ring: var(--primary);

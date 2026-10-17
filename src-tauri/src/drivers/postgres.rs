@@ -596,17 +596,24 @@ impl PgDriver {
         Ok(suggest_missing_pg(&stats))
     }
 
+    /// Every FK column pair of a schema. Reads pg_constraint directly: the
+    /// information_schema version took ~13 s on a 1,500-table schema (750 FKs), and
+    /// its join on constraint_column_usage paired every column of a multi-column key
+    /// with every referenced column (a 2-column FK came back as 4 rows). Here each
+    /// local column is paired with its referenced column by position (conkey[i] →
+    /// confkey[i]).
     pub async fn foreign_keys(&mut self, schema: &str) -> Result<Vec<ForeignKey>, QueryError> {
         let rows = sqlx::query(
-            "SELECT tc.constraint_name, kcu.table_name, kcu.column_name,
-                    ccu.table_name AS ref_table, ccu.column_name AS ref_col
-             FROM information_schema.table_constraints tc
-             JOIN information_schema.key_column_usage kcu
-               ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema
-             JOIN information_schema.constraint_column_usage ccu
-               ON ccu.constraint_name = tc.constraint_name AND ccu.table_schema = tc.table_schema
-             WHERE tc.constraint_type = 'FOREIGN KEY' AND tc.table_schema = $1
-             ORDER BY kcu.table_name, tc.constraint_name",
+            "SELECT con.conname, src.relname, sa.attname, ref.relname, ra.attname
+             FROM pg_catalog.pg_constraint con
+             JOIN pg_catalog.pg_class src ON src.oid = con.conrelid
+             JOIN pg_catalog.pg_namespace ns ON ns.oid = src.relnamespace
+             JOIN pg_catalog.pg_class ref ON ref.oid = con.confrelid
+             CROSS JOIN LATERAL unnest(con.conkey, con.confkey) WITH ORDINALITY AS k(src_att, ref_att, ord)
+             JOIN pg_catalog.pg_attribute sa ON sa.attrelid = con.conrelid AND sa.attnum = k.src_att
+             JOIN pg_catalog.pg_attribute ra ON ra.attrelid = con.confrelid AND ra.attnum = k.ref_att
+             WHERE con.contype = 'f' AND ns.nspname = $1
+             ORDER BY src.relname, con.conname, k.ord",
         )
         .bind(schema)
         .fetch_all(&mut self.conn)

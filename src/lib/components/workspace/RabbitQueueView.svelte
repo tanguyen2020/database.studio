@@ -1,5 +1,7 @@
 <script lang="ts">
   import Icon from '$lib/components/Icon.svelte'
+  import SystemIcon from '$lib/components/SystemIcon.svelte'
+  import PayloadPreview from '$lib/components/viewer/PayloadPreview.svelte'
   // RabbitMQ queue tab: live stats + Messages (peek with requeue, or consume) +
   // Bindings (add / remove) + Publish + Details. One tab per (vhost, queue).
   import { untrack } from 'svelte'
@@ -17,6 +19,7 @@
     exchangeLabel,
     formatPayloadBytes,
     payloadPreview,
+    payloadText,
     sortExchanges,
   } from '$lib/rabbitmq/format'
   import type { TabState } from '$lib/types'
@@ -210,20 +213,20 @@
   const fmt = (n: number | null | undefined) => (n == null ? '?' : n.toLocaleString('en-US'))
 </script>
 
-<div style="flex:1;display:flex;flex-direction:column;min-height:0;position:relative">
+<div class="ds-ws">
   <!-- header -->
-  <div style="flex:none;display:flex;align-items:center;gap:var(--px-12);padding:var(--px-9) var(--px-14);border-bottom:var(--px-1) solid var(--border);background:var(--surface)">
-    <span style="width:var(--px-3);height:var(--px-20);border-radius:var(--px-2);background:{accent}"></span>
-    <div style="display:flex;flex-direction:column;line-height:1.15;min-width:0">
-      <span class="mono" style="font-size:var(--px-13);font-weight:700;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title={name}>{name}</span>
-      <span class="mono" style="font-size:var(--px-10);color:var(--muted)">
+  <div class="ds-ws-head">
+    <span class="ds-ws-icon" style="background:color-mix(in srgb, {accent} 12%, transparent)" aria-hidden="true"><SystemIcon system="rabbitmq" size={20} /></span>
+    <div class="ds-ws-titles">
+      <span class="ds-ws-title" title={name}>{name}</span>
+      <span class="ds-ws-sub">
         queue · vhost <span style="color:var(--text2)">{vhost}</span>{#if queue}{' · '}{queue.queue_type}{queue.durable ? ' · durable' : ''}{queue.auto_delete ? ' · auto-delete' : ''}{queue.exclusive ? ' · exclusive' : ''}{/if}
       </span>
     </div>
-    <div style="margin-left:auto;display:flex;gap:var(--px-8);align-items:center">
-      <span onclick={() => loadInfo()} onkeydown={(e) => e.key === 'Enter' && loadInfo()} role="button" tabindex="0" class="pv-btn" aria-busy={loading}><Icon name="refresh" size={12} /> Refresh</span>
-      <span onclick={purge} onkeydown={(e) => e.key === 'Enter' && purge()} role="button" tabindex="0" class="pv-btn" style="color:var(--error)">Purge</span>
-      <span onclick={deleteQueue} onkeydown={(e) => e.key === 'Enter' && deleteQueue()} role="button" tabindex="0" class="pv-btn" style="color:var(--error)">Delete queue</span>
+    <div class="ds-ws-actions">
+      <span onclick={() => loadInfo()} onkeydown={(e) => e.key === 'Enter' && loadInfo()} role="button" tabindex="0" class="cfm-btn" aria-busy={loading}><Icon name="refresh" size={12} /> Refresh</span>
+      <span onclick={purge} onkeydown={(e) => e.key === 'Enter' && purge()} role="button" tabindex="0" class="cfm-btn ds-danger-outline">Purge</span>
+      <span onclick={deleteQueue} onkeydown={(e) => e.key === 'Enter' && deleteQueue()} role="button" tabindex="0" class="cfm-btn ds-danger-outline">Delete queue</span>
     </div>
   </div>
 
@@ -236,21 +239,21 @@
       <div role="alert" style="padding:var(--px-8) var(--px-14);font-size:var(--px-11_5);color:var(--error);border-bottom:var(--px-1) solid var(--border)">{loadError}</div>
     {/if}
     <!-- stats -->
-    <div style="flex:none;display:flex;gap:var(--px-10);padding:var(--px-10) var(--px-14);border-bottom:var(--px-1) solid var(--border);flex-wrap:wrap">
+    <div style="flex:none;display:flex;gap:var(--px-10);padding:var(--px-12) var(--px-18);border-bottom:var(--px-1) solid var(--border);flex-wrap:wrap;background:var(--surface)">
       {#each [['Ready', queue?.messages_ready], ['Unacked', queue?.messages_unacknowledged], ['Total', queue?.messages], ['Consumers', queue?.consumers]] as [label, value] (label)}
         <div class="rq-stat" data-stat={label}>
           <span class="rq-stat-label">{label}</span>
-          <span class="mono rq-stat-value" style={label === 'Unacked' && Number(value) > 0 ? 'color:var(--tbl-alert)' : ''}>{fmt(value as number | null | undefined)}</span>
+          <span class="ds-num rq-stat-value" style={label === 'Unacked' && Number(value) > 0 ? 'color:var(--tbl-alert)' : ''}>{fmt(value as number | null | undefined)}</span>
         </div>
       {/each}
       <div class="rq-stat">
         <span class="rq-stat-label">State</span>
-        <span class="mono rq-stat-value" style="font-size:var(--px-12);color:{queue?.state === 'running' ? 'var(--sacc-green)' : 'var(--text2)'}">{queue?.state || '—'}</span>
+        <span class="rq-stat-value" style="font-size:var(--px-13);color:{queue?.state === 'running' ? 'var(--sacc-green)' : 'var(--text2)'}">{queue?.state || '—'}</span>
       </div>
     </div>
 
     <!-- section switcher -->
-    <div role="tablist" aria-label="Queue sections" style="flex:none;display:flex;gap:var(--px-4);padding:var(--px-6) var(--px-14) 0;border-bottom:var(--px-1) solid var(--border)">
+    <div role="tablist" aria-label="Queue sections" style="flex:none;display:flex;gap:var(--px-4);padding:0 var(--px-14);border-bottom:var(--px-1) solid var(--border);background:var(--surface)">
       {#each [['messages', 'Messages'], ['live', 'Live'], ['bindings', `Bindings (${bindings.length})`], ['publish', 'Publish'], ['details', 'Details']] as [key, label] (key)}
         <span
           role="tab"
@@ -264,13 +267,13 @@
       {/each}
     </div>
 
-    <div style="flex:1;overflow:auto;min-height:0;padding:var(--px-12) var(--px-14)">
+    <div style="flex:1;overflow:auto;min-height:0;padding:var(--px-14) var(--px-18)">
       {#if section === 'messages'}
         <div style="display:flex;align-items:center;gap:var(--px-10);flex-wrap:wrap;margin-bottom:var(--px-10)">
           <label style="font-size:var(--px-12);color:var(--text2);display:flex;align-items:center;gap:var(--px-6)">
-            Count <input class="mono rq-input" type="number" min="1" max="1000" bind:value={count} aria-label="Message count" style="width:var(--px-80)" />
+            Count <input class="ds-control mono rq-input" type="number" min="1" max="1000" bind:value={count} aria-label="Message count" style="width:var(--px-80)" />
           </label>
-          <select class="rq-input" bind:value={mode} aria-label="Get mode">
+          <select class="ds-control rq-input" bind:value={mode} aria-label="Get mode">
             <option value="requeue">Peek — messages stay in the queue (requeue)</option>
             <option value="ack">Consume — acknowledge and remove</option>
             <option value="reject">Reject — remove without requeue</option>
@@ -283,28 +286,28 @@
           {/if}
         </div>
         {#if !fetched}
-          <div style="font-size:var(--px-12);color:var(--muted);padding:var(--px-12) 0">Press <b>Get messages</b> to read from <span class="mono">{name}</span>.</div>
+          <div class="ds-empty">Press <b style="display:inline;font-size:inherit">Get messages</b> to read from <span class="mono">{name}</span>.</div>
         {:else if messages.length === 0}
-          <div style="font-size:var(--px-12);color:var(--muted);padding:var(--px-12) 0">The queue has no ready messages.</div>
+          <div class="ds-empty"><b>Nothing waiting</b>The queue has no ready messages.</div>
         {:else}
-          <table class="mono" style="border-collapse:collapse;width:100%;font-size:var(--px-12);table-layout:fixed;{GRID_FONT}">
+          <table class="ds-table" style="font-size:var(--px-12_5);table-layout:fixed;">
             <thead><tr>
               {#each [['#', 'width:var(--px-40)'], ['Routing key', 'width:var(--px-180)'], ['Exchange', 'width:var(--px-140)'], ['Redelivered', 'width:var(--px-90)'], ['Size', 'width:var(--px-80)'], ['Payload', ''], ['', 'width:var(--px-60)']] as [h, extra] (h || 'actions')}
-                <th style="position:sticky;top:0;background:var(--header);border-bottom:var(--px-1) solid var(--border2);padding:var(--px-7) var(--px-10);text-align:left;color:var(--tbl-head);font-weight:600;{extra}">{h}</th>
+                <th style={extra}>{h}</th>
               {/each}
             </tr></thead>
             <tbody>
               {#each messages as m, i (i)}
                 <tr class="rq-row" class:sel={selIdx === i} aria-selected={selIdx === i} onclick={() => (selIdx = i)}>
-                  <td style="color:{cellColor(i, 'var(--muted)')}">{i + 1}</td>
-                  <td style="color:{cellColor(i, 'var(--tbl-subject)')};white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title={m.routing_key}>{m.routing_key || '—'}</td>
+                  <td class="ds-num" style="color:{cellColor(i, 'var(--muted)')}">{i + 1}</td>
+                  <td class="mono" style="font-size:var(--px-12);color:{cellColor(i, 'var(--tbl-subject)')};white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title={m.routing_key}>{m.routing_key || '—'}</td>
                   <td style="color:{cellColor(i, 'var(--tbl-meta)')};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{exchangeLabel(m.exchange)}</td>
                   <td style="color:{cellColor(i, m.redelivered ? 'var(--sacc-amber)' : 'var(--tbl-quiet)')}">{m.redelivered ? 'yes' : 'no'}</td>
-                  <td style="color:{cellColor(i, 'var(--syntax-number)')}">{formatPayloadBytes(m.payload_bytes)}</td>
-                  <td style="color:{cellColor(i, 'var(--syntax-string)')};white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title={m.payload}>{payloadPreview(m)}</td>
+                  <td class="ds-num" style="color:{cellColor(i, 'var(--syntax-number)')}">{formatPayloadBytes(m.payload_bytes)}</td>
+                  <td style="max-width:var(--px-560)">{#if payloadText(m).binary}<span class="mono" style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--px-12);color:var(--muted)" title={m.payload}>{payloadPreview(m)}</span>{:else}<PayloadPreview text={payloadText(m).text} inverted={selIdx === i} />{/if}</td>
                   <td style="white-space:nowrap">
-                    <span onclick={(e) => { e.stopPropagation(); view(m, i) }} onkeydown={(e) => e.key === 'Enter' && view(m, i)} role="button" tabindex="0" title="View payload" style="cursor:pointer;color:{cellColor(i, 'var(--muted)')};margin-right:var(--px-8)">⛶</span>
-                    <span onclick={(e) => { e.stopPropagation(); copy(m.payload, 'Payload copied') }} onkeydown={(e) => e.key === 'Enter' && copy(m.payload, 'Payload copied')} role="button" tabindex="0" title="Copy payload" style="cursor:pointer;color:{cellColor(i, 'var(--muted)')}">⧉</span>
+                    <span onclick={(e) => { e.stopPropagation(); view(m, i) }} onkeydown={(e) => e.key === 'Enter' && view(m, i)} role="button" tabindex="0" title="View payload" class="ds-act" style="color:{cellColor(i, 'var(--muted)')}"><Icon name="expand" size={13} /></span>
+                    <span onclick={(e) => { e.stopPropagation(); copy(m.payload, 'Payload copied') }} onkeydown={(e) => e.key === 'Enter' && copy(m.payload, 'Payload copied')} role="button" tabindex="0" title="Copy payload" class="ds-act" style="color:{cellColor(i, 'var(--muted)')}"><Icon name="copy" size={13} /></span>
                   </td>
                 </tr>
               {/each}
@@ -312,21 +315,21 @@
           </table>
         {/if}
       {:else if section === 'bindings'}
-        <table class="mono" style="border-collapse:collapse;width:100%;max-width:var(--px-720);font-size:var(--px-12)">
+        <table class="ds-table" style="max-width:var(--px-720);font-size:var(--px-12_5);">
           <thead><tr>
             {#each ['From exchange', 'Routing key', ''] as h (h || 'x')}
-              <th style="border-bottom:var(--px-1) solid var(--border2);padding:var(--px-7) var(--px-10);text-align:left;color:var(--tbl-head);font-weight:600">{h}</th>
+              <th>{h}</th>
             {/each}
           </tr></thead>
           <tbody>
             {#each bindings as b (b.source + '|' + b.properties_key)}
               <tr class="rq-row">
                 <td style="color:var(--tbl-link)">{exchangeLabel(b.source)}</td>
-                <td style="color:var(--tbl-subject)">{b.routing_key || '—'}</td>
+                <td class="mono" style="font-size:var(--px-12);color:var(--tbl-subject)">{b.routing_key || '—'}</td>
                 <td style="text-align:right">
                   <!-- the implicit default-exchange binding cannot be removed -->
                   {#if b.source !== ''}
-                    <span onclick={() => unbind(b)} onkeydown={(e) => e.key === 'Enter' && unbind(b)} role="button" tabindex="0" title="Remove binding" style="cursor:pointer;color:var(--error)">Unbind</span>
+                    <span onclick={() => unbind(b)} onkeydown={(e) => e.key === 'Enter' && unbind(b)} role="button" tabindex="0" title="Remove binding" class="eg-btn ds-danger-outline">Unbind</span>
                   {/if}
                 </td>
               </tr>
@@ -336,13 +339,13 @@
         <div style="margin-top:var(--px-14);display:flex;gap:var(--px-8);align-items:flex-end;flex-wrap:wrap">
           <label style="display:flex;flex-direction:column;gap:var(--px-4);font-size:var(--px-11_5);color:var(--text2);font-weight:600">
             Bind from exchange
-            <select class="rq-input" bind:value={bindExchange} aria-label="Bind from exchange">
+            <select class="ds-control rq-input" bind:value={bindExchange} aria-label="Bind from exchange">
               {#each bindable as x (x)}<option value={x}>{x}</option>{/each}
             </select>
           </label>
           <label style="display:flex;flex-direction:column;gap:var(--px-4);font-size:var(--px-11_5);color:var(--text2);font-weight:600">
             Routing key
-            <input class="mono rq-input" bind:value={bindKey} placeholder="orders.*" aria-label="Binding routing key" spellcheck="false" />
+            <input class="ds-control mono rq-input" bind:value={bindKey} placeholder="orders.*" aria-label="Binding routing key" spellcheck="false" />
           </label>
           <span onclick={bind} onkeydown={(e) => e.key === 'Enter' && bind()} role="button" tabindex="0" class="pv-btn primary" style={binding || !bindable.length ? 'opacity:.6;pointer-events:none' : ''}>Bind</span>
         </div>
@@ -359,7 +362,7 @@
       {:else if section === 'details'}
         <dl class="rq-dl">
           {#each [['Type', queue?.queue_type], ['Durable', queue ? String(queue.durable) : ''], ['Auto-delete', queue ? String(queue.auto_delete) : ''], ['Exclusive', queue ? String(queue.exclusive) : ''], ['Node', queue?.node], ['Policy', queue?.policy || '—'], ['Memory', queue?.memory != null ? formatPayloadBytes(queue.memory) : '—']] as [k, v] (k)}
-            <dt>{k}</dt><dd class="mono">{v || '—'}</dd>
+            <dt>{k}</dt><dd>{v || '—'}</dd>
           {/each}
         </dl>
         <div style="margin-top:var(--px-12);font-size:var(--px-11_5);font-weight:600;color:var(--text2)">Arguments</div>
@@ -393,7 +396,7 @@
         <div style="font-size:var(--px-12_5);color:var(--text2);line-height:1.45;margin-bottom:var(--px-16)">{confirmState.body}</div>
         <div style="display:flex;gap:var(--px-8);justify-content:flex-end">
           <span onclick={() => (confirmState = null)} onkeydown={(e) => e.key === 'Enter' && (confirmState = null)} role="button" tabindex="0" class="pv-btn">Cancel</span>
-          <span onclick={runConfirm} onkeydown={(e) => e.key === 'Enter' && runConfirm()} role="button" tabindex="0" class="pv-btn primary" style="background:var(--error);border-color:var(--error);{confirmBusy ? 'opacity:.6;pointer-events:none' : ''}">{confirmState.action}</span>
+          <span onclick={runConfirm} onkeydown={(e) => e.key === 'Enter' && runConfirm()} role="button" tabindex="0" class="pv-btn danger" style="{confirmBusy ? 'opacity:.6;pointer-events:none' : ''}">{confirmState.action}</span>
         </div>
       </div>
     </div>
@@ -401,56 +404,49 @@
 </div>
 
 <style>
+  /* summary cards: a label, then the number large and readable */
   .rq-stat {
     display: flex;
     flex-direction: column;
-    gap: var(--px-2);
-    min-width: var(--px-90);
-    padding: var(--px-6) var(--px-12);
-    border: var(--px-1) solid var(--border);
-    border-radius: var(--px-8);
-    background: var(--panel);
+    gap: var(--px-4);
+    min-width: var(--px-120);
+    padding: var(--px-10) var(--px-14);
+    border: var(--px-1) solid var(--border2);
+    border-radius: var(--px-10);
+    background: var(--raised);
+    box-shadow: var(--shadow-xs);
   }
   .rq-stat-label {
-    font-size: var(--px-10_5);
-    color: var(--tbl-meta);
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    font-weight: 600;
+    font-size: var(--px-12);
+    color: var(--muted);
+    font-weight: 500;
   }
   .rq-stat-value {
-    font-size: var(--px-16);
-    font-weight: 700;
-    color: var(--syntax-number);
+    font-size: var(--px-20);
+    font-weight: 650;
+    color: var(--text);
     font-variant-numeric: tabular-nums;
+    line-height: 1.15;
   }
   .rq-tab {
-    font-size: var(--px-12);
+    font-size: var(--px-13);
+    font-weight: 500;
     color: var(--text2);
-    padding: var(--px-6) var(--px-12);
+    padding: var(--px-10) var(--px-10);
     border-bottom: var(--px-2) solid transparent;
+    margin-bottom: calc(-1 * var(--px-1));
     cursor: pointer;
+  }
+  .rq-tab:hover {
+    color: var(--text);
   }
   .rq-tab.on {
     color: var(--text);
     font-weight: 600;
     border-bottom-color: var(--primary);
   }
-  .rq-input {
-    font-size: var(--px-12);
-    background: var(--raised);
-    border: var(--px-1) solid var(--border2);
-    border-radius: var(--px-6);
-    padding: var(--px-5) var(--px-8);
-    color: var(--text);
-    outline: none;
-  }
   .rq-row td {
-    border-bottom: var(--px-1) solid var(--border);
-    padding: var(--px-6) var(--px-10);
-  }
-  .rq-row:nth-child(even) {
-    background: var(--tbl-zebra);
+    padding: var(--px-8) var(--px-12);
   }
   .rq-row:hover:not(.sel) {
     background: var(--tbl-hover);
@@ -462,9 +458,15 @@
   .rq-dl {
     display: grid;
     grid-template-columns: max-content 1fr;
-    gap: var(--px-6) var(--px-16);
-    font-size: var(--px-12);
+    gap: var(--px-8) var(--px-20);
+    font-size: var(--px-13);
     margin: 0;
+    padding: var(--px-14) var(--px-16);
+    background: var(--surface);
+    border: var(--px-1) solid var(--border2);
+    border-radius: var(--px-10);
+    box-shadow: var(--shadow-xs);
+    max-width: var(--px-720);
   }
   .rq-dl dt {
     color: var(--tbl-meta);

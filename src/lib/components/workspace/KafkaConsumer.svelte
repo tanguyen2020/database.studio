@@ -7,8 +7,17 @@
   import { IS_TAURI } from '$lib/demo'
   import { toasts } from '$lib/stores/toast.svelte'
   import { explorer } from '$lib/stores/explorer.svelte'
-  import CodeView from '$lib/components/editor/CodeView.svelte'
-  import { DS_JSON } from '$lib/editor/monarch'
+  import PayloadDialog from '$lib/components/viewer/PayloadDialog.svelte'
+  import {
+    inView,
+    kafkaMessageState,
+    type ConsumerState,
+    type ConsumerView,
+    type KafkaGroupLag,
+  } from '$lib/stream/consumers'
+  import Icon from '$lib/components/Icon.svelte'
+  import StreamConsumersView from '$lib/components/stream/StreamConsumersView.svelte'
+  import PayloadPreview from '$lib/components/viewer/PayloadPreview.svelte'
   import { consumerEmptyText } from '$lib/stream/explorer'
   import { autofocus } from '$lib/actions/autofocus'
   import type { TabState } from '$lib/types'
@@ -78,30 +87,95 @@
   let selKey = $state<string | null>(null)
   let hoverKey = $state<string | null>(null)
   const msgKey = (m: ipc.KafkaMsg) => `${m.partition}:${m.offset}`
-  const rowBg = (k: string) => (selKey === k ? 'var(--grid-select)' : hoverKey === k ? 'var(--hover)' : 'transparent')
+  const rowBg = (k: string) => (selKey === k ? 'var(--grid-select) !important' : '')
   const cellColor = (k: string, base: string) => (selKey === k ? 'var(--hex-fff)' : base)
-  // Result Grid's typographic rule (rule chung): tabular figures.
-  const GRID_FONT = "font-variant-numeric:tabular-nums;font-feature-settings:'tnum' 1,'zero' 1"
+  // numbers use the UI font with tabular figures (.ds-num / .ds-time, theme.css);
+  // only raw content (key, value, subject) is monospaced
 
   // JSON viewer popup — pretty-prints the value (falls back to raw text when it
   // isn't valid JSON) so the full message is readable, not just the row preview.
-  let viewState = $state<{ label: string; text: string; isJson: boolean } | null>(null)
-  function viewJson(m: ipc.KafkaMsg) {
-    let text = m.value
-    let isJson = false
+  let viewState = $state<ipc.KafkaMsg | null>(null)
+  // Two screens on this tab: Messages and Consumer groups. Each loads ITS OWN
+  // data, and only when opened — the message grid never waits on the groups.
+  let mode = $state<'messages' | 'consumers'>('messages')
+  // Consumer groups screen: ONE list call (names, state, members, and the topics
+  // their live members are assigned) — nothing per group.
+  let groups = $state<ipc.KafkaGroup[] | null>(null)
+  let groupError = $state('')
+  let groupsLoading = $state(false)
+  let groupScope = $state<'topic' | 'all'>('topic')
+  const readingThis = $derived((groups ?? []).filter((g) => (g.topics ?? []).includes(topic)))
+  async function loadGroups() {
+    if (!tab.connectionId || groupsLoading) return
+    groupError = ''
+    groupsLoading = true
     try {
-      text = JSON.stringify(JSON.parse(m.value), null, 2)
-      isJson = true
-    } catch {
-      // not JSON — show the raw value
+      groups = await ipc.kafkaConsumerGroups(tab.connectionId)
+      if (!(groups ?? []).some((g) => (g.topics ?? []).includes(topic))) groupScope = 'all'
+    } catch (e) {
+      groupError = String(e)
+      groups = []
+    } finally {
+      groupsLoading = false
     }
-    viewState = { label: `${topic} · p${m.partition}:${m.offset}`, text, isJson }
   }
-  async function copyText(text: string) {
-    await navigator.clipboard.writeText(text)
-    toasts.success('Copied')
+  function openMode(m: 'messages' | 'consumers') {
+    mode = m
+    if (m === 'consumers' && groups === null) void loadGroups()
   }
+  const groupRows = $derived(
+    (groupScope === 'topic' ? readingThis : (groups ?? [])).map((g) => ({
+      name: g.name,
+      ok: g.state === 'Stable' ? true : g.state === 'Empty' || g.state === 'Dead' ? null : false,
+      cells: {
+        state: g.state || '—',
+        members: String(g.members.length),
+        topics: (g.topics ?? []).join(', ') || (g.members.length ? '—' : 'idle'),
+      },
+      title: `${g.name} · ${g.state} · ${g.members.length} member${g.members.length === 1 ? '' : 's'}`,
+    })),
+  )
 
+  // "View messages" on a group: the Messages screen, seen through that group. Reads
+  // that ONE group's offsets on THIS topic only.
+  let selGroup = $state<string | null>(null)
+  let selGroupLag = $state<KafkaGroupLag | null>(null)
+  let selLagLoading = $state(false)
+  let selLagError = $state('')
+  let groupView = $state<ConsumerView>('all')
+  const stateOf = (m: ipc.KafkaMsg): ConsumerState | null =>
+    selGroupLag ? kafkaMessageState(selGroupLag, topic, m.partition, m.offset) : null
+  const STATE_LABEL: Record<ConsumerState, string> = { processed: 'Processed', pending: 'Not processed', 'in-flight': 'In flight', unknown: 'Unknown' }
+  const selBehind = $derived(selGroupLag ? selGroupLag.lag.reduce((n, l) => n + Math.max(0, l.lag), 0) : 0)
+  async function viewAs(name: string) {
+    mode = 'messages'
+    selGroup = name
+    groupView = 'all'
+    selGroupLag = null
+    selLagError = ''
+    if (!tab.connectionId) return
+    selLagLoading = true
+    try {
+      const lag = await ipc.kafkaGroupTopicLag(tab.connectionId, name, topic)
+      if (selGroup === name) selGroupLag = { name, state: groups?.find((g) => g.name === name)?.state ?? '', lag }
+    } catch (e) {
+      if (selGroup === name) selLagError = String(e)
+    } finally {
+      selLagLoading = false
+    }
+  }
+  function stopViewAs() {
+    selGroup = null
+    selGroupLag = null
+    groupView = 'all'
+  }
+  /** the two view buttons: press one to filter, press it again to show everything */
+  function setGroupView(v: ConsumerView) {
+    groupView = groupView === v ? 'all' : v
+  }
+  function viewJson(m: ipc.KafkaMsg) {
+    viewState = m
+  }
   function decodeVal(v: string): string {
     if (decode === 'json') {
       try {
@@ -173,6 +247,7 @@
           return m.key.includes(keyFilter)
         }
       }
+      if (selGroupLag && groupView !== 'all' && !inView(stateOf(m) ?? 'unknown', groupView)) return false
       return true
     }),
   )
@@ -307,106 +382,183 @@
   }
 </script>
 
-<div style="flex:1;display:flex;flex-direction:column;min-height:0;position:relative">
-  <!-- header -->
-  <div style="flex:none;display:flex;align-items:center;gap:var(--px-10);padding:var(--px-10) var(--px-14);border-bottom:var(--px-1) solid var(--border);background:var(--surface);flex-wrap:wrap">
-    <span style="width:var(--px-3);height:var(--px-20);border-radius:var(--px-2);background:var(--hex-8b5cf6)"></span>
-    <span class="mono" style="font-size:var(--px-13);font-weight:600">{topic}</span>
-    <span style="font-size:var(--px-11);color:var(--text2)">Rows</span>
-    <select
-      bind:value={pageSize}
-      onchange={() => loadPage(-1)}
-      class="cm-mini"
-      title="How many records to read per page. A topic can hold millions — the grid reads one bounded window at a time."
-    >
-      {#each [50, 100, 200, 500, 1000] as n (n)}<option value={n}>{n}</option>{/each}
-    </select>
-    <span style="font-size:var(--px-11);color:var(--text2)">Partition</span>
-    <input bind:value={partition} onchange={() => loadPage(-1)} placeholder="all" class="cm-mini mono" style="width:var(--px-60)" />
-    <span style="font-size:var(--px-11);color:var(--text2)">Decode</span>
-    <select bind:value={decode} class="cm-mini">
-      <option value="utf8">UTF-8</option>
-      <option value="json">JSON</option>
-      <option value="raw">Raw</option>
-    </select>
-    <div style="margin-left:auto;display:flex;gap:var(--px-8);align-items:center">
-      <span style="font-size:var(--px-11);color:var(--muted)">{filtered.length}/{messages.length}</span>
-      <span onclick={toggle} onkeydown={(e) => e.key === 'Enter' && toggle()} role="button" tabindex="0" style="font-size:var(--px-11_5);background:{consuming ? 'var(--hex-8b5cf6)' : 'var(--panel)'};color:{consuming ? 'var(--hex-fff)' : 'var(--text)'};border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-12);cursor:pointer;font-weight:600">{consuming ? 'Stop' : 'Consume'}</span>
-      <span onclick={() => (paused = !paused)} onkeydown={(e) => e.key === 'Enter' && (paused = !paused)} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-12);cursor:pointer">{paused ? 'Resume' : 'Pause'}</span>
-      <span onclick={() => { messages = []; pending = [] }} onkeydown={(e) => e.key === 'Enter' && (messages = [], pending = [])} role="button" tabindex="0" title="Clear the view only (does not touch Kafka)" style="font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-12);cursor:pointer">Clear</span>
-      <span onclick={clearMessages} onkeydown={(e) => e.key === 'Enter' && clearMessages()} role="button" tabindex="0" title="Delete all messages of this topic on Kafka" style="font-size:var(--px-11_5);background:var(--panel);color:var(--error);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-12);cursor:pointer;font-weight:600">Clear messages</span>
+<div class="ds-ws">
+  <!-- header: which topic, what state, the live actions -->
+  <div class="ds-ws-head">
+    <span class="ds-ws-icon" style="color:var(--sacc-purple);background:color-mix(in srgb, var(--sacc-purple) 13%, transparent)" aria-hidden="true">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="6" cy="12" r="2.2" /><circle cx="18" cy="5.5" r="2.2" /><circle cx="18" cy="18.5" r="2.2" /><path d="M8 11 L16 6.5" /><path d="M8 13 L16 17.5" /></svg>
+    </span>
+    <div class="ds-ws-titles">
+      <span class="ds-ws-title" title={topic}>{topic}</span>
+      <span class="ds-ws-sub">Kafka topic{retained >= 0 ? ` · ${retained.toLocaleString()} messages` : ''}</span>
+    </div>
+    <span class="ds-chip" class:live={consuming && !paused} class:warn={consuming && paused}>{consuming ? (paused ? 'Paused' : 'Live') : 'Browsing'}</span>
+    <div class="ds-ws-actions">
+      {#if mode === 'messages'}
+      <span onclick={toggle} onkeydown={(e) => e.key === 'Enter' && toggle()} role="button" tabindex="0" class="cfm-btn" class:primary={!consuming} title={consuming ? 'Stop following new messages' : 'Follow new messages as they arrive'}>{consuming ? 'Stop' : 'Consume'}</span>
+      <span onclick={() => (paused = !paused)} onkeydown={(e) => e.key === 'Enter' && (paused = !paused)} role="button" tabindex="0" class="cfm-btn">{paused ? 'Resume' : 'Pause'}</span>
+      <span onclick={() => { messages = []; pending = [] }} onkeydown={(e) => e.key === 'Enter' && (messages = [], pending = [])} role="button" tabindex="0" title="Clear the view only (does not touch Kafka)" class="cfm-btn">Clear</span>
+      {/if}
+      <span onclick={clearMessages} onkeydown={(e) => e.key === 'Enter' && clearMessages()} role="button" tabindex="0" title="Delete all messages of this topic on Kafka" class="cfm-btn ds-danger-outline">Clear messages</span>
     </div>
   </div>
 
+  <!-- two screens of this topic; each loads its own data when opened -->
+  <div class="ds-viewtabs" role="tablist" aria-label="Topic views">
+    <span role="tab" tabindex="0" aria-selected={mode === 'messages'} onclick={() => openMode('messages')} onkeydown={(e) => e.key === 'Enter' && openMode('messages')}>
+      Messages
+    </span>
+    <span role="tab" tabindex="0" aria-selected={mode === 'consumers'} data-testid="consumers-tab" onclick={() => openMode('consumers')} onkeydown={(e) => e.key === 'Enter' && openMode('consumers')}>
+      Consumer groups
+      {#if groups !== null}<span class="ds-count">{readingThis.length}</span>{/if}
+    </span>
+  </div>
+
+  {#if mode === 'consumers'}
+    <StreamConsumersView
+      noun="group"
+      attr="data-group"
+      columns={[
+        { key: 'state', label: 'State' },
+        { key: 'members', label: 'Members', num: true },
+        { key: 'topics', label: 'Assigned topics', mono: true },
+      ]}
+      rows={groups === null ? null : groupRows}
+      loading={groupsLoading}
+      error={groupError}
+      emptyText={groupScope === 'topic' ? 'No running group is assigned this topic right now. Idle groups are under All groups.' : 'This cluster has no consumer groups.'}
+      note="Reading this topic = groups whose running members are assigned it. A group with no member running (Empty) can still hold offsets here — open it to see."
+      scopes={[
+        { key: 'topic', label: 'Reading this topic', count: readingThis.length },
+        { key: 'all', label: 'All groups', count: (groups ?? []).length },
+      ]}
+      scope={groupScope}
+      onScope={(k) => (groupScope = k as 'topic' | 'all')}
+      onOpen={(n) => void viewAs(n)}
+      onReload={() => void loadGroups()}
+    />
+  {:else}
+  <!-- toolbar: what to read, how to show it, and filters -->
+  <div class="ds-toolbar">
+    <label class="ds-field">Rows
+      <select
+        bind:value={pageSize}
+        onchange={() => loadPage(-1)}
+        class="ds-control"
+        title="How many records to read per page. A topic can hold millions — the grid reads one bounded window at a time."
+      >
+        {#each [50, 100, 200, 500, 1000] as n (n)}<option value={n}>{n}</option>{/each}
+      </select>
+    </label>
+    <label class="ds-field">Partition
+      <input bind:value={partition} onchange={() => loadPage(-1)} placeholder="all" class="ds-control ds-num" style="width:var(--px-70)" />
+    </label>
+    <label class="ds-field">Decode
+      <select bind:value={decode} class="ds-control">
+        <option value="utf8">UTF-8</option>
+        <option value="json">JSON</option>
+        <option value="raw">Raw</option>
+      </select>
+    </label>
+    <span class="ds-search" style="flex:1;min-width:var(--px-160)">
+      <Icon name="search" size={13} />
+      <input bind:value={keyFilter} placeholder="filter key (regex)" aria-label="Filter by key" />
+    </span>
+    <span class="ds-search" style="flex:1;min-width:var(--px-160)">
+      <Icon name="search" size={13} />
+      <input bind:value={valFilter} placeholder="filter value (text)" aria-label="Filter by value" />
+    </span>
+  </div>
+
   <!-- pager: one bounded window of the log at a time -->
-  <div style="flex:none;display:flex;gap:var(--px-8);align-items:center;padding:var(--px-6) var(--px-14);border-bottom:var(--px-1) solid var(--border)">
-    <span
-      onclick={() => loadPage(-1)}
-      onkeydown={(e) => e.key === 'Enter' && loadPage(-1)}
-      role="button"
-      tabindex="0"
-      aria-disabled={loadingPage}
-      title="Jump to the newest records"
-      class="pg-btn"
-      style="opacity:{loadingPage ? 0.5 : 1}">⏮ Newest</span
-    >
-    <!--
-      Records are listed newest-first, so paging follows the LIST, not the offsets:
-      Previous walks back toward the newest page, Next walks on to older records.
-    -->
-    <span
-      onclick={newerPage}
-      onkeydown={(e) => e.key === 'Enter' && newerPage()}
-      role="button"
-      tabindex="0"
-      aria-disabled={loadingPage || atNewest}
-      title="Previous page (back toward the newest records)"
-      class="pg-btn"
-      style="opacity:{loadingPage || atNewest ? 0.5 : 1}">◀ Previous</span
-    >
-    <span
-      onclick={olderPage}
-      onkeydown={(e) => e.key === 'Enter' && olderPage()}
-      role="button"
-      tabindex="0"
-      aria-disabled={loadingPage || !hasOlder}
-      title="Next page (on to older records)"
-      class="pg-btn"
-      style="opacity:{loadingPage || !hasOlder ? 0.5 : 1}">Next ▶</span
-    >
-    <span class="mono" style="font-size:var(--px-11);color:var(--muted)">
+  <div class="ds-toolbar" style="padding-top:var(--px-6);padding-bottom:var(--px-6)">
+    <div class="ds-seg" role="group" aria-label="Pages">
+      <span
+        onclick={() => loadPage(-1)}
+        onkeydown={(e) => e.key === 'Enter' && loadPage(-1)}
+        role="button"
+        tabindex="0"
+        aria-disabled={loadingPage}
+        title="Jump to the newest records">⏮ Newest</span
+      >
+      <!--
+        Records are listed newest-first, so paging follows the LIST, not the offsets:
+        Previous walks back toward the newest page, Next walks on to older records.
+      -->
+      <span
+        onclick={newerPage}
+        onkeydown={(e) => e.key === 'Enter' && newerPage()}
+        role="button"
+        tabindex="0"
+        aria-disabled={loadingPage || atNewest}
+        title="Previous page (back toward the newest records)">◀ Previous</span
+      >
+      <span
+        onclick={olderPage}
+        onkeydown={(e) => e.key === 'Enter' && olderPage()}
+        role="button"
+        tabindex="0"
+        aria-disabled={loadingPage || !hasOlder}
+        title="Next page (on to older records)">Next ▶</span
+      >
+    </div>
+    <span class="ds-meta">
       {#if loadingPage}
         Reading…
       {:else if messages.length > 0}
-        from offset {windowStart} · {messages.length} read{retained >= 0 ? ` · topic holds ${retained.toLocaleString()}` : ''}
+        from offset <b>{windowStart}</b> · <b>{messages.length}</b> read{retained >= 0 ? ` · topic holds ${retained.toLocaleString()}` : ''}
       {:else if retained > 0}
         topic holds {retained.toLocaleString()}
       {/if}
     </span>
-    <input bind:value={keyFilter} placeholder="filter key (regex)" class="cm-mini mono" style="flex:1;margin-left:var(--px-8)" />
-    <input bind:value={valFilter} placeholder="filter value (text)" class="cm-mini mono" style="flex:1" />
+    <span class="ds-meta" style="margin-left:auto">Showing <b>{filtered.length}</b> of {messages.length}</span>
   </div>
+
+  <!-- viewing as a group (picked on the Consumer groups screen) -->
+  {#if selGroup}
+    <div class="ds-toolbar" role="group" aria-label="Viewing as" data-testid="consumer-groups">
+      <span class="ds-field">Viewing as</span>
+      <span class="ds-consumer" aria-pressed="true" data-group={selGroup}>
+        <span class="dot" class:ok={!!selGroupLag && selBehind === 0}></span>
+        {selGroup}
+        <span class="sub">
+          {#if selLagLoading}reading offsets…{:else if selLagError}offsets unavailable{:else if selGroupLag && !selGroupLag.lag.length}no offsets on this topic{:else if selBehind === 0}up to date{:else}{selBehind.toLocaleString('en-US')} behind{/if}
+        </span>
+      </span>
+      <span role="button" tabindex="0" class="ds-act" style="opacity:1" title="Stop viewing as this group" aria-label="Stop viewing as this group" onclick={stopViewAs} onkeydown={(e) => e.key === 'Enter' && stopViewAs()}><Icon name="close" size={12} /></span>
+      {#if selLagError}<span class="ds-meta" style="color:var(--danger-text)" title={selLagError}>{selLagError}</span>{/if}
+      <div class="ds-seg" role="group" aria-label={`Messages for ${selGroup}`} style="margin-left:auto">
+        <span role="button" tabindex="0" aria-pressed={groupView === 'processed'} title="Show only what this group has processed" onclick={() => setGroupView('processed')} onkeydown={(e) => e.key === 'Enter' && setGroupView('processed')}>Processed</span>
+        <span role="button" tabindex="0" aria-pressed={groupView === 'unprocessed'} title="Show only what this group has not processed yet" onclick={() => setGroupView('unprocessed')} onkeydown={(e) => e.key === 'Enter' && setGroupView('unprocessed')}>Not processed</span>
+      </div>
+    </div>
+  {/if}
 
   <!-- status / error line from librdkafka (so empty grid isn't a mystery) -->
   {#if statusMsg}
     <div
-      style="flex:none;padding:var(--px-6) var(--px-14);font-size:var(--px-11_5);border-bottom:var(--px-1) solid var(--border);color:{statusLevel === 'error' ? 'var(--error)' : 'var(--sacc-amber)'};background:var(--surface)"
+      style="flex:none;padding:var(--px-8) var(--px-18);font-size:var(--px-12);border-bottom:var(--px-1) solid var(--border);color:{statusLevel === 'error' ? 'var(--danger-text)' : 'var(--sacc-amber)'};background:{statusLevel === 'error' ? 'var(--danger-soft)' : 'color-mix(in srgb, var(--sacc-amber) 10%, var(--surface))'}"
     >
       {statusLevel === 'error' ? '✕' : '⚠'} {statusMsg}
     </div>
   {/if}
 
   <!-- message table -->
-  <div style="flex:1;overflow:auto;min-height:0">
+  <div style="flex:1;overflow:auto;min-height:0;background:var(--surface)">
     {#if messages.length === 0}
-      <div style="padding:var(--px-16);text-align:center;font-size:var(--px-12);color:var(--muted)">
+      <div class="ds-empty">
         {emptyText}
       </div>
+    {:else if filtered.length === 0 && selGroup && groupView !== 'all'}
+      <div class="ds-empty">
+        <b>Nothing here for {selGroup}</b>
+        No message on this page is {groupView === 'processed' ? 'processed' : 'still waiting'} for this group. Use Previous / Next to look at other pages.
+      </div>
     {:else}
-      <table class="mono" style="border-collapse:collapse;width:100%;font-size:var(--px-12);{GRID_FONT}">
+      <table class="ds-table flush" style="font-size:var(--px-12_5)">
         <thead><tr>
-          {#each ['Partition', 'Offset', 'Time', 'Key', 'Value', ''] as h (h)}
-            <th style="position:sticky;top:0;background:var(--header);border-bottom:var(--px-1) solid var(--border2);padding:var(--px-6) var(--px-12);text-align:left;color:var(--text2);font-weight:600;white-space:nowrap">{h}</th>
+          {#each ['Partition', 'Offset', 'Time', ...(selGroupLag ? ['Status'] : []), 'Key', 'Value', ''] as h (h)}
+            <th>{h}</th>
           {/each}
         </tr></thead>
         <tbody>
@@ -421,15 +573,25 @@
               onmouseleave={() => (hoverKey === k ? (hoverKey = null) : null)}
               style="background:{rowBg(k)};cursor:default"
             >
-              <td style="padding:var(--px-5) var(--px-12);border-bottom:var(--px-1) solid var(--border);white-space:nowrap;width:1%;color:{cellColor(k, 'var(--muted)')}">{m.partition}</td>
-              <td style="padding:var(--px-5) var(--px-12);border-bottom:var(--px-1) solid var(--border);white-space:nowrap;width:1%;color:{cellColor(k, 'var(--syntax-number)')}">{m.offset}</td>
-              <td style="padding:var(--px-5) var(--px-12);border-bottom:var(--px-1) solid var(--border);white-space:nowrap;width:1%;font-weight:700;color:{cellColor(k, 'var(--sacc-amber)')}">{fmtTs(m.timestamp)}</td>
-              <td style="padding:var(--px-5) var(--px-12);border-bottom:var(--px-1) solid var(--border);color:{cellColor(k, 'var(--syntax-function)')};max-width:var(--px-140);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title={m.key}>{m.key}</td>
-              <td style="padding:var(--px-5) var(--px-12);border-bottom:var(--px-1) solid var(--border);color:{cellColor(k, 'var(--syntax-operator)')};max-width:var(--px-420);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title={decodeVal(m.value)}>{decodeVal(m.value)}</td>
+              <td class="ds-num" style="white-space:nowrap;width:1%;color:{cellColor(k, 'var(--muted)')}">{m.partition}</td>
+              <td class="ds-num" style="white-space:nowrap;width:1%;color:{cellColor(k, 'var(--syntax-number)')}">{m.offset}</td>
+              <td class="ds-time" style="white-space:nowrap;width:1%;color:{cellColor(k, 'var(--text2)')}">{fmtTs(m.timestamp)}</td>
+              {#if selGroupLag}
+                {@const st = stateOf(m) ?? 'unknown'}
+                <td style="white-space:nowrap;width:1%"><span class="ds-state {st}" data-state={st}>{STATE_LABEL[st]}</span></td>
+              {/if}
+              <td style="max-width:var(--px-200)"><span class="ds-key" class:none={!m.key} style="color:{cellColor(k, m.key ? 'var(--text2)' : 'var(--muted)')}" title={m.key}>{m.key || 'no key'}</span></td>
+              <td style="max-width:var(--px-560)">
+                {#if decode === 'raw'}
+                  <span class="mono" style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--px-12);color:{cellColor(k, 'var(--text2)')}" title={m.value}>{m.value}</span>
+                {:else}
+                  <PayloadPreview text={decodeVal(m.value)} inverted={selKey === k} />
+                {/if}
+              </td>
               <!-- action icons recolour to white when selected so the blue highlight never hides them -->
-              <td style="padding:var(--px-5) var(--px-8);border-bottom:var(--px-1) solid var(--border);white-space:nowrap">
-                <span onclick={(e) => { e.stopPropagation(); viewJson(m) }} onkeydown={(e) => e.key === 'Enter' && viewJson(m)} role="button" tabindex="0" title="View value as JSON" style="cursor:pointer;color:{cellColor(k, 'var(--muted)')};margin-right:var(--px-6)">⛶</span>
-                <span onclick={(e) => { e.stopPropagation(); copyMsg(m) }} onkeydown={(e) => e.key === 'Enter' && copyMsg(m)} role="button" tabindex="0" title="Copy message" style="cursor:pointer;color:{cellColor(k, 'var(--muted)')}">⧉</span>
+              <td style="white-space:nowrap;width:1%;padding:var(--px-2) var(--px-8)">
+                <span onclick={(e) => { e.stopPropagation(); viewJson(m) }} onkeydown={(e) => e.key === 'Enter' && viewJson(m)} role="button" tabindex="0" title="View value as JSON" class="ds-act" style="color:{cellColor(k, 'var(--muted)')}"><Icon name="expand" size={13} /></span>
+                <span onclick={(e) => { e.stopPropagation(); copyMsg(m) }} onkeydown={(e) => e.key === 'Enter' && copyMsg(m)} role="button" tabindex="0" title="Copy message" class="ds-act" style="color:{cellColor(k, 'var(--muted)')}"><Icon name="copy" size={13} /></span>
               </td>
             </tr>
           {/each}
@@ -437,6 +599,8 @@
       </table>
     {/if}
   </div>
+
+  {/if}
 
   {#if confirmState}
     <!-- backdrop click does NOT confirm/close (rule chung); use Cancel / Confirm / Escape -->
@@ -450,7 +614,7 @@
         onclick={(e) => e.stopPropagation()}
         onkeydown={(e) => { if (e.key === 'Escape') confirmState = null; if (e.key === 'Enter') runConfirm() }}
         tabindex="-1"
-        style="background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-14);padding:var(--px-18);min-width:var(--px-320);max-width:var(--px-420);box-shadow:0 var(--px-24) var(--px-60) var(--rgba-0-0-0-_55)"
+        style="background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-14);padding:var(--px-18);min-width:var(--px-340);max-width:var(--px-420);box-shadow:0 var(--px-24) var(--px-60) var(--rgba-0-0-0-_55)"
       >
         <div style="font-size:var(--px-14);font-weight:600;color:var(--text);margin-bottom:var(--px-8)">{confirmState.title}</div>
         <div style="font-size:var(--px-12_5);color:var(--text2);line-height:1.45;margin-bottom:var(--px-16)">{confirmState.body}</div>
@@ -463,41 +627,22 @@
   {/if}
 
   {#if viewState}
-    <!-- backdrop click does NOT close (rule chung); use Close / Escape -->
-    <div
-      role="presentation"
-      style="position:absolute;inset:0;background:var(--rgba-0-0-0-_5);display:flex;align-items:center;justify-content:center;z-index:50;padding:var(--px-20)"
-    >
-      <div
-        role="dialog"
-        aria-modal="true"
-        onclick={(e) => e.stopPropagation()}
-        onkeydown={(e) => e.key === 'Escape' && (viewState = null)}
-        tabindex="-1"
-        style="background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-14);padding:var(--px-18);width:min(var(--px-720), 100%);max-height:100%;display:flex;flex-direction:column;box-shadow:0 var(--px-24) var(--px-60) var(--rgba-0-0-0-_55)"
-      >
-        <div style="display:flex;align-items:center;gap:var(--px-8);margin-bottom:var(--px-10)">
-          <span style="font-size:var(--px-14);font-weight:600;color:var(--text)">Message</span>
-          <span class="mono" style="font-size:var(--px-11);color:var(--sacc-purple)">{viewState.label}</span>
-          {#if !viewState.isJson}<span style="font-size:var(--px-10_5);color:var(--muted)">(not JSON — raw value)</span>{/if}
-          <span style="margin-left:auto;display:flex;gap:var(--px-8)">
-            <span onclick={() => viewState && copyText(viewState.text)} onkeydown={(e) => e.key === 'Enter' && viewState && copyText(viewState.text)} role="button" tabindex="0" class="pv-btn primary">Copy</span>
-            <span onclick={() => (viewState = null)} onkeydown={(e) => e.key === 'Enter' && (viewState = null)} role="button" tabindex="0" class="pv-btn">Close</span>
-          </span>
-        </div>
-        <div style="flex:1;min-height:0;display:flex">
-          <CodeView
-            value={viewState.text}
-            language={viewState.isJson ? DS_JSON : 'plaintext'}
-            readOnly
-            height="auto"
-            maxHeight={520}
-            minHeight={160}
-            ariaLabel="Payload"
-          />
-        </div>
-      </div>
-    </div>
+    <PayloadDialog
+      title="Message"
+      system="kafka"
+      subtitle={`Kafka message · ${topic}`}
+      facts={[
+        { label: 'Topic', value: topic },
+        { label: 'Partition', value: viewState.partition },
+        { label: 'Offset', value: viewState.offset },
+        { label: 'Time', value: fmtTs(viewState.timestamp) },
+        { label: 'Key', value: viewState.key, mono: true },
+        ...(viewState.headers.length ? [{ label: 'Headers', value: viewState.headers.length }] : []),
+        ...(selGroupLag ? [{ label: selGroup ?? 'Group', value: STATE_LABEL[stateOf(viewState) ?? 'unknown'] }] : []),
+      ]}
+      text={viewState.value}
+      onClose={() => (viewState = null)}
+    />
   {/if}
 </div>
 
@@ -510,19 +655,6 @@
     font-size: var(--px-12);
     color: var(--text);
     outline: none;
-  }
-  .pg-btn {
-    background: var(--panel);
-    border: var(--px-1) solid var(--border);
-    border-radius: var(--px-6);
-    padding: var(--px-4) var(--px-10);
-    font-size: var(--px-11_5);
-    color: var(--text);
-    cursor: pointer;
-    white-space: nowrap;
-  }
-  .pg-btn[aria-disabled='true'] {
-    cursor: default;
   }
   .cm-mini.danger {
     color: var(--hex-fff);

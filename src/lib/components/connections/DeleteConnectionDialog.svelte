@@ -91,7 +91,7 @@
           onkeydown={(e) => e.key === 'Enter' && forceDelete()}
           role="button"
           tabindex="0"
-          style="font-size:var(--px-12_5);background:var(--hex-e03131);color:var(--hex-fff);border-radius:var(--px-8);padding:var(--px-8) var(--px-14);cursor:pointer;font-weight:600"
+          class="ds-danger" style="font-size:var(--px-12_5);border-radius:var(--px-8);padding:var(--px-8) var(--px-14);cursor:pointer;font-weight:600"
         >Force Delete</span>
       </div>
     </div>

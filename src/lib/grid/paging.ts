@@ -16,8 +16,12 @@ export interface PageWindow {
   last: boolean
 }
 
+/** Page size meaning "every row on one page". The grid is virtualised, so only
+ *  the rows on screen are rendered no matter how many the page holds. */
+export const ALL_ROWS = 0
+
 export function pageWindow(rowCount: number, pageSize: number, page: number): PageWindow {
-  const size = Math.max(1, pageSize)
+  const size = pageSize <= ALL_ROWS ? Math.max(1, rowCount) : Math.max(1, pageSize)
   const paged = rowCount > size
   const pageCount = paged ? Math.ceil(rowCount / size) : 1
   const clamped = Math.min(Math.max(0, page), pageCount - 1)
