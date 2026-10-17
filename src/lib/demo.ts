@@ -747,7 +747,7 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
           return ok({ cols: [['pid', 'int4'], ['username', 'text'], ['database', 'text'], ['state', 'text'], ['query', 'text']], rows: [
             { pid: 4821, username: 'app_ro', database: 'sis_prod', state: 'active', query: 'db.students.find({})' },
           ], total: 1 })
-        const S = (o: Record<string, unknown>) => ({ client: '10.0.1.20', application: 'svc-api', wait_type: '', wait_event: '', kind: 'client', query_ms: null, state_ms: 12_000, is_self: 0, query: '', ...o })
+        const S = (o: Record<string, unknown>): Record<string, unknown> => ({ client: '10.0.1.20', application: 'svc-api', wait_type: '', wait_event: '', kind: 'client', query_ms: null, state_ms: 12_000, is_self: 0, query: '', ...o })
         const all = [
           S({ pid: 4821, username: 'app_ro', database: 'sis_prod', state: 'active', query_ms: 95_000, state_ms: 95_000, query: 'SELECT s.id, s.first_name, count(e.*) AS enrolments\nFROM students s JOIN enrollments e ON e.student_id = s.id\nGROUP BY s.id, s.first_name ORDER BY enrolments DESC' }),
           S({ pid: 4830, username: 'billing', database: 'payment', state: 'active', wait_type: 'Lock', wait_event: 'transactionid', query_ms: 14_000, query: "UPDATE invoices SET status = 'paid' WHERE id = $1" }),

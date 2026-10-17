@@ -163,7 +163,6 @@
     { fmt: 'sql', label: 'SQL INSERT', desc: 'Statements to load the rows elsewhere', ext: '.sql', icon: 'code' },
     { fmt: 'xml', label: 'XML', desc: 'One element per row', ext: '.xml', icon: 'code' },
   ]
-  const exportRowCount = $derived(activeResult?.kind === 'rows' && activeResult.result ? activeResult.result.rows.length : 0)
   async function doExport(fmt: 'csv' | 'json' | 'sql' | 'xlsx' | 'xml') {
     exportOpen = false
     const r = activeResult?.kind === 'rows' ? activeResult.result : undefined
@@ -227,6 +226,8 @@
   const activeResult = $derived(
     exec && exec.activeSub >= 0 ? exec.subResults[exec.activeSub] : undefined,
   )
+  // rows the Export menu writes (its heading says how many)
+  const exportRowCount = $derived(activeResult?.kind === 'rows' && activeResult.result ? activeResult.result.rows.length : 0)
 
   function stripN(label: string): string {
     return label.replace(/^#\d+\s*/, '')
