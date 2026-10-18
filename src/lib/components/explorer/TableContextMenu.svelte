@@ -14,6 +14,7 @@
   import { chTtl } from '$lib/stores/chttl.svelte'
   import { importWizard } from '$lib/stores/import.svelte'
   import { exportWizard } from '$lib/stores/export.svelte'
+  import { duckExport, duckImport } from '$lib/stores/duckdb.svelte'
   import { copyWizard } from '$lib/stores/copy.svelte'
   import { testDataWizard } from '$lib/stores/testdata.svelte'
   import { addPartitionWizard } from '$lib/stores/addpartition.svelte'
@@ -134,6 +135,14 @@
   <ContextMenu.Item onclick={() => tabs.openTableViewer(connId, schema, table)}>Open Data</ContextMenu.Item>
   <ContextMenu.Item onclick={() => importWizard.show(connId, schema)}>Import Data…</ContextMenu.Item>
   <ContextMenu.Item onclick={() => exportWizard.showTable(connId, schema, table)}>Export Data…</ContextMenu.Item>
+  {#if system === 'duckdb'}
+    <!-- DuckDB-native file I/O + profiling (COPY TO / read_* / SUMMARIZE) -->
+    <ContextMenu.Item onclick={() => tabs.openDuckProfile(connId, { kind: 'table', schema, table })}>Profile Data</ContextMenu.Item>
+    <ContextMenu.Item onclick={() => duckExport.show(connId, { kind: 'table', schema, table })}>Export to Parquet / CSV / JSON…</ContextMenu.Item>
+    {#if !locked}
+      <ContextMenu.Item onclick={() => duckImport.show(connId, { schema, table })}>Append from File…</ContextMenu.Item>
+    {/if}
+  {/if}
   <ContextMenu.Item onclick={() => stmtTab(`${table} · SELECT`, selectStarSql(system, schema, table))}>New Query</ContextMenu.Item>
   <ContextMenu.Separator />
   <!-- Design Table includes a Script tab (the former "Alter Table…" flow). -->

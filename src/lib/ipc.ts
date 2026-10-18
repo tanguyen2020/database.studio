@@ -846,8 +846,12 @@ export const attachDatabase = (connId: string, database: string) =>
 
 // Per-tab dedicated connection (item 6): each Query Editor tab runs on its own
 // physical connection so a hung query can't block other tabs / the Explorer.
-export const openTabConnection = (connId: string, tabId: string, database: string) =>
-  invoke<string>('open_tab_connection', { connId, tabId, database })
+/** Opens (or reuses) a Query Editor tab's own connection. `initSql` is the
+ *  session setup (PG/DuckDB `SET search_path …`): the backend runs it only when it
+ *  CHANGES and replays it after a reconnect — so a Run no longer pays a round
+ *  trip for it every time. `null` = no setup. */
+export const openTabConnection = (connId: string, tabId: string, database: string, initSql: string | null = null) =>
+  invoke<string>('open_tab_connection', { connId, tabId, database, initSql })
 export const closeTabConnection = (connId: string) =>
   invoke<void>('close_tab_connection', { connId })
 

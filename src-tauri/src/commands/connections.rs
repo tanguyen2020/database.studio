@@ -252,27 +252,48 @@ pub async fn open_tab_connection(
     conn_id: String,
     tab_id: String,
     database: String,
+    init_sql: Option<String>,
 ) -> Result<String, AppError> {
     let base = base_conn_id(&conn_id);
-    let (mut profile, password, ssh_password) = resolve_credentials(&state, &base)?;
-    let effective_db = if database.is_empty() { profile.database.clone() } else { database };
     let tab_conn_id = format!("{base}#tab-{tab_id}");
+    // Called before EVERY Run. The common case — the tab's connection is already
+    // open on the right database — must not touch storage (read + AES decrypt of
+    // the saved password) or the network; only the in-memory registry.
     if state.registry.is_connected(&tab_conn_id) {
         let current_db = state
             .registry
             .live_credentials(&tab_conn_id)
             .map(|(p, _, _)| p.database)
             .unwrap_or_default();
-        if current_db == effective_db {
+        let wanted = if database.is_empty() {
+            match state.registry.live_credentials(&base) {
+                Ok((p, _, _)) => p.database,
+                Err(_) => resolve_credentials(&state, &base)?.0.database,
+            }
+        } else {
+            database.clone()
+        };
+        if current_db == wanted {
+            apply_session_init(&state, &tab_conn_id, init_sql).await;
             return Ok(tab_conn_id);
         }
         // database dropdown changed → drop the old tab connection and re-open on the new DB.
         let _ = state.registry.disconnect(&tab_conn_id).await;
     }
+    let (mut profile, password, ssh_password) = resolve_credentials(&state, &base)?;
+    let effective_db = if database.is_empty() { profile.database.clone() } else { database };
     profile.id = tab_conn_id.clone();
     profile.database = effective_db;
     state.registry.connect(profile, password, ssh_password).await?;
+    apply_session_init(&state, &tab_conn_id, init_sql).await;
     Ok(tab_conn_id)
+}
+
+/// Session setup for a tab's connection (`SET search_path …`). Sent only when it
+/// changes; the registry replays it after a reconnect. A failing setup is not
+/// fatal — the statement then runs with the server's default, as before.
+async fn apply_session_init(state: &AppState, conn_id: &str, init_sql: Option<String>) {
+    let _ = state.registry.set_session_init(conn_id, init_sql).await;
 }
 
 /// Close (and abort any running query on) a Query Editor tab's dedicated

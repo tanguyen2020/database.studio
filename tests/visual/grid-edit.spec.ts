@@ -163,3 +163,51 @@ test('editable grid: copy N rows then paste yields N rows', async ({ page, conte
 
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
+
+// Open Data editing is legible: an idle grid says how to edit; pending changes are
+// broken down by kind in colours that match the grid; an edited cell shows the
+// value it replaces; marked rows say what will happen to them.
+test('editable grid: pending changes are explained, edited cells show their original value', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(String(e)))
+  await blockRemoteFonts(page)
+  await page.goto(APP_URL)
+  await page.waitForSelector('#app > *', { timeout: 15_000 })
+  await page.getByRole('button', { name: /Postgres/ }).first().click()
+  await openDatabaseNode(page)
+  await page.getByText('public', { exact: true }).first().dblclick()
+  await page.getByText('Tables', { exact: true }).first().dblclick()
+  await page.getByRole('treeitem', { name: /students/ }).first().dblclick()
+  await expect(page.getByRole('button', { name: 'Insert row', exact: true }).first()).toBeVisible({ timeout: 10_000 })
+
+  // idle: a hint instead of nothing
+  await expect(page.getByText(/Double-click a cell to edit/)).toBeVisible()
+
+  // edit first_name of row 1 (An → Edited)
+  const cell = page.locator('.grid-row').first().locator('td').nth(2)
+  await cell.dblclick()
+  await page.keyboard.press('Control+a')
+  await page.keyboard.type('Edited')
+  await page.keyboard.press('Enter')
+  await expect(page.getByText(/1 unsaved change\b/)).toBeVisible()
+  await expect(page.locator('.rg-kind.k-edit')).toHaveText('1 edited')
+  await expect(page.getByText(/Double-click a cell to edit/)).toHaveCount(0)
+  // the edited cell names the value it replaces
+  await expect(cell).toHaveAttribute('title', /New: Edited\s+Original: An/)
+
+  // mark row 3 for deletion + add a row → each kind is counted separately
+  await page.locator('.grid-row').nth(2).locator('td').first().click()
+  await page.getByRole('button', { name: 'Delete row', exact: true }).first().click()
+  await expect(page.locator('.rg-kind.k-del')).toHaveText('1 to delete')
+  await expect(page.locator('.grid-row').nth(2).locator('td').first()).toHaveAttribute('title', /Marked for deletion/)
+  await page.getByRole('button', { name: 'Insert row', exact: true }).first().click()
+  await page.keyboard.press('Escape')
+  await expect(page.locator('.rg-kind.k-new')).toHaveText('1 new')
+  await expect(page.getByText(/3 unsaved changes/)).toBeVisible()
+
+  // Reset clears everything and the hint comes back
+  await page.getByRole('button', { name: 'Reset' }).first().click()
+  await expect(page.locator('.rg-kind')).toHaveCount(0)
+  await expect(page.getByText(/Double-click a cell to edit/)).toBeVisible()
+  expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
+})

@@ -1,0 +1,444 @@
+{
+  "about": "Statements the DuckDB workspace runs (src/lib/duckdb/sql.ts). duckdb.test.ts checks the builders produce exactly these strings ({dir} = '/tmp/dk'); duckdb_integration.rs runs them in order on the real engine ({dir} = a temp folder). Steps whose key starts with 'setup.' are plain SQL that only prepares data.",
+  "steps": [
+    {
+      "key": "setup.seed_csv",
+      "sql": "COPY (SELECT * FROM (VALUES (1, 'An', 10.5, DATE '2026-01-02'), (2, 'B;o', 7.0, DATE '2026-01-03'), (3, 'Chi', NULL, DATE '2026-02-01')) t(id, name, amount, day)) TO '{dir}/Sales 2026.csv' (FORMAT csv, HEADER true, DELIMITER ';')",
+      "expect": {
+        "affected": 3
+      }
+    },
+    {
+      "key": "setup.seed_json",
+      "sql": "COPY (SELECT 1 AS id, ['x', 'y'] AS tags UNION ALL SELECT 2, []) TO '{dir}/tags.json' (FORMAT json, ARRAY true)",
+      "expect": {
+        "affected": 2
+      }
+    },
+    {
+      "key": "overview",
+      "sql": "SELECT version() AS version, (SELECT platform FROM pragma_platform()) AS platform, current_database() AS database, current_schema() AS schema, current_setting('threads') AS threads, current_setting('memory_limit') AS memory_limit, (SELECT count(*) FROM duckdb_tables() WHERE NOT internal) AS tables, (SELECT count(*) FROM duckdb_views() WHERE NOT internal) AS views, (SELECT coalesce(sum(estimated_size), 0) FROM duckdb_tables() WHERE NOT internal) AS est_rows, (SELECT count(*) FROM duckdb_extensions() WHERE loaded) AS extensions_loaded",
+      "expect": {
+        "rows": 1
+      }
+    },
+    {
+      "key": "databases",
+      "sql": "SELECT d.database_name AS name, d.path, d.type, d.readonly, s.database_size, s.wal_size, s.block_size, s.total_blocks, s.used_blocks, s.free_blocks, s.memory_usage, (d.database_name = current_database()) AS current FROM duckdb_databases() d LEFT JOIN pragma_database_size() s ON s.database_name = d.database_name WHERE NOT d.internal ORDER BY current DESC, name",
+      "expect": {
+        "rows_min": 1
+      }
+    },
+    {
+      "key": "largest_tables",
+      "sql": "SELECT database_name, schema_name, table_name, estimated_size, column_count, index_count FROM duckdb_tables() WHERE NOT internal ORDER BY estimated_size DESC, database_name, schema_name, table_name LIMIT 10",
+      "expect": "ok"
+    },
+    {
+      "key": "memory",
+      "sql": "SELECT tag, memory_usage_bytes, temporary_storage_bytes FROM duckdb_memory() ORDER BY memory_usage_bytes DESC, tag",
+      "expect": {
+        "rows_min": 1
+      }
+    },
+    {
+      "key": "temp_files",
+      "sql": "SELECT path, size FROM duckdb_temporary_files() ORDER BY size DESC",
+      "expect": "ok"
+    },
+    {
+      "key": "extensions",
+      "sql": "SELECT extension_name, loaded, installed, install_path, description, aliases, extension_version, install_mode, installed_from FROM duckdb_extensions() ORDER BY loaded DESC, installed DESC, extension_name",
+      "expect": {
+        "rows_min": 1
+      }
+    },
+    {
+      "key": "settings",
+      "sql": "SELECT name, value, description, input_type, scope FROM duckdb_settings() ORDER BY name",
+      "expect": {
+        "rows_min": 50
+      }
+    },
+    {
+      "key": "ext.load_json",
+      "sql": "LOAD json",
+      "expect": "ok"
+    },
+    {
+      "key": "setting.threads",
+      "sql": "SET GLOBAL threads = '2'",
+      "expect": "ok"
+    },
+    {
+      "key": "setup.check_threads",
+      "sql": "SELECT current_setting('threads') AS v",
+      "expect": {
+        "rows": 1,
+        "first": {
+          "v": 2
+        }
+      }
+    },
+    {
+      "key": "setting.insertion_order",
+      "sql": "SET GLOBAL preserve_insertion_order = 'false'",
+      "expect": "ok"
+    },
+    {
+      "key": "setup.check_insertion_order",
+      "sql": "SELECT current_setting('preserve_insertion_order') AS v",
+      "expect": {
+        "rows": 1,
+        "first": {
+          "v": false
+        }
+      }
+    },
+    {
+      "key": "setting.reset_threads",
+      "sql": "RESET GLOBAL threads",
+      "expect": "ok"
+    },
+    {
+      "key": "setting.reset_insertion_order",
+      "sql": "RESET GLOBAL preserve_insertion_order",
+      "expect": "ok"
+    },
+    {
+      "key": "setup.check_reset",
+      "sql": "SELECT current_setting('preserve_insertion_order') AS v",
+      "expect": {
+        "rows": 1,
+        "first": {
+          "v": true
+        }
+      }
+    },
+    {
+      "key": "file.describe_csv",
+      "sql": "DESCRIBE SELECT * FROM read_csv('{dir}/Sales 2026.csv', header = true, delim = ';')",
+      "expect": {
+        "rows": 4
+      }
+    },
+    {
+      "key": "file.preview_csv",
+      "sql": "SELECT * FROM read_csv('{dir}/Sales 2026.csv', header = true, delim = ';') LIMIT 100",
+      "expect": {
+        "rows": 3
+      }
+    },
+    {
+      "key": "file.count_csv",
+      "sql": "SELECT count(*) AS \"rows\" FROM read_csv('{dir}/Sales 2026.csv', header = true, delim = ';')",
+      "expect": {
+        "rows": 1,
+        "first": {
+          "rows": 3
+        }
+      }
+    },
+    {
+      "key": "file.preview_json",
+      "sql": "SELECT * FROM read_json('{dir}/tags.json', format = 'array') LIMIT 100",
+      "expect": {
+        "rows": 2
+      }
+    },
+    {
+      "key": "import.create",
+      "sql": "CREATE TABLE \"main\".\"sales_2026\" AS SELECT * FROM read_csv('{dir}/Sales 2026.csv', header = true, delim = ';')",
+      "expect": {
+        "affected": 3
+      }
+    },
+    {
+      "key": "import.append_columns",
+      "sql": "INSERT INTO \"main\".\"sales_2026\" BY NAME SELECT CAST(\"id\" AS INTEGER) AS \"id\", \"name\", \"day\" FROM read_csv('{dir}/Sales 2026.csv', header = true, delim = ';')",
+      "expect": {
+        "affected": 3
+      }
+    },
+    {
+      "key": "setup.check_append",
+      "sql": "SELECT count(*) AS n, count(amount) AS with_amount FROM main.sales_2026",
+      "expect": {
+        "rows": 1,
+        "first": {
+          "n": 6,
+          "with_amount": 2
+        }
+      }
+    },
+    {
+      "key": "import.replace_json",
+      "sql": "CREATE OR REPLACE TABLE \"main\".\"tags\" AS SELECT * FROM read_json('{dir}/tags.json', format = 'array')",
+      "expect": {
+        "affected": 2
+      }
+    },
+    {
+      "key": "import.view",
+      "sql": "CREATE OR REPLACE VIEW \"main\".\"sales_file\" AS SELECT * FROM read_csv('{dir}/Sales 2026.csv', header = true, delim = ';')",
+      "expect": "ok"
+    },
+    {
+      "key": "setup.check_view",
+      "sql": "SELECT count(*) AS n FROM main.sales_file",
+      "expect": {
+        "rows": 1,
+        "first": {
+          "n": 3
+        }
+      }
+    },
+    {
+      "key": "import.glob_union",
+      "sql": "SELECT * FROM read_csv('{dir}/*.csv', delim = ';', filename = true, union_by_name = true) LIMIT 100",
+      "expect": {
+        "rows": 3
+      }
+    },
+    {
+      "key": "export.parquet",
+      "sql": "COPY \"main\".\"sales_2026\" TO '{dir}/sales.parquet' (FORMAT parquet, COMPRESSION zstd)",
+      "expect": {
+        "affected": 6
+      }
+    },
+    {
+      "key": "export.csv_query",
+      "sql": "COPY (SELECT * FROM main.sales_2026 WHERE id = 1) TO '{dir}/one.tsv' (FORMAT csv, HEADER true, DELIMITER '\t')",
+      "expect": {
+        "affected": 2
+      }
+    },
+    {
+      "key": "export.json",
+      "sql": "COPY \"main\".\"sales_2026\" TO '{dir}/sales.json' (FORMAT json, ARRAY true)",
+      "expect": {
+        "affected": 6
+      }
+    },
+    {
+      "key": "export.ndjson",
+      "sql": "COPY \"main\".\"sales_2026\" TO '{dir}/sales.ndjson' (FORMAT json)",
+      "expect": {
+        "affected": 6
+      }
+    },
+    {
+      "key": "export.partitioned",
+      "sql": "COPY \"main\".\"sales_2026\" TO '{dir}/by_day' (FORMAT parquet, COMPRESSION snappy, PARTITION_BY (\"day\"), OVERWRITE_OR_IGNORE true)",
+      "expect": {
+        "affected": 6
+      }
+    },
+    {
+      "key": "verify.parquet",
+      "sql": "SELECT count(*) AS \"rows\" FROM read_parquet('{dir}/sales.parquet')",
+      "expect": {
+        "rows": 1,
+        "first": {
+          "rows": 6
+        }
+      }
+    },
+    {
+      "key": "verify.tsv",
+      "sql": "SELECT * FROM read_csv('{dir}/one.tsv', header = true, delim = '\t') LIMIT 100",
+      "expect": {
+        "rows": 2
+      }
+    },
+    {
+      "key": "verify.json",
+      "sql": "SELECT count(*) AS \"rows\" FROM read_json('{dir}/sales.json', format = 'array')",
+      "expect": {
+        "rows": 1,
+        "first": {
+          "rows": 6
+        }
+      }
+    },
+    {
+      "key": "verify.ndjson",
+      "sql": "SELECT count(*) AS \"rows\" FROM read_json('{dir}/sales.ndjson', format = 'newline_delimited')",
+      "expect": {
+        "rows": 1,
+        "first": {
+          "rows": 6
+        }
+      }
+    },
+    {
+      "key": "verify.partitioned",
+      "sql": "SELECT count(*) AS \"rows\" FROM read_parquet('{dir}/by_day/*/*.parquet', union_by_name = true)",
+      "expect": {
+        "rows": 1,
+        "first": {
+          "rows": 6
+        }
+      }
+    },
+    {
+      "key": "db.attach",
+      "sql": "ATTACH '{dir}/lake.duckdb' AS \"lake\"",
+      "expect": "ok"
+    },
+    {
+      "key": "setup.lake_table",
+      "sql": "CREATE TABLE lake.main.trips AS SELECT range AS id, range % 3 AS zone FROM range(250)",
+      "expect": {
+        "affected": 250
+      }
+    },
+    {
+      "key": "db.checkpoint_lake",
+      "sql": "CHECKPOINT \"lake\"",
+      "expect": "ok"
+    },
+    {
+      "key": "db.export",
+      "sql": "EXPORT DATABASE \"lake\" TO '{dir}/lake_export' (FORMAT parquet)",
+      "expect": "ok"
+    },
+    {
+      "key": "db.detach",
+      "sql": "DETACH DATABASE IF EXISTS \"lake\"",
+      "expect": "ok"
+    },
+    {
+      "key": "db.attach_ro",
+      "sql": "ATTACH '{dir}/lake.duckdb' AS \"lake_ro\" (READ_ONLY)",
+      "expect": "ok"
+    },
+    {
+      "key": "setup.write_ro",
+      "sql": "INSERT INTO lake_ro.main.trips VALUES (999, 0)",
+      "expect": {
+        "error": "read-only"
+      }
+    },
+    {
+      "key": "setup.read_ro",
+      "sql": "SELECT count(*) AS n FROM lake_ro.main.trips",
+      "expect": {
+        "rows": 1,
+        "first": {
+          "n": 250
+        }
+      }
+    },
+    {
+      "key": "db.detach_ro",
+      "sql": "DETACH DATABASE IF EXISTS \"lake_ro\"",
+      "expect": "ok"
+    },
+    {
+      "key": "db.import",
+      "sql": "IMPORT DATABASE '{dir}/lake_export'",
+      "expect": "ok"
+    },
+    {
+      "key": "setup.check_import",
+      "sql": "SELECT count(*) AS n FROM main.trips",
+      "expect": {
+        "rows": 1,
+        "first": {
+          "n": 250
+        }
+      }
+    },
+    {
+      "key": "profile.summarize_table",
+      "sql": "SUMMARIZE \"main\".\"sales_2026\"",
+      "expect": {
+        "rows": 4
+      }
+    },
+    {
+      "key": "profile.summarize_query",
+      "sql": "SUMMARIZE SELECT * FROM read_csv('{dir}/Sales 2026.csv', header = true, delim = ';') LIMIT 100",
+      "expect": {
+        "rows": 4
+      }
+    },
+    {
+      "key": "profile.top_values",
+      "sql": "SELECT \"name\" AS value, count(*) AS n FROM \"main\".\"sales_2026\" GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT 10",
+      "expect": {
+        "rows": 3,
+        "first": {
+          "n": 2
+        }
+      }
+    },
+    {
+      "key": "profile.histogram_number",
+      "sql": "SELECT CAST(least(floor((CAST(\"amount\" AS DOUBLE) - s.lo) / nullif(s.hi - s.lo, 0) * 20), 19) AS INTEGER) AS bucket, any_value(s.lo) AS lo, any_value(s.hi) AS hi, count(*) AS n FROM \"main\".\"sales_2026\", (SELECT min(CAST(\"amount\" AS DOUBLE)) AS lo, max(CAST(\"amount\" AS DOUBLE)) AS hi FROM \"main\".\"sales_2026\") AS s WHERE \"amount\" IS NOT NULL GROUP BY 1 ORDER BY 1",
+      "expect": {
+        "rows": 2
+      }
+    },
+    {
+      "key": "profile.histogram_temporal",
+      "sql": "SELECT CAST(least(floor((epoch(CAST(\"day\" AS TIMESTAMP)) - s.lo) / nullif(s.hi - s.lo, 0) * 20), 19) AS INTEGER) AS bucket, any_value(s.lo) AS lo, any_value(s.hi) AS hi, count(*) AS n FROM \"main\".\"sales_2026\", (SELECT min(epoch(CAST(\"day\" AS TIMESTAMP))) AS lo, max(epoch(CAST(\"day\" AS TIMESTAMP))) AS hi FROM \"main\".\"sales_2026\") AS s WHERE \"day\" IS NOT NULL GROUP BY 1 ORDER BY 1",
+      "expect": {
+        "rows": 2
+      }
+    },
+    {
+      "key": "profile.histogram_query",
+      "sql": "SELECT CAST(least(floor((CAST(\"id\" AS DOUBLE) - s.lo) / nullif(s.hi - s.lo, 0) * 20), 19) AS INTEGER) AS bucket, any_value(s.lo) AS lo, any_value(s.hi) AS hi, count(*) AS n FROM (SELECT * FROM main.trips) AS q, (SELECT min(CAST(\"id\" AS DOUBLE)) AS lo, max(CAST(\"id\" AS DOUBLE)) AS hi FROM (SELECT * FROM main.trips) AS q) AS s WHERE \"id\" IS NOT NULL GROUP BY 1 ORDER BY 1",
+      "expect": {
+        "rows": 20
+      }
+    },
+    {
+      "key": "setup.no_autoinstall",
+      "sql": "SET autoinstall_known_extensions = false",
+      "expect": "ok"
+    },
+    {
+      "key": "setup.no_autoload",
+      "sql": "SET autoload_known_extensions = false",
+      "expect": "ok"
+    },
+    {
+      "key": "file.preview_xlsx_missing_extension",
+      "sql": "SELECT * FROM read_xlsx('{dir}/book.xlsx', sheet = 'Data') LIMIT 100",
+      "expect": {
+        "error": "excel"
+      }
+    },
+    {
+      "key": "db.attach_sqlite_missing_extension",
+      "sql": "ATTACH '{dir}/legacy.db' AS \"legacy\" (TYPE sqlite, READ_ONLY)",
+      "expect": {
+        "error": "sqlite"
+      }
+    },
+    {
+      "key": "setup.reset_autoinstall",
+      "sql": "RESET autoinstall_known_extensions",
+      "expect": "ok"
+    },
+    {
+      "key": "setup.reset_autoload",
+      "sql": "RESET autoload_known_extensions",
+      "expect": "ok"
+    },
+    {
+      "key": "db.checkpoint",
+      "sql": "CHECKPOINT",
+      "expect": "ok"
+    },
+    {
+      "key": "db.force_checkpoint",
+      "sql": "FORCE CHECKPOINT",
+      "expect": "ok"
+    }
+  ]
+}

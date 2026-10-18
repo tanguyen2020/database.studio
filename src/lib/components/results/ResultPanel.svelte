@@ -11,7 +11,8 @@
   import ResultSingleRow from './ResultSingleRow.svelte'
   import ResultChart from './ResultChart.svelte'
   import ResultPlanView from './ResultPlanView.svelte'
-  import type { SubResult, TabExecution, ExplainState } from '$lib/stores/results.svelte'
+  import ResultMessages from './ResultMessages.svelte'
+  import { MESSAGES_TAB, type TabExecution, type ExplainState } from '$lib/stores/results.svelte'
   import { mapErrorToDocument } from '$lib/sql/errors'
   import { toJson, download, csvCell, sqlLiteral, CSV_BOM } from '$lib/export/rows'
   import { toXlsx, XLSX_MIME, numericColumns, bytesToBase64 } from '$lib/export/xlsx'
@@ -221,7 +222,7 @@
     exportWizard.showResult(connId ?? '', r.cols.map((c) => c[0]), r.rows as Record<string, unknown>[], r.cols as [string, string][])
   }
 
-  const MESSAGES = -1
+  const MESSAGES = MESSAGES_TAB
 
   const activeResult = $derived(
     exec && exec.activeSub >= 0 ? exec.subResults[exec.activeSub] : undefined,
@@ -237,17 +238,14 @@
     if (!exec) return
     planActive = false
     exec.activeSub = idx
-    const sub = exec.subResults[idx]
-    if (sub?.kind === 'error') {
-      jumpToError(sub)
-    }
   }
-
-  function jumpToError(sub: SubResult) {
-    if (!sub.error) return
-    const pos = mapErrorToDocument(sub.statement, sub.error)
-    onJump?.(pos.line, pos.col)
+  /** Messages → "N rows returned ›": open the result tab of statement #index. */
+  function showResultOf(index: number) {
+    const idx = exec?.subResults.findIndex((s) => s.index === index && s.kind === 'rows') ?? -1
+    if (idx >= 0) selectSub(idx)
   }
+  const msgCount = $derived(exec?.messages.filter((m) => m.kind !== 'warning').length ?? 0)
+  const msgFailed = $derived(exec?.messages.some((m) => m.kind === 'error' || (!m.ok && m.kind !== 'warning')) ?? false)
 
   const summary = $derived.by(() => {
     if (!activeResult) return ''
@@ -262,8 +260,9 @@
   <!-- sub tabs — dòng 332-340 -->
   <div style="flex:none;display:flex;align-items:center;gap:0;border-bottom:var(--px-1) solid var(--border);background:var(--header);overflow-x:auto">
     {#each exec?.subResults ?? [] as sub, idx (sub.index)}
+      {#if sub.kind === 'rows'}
       {@const on = !planActive && exec?.activeSub === idx}
-      {@const statusColor = sub.kind === 'error' ? 'var(--hex-e06c75)' : sub.kind === 'affected' || sub.kind === 'ok' ? 'var(--hex-27ae60)' : 'var(--muted)'}
+      {@const statusColor = 'var(--muted)'}
       <div
         onclick={() => selectSub(idx)}
         onkeydown={(e) => e.key === 'Enter' && selectSub(idx)}
@@ -274,10 +273,11 @@
       >
         <span class="mono" style="font-weight:700;color:var(--muted)">#{sub.index}</span>
         <span style="color:{statusColor}">{on ? '›' : ''}</span>
-        <span style="font-weight:{on ? 700 : 500};color:{sub.kind === 'error' ? 'var(--hex-e06c75)' : 'inherit'}">{stripN(sub.label)}</span>
+        <span style="font-weight:{on ? 700 : 500}">{stripN(sub.label)}</span>
       </div>
+      {/if}
     {/each}
-    {#if (exec?.subResults.length ?? 0) > 0}
+    {#if exec}
       {@const on = !planActive && exec?.activeSub === MESSAGES}
       <div
         onclick={() => { if (exec) { planActive = false; exec.activeSub = MESSAGES } }}
@@ -289,6 +289,7 @@
       >
         <span style="color:var(--muted)">≣</span>
         <span style="font-weight:{on ? 700 : 500}">Messages</span>
+        {#if msgCount}<span class="rp-count" class:bad={msgFailed} title={msgFailed ? 'A statement failed' : `${msgCount} statement(s) run`}>{msgCount}</span>{/if}
       </div>
     {/if}
     {#if explain}
@@ -396,118 +397,17 @@
           onExplainClose?.()
         }}
       />
-    {:else if exec?.activeSub === MESSAGES}
-      <div class="selectable" style="flex:1;overflow-y:auto;padding:var(--px-4);font-size:var(--px-12)">
-        {#each exec?.messages ?? [] as msg (msg.index)}
-          <div
-            class="mono msg-row"
-            onclick={() => {
-              if (msg.error) {
-                const pos = mapErrorToDocument(msg.statement, msg.error)
-                onJump?.(pos.line, pos.col)
-              } else {
-                onJump?.(msg.statement.startLine, msg.statement.startCol)
-              }
-            }}
-            onkeydown={(e) => e.key === 'Enter' && onJump?.(msg.statement.startLine, msg.statement.startCol)}
-            role="button"
-            tabindex="0"
-            style="display:flex;align-items:flex-start;gap:var(--px-8);border-radius:var(--px-5);padding:var(--px-4) var(--px-8);cursor:pointer;text-align:left;width:100%"
-          >
-            <span style="flex:none;color:{msg.ok ? 'var(--hex-27ae60)' : 'var(--hex-e06c75)'}">{msg.ok ? '✓' : '✗'}</span>
-            <span style="flex:none;color:var(--muted)">#{msg.index}</span>
-            <span style="min-width:0;flex:1;white-space:pre-wrap;word-break:break-word;color:{msg.ok ? 'inherit' : 'var(--hex-e06c75)'}">
-              {#if msg.error}
-                {msg.error.severity} · {msg.error.code ?? '—'} · {msg.text}
-                {#if msg.error.position}
-                  {@const pos = mapErrorToDocument(msg.statement, msg.error)}
-                  <span style="color:var(--muted)">(line {pos.line}:{pos.col})</span>
-                {/if}
-                {#if msg.error.hint}
-                  <div style="margin-top:var(--px-2);font-size:var(--px-11);color:var(--warn)">💡 {msg.error.hint}</div>
-                {/if}
-              {:else}
-                {msg.text}
-              {/if}
-            </span>
-            <span style="flex:none;font-size:var(--px-10_5);color:var(--muted)">{msg.durationMs} ms</span>
-            {#if msg.error}
-              <span
-                onclick={(e) => {
-                  e.stopPropagation()
-                  rawError = msg.error?.raw ?? null
-                }}
-                onkeydown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.stopPropagation()
-                    rawError = msg.error?.raw ?? null
-                  }
-                }}
-                role="button"
-                tabindex="0"
-                style="flex:none;font-size:var(--px-10);color:var(--text2);border:var(--px-1) solid var(--border);border-radius:var(--px-5);padding:var(--px-1) var(--px-6);cursor:pointer"
-              >View raw</span>
-            {/if}
-          </div>
-        {/each}
-        {#if (exec?.messages.length ?? 0) === 0}
-          <div style="padding:var(--px-8) var(--px-12);color:var(--muted)">No messages yet</div>
-        {/if}
-      </div>
-    {:else if activeResult}
-      {#if activeResult.kind === 'rows' && activeResult.result}
-        {#if viewMode === 'grid'}
-          <ResultGrid bind:this={grid} data={activeResult.result} {editTarget} {system} />
-        {:else if viewMode === 'json'}
-          <ResultJsonView data={activeResult.result} />
-        {:else if viewMode === 'single'}
-          <ResultSingleRow data={activeResult.result} />
-        {:else}
-          <ResultChart data={activeResult.result} {accent} />
-        {/if}
-      {:else if activeResult.kind === 'affected'}
-        <div style="padding:var(--px-16);font-size:var(--px-13)">
-          <span style="color:var(--hex-27ae60)">✓</span>
-          {activeResult.affected?.toLocaleString()} rows affected
-          <span class="mono" style="margin-left:var(--px-8);font-size:var(--px-11);color:var(--muted)">{activeResult.durationMs} ms</span>
-        </div>
-      {:else if activeResult.kind === 'ok'}
-        <div style="padding:var(--px-16);font-size:var(--px-13)">
-          <span style="color:var(--hex-27ae60)">✓</span> OK
-          <span class="mono" style="margin-left:var(--px-8);font-size:var(--px-11);color:var(--muted)">{activeResult.durationMs} ms</span>
-        </div>
-      {:else if activeResult.kind === 'error' && activeResult.error}
-        {@const err = activeResult.error}
-        <div class="selectable" style="padding:var(--px-16);font-size:var(--px-12_5)">
-          <div style="display:flex;align-items:flex-start;gap:var(--px-8)">
-            <span style="color:var(--hex-e06c75)">✗</span>
-            <div style="min-width:0;flex:1">
-              <div style="font-weight:500;color:var(--hex-e06c75)">
-                {err.code ? `[${err.code}] ` : ''}{err.message}
-              </div>
-              {#if err.position}
-                {@const pos = mapErrorToDocument(activeResult.statement, err)}
-                <div
-                  onclick={() => jumpToError(activeResult)}
-                  onkeydown={(e) => e.key === 'Enter' && jumpToError(activeResult)}
-                  role="button"
-                  tabindex="0"
-                  style="margin-top:var(--px-4);font-size:var(--px-11_5);color:var(--primary);cursor:pointer;width:fit-content"
-                >→ line {pos.line}, col {pos.col}</div>
-              {/if}
-              {#if err.hint}
-                <div style="margin-top:var(--px-6);font-size:var(--px-12);color:var(--warn)">💡 {err.hint}</div>
-              {/if}
-              <div
-                onclick={() => (rawError = err.raw)}
-                onkeydown={(e) => e.key === 'Enter' && (rawError = err.raw)}
-                role="button"
-                tabindex="0"
-                style="margin-top:var(--px-8);font-size:var(--px-11);color:var(--text2);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-9);cursor:pointer;width:fit-content"
-              >View raw error</div>
-            </div>
-          </div>
-        </div>
+    {:else if exec && (exec.activeSub === MESSAGES || activeResult?.kind !== 'rows')}
+      <ResultMessages {exec} {onJump} onShowResult={showResultOf} onRawError={(r) => (rawError = r)} />
+    {:else if activeResult?.kind === 'rows' && activeResult.result}
+      {#if viewMode === 'grid'}
+        <ResultGrid bind:this={grid} data={activeResult.result} {editTarget} {system} />
+      {:else if viewMode === 'json'}
+        <ResultJsonView data={activeResult.result} />
+      {:else if viewMode === 'single'}
+        <ResultSingleRow data={activeResult.result} />
+      {:else}
+        <ResultChart data={activeResult.result} {accent} />
       {/if}
     {:else}
       <div style="flex:1;display:flex;align-items:center;justify-content:center;font-size:var(--px-12);color:var(--muted)">
@@ -587,8 +487,20 @@
 {/if}
 
 <style>
-  .msg-row:hover {
-    background: var(--hover);
+  .rp-count {
+    font-size: var(--px-10_5);
+    font-weight: 600;
+    color: var(--text2);
+    background: var(--panel);
+    border: var(--px-1) solid var(--border);
+    border-radius: var(--px-8);
+    padding: 0 var(--px-6);
+    font-variant-numeric: tabular-nums;
+  }
+  .rp-count.bad {
+    color: var(--hex-fff);
+    background: var(--error);
+    border-color: var(--error);
   }
   .rp-hide:hover {
     background: color-mix(in srgb, var(--error) 18%, transparent);

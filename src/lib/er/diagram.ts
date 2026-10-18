@@ -8,6 +8,38 @@ export interface XY {
   y: number
 }
 
+/** What is in focus on the canvas — a hovered table and/or a hovered/selected
+ *  relationship. Shared by every edge so only the related lines light up. */
+export interface ErHighlight {
+  node: string | null
+  edge: string | null
+}
+
+/** Horizontal offset (px) of each relationship's vertical run, so several lines
+ *  leaving the same table do not share one trunk and read as a single merged line.
+ *  Lines are fanned out around the midpoint in the order of their FK column in the
+ *  table (top row → leftmost lane), which keeps them from crossing each other.
+ *  `edges` = [edge id, source table, FK column]; `columnOrder` gives the row index. */
+export function laneOffsets(
+  edges: [id: string, source: string, column: string][],
+  columnOrder: (table: string, column: string) => number,
+  spacing = 14,
+): Record<string, number> {
+  const bySource = new Map<string, { id: string; row: number }[]>()
+  for (const [id, source, column] of edges) {
+    const list = bySource.get(source) ?? []
+    list.push({ id, row: columnOrder(source, column) })
+    bySource.set(source, list)
+  }
+  const out: Record<string, number> = {}
+  for (const list of bySource.values()) {
+    list.sort((a, b) => a.row - b.row || a.id.localeCompare(b.id))
+    const mid = (list.length - 1) / 2
+    list.forEach((e, i) => (out[e.id] = (i - mid) * spacing))
+  }
+  return out
+}
+
 export interface Viewport {
   x: number
   y: number

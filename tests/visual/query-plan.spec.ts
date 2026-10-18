@@ -23,21 +23,36 @@ test('query plan: Explain opens normalized tree + hotspot + summary', async ({ p
   // editor tab — the SQL editor stays visible below/above the plan.
   await expect(page.getByRole('tab', { name: /Query Plan/ }).first()).toBeVisible()
   await expect(page.locator('.view-lines').first()).toBeVisible()
-  await expect(page.getByText('HashJoin').first()).toBeVisible()
-  await expect(page.getByText('SeqScan').first()).toBeVisible()
-  await expect(page.getByText('HOTSPOT').first()).toBeVisible()
+  // Steps are named in plain words (not planner identifiers), numbered in run order.
+  await expect(page.getByText('Hash join', { exact: true }).first()).toBeVisible()
+  await expect(page.getByText('Full table scan', { exact: true }).first()).toBeVisible()
+  await expect(page.getByText('Reads every row of enrollments to find the matches.').first()).toBeVisible()
+  await expect(page.locator('[data-step="1"]').getByText('Full table scan')).toBeVisible()
+  await expect(page.locator('[data-step="3"]').getByText('Hash join')).toBeVisible()
+  await expect(page.getByText('Hotspot', { exact: true }).first()).toBeVisible()
+  // The warning is explained (what + how to fix) and the engine's own message is kept.
+  await expect(page.getByText('Reads the whole enrollments table').first()).toBeVisible()
+  await expect(page.getByText(/How to fix:/).first()).toBeVisible()
   await expect(page.getByText(/Seq Scan on enrollments/).first()).toBeVisible()
+  // Engine details fold out per step.
+  await page.locator('[data-step="1"]').getByRole('button', { name: 'Show details' }).click()
+  await expect(page.locator('[data-step="1"]').getByText("(status = 'active')")).toBeVisible()
 
   // P1.1: Postgres supports EXPLAIN ANALYZE → Actual toggle is shown
   await expect(page.getByRole('button', { name: 'Actual' }).first()).toBeVisible()
-  // Explain defaults to Actual on engines that support it → mode badge = "actual".
-  await expect(page.getByText('actual', { exact: true }).first()).toBeVisible()
+  // Explain defaults to Actual on engines that support it → Actual is the pressed
+  // half of the Estimate/Actual switch and the mode badge says so.
+  await expect(page.getByRole('button', { name: 'Actual' }).first()).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByRole('button', { name: 'Estimate' }).first()).toHaveAttribute('aria-pressed', 'false')
+  await expect(page.getByText('Actual run', { exact: true }).first()).toBeVisible()
 
-  // P3.1: nodes show "Cost N%" (self-cost percentage, SSMS-style)
-  await expect(page.getByText(/Cost 74\.2%/).first()).toBeVisible()
+  // P3.1: steps show their share of the cost (self-cost percentage, SSMS-style)
+  await expect(page.getByText(/74\.2% of cost/).first()).toBeVisible()
 
-  // P3.2: missing-index banner with the suggested DDL + Copy button
-  await expect(page.getByText(/Missing index \(Impact ~92\.5%\)/).first()).toBeVisible()
+  // P3.2: the verdict leads with the missing index; the card carries the DDL + Copy
+  await expect(page.getByText(/An index could cut the cost by ~92\.5%/).first()).toBeVisible()
+  await expect(page.getByText('Suggested index', { exact: true }).first()).toBeVisible()
+  await expect(page.getByText(/~92\.5% lower cost/).first()).toBeVisible()
   await expect(page.getByText(/CREATE INDEX ix_enrollments_status/).first()).toBeVisible()
   await expect(page.getByRole('button', { name: 'Copy DDL' }).first()).toBeVisible()
 
@@ -157,7 +172,7 @@ test('query plan: Cassandra is shown as TRACING/diagnostics, not an Actual plan'
 
   // P1.3: tracing is labeled diagnostics (not "ACTUAL"), and no Actual toggle
   await expect(page.getByRole('tab', { name: /Query Plan/ }).first()).toBeVisible()
-  await expect(page.getByText(/TRACING · DIAGNOSTICS/).first()).toBeVisible()
+  await expect(page.getByText('Trace · diagnostics', { exact: true }).first()).toBeVisible()
   await expect(page.getByRole('button', { name: 'Actual' })).toHaveCount(0)
 
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])

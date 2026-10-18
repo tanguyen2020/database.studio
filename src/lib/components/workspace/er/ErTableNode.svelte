@@ -19,7 +19,7 @@
      it. Only visible while selected. onResizeEnd persists the new size (like layout).
      The node fills whatever box the resizer sets; overflow clips excess rows. -->
 <NodeResizer isVisible={selected} minWidth={130} minHeight={52} onResizeEnd={() => data.onResizeEnd?.()} />
-<div class="er-node" style="position:relative;width:100%;height:100%;min-width:130px;background:var(--panel);border:1px solid var(--border2);border-radius:8px;overflow:hidden;font-size:12px;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility">
+<div class="er-node" class:selected style="position:relative;width:100%;height:100%;min-width:130px;background:var(--panel);border-radius:10px;overflow:hidden;font-size:12px;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility">
   <!-- node-level default handles (id rỗng) — mũi tên FK tự động bám vào đây (giữ nguyên) -->
   <Handle type="target" position={Position.Left} style="opacity:0" />
   <Handle type="source" position={Position.Right} style="opacity:0" />
@@ -47,28 +47,48 @@
 </div>
 
 <style>
-  /* Per-column anchors — tall pill-shaped grab zones on each row edge so drawing a
-     relationship is easy (no pixel-hunting a tiny dot). Visible even without hover;
-     brighter on node-hover and full on direct hover / while connecting. Svelte
-     Flow's Handle DOM is a child of this component, so target it via :global. */
+  /* The card: soft border + shadow; a selected table gets an accent ring. */
+  .er-node {
+    border: var(--px-1) solid var(--border2);
+    box-shadow: var(--shadow-sm);
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  }
+  .er-node:hover {
+    border-color: color-mix(in srgb, var(--primary) 45%, var(--border2));
+    box-shadow: var(--shadow-md);
+  }
+  .er-node.selected {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 var(--px-3) var(--ring-soft), var(--shadow-md);
+  }
+
+  /* Per-column anchors — pill-shaped grab zones on each row edge so drawing a
+     relationship needs no pixel-hunting. Hidden at rest (a bar on every row of
+     every table made the canvas look like a barcode): the drag origins (right
+     side) appear when the pointer is on the table, and the drop targets (left
+     side) only while a relationship is being drawn. Svelte Flow's Handle DOM is a
+     child of this component, so target it via :global. */
   :global(.er-node .col-anchor) {
-    width: var(--px-11);
-    height: var(--px-16);
-    border-radius: var(--px-3);
+    width: var(--px-8);
+    height: var(--px-14);
+    border-radius: var(--px-4);
     background: var(--primary);
     border: var(--px-2) solid var(--panel);
-    opacity: 0.5;
+    opacity: 0;
     transition: opacity 0.12s ease;
   }
-  /* PK anchor — the usual drag origin — stays clearly visible. */
-  :global(.er-node .pk-anchor) {
-    opacity: 0.85;
+  :global(.er-node:hover .col-anchor.source) {
+    opacity: 0.55;
   }
-  :global(.er-node:hover .col-anchor) {
+  :global(.er-node:hover .pk-anchor.source) {
     opacity: 0.9;
   }
+  :global(.svelte-flow:has(.svelte-flow__handle.connectingfrom) .er-node .col-anchor.target) {
+    opacity: 0.5;
+  }
   :global(.er-node .col-anchor:hover),
-  :global(.svelte-flow__handle.connectingfrom.col-anchor) {
+  :global(.svelte-flow__handle.connectingfrom.col-anchor),
+  :global(.svelte-flow__handle.connectingto.col-anchor) {
     opacity: 1;
   }
   /* Full-node drop target — covers the whole node, invisible; xyflow toggles its

@@ -1,3 +1,4 @@
+import { copyFileSync, readFileSync } from 'node:fs'
 import { expect, test } from '@playwright/test'
 import { APP_URL, blockRemoteFonts, openDatabaseNode } from './helpers'
 
@@ -147,6 +148,122 @@ test('ER diagram: select a table then drag a corner to shrink it', async ({ page
   if (!after) throw new Error('no node box after')
   expect(after.width).toBeLessThan(before.width - 20)
   expect(after.height).toBeLessThan(before.height - 20)
+
+  expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
+})
+
+// Relationship lines: orthogonal routes with crow's-foot ends; the column label
+// stays hidden at rest (no clutter) and shows when one of the two tables is hovered.
+test('ER diagram: quiet lines at rest, labelled when a related table is hovered', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(String(e)))
+  await blockRemoteFonts(page)
+  await page.goto(APP_URL)
+  await page.waitForSelector('#app > *', { timeout: 15_000 })
+  await page.waitForTimeout(300)
+  await page.getByRole('button', { name: /Postgres/ }).first().click()
+  await page.waitForTimeout(500)
+  await openDatabaseNode(page)
+  await page.getByText('public', { exact: true }).first().click({ button: 'right' })
+  await page.waitForTimeout(200)
+  await page.getByText('View ER Diagram').first().click()
+  await page.waitForTimeout(700)
+
+  const edges = page.locator('.svelte-flow__edge .er-edge')
+  await expect(edges.first()).toBeVisible()
+  // each relationship: one route + the two cardinality ends (many / one)
+  await expect(edges.first().locator('.er-edge-end')).toHaveCount(2)
+  // the route is orthogonal (smooth-step) — no cubic bezier segments
+  const d = await edges.first().locator('path.er-edge-path').getAttribute('d')
+  expect(d ?? '').not.toMatch(/C/)
+  // no label clutter at rest
+  await expect(page.locator('.er-edge-label')).toHaveCount(0)
+  // hovering a table lights up its relationships and names their columns
+  await page.locator('.svelte-flow__node[data-id="enrollments"]').first().hover({ position: { x: 40, y: 10 } })
+  await expect(page.locator('.er-edge-label').first()).toBeVisible()
+  await expect(page.locator('.er-edge.active').first()).toBeVisible()
+  // xyflow's chrome follows the app palette (not a white panel on a dark canvas)
+  const bg = await page.locator('.svelte-flow__minimap').first().evaluate((el) => getComputedStyle(el).backgroundColor)
+  const surface = await page.evaluate(() => {
+    const p = document.createElement('div')
+    p.style.background = 'var(--surface)'
+    document.body.appendChild(p)
+    const c = getComputedStyle(p).backgroundColor
+    p.remove()
+    return c
+  })
+  expect(bg).toBe(surface)
+
+  expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
+})
+
+// SVG/PNG export draws the diagram the way the canvas shows it (shared edge
+// geometry), where the tables are NOW, in the current theme — not straight
+// centre-to-centre lines at the positions of the first layout.
+test('ER diagram: SVG/PNG export matches the canvas', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(String(e)))
+  await blockRemoteFonts(page)
+  await page.addInitScript(() => localStorage.setItem('theme', 'light'))
+  await page.goto(APP_URL)
+  await page.waitForSelector('#app > *', { timeout: 15_000 })
+  await page.waitForTimeout(300)
+  await page.getByRole('button', { name: /Postgres/ }).first().click()
+  await page.waitForTimeout(500)
+  await openDatabaseNode(page)
+  await page.getByText('public', { exact: true }).first().click({ button: 'right' })
+  await page.waitForTimeout(200)
+  await page.getByText('View ER Diagram').first().click()
+  await page.waitForTimeout(900)
+
+  // the canvas route of enrollments.student_id → students.id
+  const canvasD = await page.locator('.svelte-flow__edge .er-edge path.er-edge-path').first().getAttribute('d')
+  expect(canvasD ?? '').not.toMatch(/C/)
+
+  const [svgDl] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'SVG', exact: true }).click()])
+  expect(svgDl.suggestedFilename()).toBe('er_public.svg')
+  const svg = readFileSync((await svgDl.path())!, 'utf8')
+  expect(svg.startsWith('<svg')).toBe(true)
+  for (const rel of ['enrollments.student_id → students.id', 'enrollments.course_id → courses.id']) {
+    const m = new RegExp(`<title>${rel.replace(/\./g, '\\.')}</title><path d="([^"]+)"/><path d="([^"]+)"/><path d="([^"]+)"/>`).exec(svg)
+    expect(m, rel).not.toBeNull()
+    expect(m![1]).toMatch(/Q/) // rounded orthogonal route
+    expect(m![1]).not.toMatch(/C/)
+    expect(m![2].match(/M /g)).toHaveLength(4) // crow's foot (3 prongs + bar)
+  }
+  // light theme colours, not the old hard-coded dark background
+  expect(svg).not.toContain('fill="#0f1219"')
+  const bg = /<rect width="\d+" height="\d+" fill="(#[0-9a-f]{6})"\/>/.exec(svg)?.[1] ?? ''
+  const lum = parseInt(bg.slice(1, 3), 16) + parseInt(bg.slice(3, 5), 16) + parseInt(bg.slice(5, 7), 16)
+  expect(lum, `background ${bg}`).toBeGreaterThan(600)
+
+  // drag a table → the export follows it (it used the first layout before)
+  const before = /<text x="([\d.]+)" y="([\d.]+)"[^>]*>courses<\/text>/.exec(svg)
+  const node = page.locator('.svelte-flow__node[data-id="courses"]').first()
+  const nb = await node.boundingBox()
+  if (!nb) throw new Error('no node box')
+  await page.mouse.move(nb.x + 40, nb.y + 10)
+  await page.mouse.down()
+  await page.mouse.move(nb.x + 40, nb.y + 200, { steps: 8 })
+  await page.mouse.up()
+  await page.waitForTimeout(300)
+  const [svgDl2] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'SVG', exact: true }).click()])
+  const svg2 = readFileSync((await svgDl2.path())!, 'utf8')
+  const after = /<text x="([\d.]+)" y="([\d.]+)"[^>]*>courses<\/text>/.exec(svg2)
+  expect(before && after).toBeTruthy()
+  // courses moved down relative to students
+  const rel = (s: string) => {
+    const c = Number(/<text x="[\d.]+" y="([\d.]+)"[^>]*>courses<\/text>/.exec(s)![1])
+    const st = Number(/<text x="[\d.]+" y="([\d.]+)"[^>]*>students<\/text>/.exec(s)![1])
+    return c - st
+  }
+  expect(rel(svg2)).toBeGreaterThan(rel(svg) + 100)
+
+  const [pngDl] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'PNG', exact: true }).click()])
+  expect(pngDl.suggestedFilename()).toBe('er_public.png')
+  const png = readFileSync((await pngDl.path())!)
+  expect(png.subarray(0, 4).toString('hex')).toBe('89504e47')
+  if (process.env.SHOT_DIR) copyFileSync((await pngDl.path())!, `${process.env.SHOT_DIR}/er-export.png`)
 
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })

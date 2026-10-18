@@ -36,7 +36,7 @@ vi.mock('./toast.svelte', () => ({
 }))
 
 import { connections } from './connections.svelte'
-import { results } from './results.svelte'
+import { MESSAGES_TAB, results } from './results.svelte'
 
 function profile(id: string, connected: boolean): ProfilePublic {
   return { ...connections.makeBlankProfile('postgres'), id, name: `Conn ${id}`, connected }
@@ -234,5 +234,53 @@ describe('cancel — targets the connection the run used', () => {
   it('does nothing when the tab is not running', async () => {
     await results.cancel('tab-none', 'c1')
     expect(cancelQuery).not.toHaveBeenCalled()
+  })
+})
+
+describe('run — only result sets get a tab; everything else goes to Messages', () => {
+  const rowsOf = (n: number): ExecResponse => ({
+    ok: true,
+    result: { cols: [['id', 'int4']], rows: Array.from({ length: n }, (_, i) => row(i)), total: n },
+    duration_ms: 1,
+  })
+  const respond = (sql: string): ExecResponse => {
+    if (/^select/i.test(sql)) return rowsOf(2)
+    if (/^(create|drop|truncate)/i.test(sql)) return { ok: true, duration_ms: 1 }
+    return { ok: true, affected: 3, duration_ms: 1 }
+  }
+
+  it('a DML/DDL-only script stays on Messages with one entry per statement', async () => {
+    connections.profiles = [profile('c1', true)]
+    stream = async (_c, sql) => respond(sql)
+    await results.run('tab-1', 'c1', ['INSERT INTO t VALUES (1)', 'UPDATE t SET a = 1', 'DELETE FROM t', 'TRUNCATE t', 'DROP TABLE t'].map(stmt))
+    const exec = results.get('tab-1')!
+    expect(exec.activeSub).toBe(MESSAGES_TAB)
+    expect(exec.subResults.filter((s) => s.kind === 'rows')).toHaveLength(0)
+    expect(exec.messages.map((m) => m.kind)).toEqual(['affected', 'affected', 'affected', 'ok', 'ok'])
+    expect(exec.messages[0]).toMatchObject({ affected: 3, text: '3 rows affected' })
+  })
+
+  it('a mixed script opens a tab per SELECT and shows the newest one', async () => {
+    connections.profiles = [profile('c1', true)]
+    stream = async (_c, sql) => respond(sql)
+    await results.run('tab-1', 'c1', ['UPDATE t SET a = 1', 'SELECT * FROM a', 'INSERT INTO t VALUES (2)', 'SELECT * FROM b', 'DELETE FROM t'].map(stmt))
+    const exec = results.get('tab-1')!
+    const rowSubs = exec.subResults.filter((s) => s.kind === 'rows')
+    expect(rowSubs.map((s) => s.index)).toEqual([2, 4])
+    // trailing DML does not steal focus from the last result set
+    expect(exec.subResults[exec.activeSub].index).toBe(4)
+    expect(exec.messages.find((m) => m.index === 2)).toMatchObject({ kind: 'rows', rows: 2, text: '2 rows returned' })
+  })
+
+  it('a failing statement switches to Messages so the error is visible', async () => {
+    connections.profiles = [profile('c1', true)]
+    stream = async (_c, sql) =>
+      /bad/.test(sql)
+        ? { ok: false, error: { system: 'postgres', message: 'syntax error', severity: 'error', raw: 'syntax error' }, duration_ms: 1 }
+        : respond(sql)
+    await results.run('tab-1', 'c1', ['SELECT * FROM a', 'UPDATE bad'].map(stmt))
+    const exec = results.get('tab-1')!
+    expect(exec.activeSub).toBe(MESSAGES_TAB)
+    expect(exec.messages.at(-1)).toMatchObject({ kind: 'error', ok: false })
   })
 })

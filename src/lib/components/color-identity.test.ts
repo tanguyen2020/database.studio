@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest'
 import { render } from '@testing-library/svelte'
 import SystemBadge from './SystemBadge.svelte'
 import SystemIcon from './SystemIcon.svelte'
+import { BRAND_MARKS, brandViewBox } from '$lib/brand-icons'
 import ConnectionIndicator from './ConnectionIndicator.svelte'
 import { SYSTEMS, SYSTEM_ORDER, systemMeta } from '$lib/systems'
 import { SYS_GEN } from '$lib/systems.gen'
@@ -104,7 +105,6 @@ describe('SystemIcon (port dbIcon() HTML dòng 3883)', () => {
   // MariaDB (sea lion) use hand-built SVG logos in public/assets/.
   it.each([
     ['postgres', 'svg'],
-    ['mysql', 'png'],
     ['mssql', 'png'],
     ['mariadb', 'svg'],
     ['oracle', 'svg'],
@@ -117,30 +117,44 @@ describe('SystemIcon (port dbIcon() HTML dòng 3883)', () => {
     expect(img.getAttribute('width')).toBe('16')
   })
 
-  it.each(['redis', 'kafka', 'cassandra', 'sqlite', 'mongodb'])(
-    '%s dùng SVG stroke accent, viewBox 24, strokeWidth 1.9',
+  // The engines that used hand-drawn stand-ins now show their official mark: the
+  // simple-icons path, verbatim, in the brand colour (theme-safe where noted).
+  it.each(['clickhouse', 'redis', 'kafka', 'cassandra', 'mongodb', 'sqlite', 'rabbitmq', 'mysql'])(
+    '%s shows its official brand mark (simple-icons path, verbatim)',
     (key) => {
-      const { container } = render(SystemIcon, { system: key })
+      const { container } = render(SystemIcon, { system: key, size: 16 })
       const svg = container.querySelector('svg')!
-      expect(svg.getAttribute('viewBox')).toBe('0 0 24 24')
-      expect(svg.getAttribute('stroke')).toBe(SYSTEMS[key as keyof typeof SYSTEMS].accent)
-      expect(svg.getAttribute('stroke-width')).toBe('1.9')
+      expect(svg.getAttribute('data-logo')).toBe(key)
+      expect(svg.getAttribute('viewBox')).toBe(brandViewBox(key))
+      expect(svg.getAttribute('width')).toBe('16')
+      const path = svg.querySelector('path')!
+      expect(path.getAttribute('d')).toBe(BRAND_MARKS[key].d)
+      expect(path.getAttribute('fill')).toBe(BRAND_MARKS[key].fill)
+      // no hand-drawn stroke icon left behind
+      expect(svg.getAttribute('stroke')).toBeNull()
     },
   )
 
-  it('clickhouse dùng SVG fill (4 thanh cột), không stroke', () => {
+  it('clickhouse sits on its black tile (yellow on white would be unreadable)', () => {
     const { container } = render(SystemIcon, { system: 'clickhouse' })
-    const svg = container.querySelector('svg')!
-    expect(svg.getAttribute('fill')).toBe(SYSTEMS.clickhouse.accent)
-    expect(svg.getAttribute('stroke')).toBe('none')
-    expect(svg.querySelectorAll('rect')).toHaveLength(4)
+    expect(container.querySelector('rect')?.getAttribute('fill')).toBe(BRAND_MARKS.clickhouse.tile)
   })
 
-  it('cassandra: ring 7 circle + 6 nan hoa', () => {
-    const { container } = render(SystemIcon, { system: 'cassandra' })
-    const svg = container.querySelector('svg')!
-    expect(svg.querySelectorAll('circle')).toHaveLength(7)
-    expect(svg.querySelectorAll('path')).toHaveLength(6)
+  it('mysql keeps only the dolphin — the tiny MySQL wordmark is dropped and the view crops to it', () => {
+    // simple-icons draws eye, wordmark, dolphin as three sub-paths; the wordmark one is gone
+    expect(BRAND_MARKS.mysql.d.split(/(?=M)/)).toHaveLength(2)
+    expect(brandViewBox('mysql')).not.toBe('0 0 24 24')
+  })
+
+  it('kafka (near-black brand ink) follows the text colour so it shows in dark mode', () => {
+    expect(BRAND_MARKS.kafka.fill).toBe('var(--text)')
+  })
+
+  it('every brand mark is a real path, not a stand-in', () => {
+    for (const [key, m] of Object.entries(BRAND_MARKS)) {
+      expect(m.d.length, key).toBeGreaterThan(100)
+      expect(m.d.startsWith('M'), key).toBe(true)
+    }
   })
 })
 

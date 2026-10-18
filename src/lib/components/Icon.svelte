@@ -1,6 +1,7 @@
 <script module lang="ts">
   export type IconName = 'refresh' | 'plus' | 'close' | 'chevron-down' | 'merge' | 'search' | 'panel-right' | 'query' | 'expand' | 'copy' | 'trash'
     | 'download' | 'filter' | 'sort' | 'chevron-left' | 'chevron-right' | 'first' | 'last' | 'paste' | 'edit' | 'table' | 'braces' | 'code' | 'file' | 'columns' | 'rows' | 'sliders' | 'check'
+    | 'database' | 'puzzle' | 'upload' | 'link' | 'unlink' | 'chart' | 'cpu' | 'play' | 'folder' | 'zap' | 'info' | 'warning'
 </script>
 
 <script lang="ts">
@@ -95,5 +96,34 @@
     <circle cx="5.5" cy="11.5" r="1.5" />
   {:else if name === 'check'}
     <path d="m3.5 8.5 3 3 6-7" />
+  {:else if name === 'database'}
+    <ellipse cx="8" cy="4" rx="5" ry="1.8" />
+    <path d="M3 4v8c0 1 2.2 1.8 5 1.8s5-.8 5-1.8V4M3 8c0 1 2.2 1.8 5 1.8s5-.8 5-1.8" />
+  {:else if name === 'puzzle'}
+    <path d="M6.5 2.8a1.4 1.4 0 0 1 2.8 0v1.2h3.2v3.2h-1.2a1.4 1.4 0 0 0 0 2.8h1.2v3.2H9.3v-1.2a1.4 1.4 0 0 0-2.8 0v1.2H3.3V10h1.2a1.4 1.4 0 0 0 0-2.8H3.3V4h3.2z" />
+  {:else if name === 'upload'}
+    <path d="M8 10.5V2.8M5 5.6 8 2.6l3 3M3 10.5v1.7c0 .7.5 1.3 1.2 1.3h7.6c.7 0 1.2-.6 1.2-1.3v-1.7" />
+  {:else if name === 'link'}
+    <path d="M6.8 9.2a2.6 2.6 0 0 0 3.7 0l2-2a2.6 2.6 0 0 0-3.7-3.7l-.7.7M9.2 6.8a2.6 2.6 0 0 0-3.7 0l-2 2a2.6 2.6 0 0 0 3.7 3.7l.7-.7" />
+  {:else if name === 'unlink'}
+    <path d="M9.4 4.1l.3-.3a2.6 2.6 0 0 1 3.7 3.7l-1.3 1.3M6.6 11.9l-.3.3a2.6 2.6 0 0 1-3.7-3.7l1.3-1.3M2.5 2.5l11 11" />
+  {:else if name === 'chart'}
+    <path d="M2.5 13.5h11" />
+    <path d="M4.5 13.5V9M8 13.5V4.5M11.5 13.5v-6" />
+  {:else if name === 'cpu'}
+    <rect x="4" y="4" width="8" height="8" rx="1.4" />
+    <path d="M6.5 6.5h3v3h-3zM6 2v2M10 2v2M6 12v2M10 12v2M2 6h2M2 10h2M12 6h2M12 10h2" />
+  {:else if name === 'play'}
+    <path d="M5 3.3v9.4L12.5 8z" />
+  {:else if name === 'folder'}
+    <path d="M2.5 4.3c0-.7.5-1.3 1.2-1.3h2.6l1.4 1.6h4.6c.7 0 1.2.6 1.2 1.3v6.3c0 .7-.5 1.3-1.2 1.3H3.7c-.7 0-1.2-.6-1.2-1.3z" />
+  {:else if name === 'zap'}
+    <path d="M9 2 3.5 9h4L7 14l5.5-7h-4z" />
+  {:else if name === 'info'}
+    <circle cx="8" cy="8" r="5.6" />
+    <path d="M8 7.3v3.6M8 5.1v.1" />
+  {:else if name === 'warning'}
+    <path d="M8 2.6 14 13H2z" />
+    <path d="M8 6.6v3M8 11.3v.1" />
   {/if}
 </svg>

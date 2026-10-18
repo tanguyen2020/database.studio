@@ -593,22 +593,44 @@
                   <input class="cm-input mono" type="number" bind:value={draft.ssh.port} />
                 </div>
               </div>
-              <div class="cm-label">Authentication</div>
-              <div class="ds-seg cm-ssh-seg" role="group" aria-label="SSH authentication">
-                <span
-                  onclick={() => draft && (draft.ssh.auth = 'password')}
-                  onkeydown={(e) => e.key === 'Enter' && draft && (draft.ssh.auth = 'password')}
-                  role="button"
-                  tabindex="0"
-                  aria-pressed={sshMode === 'password'}
-                >Username / Password</span>
-                <span
-                  onclick={() => draft && (draft.ssh.auth = 'key')}
-                  onkeydown={(e) => e.key === 'Enter' && draft && (draft.ssh.auth = 'key')}
-                  role="button"
-                  tabindex="0"
-                  aria-pressed={sshMode === 'key'}
-                >Private Key</span>
+              <!-- SSH authentication — two option cards, each method with its own colour
+                   and icon (password = blue, private key = amber) so the chosen one is
+                   obvious at a glance; the old segmented pill was white-on-grey. -->
+              <div class="cm-label" id="ssh-auth-label">Authentication</div>
+              <div class="cm-ssh-auth" role="radiogroup" aria-labelledby="ssh-auth-label">
+                {#each [{ v: 'password', t: 'Username / Password', d: 'Sign in with the SSH user\'s password' }, { v: 'key', t: 'Private Key', d: 'Use a key file (id_rsa, id_ed25519…)' }] as opt (opt.v)}
+                  {@const on = sshMode === opt.v}
+                  <div
+                    class="cm-ssh-opt {opt.v}"
+                    class:on
+                    role="radio"
+                    aria-checked={on}
+                    tabindex={on ? 0 : -1}
+                    onclick={() => draft && (draft.ssh.auth = opt.v as 'password' | 'key')}
+                    onkeydown={(e) => {
+                      if (!draft) return
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault()
+                        draft.ssh.auth = opt.v as 'password' | 'key'
+                      } else if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) {
+                        e.preventDefault()
+                        draft.ssh.auth = draft.ssh.auth === 'key' ? 'password' : 'key'
+                        const next = (e.currentTarget as HTMLElement).parentElement?.querySelector<HTMLElement>(`.cm-ssh-opt.${draft.ssh.auth}`)
+                        next?.focus()
+                      }
+                    }}
+                  >
+                    <span class="cm-ssh-ico" aria-hidden="true">
+                      {#if opt.v === 'password'}
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"></circle><path d="M4 21v-1a6 6 0 0 1 6-6h4a6 6 0 0 1 6 6v1"></path></svg>
+                      {:else}
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="7.5" cy="15.5" r="4.5"></circle><path d="M10.7 12.3 21 2"></path><path d="m16 7 3 3"></path><path d="m19 4 2 2"></path></svg>
+                      {/if}
+                    </span>
+                    <span class="cm-ssh-txt"><b>{opt.t}</b><span>{opt.d}</span></span>
+                    <span class="cm-ssh-radio" aria-hidden="true"></span>
+                  </div>
+                {/each}
               </div>
               {#if sshMode === 'password'}
                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--px-14)">
@@ -1082,8 +1104,93 @@
   .cm-subpanel .cm-input {
     background: var(--surface);
   }
-  .cm-ssh-seg {
+  /* SSH authentication chooser — each method owns a colour (--opt) so the chosen
+     card reads at a glance in both themes: password = blue, private key = amber. */
+  .cm-ssh-auth {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--px-10);
     margin-bottom: var(--px-14);
+  }
+  .cm-ssh-opt {
+    --opt: var(--primary);
+    display: flex;
+    align-items: center;
+    gap: var(--px-10);
+    padding: var(--px-10) var(--px-12);
+    border: var(--px-1) solid var(--border2);
+    border-radius: var(--px-10);
+    background: var(--surface);
+    cursor: pointer;
+    outline: none;
+    transition: border-color 0.12s, background 0.12s, box-shadow 0.12s;
+  }
+  .cm-ssh-opt.key {
+    --opt: var(--sacc-amber);
+  }
+  .cm-ssh-opt:hover:not(.on) {
+    border-color: color-mix(in srgb, var(--opt) 45%, var(--border2));
+  }
+  .cm-ssh-opt:focus-visible {
+    box-shadow: 0 0 0 var(--px-3) color-mix(in srgb, var(--opt) 28%, transparent);
+  }
+  .cm-ssh-opt.on {
+    border-color: var(--opt);
+    background: color-mix(in srgb, var(--opt) 10%, var(--surface));
+    box-shadow: 0 0 0 var(--px-1) var(--opt) inset;
+  }
+  .cm-ssh-ico {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: var(--px-30);
+    height: var(--px-30);
+    border-radius: var(--px-8);
+    color: var(--opt);
+    background: color-mix(in srgb, var(--opt) 12%, transparent);
+  }
+  .cm-ssh-opt.on .cm-ssh-ico {
+    color: var(--hex-fff);
+    background: var(--opt);
+  }
+  /* dark: the method colours are light (pale blue / yellow) — white would wash out */
+  :global(.dark) .cm-ssh-opt.on .cm-ssh-ico {
+    color: var(--bg);
+  }
+  .cm-ssh-txt {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--px-2);
+  }
+  .cm-ssh-txt b {
+    font-size: var(--px-13);
+    font-weight: 600;
+    color: var(--text);
+  }
+  .cm-ssh-opt.on .cm-ssh-txt b {
+    color: var(--opt);
+  }
+  .cm-ssh-txt span {
+    font-size: var(--px-11_5);
+    color: var(--muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  /* radio mark: empty ring → filled with the method's colour */
+  .cm-ssh-radio {
+    flex: none;
+    width: var(--px-16);
+    height: var(--px-16);
+    border-radius: 50%;
+    border: var(--px-2) solid var(--border2);
+    transition: border-color 0.12s, border-width 0.12s;
+  }
+  .cm-ssh-opt.on .cm-ssh-radio {
+    border: var(--px-5) solid var(--opt);
   }
 
   /* ---- footer ---------------------------------------------------------- */

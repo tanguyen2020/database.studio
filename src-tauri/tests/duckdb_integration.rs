@@ -533,3 +533,88 @@ async fn duckdb_backup_restore_roundtrip() {
     assert!(drv.restore_from(format!("{dest}.missing")).await.is_err());
     eprintln!("CHK duckdb_backup_restore_roundtrip OK");
 }
+
+/// DuckDB workspace (Overview · Extensions · Settings · Import file · Export ·
+/// Attach · Profile): runs, in order, EXACTLY the statements the frontend
+/// builders produce (src/lib/duckdb/sql.ts — duckdb.test pins them to this same
+/// fixture), with the expectation written next to each one.
+#[tokio::test]
+async fn duckdb_workspace_statements_run() {
+    let path = temp_db("workspace");
+    let dir = std::path::Path::new(&path).parent().unwrap().to_string_lossy().replace('\\', "/");
+    let fixture: Value =
+        serde_json::from_str(include_str!("fixtures/duckdb-statements.json")).expect("fixture json");
+    let mut c = open("workspace", &path).await;
+    let mut ran = 0;
+    for step in fixture["steps"].as_array().unwrap() {
+        let key = step["key"].as_str().unwrap();
+        let sql = step["sql"].as_str().unwrap().replace("{dir}", &dir);
+        assert!(!sql.is_empty(), "{key}: empty statement in the fixture");
+        let expect = &step["expect"];
+        let out = c.exec(&sql).await;
+        ran += 1;
+        if let Some(needle) = expect.get("error").and_then(Value::as_str) {
+            let err = match out {
+                Err(e) => e.message,
+                Ok(o) => panic!("{key}: expected an error containing {needle:?}, got {o:?}"),
+            };
+            assert!(err.to_lowercase().contains(&needle.to_lowercase()), "{key}: error {err:?} lacks {needle:?}");
+            continue;
+        }
+        let out = out.unwrap_or_else(|e| panic!("{key}: {sql}\n  -> {}", e.message));
+        if expect.as_str() == Some("ok") {
+            continue;
+        }
+        if let Some(n) = expect.get("affected").and_then(Value::as_u64) {
+            match out {
+                StatementOutcome::Affected { affected } => assert_eq!(affected, n, "{key}: affected"),
+                other => panic!("{key}: expected {n} affected, got {other:?}"),
+            }
+            continue;
+        }
+        let rows = match out {
+            StatementOutcome::Rows { result } => result.rows,
+            other => panic!("{key}: expected rows, got {other:?}"),
+        };
+        if let Some(n) = expect.get("rows").and_then(Value::as_u64) {
+            assert_eq!(rows.len() as u64, n, "{key}: row count ({rows:?})");
+        }
+        if let Some(n) = expect.get("rows_min").and_then(Value::as_u64) {
+            assert!(rows.len() as u64 >= n, "{key}: at least {n} rows, got {}", rows.len());
+        }
+        if let Some(first) = expect.get("first").and_then(Value::as_object) {
+            for (col, want) in first {
+                assert_eq!(&rows[0][col], want, "{key}: first row column {col} ({:?})", rows[0]);
+            }
+        }
+    }
+    assert!(ran > 50, "ran {ran} steps");
+
+    // Shapes the screens read (column names / value kinds), on the same connection.
+    let (cols, r) = rows(&mut c, "SELECT * FROM (SELECT version() AS version, (SELECT platform FROM pragma_platform()) AS platform) t").await;
+    assert_eq!(cols.len(), 2);
+    assert!(r[0]["version"].as_str().unwrap().starts_with('v'));
+    let (cols, r) = rows(&mut c, fixture_sql(&fixture, "databases")).await;
+    let names: Vec<&str> = cols.iter().map(|(n, _)| n.as_str()).collect();
+    for want in ["name", "path", "type", "readonly", "database_size", "wal_size", "memory_usage", "current"] {
+        assert!(names.contains(&want), "databases column {want} in {names:?}");
+    }
+    assert_eq!(r[0]["current"], json!(true), "the opened file comes first");
+    assert_eq!(r[0]["readonly"], json!(false));
+    let (_, r) = rows(&mut c, fixture_sql(&fixture, "extensions")).await;
+    let json_ext = r.iter().find(|e| e["extension_name"] == json!("json")).expect("json extension listed");
+    assert_eq!(json_ext["loaded"], json!(true), "json is bundled and loaded: {json_ext:?}");
+    let (_, r) = rows(&mut c, fixture_sql(&fixture, "settings")).await;
+    let threads = r.iter().find(|s| s["name"] == json!("threads")).expect("threads setting");
+    assert_eq!(threads["input_type"], json!("BIGINT"));
+    assert!(threads["scope"].is_string());
+    let (_, r) = rows(&mut c, fixture_sql(&fixture, "profile.summarize_table")).await;
+    for want in ["column_name", "column_type", "min", "max", "approx_unique", "avg", "std", "q25", "q50", "q75", "count", "null_percentage"] {
+        assert!(r[0].get(want).is_some(), "SUMMARIZE column {want}: {:?}", r[0]);
+    }
+    eprintln!("CHK duckdb_workspace_statements_run OK ({ran} steps)");
+}
+
+fn fixture_sql<'a>(fixture: &'a Value, key: &str) -> &'a str {
+    fixture["steps"].as_array().unwrap().iter().find(|s| s["key"] == json!(key)).unwrap()["sql"].as_str().unwrap()
+}

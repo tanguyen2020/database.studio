@@ -19,6 +19,7 @@
   import { explorer } from '$lib/stores/explorer.svelte'
   import { connections } from '$lib/stores/connections.svelte'
   import { tabs } from '$lib/stores/tabs.svelte'
+  import { duckAttach, duckImport } from '$lib/stores/duckdb.svelte'
   import { toasts } from '$lib/stores/toast.svelte'
   import { ui } from '$lib/stores/ui.svelte'
   import type { ProfilePublic } from '$lib/types'
@@ -507,6 +508,15 @@
         <ContextMenu.Item onclick={() => { connections.selectedId = p.id; tabs.openEsCluster(p.id) }}>Cluster Overview</ContextMenu.Item>
       {:else if p.system !== 'rabbitmq'}
         <ContextMenu.Item onclick={() => newQueryConsole(p)}>New Query Console</ContextMenu.Item>
+      {/if}
+      {#if p.system === 'duckdb' && p.connected}
+        <ContextMenu.Item onclick={() => { connections.selectedId = p.id; tabs.openDuckHome(p.id) }}>DuckDB Overview</ContextMenu.Item>
+        {#if p.sqlite_mode !== 'read-only'}
+          <ContextMenu.Item onclick={() => { connections.selectedId = p.id; duckImport.show(p.id) }}>Import File…</ContextMenu.Item>
+        {/if}
+        <ContextMenu.Item onclick={() => { connections.selectedId = p.id; duckAttach.show(p.id, () => { explorer.invalidate(p.id); void explorer.loadDatabases(p.id, true) }) }}>Attach Database…</ContextMenu.Item>
+        <ContextMenu.Item onclick={() => { connections.selectedId = p.id; tabs.openDuckHome(p.id, 'extensions') }}>Extensions</ContextMenu.Item>
+        <ContextMenu.Item onclick={() => { connections.selectedId = p.id; tabs.openDuckHome(p.id, 'settings') }}>Settings</ContextMenu.Item>
       {/if}
       {#if (isRelational(p.system) && p.system !== 'sqlite' && p.system !== 'duckdb') || p.system === 'mongodb'}
         <ContextMenu.Item onclick={() => newDatabase(p)}>New Database…</ContextMenu.Item>

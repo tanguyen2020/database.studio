@@ -1,0 +1,333 @@
+/*
+ * DuckDB workspace. The pages are built from the app's shared workspace kit
+ * (es.css — page / header / tabs / cards / stats / tables / modals, the same
+ * visual language as the other engine workspaces); `.dk-page` re-points its
+ * accent to DuckDB's palette, so nothing outside the DuckDB screens changes.
+ * Only DuckDB-specific pieces are defined here (prefix `dk-`).
+ */
+
+.dk-page,
+.dk-modal {
+  --es-accent: var(--dk-accent);
+  --es-accent-soft: var(--dk-accent-soft);
+  --es-green: var(--dk-green);
+  --es-green-soft: var(--dk-green-soft);
+  --es-red: var(--dk-red);
+  --es-red-soft: var(--dk-red-soft);
+}
+
+/* the DuckDB identity tile in a page header */
+.dk-logo {
+  flex: none;
+  width: var(--px-40);
+  height: var(--px-40);
+  border-radius: var(--px-10);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  /* the official logo is a yellow disc: it reads best on DuckDB's black */
+  background: var(--dk-brand-ink);
+}
+
+.dk-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(var(--px-340), 1fr));
+  gap: var(--px-16);
+  align-items: start;
+}
+.dk-grid > .es-card + .es-card {
+  margin-top: 0;
+}
+
+/* horizontal meter (memory, blocks used, null %) */
+.dk-meter {
+  position: relative;
+  height: var(--px-6);
+  border-radius: var(--px-4);
+  background: var(--panel);
+  overflow: hidden;
+  min-width: var(--px-60);
+}
+.dk-meter > span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: var(--px-4);
+  background: var(--dk-bar);
+}
+.dk-meter.blue > span {
+  background: var(--dk-bar-2);
+}
+.dk-meter.red > span {
+  background: var(--dk-red);
+}
+
+.dk-path {
+  font-family: var(--font-mono);
+  font-size: var(--px-11_5);
+  color: var(--text2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+}
+
+/* step indicator of the import wizard */
+.dk-steps {
+  display: flex;
+  gap: var(--px-6);
+  align-items: center;
+  font-size: var(--px-12);
+  color: var(--muted);
+}
+.dk-step {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--px-6);
+  white-space: nowrap;
+}
+.dk-step b {
+  width: var(--px-20);
+  height: var(--px-20);
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--px-11);
+  background: var(--panel);
+  border: var(--px-1) solid var(--border2);
+  color: var(--text2);
+}
+.dk-step.on {
+  color: var(--text);
+  font-weight: 600;
+}
+.dk-step.on b {
+  background: var(--dk-accent);
+  border-color: var(--dk-accent);
+  color: var(--surface);
+}
+.dk-step.done b {
+  background: var(--dk-green-soft);
+  border-color: transparent;
+  color: var(--dk-green);
+}
+.dk-step-sep {
+  flex: 0 0 var(--px-24);
+  height: var(--px-1);
+  background: var(--border2);
+}
+
+/* format / mode choice cards */
+.dk-choices {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(var(--px-150), 1fr));
+  gap: var(--px-8);
+}
+.dk-choice {
+  appearance: none;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  padding: var(--px-10) var(--px-12);
+  border-radius: var(--px-10);
+  border: var(--px-1) solid var(--border2);
+  background: var(--raised);
+  color: var(--text);
+  display: flex;
+  flex-direction: column;
+  gap: var(--px-3);
+}
+.dk-choice:hover {
+  border-color: color-mix(in srgb, var(--dk-accent) 55%, var(--border2));
+}
+.dk-choice.on {
+  border-color: var(--dk-accent);
+  background: var(--dk-accent-soft);
+  box-shadow: 0 0 0 var(--px-1) var(--dk-accent);
+}
+.dk-choice-title {
+  font-size: var(--px-13);
+  font-weight: 600;
+}
+.dk-choice-help {
+  font-size: var(--px-11_5);
+  color: var(--text2);
+  line-height: 1.4;
+}
+
+.dk-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(var(--px-180), 1fr));
+  gap: var(--px-12) var(--px-14);
+}
+.dk-field {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.dk-field.wide {
+  grid-column: 1 / -1;
+}
+.dk-check {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--px-6);
+  font-size: var(--px-12_5);
+  color: var(--text);
+  cursor: pointer;
+}
+
+/* profile: one card per column */
+.dk-cols {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(var(--px-300), 1fr));
+  gap: var(--px-14);
+}
+.dk-col {
+  background: var(--surface);
+  border: var(--px-1) solid var(--border);
+  border-radius: var(--px-10);
+  box-shadow: var(--shadow-xs);
+  padding: var(--px-12) var(--px-14);
+  display: flex;
+  flex-direction: column;
+  gap: var(--px-10);
+  min-width: 0;
+}
+.dk-col.sel {
+  border-color: var(--dk-accent);
+  box-shadow: 0 0 0 var(--px-1) var(--dk-accent);
+}
+.dk-col-h {
+  display: flex;
+  align-items: center;
+  gap: var(--px-8);
+  min-width: 0;
+}
+.dk-col-name {
+  font-weight: 600;
+  font-size: var(--px-13_5);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dk-type {
+  font-family: var(--font-mono);
+  font-size: var(--px-10_5);
+  font-weight: 600;
+  padding: var(--px-2) var(--px-6);
+  border-radius: var(--px-5);
+  white-space: nowrap;
+}
+.dk-type.number {
+  color: var(--syntax-number);
+  background: color-mix(in srgb, var(--syntax-number) 12%, transparent);
+}
+.dk-type.temporal {
+  color: var(--syntax-function);
+  background: color-mix(in srgb, var(--syntax-function) 12%, transparent);
+}
+.dk-type.text {
+  color: var(--syntax-string);
+  background: color-mix(in srgb, var(--syntax-string) 12%, transparent);
+}
+.dk-type.boolean {
+  color: var(--syntax-keyword);
+  background: color-mix(in srgb, var(--syntax-keyword) 12%, transparent);
+}
+.dk-type.nested,
+.dk-type.other {
+  color: var(--text2);
+  background: var(--panel);
+}
+.dk-mini {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--px-8);
+}
+.dk-mini > div {
+  min-width: 0;
+}
+.dk-mini dt {
+  font-size: var(--px-10_5);
+  color: var(--muted);
+  font-weight: 500;
+}
+.dk-mini dd {
+  margin: var(--px-2) 0 0;
+  font-size: var(--px-12_5);
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* histogram bars (profile) */
+.dk-hist {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--px-1);
+  height: var(--px-56);
+}
+.dk-hist > span {
+  flex: 1 1 0;
+  min-width: var(--px-2);
+  background: var(--dk-bar);
+  border-radius: var(--px-2) var(--px-2) 0 0;
+  opacity: 0.85;
+}
+.dk-hist > span:hover {
+  opacity: 1;
+}
+.dk-axis {
+  display: flex;
+  justify-content: space-between;
+  font-size: var(--px-10_5);
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  gap: var(--px-8);
+}
+
+/* top values */
+.dk-top {
+  display: flex;
+  flex-direction: column;
+  gap: var(--px-4);
+}
+.dk-top-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--px-90) var(--px-56);
+  gap: var(--px-8);
+  align-items: center;
+  font-size: var(--px-12);
+}
+
+/* box plot (q25 · median · q75 between min and max) */
+.dk-box {
+  position: relative;
+  height: var(--px-14);
+}
+.dk-box .line {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  right: 0;
+  height: var(--px-1);
+  background: var(--border2);
+}
+.dk-box .iqr {
+  position: absolute;
+  top: var(--px-2);
+  bottom: var(--px-2);
+  background: color-mix(in srgb, var(--dk-bar-2) 30%, transparent);
+  border: var(--px-1) solid var(--dk-bar-2);
+  border-radius: var(--px-3);
+}
+.dk-box .med {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: var(--px-2);
+  background: var(--dk-bar-2);
+}

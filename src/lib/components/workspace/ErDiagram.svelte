@@ -4,13 +4,16 @@
   // export PNG/SVG/Mermaid. Toolbar port dòng 1257-1276.
   import '@xyflow/svelte/dist/style.css'
   import { untrack } from 'svelte'
-  import { SvelteFlow, Background, Controls, MiniMap, MarkerType, type Node, type Edge } from '@xyflow/svelte'
+  import { SvelteFlow, Background, BackgroundVariant, Controls, MiniMap, ConnectionLineType, type Node, type Edge } from '@xyflow/svelte'
   import Dagre from '@dagrejs/dagre'
   import * as ipc from '$lib/ipc'
   import { toasts } from '$lib/stores/toast.svelte'
-  import { toMermaid, toSvg, tableSize, type ErTable } from '$lib/er/mermaid'
-  import { addTable, flowPosition, visibleTables, relationshipFromConnection, resolveConnection, type Viewport, type RelConnection } from '$lib/er/diagram'
+  import { toMermaid, toSvg, tableSize, ER_SVG_DARK, ER_SVG_LIGHT, type ErSvgPalette, type ErTable } from '$lib/er/mermaid'
+  import { resolveCssColor } from '$lib/editor/color'
+  import { addTable, flowPosition, laneOffsets, visibleTables, relationshipFromConnection, resolveConnection, type ErHighlight, type Viewport, type RelConnection } from '$lib/er/diagram'
   import ErTableNode from './er/ErTableNode.svelte'
+  import ErEdge from './er/ErEdge.svelte'
+  import { ui } from '$lib/stores/ui.svelte'
   import { connections } from '$lib/stores/connections.svelte'
   import { tabs } from '$lib/stores/tabs.svelte'
   import { genForeignKey } from '$lib/sql/ddl'
@@ -23,6 +26,10 @@
   let { tab }: Props = $props()
 
   const nodeTypes = { table: ErTableNode }
+  const edgeTypes = { er: ErEdge }
+  // Hovered table / hovered relationship — read by every ErEdge, so only the lines
+  // that belong to what the pointer is on light up (the rest fade back).
+  const hl = $state<ErHighlight>({ node: null, edge: null })
   const schema = $derived((tab.state as { schema?: string }).schema ?? '')
 
   let tables = $state<ErTable[]>([])
@@ -31,7 +38,6 @@
   let edges = $state.raw<Edge[]>([])
   let showAll = $state(true)
   let error = $state<string | null>(null)
-  let positions = $state<Record<string, { x: number; y: number }>>({})
 
   // AUDIT-3 item 1 — drag & drop tables from the sidebar. `included` (in tab.state)
   // is undefined for the default "all tables" view, or an explicit subset for a
@@ -132,7 +138,9 @@
   function layout() {
     const shown = visibleTables(tables, included)
     const g = new Dagre.graphlib.Graph()
-    g.setGraph({ rankdir: 'LR', nodesep: 50, ranksep: 90 })
+    // ranksep leaves room for the orthogonal routes (and their crow's feet) between
+    // columns of tables; edgesep keeps parallel lines from merging.
+    g.setGraph({ rankdir: 'LR', nodesep: 44, ranksep: 130, edgesep: 24 })
     g.setDefaultEdgeLabel(() => ({}))
     for (const t of shown) {
       const s = tableSize(t)
@@ -160,28 +168,34 @@
       const sz = savedSizes[t.name]
       return { id: t.name, type: 'table', position: p, width: sz?.width, height: sz?.height, data: { table: t, showAll, onResizeEnd: saveLayout } }
     })
-    positions = pos
     // Anchor each edge to the ACTUAL columns: the FK column (child, source) → the
     // referenced PK column (parent, target). The arrowhead sits at the PK end — the
     // standard "FK references PK" direction. Fall back to the node-level handle only
     // if a column isn't present (so the edge still renders).
     const hasCol = (table: string, col: string) =>
       tables.find((t) => t.name === table)?.columns.some((c) => c.name === col) ?? false
+    // ErEdge draws the route + crow's-foot ends; the label only shows while the
+    // relationship is in focus (see ErEdge), so a dense schema stays readable.
+    const shownFks = fks.filter((fk) => pos[fk.to_table] && pos[fk.from_table])
+    const shownPending = pendingFks.filter((fk) => pos[fk.to_table] && pos[fk.from_table])
+    const lanes = laneOffsets(
+      [
+        ...shownFks.map((fk, i): [string, string, string] => [`fk-${i}`, fk.from_table, fk.from_column]),
+        ...shownPending.map((fk, i): [string, string, string] => [`pfk-${i}`, fk.from_table, fk.from_column]),
+      ],
+      (table, col) => tables.find((t) => t.name === table)?.columns.findIndex((c) => c.name === col) ?? 0,
+    )
     const edgeFor = (fk: ipc.ForeignKey, i: number, pending: boolean): Edge => ({
       id: pending ? `pfk-${i}` : `fk-${i}`,
+      type: 'er',
       source: fk.from_table,
       target: fk.to_table,
       sourceHandle: hasCol(fk.from_table, fk.from_column) ? fk.from_column : undefined,
       targetHandle: hasCol(fk.to_table, fk.to_column) ? fk.to_column : undefined,
-      label: `${fk.from_column} → ${fk.to_column} · N:1`,
-      animated: pending,
-      markerEnd: { type: MarkerType.ArrowClosed, width: 20, height: 20, color: pending ? 'var(--success)' : 'var(--primary)' },
-      style: pending ? 'stroke: #27AE60; stroke-dasharray: 5 4' : 'stroke: var(--primary)',
+      ariaLabel: `${fk.from_table}.${fk.from_column} references ${fk.to_table}.${fk.to_column}`,
+      data: { label: `${fk.from_column} → ${fk.to_column} · N:1`, pending, hl, lane: lanes[pending ? `pfk-${i}` : `fk-${i}`] ?? 0 },
     })
-    edges = [
-      ...fks.filter((fk) => pos[fk.to_table] && pos[fk.from_table]).map((fk, i) => edgeFor(fk, i, false)),
-      ...pendingFks.filter((fk) => pos[fk.to_table] && pos[fk.from_table]).map((fk, i) => edgeFor(fk, i, true)),
-    ]
+    edges = [...shownFks.map((fk, i) => edgeFor(fk, i, false)), ...shownPending.map((fk, i) => edgeFor(fk, i, true))]
   }
 
   // re-render node data khi toggle showAll (giữ vị trí)
@@ -242,11 +256,44 @@
     return save({ defaultPath: filename, filters: [{ name: label, extensions: [ext] }] })
   }
 
+  // The export draws what is on the canvas NOW: where each table sits after any
+  // dragging, its rendered width, the unsaved relationships, the PK+FK-only view
+  // and the current theme's colours (resolved from the CSS variables).
+  function exportPalette(): ErSvgPalette {
+    const base = ui.theme === 'dark' ? ER_SVG_DARK : ER_SVG_LIGHT
+    const host = paneEl ?? undefined
+    const c = (name: string, fallback: string) => resolveCssColor(name, fallback, host)
+    return {
+      bg: c('--bg', base.bg),
+      grid: c('--er-grid-dot', base.grid),
+      card: c('--panel', base.card),
+      header: c('--raised', base.header),
+      border: c('--border2', base.border),
+      rowBorder: c('--border', base.rowBorder),
+      text: c('--text', base.text),
+      muted: c('--muted', base.muted),
+      edge: c('--er-edge-color', base.edge),
+      pending: c('--success', base.pending),
+      pk: c('--sacc-amber', base.pk),
+      fk: c('--muted', base.fk),
+    }
+  }
+  function exportSvg(): string {
+    const pos: Record<string, { x: number; y: number }> = {}
+    const sizes: Record<string, { w: number }> = {}
+    for (const n of nodes) {
+      pos[n.id] = { x: n.position.x, y: n.position.y }
+      const w = n.measured?.width ?? n.width
+      if (w) sizes[n.id] = { w }
+    }
+    return toSvg(visibleTables(tables, included), fks, pos, { sizes, pending: pendingFks, showAll, palette: exportPalette() })
+  }
+
   // SVG/PNG export. In the desktop app WebView2 can't do a real `<a download>`, so
   // save through the native dialog + backend write (text for SVG, base64 bytes for
   // PNG). In a plain browser, fall back to the blob download.
   async function downloadSvg() {
-    const svg = toSvg(tables, fks, positions)
+    const svg = exportSvg()
     const filename = `er_${schema || 'schema'}.svg`
     if (IS_TAURI) {
       try {
@@ -262,7 +309,7 @@
     }
   }
   function downloadPng() {
-    const svg = toSvg(tables, fks, positions)
+    const svg = exportSvg()
     const filename = `er_${schema || 'schema'}.png`
     const img = new Image()
     img.onerror = () => toasts.error('Failed to render PNG')
@@ -297,8 +344,13 @@
     const a = document.createElement('a')
     a.href = url
     a.download = filename
+    // in the DOM while clicked, and the URL kept alive a while — revoking it right
+    // after click() makes Chromium cancel the download now and then
+    a.style.display = 'none'
+    document.body.appendChild(a)
     a.click()
-    URL.revokeObjectURL(url)
+    a.remove()
+    setTimeout(() => URL.revokeObjectURL(url), 10_000)
   }
 </script>
 
@@ -367,6 +419,7 @@
   <div
     bind:this={paneEl}
     role="application"
+    class="er-canvas"
     style="flex:1;position:relative;min-height:0"
     ondragover={(e) => { e.preventDefault(); if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy' }}
     ondrop={onDrop}
@@ -374,10 +427,29 @@
     {#if error}
       <div style="padding:var(--px-16);color:var(--error);font-size:var(--px-12)">{error}</div>
     {:else}
-      <SvelteFlow bind:nodes bind:edges bind:viewport {nodeTypes} fitView connectionRadius={40} onnodedragstop={saveLayout} onconnect={onConnect}>
-        <Background />
-        <Controls />
-        <MiniMap />
+      <SvelteFlow
+        bind:nodes
+        bind:edges
+        bind:viewport
+        {nodeTypes}
+        {edgeTypes}
+        colorMode={ui.theme}
+        fitView
+        fitViewOptions={{ padding: 0.12 }}
+        connectionRadius={40}
+        connectionLineType={ConnectionLineType.SmoothStep}
+        connectionLineStyle="stroke: var(--primary); stroke-width: 2; stroke-dasharray: 6 4"
+        proOptions={{ hideAttribution: true }}
+        onnodedragstop={saveLayout}
+        onconnect={onConnect}
+        onnodepointerenter={({ node }) => (hl.node = node.id)}
+        onnodepointerleave={() => (hl.node = null)}
+        onedgepointerenter={({ edge }) => (hl.edge = edge.id)}
+        onedgepointerleave={() => (hl.edge = null)}
+      >
+        <Background variant={BackgroundVariant.Dots} gap={20} size={1.4} patternColor="var(--er-grid-dot)" bgColor="var(--bg)" />
+        <Controls showLock={false} />
+        <MiniMap pannable zoomable nodeBorderRadius={6} />
       </SvelteFlow>
       {#if nodes.length === 0}
         <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none;color:var(--muted);font-size:var(--px-12_5);text-align:center">
@@ -387,3 +459,37 @@
     {/if}
   </div>
 </div>
+
+<style>
+  /* Canvas chrome in the app's palette (xyflow's defaults are a stark white panel
+     in dark mode). The variables are read by xyflow's own stylesheet. */
+  .er-canvas {
+    --xy-controls-button-background-color: var(--raised);
+    --xy-controls-button-background-color-hover: var(--hover);
+    --xy-controls-button-color: var(--text2);
+    --xy-controls-button-color-hover: var(--text);
+    --xy-controls-button-border-color: var(--border);
+    --xy-controls-box-shadow: var(--shadow-md);
+    --xy-minimap-background-color: var(--surface);
+    --xy-minimap-mask-background-color: color-mix(in srgb, var(--bg) 62%, transparent);
+    --xy-minimap-mask-stroke-color: var(--primary);
+    --xy-minimap-mask-stroke-width: 1.5;
+    --xy-minimap-node-background-color: color-mix(in srgb, var(--primary) 30%, var(--panel));
+    --xy-minimap-node-stroke-color: transparent;
+    --xy-connectionline-stroke: var(--primary);
+  }
+  .er-canvas :global(.svelte-flow__controls) {
+    border: var(--px-1) solid var(--border);
+    border-radius: var(--px-8);
+    overflow: hidden;
+  }
+  .er-canvas :global(.svelte-flow__controls-button svg) {
+    fill: currentColor;
+  }
+  .er-canvas :global(.svelte-flow__minimap) {
+    border: var(--px-1) solid var(--border);
+    border-radius: var(--px-8);
+    overflow: hidden;
+    box-shadow: var(--shadow-md);
+  }
+</style>

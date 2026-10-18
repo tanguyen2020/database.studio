@@ -334,8 +334,23 @@ class TabsStore {
     })
   }
 
+  /** DuckDB workspace (Overview · Databases · Extensions · Settings) — one per connection. */
+  openDuckHome(connectionId: string, section?: 'overview' | 'databases' | 'extensions' | 'settings'): TabState {
+    return this.openEsTab('duckdb-home', connectionId, 'duckdb-home', 'DuckDB', { section: section ?? 'overview' })
+  }
+
+  /** DuckDB data profile (SUMMARIZE + histograms / top values) of a table, view or query. */
+  openDuckProfile(
+    connectionId: string,
+    source: { kind: 'table'; schema: string; table: string; database?: string | null } | { kind: 'query'; sql: string; label?: string },
+  ): TabState {
+    const key = source.kind === 'table' ? `profile:${source.database ?? ''}.${source.schema}.${source.table}` : `profile:q-${uuid()}`
+    const title = source.kind === 'table' ? `${source.table} · profile` : `${source.label ?? 'Query'} · profile`
+    return this.openEsTab('duckdb-profile', connectionId, key, title, { source })
+  }
+
   private openEsTab(
-    contentType: 'es-index' | 'es-console' | 'es-cluster' | 'es-manage' | 'es-query' | 'es-devtools',
+    contentType: 'es-index' | 'es-console' | 'es-cluster' | 'es-manage' | 'es-query' | 'es-devtools' | 'duckdb-home' | 'duckdb-profile',
     connectionId: string,
     key: string,
     title: string,

@@ -371,6 +371,20 @@ function emptyTableMode(): boolean {
   if (typeof window === 'undefined') return false
   return new URLSearchParams(window.location.search).get('emptyTable') === '1'
 }
+/** `?compareDrift=1` (demo/browser only): the Staging Postgres connection (c7)
+ *  drifts from Postgres (c1) — a missing table, an extra table, changed/new/extra
+ *  columns on students, a missing index and a changed function — so Schema Compare
+ *  has every kind of difference to show. Inert without the parameter. */
+function compareDrift(args?: Record<string, unknown>): boolean {
+  if (typeof window === 'undefined') return false
+  if (new URLSearchParams(window.location.search).get('compareDrift') !== '1') return false
+  return String(args?.connId ?? '').split(/::|#/)[0] === 'c7'
+}
+/** Staging under `?compareDrift=1`: no `schedule`, an extra `audit_log`. */
+function driftTables<T extends { name: string }>(args: Record<string, unknown> | undefined, list: T[]): T[] {
+  if (!compareDrift(args)) return list
+  return [...list.filter((t) => t.name !== 'schedule'), { ...list[0], name: 'audit_log', row_estimate: 90210 }]
+}
 /** `?indexesFail=1` (demo/browser only): index introspection errors, the way a
  *  locked-down server does. An empty list and a failed query used to look identical
  *  in the tree (the node simply vanished), so the tree has to keep showing Indexes
@@ -445,6 +459,7 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
       __ipcAttach?: string[]
       __ipcConns?: Record<string, string[]>
       __ipcLastSql?: string
+      __ipcSqlLog?: string[]
     }
     w.__ipcCalls = w.__ipcCalls ?? {}
     w.__ipcCalls[cmd] = (w.__ipcCalls[cmd] ?? 0) + 1
@@ -455,7 +470,10 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
       w.__ipcConns[cmd] = [...(w.__ipcConns[cmd] ?? []), args.connId as string]
     }
     // …and the last statement text, so a test can assert WHAT was executed.
-    if (cmd === 'exec_statement' && typeof args?.sql === 'string') w.__ipcLastSql = args.sql as string
+    if (cmd === 'exec_statement' && typeof args?.sql === 'string') {
+      w.__ipcLastSql = args.sql as string
+      w.__ipcSqlLog = [...(w.__ipcSqlLog ?? []), args.sql as string].slice(-200)
+    }
     // attach_database also records WHICH connection+database was attached: a
     // sub-connection is only correct when it derives from the selected connection.
     if (cmd === 'attach_database') {
@@ -613,7 +631,7 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
           { name: 'report_daily', kind: 'table', row_estimate: 90, locked: false, engine: 'MergeTree', data_length: 8192 },
           { name: 'report_monthly', kind: 'table', row_estimate: 12, locked: false, engine: 'MergeTree', data_length: 4096 },
         ])
-      return ok([
+      return ok(driftTables(args, [
         { name: 'students', kind: 'table', row_estimate: 3842, locked: false, engine: 'MergeTree', data_length: 1114112 },
         { name: 'courses', kind: 'table', row_estimate: 214, locked: false, engine: 'ReplacingMergeTree', data_length: 65536 },
         { name: 'enrollments', kind: 'table', row_estimate: 12480, locked: false, engine: 'MergeTree', data_length: 3686400, is_partitioned: true },
@@ -631,7 +649,7 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
         ...(extraName('__demoExtraTable')
           ? [{ name: extraName('__demoExtraTable'), kind: 'table', row_estimate: 1, locked: false, engine: 'MergeTree', data_length: 8192 }]
           : []),
-      ])
+      ]))
     }
     case 'list_columns': {
       // perf-gate seam: 30 columns for every synthetic table
@@ -665,6 +683,14 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
           { name: 'title', data_type: 'varchar(120)', nullable: false, default: null, is_pk: false, is_fk: false },
           { name: 'credits', data_type: 'int4', nullable: false, default: null, is_pk: false, is_fk: false },
           { name: 'department', data_type: 'varchar(60)', nullable: true, default: null, is_pk: false, is_fk: false },
+        ])
+      if (compareDrift(args) && colTable === 'students')
+        return ok([
+          { name: 'id', data_type: 'int4', nullable: false, default: null, is_pk: true, is_fk: false, auto_increment: true },
+          { name: 'first_name', data_type: 'varchar(80)', nullable: false, default: null, is_pk: false, is_fk: false },
+          { name: 'status', data_type: 'varchar(10)', nullable: true, default: null, is_pk: false, is_fk: false },
+          { name: 'order', data_type: 'int4', nullable: true, default: null, is_pk: false, is_fk: false },
+          { name: 'legacy_code', data_type: 'char(4)', nullable: true, default: null, is_pk: false, is_fk: false },
         ])
       return ok([
         // identity PK — Generate Test Data excludes auto-increment columns by default
@@ -940,6 +966,8 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
       const name = String(args?.name ?? 'obj')
       if (kind === 'view') return ok(`SELECT id, first_name, gpa\nFROM students\nWHERE status = 'active'`)
       if (kind === 'trigger') return ok(`CREATE TRIGGER ${name} BEFORE INSERT ON students\nFOR EACH ROW EXECUTE FUNCTION log_insert();`)
+      if (compareDrift(args) && name === 'add_one')
+        return ok(`CREATE OR REPLACE FUNCTION ${name}(x integer)\n RETURNS integer\n LANGUAGE sql\nAS $function$ SELECT x + 2 $function$`)
       return ok(`CREATE OR REPLACE FUNCTION ${name}(x integer)\n RETURNS integer\n LANGUAGE sql\nAS $function$ SELECT x + 1 $function$`)
     }
     case 'list_foreign_keys':
@@ -949,6 +977,7 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
       ])
     case 'list_indexes':
       if (indexesFail()) throw new Error('permission denied for relation pg_index')
+      if (compareDrift(args) && String(args?.table ?? '') === 'students') return ok([{ name: 'students_pkey', method: 'btree', columns: ['id'], unique: true, primary: true }])
       return ok([
         { name: 'students_pkey', method: 'btree', columns: ['id'], unique: true, primary: true },
         { name: 'idx_students_gpa', method: 'btree', columns: ['gpa'], unique: false, primary: false },
@@ -1024,6 +1053,43 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
         demoRenamedSchemas.set(demoIdent(renScM[1]), demoIdent(renScM[2]))
         return ok({ ok: true, duration_ms: 7 })
       }
+      // Realistic statement errors with a position, like PostgreSQL reports them:
+      // a typo'd keyword is a syntax error, a table named `no_such_…` does not exist.
+      const posOf = (offset: number) => {
+        const before = stmtSql.slice(0, offset).split('\n')
+        return { line: before.length, col: (before[before.length - 1]?.length ?? 0) + 1 }
+      }
+      const typo = /^(\s*(?:--[^\n]*\n\s*)*)(SELEC|SLECT|UPDTE|DELTE|INSRT)\b/i.exec(stmtSql)
+      if (typo) {
+        return ok({
+          ok: false,
+          error: {
+            system: 'postgres',
+            code: '42601',
+            message: `syntax error at or near "${typo[2]}"`,
+            position: posOf(typo[1].length),
+            severity: 'error',
+            raw: `ERROR:  syntax error at or near "${typo[2]}"`,
+          },
+          duration_ms: 1,
+        })
+      }
+      const missing = /\b(?:from|join|into|update)\s+(no_such_\w+)/i.exec(stmtSql)
+      if (missing) {
+        return ok({
+          ok: false,
+          error: {
+            system: 'postgres',
+            code: '42P01',
+            message: `relation "${missing[1]}" does not exist`,
+            position: posOf(missing.index + missing[0].length - missing[1].length),
+            hint: 'Table does not exist. Check the current schema or the table name.',
+            severity: 'error',
+            raw: `ERROR:  relation "${missing[1]}" does not exist`,
+          },
+          duration_ms: 2,
+        })
+      }
       // DROP SCHEMA — mirrors the server: RESTRICT (the default) is REFUSED while the
       // schema still holds objects, so the app has to surface that error and let the
       // user retry with CASCADE. Recorded on success so the tree really loses it.
@@ -1067,6 +1133,16 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
           },
           duration_ms: 2,
         })
+      }
+      // Like a real server: DML without RETURNING reports how many rows it touched,
+      // DDL / transaction / session statements simply succeed — neither returns a
+      // result set (so the Result panel lists them in Messages, not as tabs).
+      const lead = stmtSql.replace(/^(?:\s+|--[^\n]*\n?|\/\*[\s\S]*?\*\/)+/, '')
+      if (/^(insert|update|delete|merge)\b/i.test(lead) && !/\breturning\b/i.test(lead)) {
+        return ok({ ok: true, affected: /\bwhere\s+\w+\s*=\s*\d+\s*;?\s*$/i.test(lead) ? 1 : 12, duration_ms: 5 })
+      }
+      if (/^(create|alter|drop|truncate|grant|revoke|comment|begin|commit|rollback|start|savepoint|release|vacuum|analyze)\b/i.test(lead)) {
+        return ok({ ok: true, duration_ms: 4 })
       }
       // Perf harness hook: `SELECT * FROM perf_rows_<N>` returns N generated rows
       // with a wide, mostly-NULL schema (mirrors a real classes-grades export) so

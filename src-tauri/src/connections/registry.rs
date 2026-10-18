@@ -42,6 +42,11 @@ struct LiveEntry {
     /// Last moment this connection was known to be usable (a statement or a
     /// ping succeeded). Drives the keepalive sweep and the pre-flight check.
     last_ok: std::time::Instant,
+    /// Session setup the editor asked for (PG/DuckDB `SET search_path …`). Kept
+    /// here so it runs ONCE per session — when it changes, and again after every
+    /// reconnect — instead of being sent ahead of every Run (one extra round trip
+    /// per execution on a remote server).
+    session_init: Option<String>,
 }
 
 /// Statement that cancels the *currently running query* of `session_id` on the
@@ -114,6 +119,17 @@ pub fn keepalive_interval() -> std::time::Duration {
         .map(|v| v.clamp(2, 3600))
         .unwrap_or(KEEPALIVE_INTERVAL_SECS);
     std::time::Duration::from_secs(secs)
+}
+
+/// Idle age past which a statement pings its connection before using it.
+///
+/// The keepalive sweep already pings every idle connection once per interval,
+/// so while it runs no idle connection is older than ~2 intervals. Using the
+/// interval itself here meant the typical rhythm "run, read the result for half
+/// a minute, run again" paid a ping round trip on most Runs; the pre-flight is
+/// now the backstop for when the sweep could not keep a connection fresh.
+pub fn preflight_idle() -> std::time::Duration {
+    keepalive_interval() * 2 + std::time::Duration::from_secs(5)
 }
 
 /// Engines whose live connection is one long-lived socket that a server or a
@@ -412,6 +428,7 @@ impl Registry {
             poisoned: false,
             latency_ms: Some(latency),
             last_ok: std::time::Instant::now(),
+            session_init: None,
         };
         self.entries.lock().unwrap().insert(profile.id.clone(), entry);
         Ok(latency)
@@ -539,6 +556,13 @@ impl Registry {
             ));
         };
         let session_id = probe_session_id(&mut fresh, profile.system.as_str()).await;
+        // A fresh session lost the editor's session setup — restore it before the
+        // connection is handed back (best effort: a failing SET must not turn a
+        // successful reconnect into an error).
+        let init = self.entries.lock().unwrap().get(id).and_then(|e| e.session_init.clone());
+        if let Some(sql) = init {
+            let _ = fresh.exec(&sql).await;
+        }
         let interrupt = fresh.interrupt_handle();
         // Replacing the driver drops the old connection, which closes its socket.
         // That is also what makes the server abandon whatever it was still doing
@@ -563,6 +587,42 @@ impl Registry {
             return Ok(());
         }
         self.reconnect(id).await
+    }
+
+    /// Sets the session setup statement for a connection (the editor's
+    /// `SET search_path …`). Runs it only when it CHANGES — the same value again
+    /// costs no round trip — and remembers it so [`Self::reconnect`] restores it
+    /// on every new session. `None` forgets it (nothing is sent).
+    ///
+    /// Returns the statement's error, if any; the setup is then not remembered,
+    /// so the next call tries again.
+    pub async fn set_session_init(&self, id: &str, sql: Option<String>) -> AppResult<Option<QueryError>> {
+        let current = {
+            let map = self.entries.lock().unwrap();
+            let e = map.get(id).ok_or_else(|| AppError::NotConnected(id.to_string()))?;
+            e.session_init.clone()
+        };
+        if current == sql {
+            return Ok(None);
+        }
+        // Nothing to send: no setup at all, or a RESET on a session that never had
+        // one (a fresh session is already at the server default).
+        let reset_only = sql.as_deref().is_some_and(|s| s.trim_start().to_ascii_uppercase().starts_with("RESET "));
+        let Some(stmt) = sql.clone().filter(|_| !(reset_only && current.is_none())) else {
+            if let Some(e) = self.entries.lock().unwrap().get_mut(id) {
+                e.session_init = sql;
+            }
+            return Ok(None);
+        };
+        match self.exec_statement(id, stmt).await? {
+            Ok(_) => {
+                if let Some(e) = self.entries.lock().unwrap().get_mut(id) {
+                    e.session_init = sql;
+                }
+                Ok(None)
+            }
+            Err(qe) => Ok(Some(qe)),
+        }
     }
 
     /// Records that the connection was just proven usable.
@@ -594,7 +654,7 @@ impl Registry {
             let map = self.entries.lock().unwrap();
             match map.get(id) {
                 Some(e) if needs_keepalive(e.profile.system.as_str()) => {
-                    e.last_ok.elapsed() >= keepalive_interval()
+                    e.last_ok.elapsed() >= preflight_idle()
                 }
                 _ => false,
             }
@@ -989,7 +1049,7 @@ impl Registry {
 mod tests {
     use super::{
         classify_loss, connection_lost_error, is_connection_lost, is_read_only, keepalive_interval,
-        kill_statement, lost_before_send, needs_keepalive, session_id_query, Loss,
+        kill_statement, lost_before_send, needs_keepalive, preflight_idle, session_id_query, Loss,
         KEEPALIVE_INTERVAL_SECS,
     };
 
@@ -1018,7 +1078,12 @@ mod tests {
         assert_eq!(keepalive_interval().as_secs(), 2);
         std::env::set_var("DBSTUDIO_KEEPALIVE_SECS", "nonsense");
         assert_eq!(keepalive_interval().as_secs(), KEEPALIVE_INTERVAL_SECS);
+        // The pre-flight ping only backs up the sweep: it must not fire for a
+        // connection the sweep keeps fresh (idle < 2 sweep periods), which is
+        // exactly the "read the result, run again" rhythm.
         std::env::remove_var("DBSTUDIO_KEEPALIVE_SECS");
+        assert!(preflight_idle() > keepalive_interval() * 2);
+        assert_eq!(preflight_idle().as_secs(), KEEPALIVE_INTERVAL_SECS * 2 + 5);
     }
     use crate::error::QueryError;
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { addTable, flowPosition, removeTable, visibleTables, relationshipFromConnection, resolveConnection, keyColumn, type Rel } from './diagram'
+import { addTable, flowPosition, laneOffsets, removeTable, visibleTables, relationshipFromConnection, resolveConnection, keyColumn, type Rel } from './diagram'
 
 const ALL = [{ name: 'a' }, { name: 'b' }, { name: 'c' }]
 
@@ -120,5 +120,39 @@ describe('flowPosition', () => {
   })
   it('zoom 0 guarded to 1', () => {
     expect(flowPosition(110, 60, { left: 100, top: 50 }, { x: 0, y: 0, zoom: 0 })).toEqual({ x: 10, y: 10 })
+  })
+})
+
+describe('laneOffsets', () => {
+  const order = (_t: string, col: string) => ['id', 'student_id', 'course_id'].indexOf(col)
+
+  it('a single line keeps the midpoint', () => {
+    expect(laneOffsets([['e1', 'enrollments', 'student_id']], order)).toEqual({ e1: 0 })
+  })
+
+  it('lines leaving one table fan out around the midpoint in column order', () => {
+    const l = laneOffsets(
+      [
+        ['b', 'enrollments', 'course_id'],
+        ['a', 'enrollments', 'student_id'],
+      ],
+      order,
+      14,
+    )
+    // the upper FK row gets the left lane → the two routes never cross
+    expect(l).toEqual({ a: -7, b: 7 })
+  })
+
+  it('tables are laned independently', () => {
+    const l = laneOffsets(
+      [
+        ['x', 't1', 'id'],
+        ['y', 't2', 'id'],
+        ['z', 't2', 'course_id'],
+      ],
+      order,
+      10,
+    )
+    expect(l).toEqual({ x: 0, y: -5, z: 5 })
   })
 })

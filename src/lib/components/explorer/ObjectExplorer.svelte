@@ -53,6 +53,7 @@
   import { dropRole as cassDropRole } from '$lib/users/cassandra'
   import { collationWizard } from '$lib/stores/collation.svelte'
   import { backupWizard } from '$lib/stores/backup.svelte'
+  import { duckAttach, duckExport, duckImport } from '$lib/stores/duckdb.svelte'
   import * as chops from '$lib/sql/chops'
   import { toasts } from '$lib/stores/toast.svelte'
   import { quoteIdent, qualified, selectStarSql } from '$lib/sql/dialect'
@@ -82,6 +83,7 @@
   import type { ColumnInfo, PartitionInfo, RoutineInfo, TableInfo } from '$lib/types'
   import type { TableDetail } from '$lib/stores/explorer.svelte'
   import { partitionedTableIcon, rowIcon } from '$lib/explorer/icons'
+  import { brandSvg } from '$lib/brand-icons'
   import { untrack, type Snippet } from 'svelte'
 
   const selected = $derived(connections.selected)
@@ -1739,12 +1741,9 @@
     kafka: 'var(--hex-8b5cf6)',
   } as const
 
-  // Kafka topic icon — the app's canonical Kafka mark (the node-"K" connector,
-  // identical to SystemIcon's Kafka logo used on connections). Inline SVG using
-  // currentColor so it renders in the Kafka accent (C.kafka) like the rest of the
-  // Kafka identity — not the previous orange asset that clashed with the logo.
-  const KAFKA_LOGO =
-    '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="display:block" aria-hidden="true"><circle cx="6" cy="12" r="2.2"/><circle cx="18" cy="5.5" r="2.2"/><circle cx="18" cy="18.5" r="2.2"/><path d="M8 11 L16 6.5"/><path d="M8 13 L16 17.5"/></svg>'
+  // Kafka topic icon — the official Apache Kafka mark (same path as the connection
+  // icon, brand-icons.ts), drawn in currentColor so it takes the row's Kafka accent.
+  const KAFKA_LOGO = brandSvg('kafka', 14, 'currentColor') ?? ''
 
   // A partitioned table: the shared table mark with a "P" badge (see explorer/icons).
   const PARTITIONED_TABLE_SVG = partitionedTableIcon()
@@ -2509,6 +2508,16 @@
         {#snippet curDbMenu()}
           <ContextMenu.Content class="w-52">
             <ContextMenu.Item onclick={() => newQuery('')}>New Query</ContextMenu.Item>
+            {#if isDuckdb && selected}
+              {@const did = selected.id}
+              <ContextMenu.Item onclick={() => tabs.openDuckHome(did)}>DuckDB Overview</ContextMenu.Item>
+              {#if selected.sqlite_mode !== 'read-only'}
+                <ContextMenu.Item onclick={() => duckImport.show(did, { schema: cache?.schemas?.find((s) => s.is_default)?.name ?? 'main' })}>Import File…</ContextMenu.Item>
+              {/if}
+              <ContextMenu.Item onclick={() => duckAttach.show(did, () => { explorer.invalidate(did); void explorer.loadDatabases(did, true); void explorer.refresh(did, { kind: 'connection' }) })}>Attach Database…</ContextMenu.Item>
+              <ContextMenu.Item onclick={() => duckExport.show(did, { kind: 'database', database: null })}>Export Database…</ContextMenu.Item>
+              <ContextMenu.Separator />
+            {/if}
             {#if !isSqlite && !isDuckdb}
               <ContextMenu.Item onclick={() => newDatabase()}>New Database…</ContextMenu.Item>
             {/if}
@@ -2556,6 +2565,10 @@
         {#snippet schemaMenu()}
           <ContextMenu.Content class="w-52">
             <ContextMenu.Item onclick={() => newQuery(schema.name)}>New Query</ContextMenu.Item>
+            {#if isDuckdb && selected && selected.sqlite_mode !== 'read-only'}
+              {@const did = selected.id}
+              <ContextMenu.Item onclick={() => duckImport.show(did, { schema: schema.name })}>Import File…</ContextMenu.Item>
+            {/if}
             <ContextMenu.Separator />
             <ContextMenu.Item onclick={() => selected && tabs.openErDiagram(selected.id, schema.name)}>View ER Diagram</ContextMenu.Item>
             <ContextMenu.Item onclick={() => selected && tabs.openErDiagram(selected.id, schema.name, { blank: true })}>New ER Diagram</ContextMenu.Item>
@@ -3251,6 +3264,11 @@
             <ContextMenu.Content class="w-52">
               <ContextMenu.Item onclick={() => newQuery('', undefined, db.name)}>New Query</ContextMenu.Item>
               <ContextMenu.Item onclick={() => toggleForeignDb(db.name)}>{expanded.has(fkey) ? 'Collapse' : 'Expand'}</ContextMenu.Item>
+              {#if isDuckdb && selected}
+                {@const did = selected.id}
+                <ContextMenu.Item onclick={() => duckImport.show(did, { database: db.name, schema: 'main' })}>Import File…</ContextMenu.Item>
+                <ContextMenu.Item onclick={() => duckExport.show(did, { kind: 'database', database: db.name })}>Export Database…</ContextMenu.Item>
+              {/if}
               <ContextMenu.Separator />
               <ContextMenu.Item onclick={() => selected && tabs.openSchemaCompare(selected.id, { tgtConnId: selected.id, srcDb: db.name })}>Compare Databases…</ContextMenu.Item>
               {#if selected && hasRealSchemas(selected.system)}

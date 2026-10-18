@@ -7,6 +7,8 @@ import * as ipc from '$lib/ipc'
 import type { SplitStatement } from '$lib/sql/statements'
 import { supportsTxn, txnEffect } from '$lib/sql/txn'
 import type { QueryError, QueryResultSet } from '$lib/types'
+import { failureToast, successToast } from '$lib/results/run-summary'
+import { mapErrorToDocument } from '$lib/sql/errors'
 import { connections, baseConnId as baseOf } from './connections.svelte'
 import { toasts } from './toast.svelte'
 
@@ -35,7 +37,23 @@ export interface MessageEntry {
   durationMs: number
   error?: QueryError
   statement: SplitStatement
+  /** What the statement produced — drives the Messages view (rows link to their
+   *  result tab, affected counts are summed, warnings are not statements). */
+  kind?: 'rows' | 'affected' | 'ok' | 'error' | 'warning'
+  rows?: number
+  affected?: number
 }
+
+/** `activeSub` value that shows the Messages view instead of a result tab.
+ *
+ *  Only statements that RETURN ROWS get a result tab of their own. INSERT /
+ *  UPDATE / DELETE / TRUNCATE / DDL report a count or "done" — one tab per such
+ *  statement turned a 30-line script into 30 tabs of "✓ 1 affected", so they are
+ *  listed together in Messages instead (DataGrip "Output", SSMS "Messages"). */
+export const MESSAGES_TAB = -1
+
+/** How often a running script hands its buffered outcomes to the UI. */
+const FLUSH_MS = 100
 
 /** Query-plan state shown inside the Result panel (not a separate tab). One per
  *  SQL tab; replaced on each Explain. */
@@ -66,6 +84,9 @@ export interface TabExecution {
   /** connection id this tab last executed against (base or `{base}::{db}` sub-id) —
    *  used to cancel the right in-flight query when the tab is closed (item 6). */
   connId: string
+  /** how many statements this run was given — the ones never reached (stop at the
+   *  first error / cancel) are reported as "not run" instead of silently missing */
+  total?: number
 }
 
 /** Table name heuristic for the sub-tab label (`#N orders · X rows`). */
@@ -193,11 +214,12 @@ class ResultsStore {
       receivedRows: 0,
       subResults: [],
       messages: [],
-      activeSub: 0,
+      activeSub: MESSAGES_TAB,
       totalMs: 0,
       lastRowCount: null,
       startedAt: Date.now(),
       connId,
+      total: statements.length,
     }
     this.byTab[tabId] = seed
     // Re-acquire the $state proxy: subsequent mutations (subResults.push,
@@ -208,7 +230,42 @@ class ResultsStore {
     const isCassandra = profile.system === 'cassandra'
     const isMongo = profile.system === 'mongodb'
 
+    // Statement outcomes are buffered and handed to the reactive state at most every
+    // FLUSH_MS. Pushing each one straight into $state made the Result panel re-render
+    // and re-layout the whole growing Messages list after EVERY statement — a
+    // 1,000-line INSERT script spent minutes redrawing (measured: 300 statements
+    // ≈ 1.8 s of pure rendering with an instant backend). Long scripts still show
+    // progress; the final state is identical.
+    const buf = {
+      subs: [] as SubResult[],
+      msgs: [] as MessageEntry[],
+      active: undefined as number | undefined,
+      totalMs: 0,
+      lastRowCount: undefined as number | undefined,
+    }
+    let lastFlush = performance.now()
+    const flush = () => {
+      if (buf.subs.length) exec.subResults.push(...buf.subs.splice(0))
+      if (buf.msgs.length) exec.messages.push(...buf.msgs.splice(0))
+      if (buf.totalMs) {
+        exec.totalMs += buf.totalMs
+        buf.totalMs = 0
+      }
+      if (buf.lastRowCount !== undefined) {
+        exec.lastRowCount = buf.lastRowCount
+        buf.lastRowCount = undefined
+      }
+      if (buf.active !== undefined) {
+        exec.activeSub = buf.active
+        buf.active = undefined
+      }
+      lastFlush = performance.now()
+    }
+
     for (let i = 0; i < statements.length; i++) {
+      // the longer the list already on screen, the costlier each redraw — space
+      // the redraws out as it grows (100 ms → ~0.5 s at 2,000 statements)
+      if (performance.now() - lastFlush >= FLUSH_MS + exec.messages.length * 0.2) flush()
       const stmt = statements[i]
       const index = i + 1
       let response
@@ -280,7 +337,7 @@ class ResultsStore {
           severity: 'error',
           raw: String(e),
         }
-        exec.subResults.push({
+        buf.subs.push({
           index,
           label: `#${index} ✗ error`,
           kind: 'error',
@@ -288,18 +345,21 @@ class ResultsStore {
           durationMs: 0,
           statement: stmt,
         })
-        exec.messages.push({
+        buf.msgs.push({
           index,
           ok: false,
           text: String(e),
           durationMs: 0,
           error: err,
           statement: stmt,
+          kind: 'error',
         })
+        buf.active = MESSAGES_TAB
+        toasts.error(failureToast({ ok: false, index, error: err }, statements.length), profile.system)
         break
       }
 
-      exec.totalMs += response.duration_ms
+      buf.totalMs += response.duration_ms
 
       // Track whether this statement left the connection inside a transaction —
       // a pinned snapshot (REPEATABLE READ) or uncommitted writes are exactly
@@ -312,7 +372,7 @@ class ResultsStore {
       // Cassandra server warnings (e.g. ALLOW FILTERING full-scan) are non-fatal —
       // log them to Messages and toast, without failing the statement.
       for (const w of cqlWarnings) {
-        exec.messages.push({ index, ok: true, text: `⚠ ${w}`, durationMs: 0, statement: stmt })
+        buf.msgs.push({ index, ok: true, text: `⚠ ${w}`, durationMs: 0, statement: stmt, kind: 'warning' })
         toasts.show(w, { system: profile.system })
       }
 
@@ -326,7 +386,7 @@ class ResultsStore {
           // objects are Svelte's opt-out: `data.rows[i]` stays a raw object.
           Object.freeze(response.result.rows)
           const table = mainTableOf(stmt.sql)
-          exec.subResults.push({
+          buf.subs.push({
             index,
             label: `#${index} ${table} · ${response.result.total.toLocaleString()} rows`,
             kind: 'rows',
@@ -337,16 +397,20 @@ class ResultsStore {
             cqlNextPage,
             cqlConsistency: opts?.consistency,
           })
-          exec.messages.push({
+          buf.msgs.push({
             index,
             ok: true,
-            text: `SELECT ${response.result.total.toLocaleString()} rows`,
+            text: `${response.result.total.toLocaleString()} ${response.result.total === 1 ? 'row' : 'rows'} returned`,
             durationMs: response.duration_ms,
             statement: stmt,
+            kind: 'rows',
+            rows: response.result.total,
           })
-          exec.lastRowCount = response.result.total
+          // a result set gets its own tab — show the newest one as it arrives
+          buf.active = exec.subResults.length + buf.subs.length - 1
+          buf.lastRowCount = response.result.total
         } else if (response.affected != null) {
-          exec.subResults.push({
+          buf.subs.push({
             index,
             label: `#${index} ✓ ${response.affected.toLocaleString()} affected`,
             kind: 'affected',
@@ -354,35 +418,36 @@ class ResultsStore {
             durationMs: response.duration_ms,
             statement: stmt,
           })
-          exec.messages.push({
+          buf.msgs.push({
             index,
             ok: true,
-            text: `${response.affected.toLocaleString()} rows affected`,
+            text: `${response.affected.toLocaleString()} ${response.affected === 1 ? 'row' : 'rows'} affected`,
             durationMs: response.duration_ms,
             statement: stmt,
+            kind: 'affected',
+            affected: response.affected,
           })
-          exec.lastRowCount = response.affected
+          buf.lastRowCount = response.affected
         } else {
-          exec.subResults.push({
+          buf.subs.push({
             index,
             label: `#${index} ✓ OK`,
             kind: 'ok',
             durationMs: response.duration_ms,
             statement: stmt,
           })
-          exec.messages.push({
+          buf.msgs.push({
             index,
             ok: true,
-            text: 'OK',
+            text: 'Completed',
             durationMs: response.duration_ms,
             statement: stmt,
+            kind: 'ok',
           })
         }
-        // show the newest result as it arrives (sequential feel)
-        exec.activeSub = exec.subResults.length - 1
       } else if (response.error) {
         const err = response.error
-        exec.subResults.push({
+        buf.subs.push({
           index,
           label: `#${index} ✗ error`,
           kind: 'error',
@@ -390,31 +455,34 @@ class ResultsStore {
           durationMs: response.duration_ms,
           statement: stmt,
         })
-        exec.messages.push({
+        buf.msgs.push({
           index,
           ok: false,
           text: err.message,
           durationMs: response.duration_ms,
           error: err,
           statement: stmt,
+          kind: 'error',
         })
-        exec.activeSub = exec.subResults.length - 1
+        // the failure must be visible: Messages lists it with its line + hint
+        buf.active = MESSAGES_TAB
         if (err.code === 'CANCELLED') {
           exec.cancelled = true
           toasts.show('Query cancelled', { system: profile.system })
         } else {
           if (isConnectionLost(err)) this.noteConnectionLost(connId, err)
-          toasts.error(`#${index}: ${err.message}`, profile.system)
+          const line = err.position ? mapErrorToDocument(stmt, err).line : undefined
+          toasts.error(failureToast({ ok: false, index, error: err }, statements.length, line), profile.system)
         }
         break // sequential execution stops at the failing statement
       }
     }
 
+    flush()
     exec.running = false
     exec.cancelling = false
     if (!exec.cancelled && exec.subResults.every((s) => s.kind !== 'error')) {
-      const n = exec.subResults.length
-      toasts.success(`Ran ${n} statement(s) · ${exec.totalMs} ms`, profile.system)
+      toasts.success(successToast(exec.messages, exec.totalMs), profile.system)
     }
   }
 

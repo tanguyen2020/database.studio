@@ -49,6 +49,10 @@
   --shadow-lg: 0 20px 40px -12px rgba(16, 24, 40, 0.22), 0 6px 14px -6px rgba(16, 24, 40, 0.1);
   --ring-soft: color-mix(in srgb, var(--primary) 28%, transparent);
 
+  /* ER diagram — resting relationship lines and the canvas dot grid */
+  --er-edge-color: #9aa4b6;
+  --er-grid-dot: #d3d8e1;
+
   --font-main: 'Inter Variable', 'Inter', 'Be Vietnam Pro', 'Segoe UI', -apple-system, sans-serif;
 }
 
@@ -81,6 +85,9 @@
   --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.4), 0 1px 2px rgba(0, 0, 0, 0.25);
   --shadow-md: 0 8px 20px -6px rgba(0, 0, 0, 0.55), 0 2px 6px -2px rgba(0, 0, 0, 0.35);
   --shadow-lg: 0 24px 48px -12px rgba(0, 0, 0, 0.7), 0 8px 16px -8px rgba(0, 0, 0, 0.45);
+
+  --er-edge-color: #5d6578;
+  --er-grid-dot: #2a2e38;
 }
 
 /* ---------------------------------------------------------------------------
@@ -1157,4 +1164,36 @@ tr[aria-selected='true'] .ds-state {
   background: var(--panel);
   font-family: var(--font-mono);
   font-size: 11px;
+}
+
+/*
+ * DuckDB workspace. DuckDB's brand yellow (#fff000) is the identity tile only:
+ * as text/underline it is unreadable on white, so the accent is a deep amber on
+ * light and the brand yellow on graphite. Only the DuckDB screens use these.
+ */
+:root {
+  --dk-brand: #fff000;
+  --dk-brand-ink: #000000;
+  --dk-accent: #8a6400;
+  --dk-accent-soft: #fdf6d3;
+  --dk-green: #157f3c;
+  --dk-green-soft: #e1f3e8;
+  --dk-red: #c0392b;
+  --dk-red-soft: #fbe8e5;
+  --dk-blue: #2f5bd3;
+  --dk-blue-soft: #e8eefc;
+  --dk-bar: #e2b100;
+  --dk-bar-2: #4f6bed;
+}
+.dark {
+  --dk-accent: #ffe14d;
+  --dk-accent-soft: #2b2808;
+  --dk-green: #6fdc9b;
+  --dk-green-soft: #12291c;
+  --dk-red: #ff8a7a;
+  --dk-red-soft: #36160f;
+  --dk-blue: #8aa4ff;
+  --dk-blue-soft: #18213d;
+  --dk-bar: #f5cc2a;
+  --dk-bar-2: #7d93ff;
 }

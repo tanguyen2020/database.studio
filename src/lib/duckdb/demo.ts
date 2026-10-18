@@ -1,3 +1,5 @@
+import { duckWorkspaceDbs, duckWorkspaceExec } from './demo-workspace'
+
 // Demo (browser / e2e) answers for the DuckDB connection. The generic demo mock
 // is shaped like a Postgres server; DuckDB differs where the UI must show it does:
 // its databases are the opened file + ATTACHed ones, its default schema is `main`,
@@ -33,16 +35,15 @@ export function duckDemo(cmd: string, args: Record<string, unknown>): unknown {
   const onLake = cid.endsWith('::lake')
   switch (cmd) {
     case 'list_databases':
-      return [
-        { name: 'warehouse', current: true },
-        { name: 'lake', current: false },
-      ]
+      return duckWorkspaceDbs().map((d) => ({ name: d.name, current: d.name === 'warehouse' }))
+    case 'exec_statement':
+      return duckWorkspaceExec(String(args.sql ?? ''))
     case 'attach_database': {
       const db = String(args.database ?? '')
       return db === 'warehouse' ? cid : `${cid}::${db}`
     }
     case 'list_schemas':
-      return onLake
+      return onLake || (cid.includes('::') && !cid.endsWith('::warehouse'))
         ? [{ name: 'main', is_default: true }]
         : [
             { name: 'main', is_default: true },

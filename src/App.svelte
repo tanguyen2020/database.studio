@@ -31,6 +31,11 @@
   import EsManageView from '$lib/components/elastic/EsManageView.svelte'
   import EsQueryView from '$lib/components/elastic/EsQueryView.svelte'
   import EsDevToolsView from '$lib/components/elastic/EsDevToolsView.svelte'
+  import DuckHomeView from '$lib/components/duckdb/DuckHomeView.svelte'
+  import DuckProfileView from '$lib/components/duckdb/DuckProfileView.svelte'
+  import DuckImportDialog from '$lib/components/duckdb/DuckImportDialog.svelte'
+  import DuckExportDialog from '$lib/components/duckdb/DuckExportDialog.svelte'
+  import DuckAttachDialog from '$lib/components/duckdb/DuckAttachDialog.svelte'
   import KafkaWorkspace from '$lib/components/workspace/KafkaWorkspace.svelte'
   import KafkaConsumer from '$lib/components/workspace/KafkaConsumer.svelte'
   import KafkaProducer from '$lib/components/workspace/KafkaProducer.svelte'
@@ -436,6 +441,10 @@
             <EsQueryView tab={t} />
           {:else if t.contentType === 'es-devtools'}
             <EsDevToolsView tab={t} />
+          {:else if t.contentType === 'duckdb-home'}
+            <DuckHomeView tab={t} />
+          {:else if t.contentType === 'duckdb-profile'}
+            <DuckProfileView tab={t} />
           {:else if t.contentType === 'kafka'}
             <KafkaWorkspace tab={t} />
           {:else if t.contentType === 'kafka-consumer'}
@@ -578,6 +587,9 @@
 <CassandraCreateRoleDialog />
 <GrantAccessDialog />
 <AddPartitionDialog />
+<DuckImportDialog />
+<DuckExportDialog />
+<DuckAttachDialog />
 <TruncateDialog />
 <NewDatabaseDialog />
 <UpdateDialog />

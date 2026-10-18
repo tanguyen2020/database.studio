@@ -162,6 +162,19 @@
     return true
   }
 
+  /** Session setup statement for this tab's connection: the picked schema becomes
+   *  the search path (PG / DuckDB). No pick → RESET, so clearing the pick really
+   *  goes back to the server default. Other engines → none. */
+  function sessionInit(): string | null {
+    if (tab.systemType === 'postgres')
+      return selectedSchema ? `SET search_path TO "${selectedSchema.replace(/"/g, '""')}", public` : 'RESET search_path'
+    if (tab.systemType === 'duckdb')
+      return selectedSchema
+        ? `SET search_path = '"${selectedSchema.replace(/"/g, '""').replace(/'/g, "''")}",main'`
+        : 'RESET search_path'
+    return null
+  }
+
   /** Effective connection to run against: the base connection, or an attached
    *  sub-connection when the tab points at a different database. */
   async function resolveRunConn(): Promise<string | null> {
@@ -172,20 +185,10 @@
     // per-tab connection keyed by tab id.
     const db = supportsDbSwitch && currentDb && currentDb !== (profile?.database ?? '') ? currentDb : ''
     try {
-      const cid = await ipc.openTabConnection(tab.connectionId, tab.id, db)
-      // Postgres: scope unqualified names to the picked schema for this run. Re-applied
-      // every run so it survives a cancel/reconnect heal. No pick → default search_path
-      // (query as before). MSSQL has no session default-schema SET, so it's PG-only.
-      if (tab.systemType === 'postgres' && selectedSchema) {
-        const q = `"${selectedSchema.replace(/"/g, '""')}"`
-        await ipc.execStatement(cid, `SET search_path TO ${q}, public`).catch(() => {})
-      }
-      // DuckDB: same idea — its search_path is one comma-separated string literal.
-      if (tab.systemType === 'duckdb' && selectedSchema) {
-        const q = `'"${selectedSchema.replace(/"/g, '""').replace(/'/g, "''")}",main'`
-        await ipc.execStatement(cid, `SET search_path = ${q}`).catch(() => {})
-      }
-      return cid
+      // Schema pick → session setup. The backend applies it only when it changes
+      // (and again after a reconnect), so a Run costs one round trip, not two.
+      // MSSQL has no session default-schema SET, so this is PG/DuckDB only.
+      return await ipc.openTabConnection(tab.connectionId, tab.id, db, sessionInit())
     } catch (e) {
       toasts.error(`Cannot open a connection for this tab: ${e}`)
       return tab.connectionId

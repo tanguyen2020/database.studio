@@ -9313,3 +9313,107 @@ async fn kafka_groups_report_their_assigned_topics_and_topic_lag_stays_on_one_to
     stop.store(true, Ordering::Relaxed);
     let _ = live.join();
 }
+
+/// Query Editor speed: the tab's schema pick (`SET search_path …`) used to be sent
+/// before EVERY Run — one extra round trip per execution. It is now a per-session
+/// setup the registry applies when it changes and replays after a reconnect.
+/// Proven on a real server:
+///   1. the setup takes effect,
+///   2. the SAME setup again sends nothing (a manual SET by the user survives),
+///   3. a reconnect (server killed the session) restores it,
+///   4. switching to RESET goes back to the server default,
+///   5. a RESET on a session that never had a setup sends nothing.
+#[tokio::test]
+async fn pg_session_init_is_sent_once_and_survives_a_reconnect() {
+    use database_studio_lib::connections::profile::{
+        ConnectionProfile, Environment, SqliteMode, SshConfig,
+    };
+    use database_studio_lib::connections::registry::Registry;
+    use database_studio_lib::drivers::types::SystemType;
+
+    let (_container, port) = start_pg().await;
+    let profile = ConnectionProfile {
+        id: "init-tab".into(),
+        name: "init".into(),
+        system: SystemType::Postgres,
+        host: "localhost".into(),
+        port,
+        database: "testdb".into(),
+        user: "postgres".into(),
+        password_enc: String::new(),
+        group: String::new(),
+        env: Environment::Development,
+        ssh: SshConfig::default(),
+        ssl: false,
+        ssl_ca: String::new(),
+        ssl_cert: String::new(),
+        ssl_key: String::new(),
+        sqlite_path: String::new(),
+        sqlite_mode: SqliteMode::ReadWrite,
+        mssql_auth: String::new(),
+        schema_registry_url: String::new(),
+        cassandra_dc: String::new(),
+        cassandra_consistency: String::new(),
+    };
+    let registry = Registry::default();
+    let deadline = Instant::now() + Duration::from_secs(240);
+    loop {
+        match registry.connect(profile.clone(), PASS.into(), String::new()).await {
+            Ok(_) => break,
+            Err(e) => {
+                assert!(Instant::now() < deadline, "connect hết 240s: {e:?}");
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+        }
+    }
+    async fn path(r: &Registry) -> String {
+        let out = r.exec_statement("init-tab", "SHOW search_path".into()).await.unwrap().unwrap();
+        let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+        result.rows[0]["search_path"].as_str().unwrap().to_string()
+    }
+    registry.exec_statement("init-tab", "CREATE SCHEMA app".into()).await.unwrap().expect("schema");
+    let default_path = path(&registry).await;
+
+    // 5. RESET on a session that never had a setup → nothing sent (still default)
+    let err = registry.set_session_init("init-tab", Some("RESET search_path".into())).await.unwrap();
+    assert!(err.is_none());
+    assert_eq!(path(&registry).await, default_path);
+
+    // 1. the setup takes effect
+    let set = Some(r#"SET search_path TO "app", public"#.to_string());
+    assert!(registry.set_session_init("init-tab", set.clone()).await.unwrap().is_none());
+    assert_eq!(path(&registry).await, "app, public");
+
+    // 2. the same setup again sends NOTHING: a manual change survives it
+    registry.exec_statement("init-tab", "SET search_path TO public".into()).await.unwrap().unwrap();
+    assert!(registry.set_session_init("init-tab", set.clone()).await.unwrap().is_none());
+    assert_eq!(path(&registry).await, "public", "an unchanged setup must not be re-sent");
+
+    // 3. the server kills the session → the healed session gets the setup back
+    let killer_params = PgConnParams {
+        host: "localhost".into(),
+        port,
+        database: "testdb".into(),
+        user: "postgres".into(),
+        password: PASS.into(),
+        ssl: false,
+        ssl_ca: String::new(),
+        ssl_cert: String::new(),
+        ssl_key: String::new(),
+    };
+    let mut killer = retry("pg killer", || PgDriver::connect(&killer_params)).await;
+    killer
+        .exec("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'testdb' AND pid <> pg_backend_pid()")
+        .await
+        .expect("terminate");
+    assert_eq!(path(&registry).await, "app, public", "a reconnect must replay the session setup");
+
+    // 4. switching the pick off → RESET really resets
+    assert!(registry.set_session_init("init-tab", Some("RESET search_path".into())).await.unwrap().is_none());
+    assert_eq!(path(&registry).await, default_path);
+
+    // a broken setup is reported and not remembered (the next call retries it)
+    let bad = Some("SET search_path TO".to_string());
+    assert!(registry.set_session_init("init-tab", bad.clone()).await.unwrap().is_some());
+    assert!(registry.set_session_init("init-tab", bad).await.unwrap().is_some(), "a failed setup must be retried, not cached");
+}

@@ -244,6 +244,8 @@ export type TabContentType =
   | 'es-manage'
   | 'es-query'
   | 'es-devtools'
+  | 'duckdb-home'
+  | 'duckdb-profile'
   | 'kafka'
   | 'kafka-consumer'
   | 'kafka-producer'

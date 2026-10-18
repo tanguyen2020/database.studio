@@ -151,3 +151,39 @@ test('the form opens with the caret in Connection name, and the Connect label is
     expect(off, `${name}: label is off-centre by ${off}px`).toBeLessThan(2)
   }
 })
+
+// SSH authentication: the two methods are cards with their own colour + icon, so
+// the chosen one is obvious (the old segmented pill was white-on-grey).
+test('SSH: Username / Password vs Private Key are distinct, coloured choices', async ({ page }) => {
+  const dialog = await openForm(page, 'PostgreSQL')
+  await dialog.getByRole('switch', { name: 'SSH Tunnel' }).click()
+  const group = dialog.getByRole('radiogroup', { name: 'Authentication' })
+  const pw = group.getByRole('radio', { name: /Username \/ Password/ })
+  const key = group.getByRole('radio', { name: /Private Key/ })
+  await expect(pw).toHaveAttribute('aria-checked', 'true')
+  await expect(key).toHaveAttribute('aria-checked', 'false')
+  await expect(dialog.locator('.cm-label', { hasText: 'SSH Password' })).toBeVisible()
+
+  const border = (l: Locator) => l.evaluate((el) => getComputedStyle(el).borderTopColor)
+  const pwOn = await border(pw)
+  const keyOff = await border(key)
+  // the chosen card stands out from the other one
+  expect(pwOn).not.toBe(keyOff)
+
+  await key.click()
+  await expect(key).toHaveAttribute('aria-checked', 'true')
+  await expect(pw).toHaveAttribute('aria-checked', 'false')
+  await expect(dialog.locator('.cm-label', { hasText: 'Private Key File' })).toBeVisible()
+  await expect(dialog.locator('.cm-label', { hasText: 'SSH Password' })).toHaveCount(0)
+  const keyOn = await border(key)
+  // each method has its own colour — the two chosen states differ
+  expect(keyOn).not.toBe(pwOn)
+  expect(keyOn).not.toBe(keyOff)
+
+  // keyboard: arrows switch between the two, like any radio group
+  await key.focus()
+  await page.keyboard.press('ArrowLeft')
+  await expect(pw).toHaveAttribute('aria-checked', 'true')
+  await expect(pw).toBeFocused()
+  if (process.env.SHOT_DIR) await dialog.locator('.cm-subpanel').first().screenshot({ path: `${process.env.SHOT_DIR}/form-ssh-auth.png` })
+})

@@ -145,6 +145,15 @@
   const editable = $derived(!!editTarget)
   const pendingCount = $derived(edits.size + deletedRows.size + insertedRows.length)
 
+  /** Tooltip of an edited cell: the new value AND the value it replaces, so a
+   *  person can check a change before Execute without opening Preview diff. */
+  function editedTitle(now: { text: string; isNull: boolean }, original: unknown, col: string): string {
+    const was = display(original, col)
+    return `Edited — not saved yet
+New: ${now.isNull ? 'NULL' : now.text}
+Original: ${was.isNull ? 'NULL' : was.text}`
+  }
+
   // A NEW result set invalidates every pending grid change: they are keyed by row
   // INDEX, so replaying them over freshly fetched rows shows the old values on top
   // of new data (the "results look cached" report) and Execute would write them to
@@ -983,7 +992,13 @@
       <span class="ds-meta">ClickHouse: edits run as async mutations — no transaction</span>
     {/if}
     {#if pendingCount > 0}
-      <span class="rg-pending"><span class="rg-pending-dot"></span>{pendingCount} unsaved {pendingCount === 1 ? 'change' : 'changes'}</span>
+      <span class="rg-pending" title="Not written to the database yet — Execute saves them, Reset undoes them"><span class="rg-pending-dot"></span>{pendingCount} unsaved {pendingCount === 1 ? 'change' : 'changes'}</span>
+      <!-- what kind of changes — the colours match the cells/rows in the grid -->
+      <span class="rg-kinds" aria-label="Pending changes by kind">
+        {#if edits.size}<span class="rg-kind k-edit" title="Edited cells (amber)">{edits.size} edited</span>{/if}
+        {#if insertedRows.length}<span class="rg-kind k-new" title="New rows (green, at the bottom of the last page)">{insertedRows.length} new</span>{/if}
+        {#if deletedRows.size}<span class="rg-kind k-del" title="Rows marked for deletion (red, struck through)">{deletedRows.size} to delete</span>{/if}
+      </span>
       <div style="margin-left:auto;display:flex;gap:var(--px-8)">
         {#if isClickhouse}
           <!-- §7 option (a): route sang Generate mutation (ALTER TABLE … UPDATE/DELETE), KHÔNG apply OLTP -->
@@ -1002,6 +1017,8 @@
           {/if}
         {/if}
       </div>
+    {:else if !isClickhouse}
+      <span class="rg-hint">Double-click a cell to edit · select rows in the # column to delete · nothing is saved until you click Execute</span>
     {/if}
   </div>
 {/if}
@@ -1098,14 +1115,14 @@
         <tr
           class="grid-row {isRowSelected ? 'selected' : ''}"
           onclick={(e) => clickRowNumber(e, ri)}
-          style="height:{ROW_H}px;cursor:pointer;background:{isDeleted ? 'var(--rgba-224-108-117-_14)' : isRowSelected ? 'color-mix(in srgb, var(--grid-select) 62%, transparent)' : ri % 2 === 1 ? 'var(--grid-zebra)' : 'transparent'};box-shadow:inset var(--px-3) 0 0 {isRowSelected ? 'var(--grid-select)' : 'transparent'};color:{isRowSelected ? 'var(--hex-fff)' : 'inherit'};{isDeleted ? 'text-decoration:line-through;opacity:.65;' : ''}"
+          style="height:{ROW_H}px;cursor:pointer;background:{isDeleted ? 'var(--rgba-224-108-117-_14)' : isRowSelected ? 'color-mix(in srgb, var(--grid-select) 62%, transparent)' : ri % 2 === 1 ? 'var(--grid-zebra)' : 'transparent'};box-shadow:inset var(--px-3) 0 0 {isRowSelected ? 'var(--grid-select)' : isDeleted ? 'var(--error)' : 'transparent'};color:{isDeleted ? 'var(--error)' : isRowSelected ? 'var(--hex-fff)' : 'inherit'};{isDeleted ? 'text-decoration:line-through;opacity:.85;' : ''}"
         >
           <td
             onclick={(e) => { e.stopPropagation(); clickRowNumber(e, ri) }}
             oncontextmenu={(e) => openRowCtx(e, ri)}
-            title="Click to select · Shift/Ctrl for multiple · right-click for menu"
+            title={isDeleted ? 'Marked for deletion — Execute deletes it, Reset keeps it' : 'Click to select · Shift/Ctrl for multiple · right-click for menu'}
             class="mono"
-            style="width:1%;padding:var(--px-3) var(--px-8);text-align:right;color:{isRowSelected ? 'var(--hex-fff)' : 'var(--muted)'};border-bottom:var(--px-1) solid var(--border);border-right:var(--px-1) solid var(--border);background:{isRowSelected ? 'var(--grid-select)' : 'var(--header)'};position:sticky;left:0;font-size:var(--px-10_5);user-select:none">{ri + 1}</td>
+            style="width:1%;padding:var(--px-3) var(--px-8);text-align:right;color:{isRowSelected ? 'var(--hex-fff)' : isDeleted ? 'var(--error)' : 'var(--muted)'};border-bottom:var(--px-1) solid var(--border);border-right:var(--px-1) solid var(--border);background:{isRowSelected ? 'var(--grid-select)' : 'var(--header)'};position:sticky;left:0;font-size:var(--px-10_5);user-select:none">{ri + 1}</td>
           {#each columns as col, ci (ci)}
             {@const edited = edits.has(cellKey(ri, col))}
             {@const rawVal = edited ? edits.get(cellKey(ri, col)) : row?.[col]}
@@ -1114,7 +1131,7 @@
             {@const isEditing = editingCell?.row === ri && editingCell?.col === col && editingCell?.insert == null}
             <!-- cell — dòng 436-446: padding 5px 12px, NULL badge; edit → highlight vàng -->
             <td
-              style="border-bottom:var(--px-1) solid var(--border);border-right:var(--px-1) solid var(--border);padding:0;white-space:nowrap;max-width:var(--px-420);overflow:hidden;text-overflow:ellipsis;{edited ? `background:var(--rgba-240-160-32-_18);` : isCellSelected ? 'background:color-mix(in srgb, var(--grid-select) 45%, transparent);' : ''}{isCellSelected ? 'box-shadow:inset 0 0 0 var(--px-2) var(--grid-select);color:var(--hex-fff);' : ''}"
+              style="border-bottom:var(--px-1) solid var(--border);border-right:var(--px-1) solid var(--border);padding:0;white-space:nowrap;max-width:var(--px-420);overflow:hidden;text-overflow:ellipsis;{edited ? `background:var(--rgba-240-160-32-_18);` : isCellSelected ? 'background:color-mix(in srgb, var(--grid-select) 45%, transparent);' : ''}{isCellSelected ? 'box-shadow:inset 0 0 0 var(--px-2) var(--grid-select);color:var(--hex-fff);' : edited ? 'box-shadow:inset var(--px-3) 0 0 var(--warn);' : ''}"
               onclick={(e) => { e.stopPropagation(); clickCell(ri, col) }}
               oncontextmenu={(e) => openCtx(e, ri, col)}
               ondblclick={(e) => {
@@ -1124,7 +1141,7 @@
                 if (editable) startCellEdit(ri, col)
                 else { clickCell(ri, col); void copySelection() }
               }}
-              title={cell.isNull ? undefined : cell.text}
+              title={edited ? editedTitle(cell, row?.[col], col) : cell.isNull ? undefined : cell.text}
             >
               {#if isEditing}
                 <!-- inline edit — port dòng 437-439 -->
@@ -1154,7 +1171,7 @@
                   {:else if cell.text === ''}
                     <span style="font-size:var(--px-10);color:var(--muted);opacity:.6">''</span>
                   {:else}
-                    <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;{numericCols.has(col) && !isCellSelected && !isRowSelected ? 'color:var(--syntax-number)' : ''}">{cell.text}</span>
+                    <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;{numericCols.has(col) && !isCellSelected && !isRowSelected && !isDeleted ? 'color:var(--syntax-number)' : ''}">{cell.text}</span>
                   {/if}
                   {#if hasJsonBadge(colTypes[col], rawVal)}
                     <!-- JSON/JSONB cell badge — port dòng 445; click opens the JSON
@@ -1183,8 +1200,8 @@
       {#if editable && onLastPage}
         <!-- inserted rows (pending) — nền xanh lá nhạt (chỉ hiện ở trang cuối); render sau spacer nên luôn nằm ở đáy -->
         {#each insertedRows as ins, insIdx (insIdx)}
-          <tr style="height:{ROW_H}px;background:var(--rgba-39-174-96-_14)">
-            <td class="mono" style="width:1%;padding:var(--px-3) var(--px-8);text-align:right;color:var(--success);border-bottom:var(--px-1) solid var(--border);border-right:var(--px-1) solid var(--border);position:sticky;left:0;font-size:var(--px-10_5)">＋</td>
+          <tr style="height:{ROW_H}px;background:var(--rgba-39-174-96-_14);box-shadow:inset var(--px-3) 0 0 var(--success)">
+            <td class="mono" title="New row — not saved yet (Execute inserts it, Reset drops it)" style="width:1%;padding:var(--px-3) var(--px-8);text-align:right;color:var(--success);border-bottom:var(--px-1) solid var(--border);border-right:var(--px-1) solid var(--border);position:sticky;left:0;font-size:var(--px-10_5)">＋</td>
             {#each columns as col, ci (ci)}
               {@const isEditing = editingCell?.insert === insIdx && editingCell?.col === col}
               <td
@@ -1549,5 +1566,41 @@
     height: var(--px-6);
     border-radius: 50%;
     background: currentColor;
+  }
+  /* pending-change legend: one chip per kind, coloured like the grid marks */
+  .rg-kinds {
+    display: inline-flex;
+    gap: var(--px-6);
+  }
+  .rg-kind {
+    --k: var(--warn);
+    display: inline-flex;
+    align-items: center;
+    gap: var(--px-5);
+    font-size: var(--px-11_5);
+    color: var(--text2);
+  }
+  .rg-kind::before {
+    content: '';
+    width: var(--px-10);
+    height: var(--px-10);
+    border-radius: var(--px-3);
+    background: color-mix(in srgb, var(--k) 28%, transparent);
+    box-shadow: inset var(--px-2) 0 0 var(--k);
+  }
+  .rg-kind.k-new {
+    --k: var(--success);
+  }
+  .rg-kind.k-del {
+    --k: var(--error);
+  }
+  .rg-hint {
+    margin-left: var(--px-4);
+    font-size: var(--px-11_5);
+    color: var(--muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
   }
 </style>
