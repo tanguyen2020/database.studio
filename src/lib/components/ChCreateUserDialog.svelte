@@ -1,4 +1,7 @@
 <script lang="ts">
+  import '$lib/components/workspace/users/um.css'
+  import { focusOnMount } from '$lib/elastic/actions'
+  import Icon from '$lib/components/Icon.svelte'
   // Create a ClickHouse User / Role (U4). Popup (not a tab). Auth dropdown
   // (sha256 default; no_password / plaintext_password warn). Live preview
   // (password masked). Runs via exec_statement (HTTP) then refreshes Explorer.
@@ -107,42 +110,43 @@
 </script>
 
 {#if dlgOpen}
-  <div onkeydown={(e) => e.key === 'Escape' && !busy && chUserWizard.close()} role="presentation" style="position:fixed;inset:0;background:var(--rgba-0-0-0-_5);display:flex;align-items:center;justify-content:center;z-index:56">
-    <div onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.key === 'Escape' && !busy && chUserWizard.close()} role="dialog" aria-modal="true" tabindex="-1" style="width:var(--px-540);max-width:95vw;max-height:90vh;background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-14);box-shadow:0 var(--px-30) var(--px-70) var(--rgba-0-0-0-_55);overflow:hidden;display:flex;flex-direction:column">
-      <div style="flex:none;display:flex;align-items:center;gap:var(--px-10);padding:var(--px-15) var(--px-18);border-bottom:var(--px-1) solid var(--border)">
-        <span style="font-weight:700;font-size:var(--px-15)">Create {mode === 'role' ? 'Role' : 'User'}</span>
-        <span onclick={() => !busy && chUserWizard.close()} onkeydown={(e) => e.key === 'Enter' && !busy && chUserWizard.close()} role="button" tabindex="0" style="margin-left:auto;cursor:pointer;color:var(--muted);font-size:var(--px-20)">×</span>
+  <div onkeydown={(e) => e.key === 'Escape' && !busy && chUserWizard.close()} role="presentation" class="um-backdrop">
+    <div onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.key === 'Escape' && !busy && chUserWizard.close()} role="dialog" aria-modal="true" tabindex="-1" use:focusOnMount class="um-dlg" style="width:var(--px-540)">
+      <div class="um-dlg-head">
+        <span class="um-dlg-icon"><Icon name="user" size={18} /></span>
+        <div class="um-dlg-title"><b>Create {mode === 'role' ? 'Role' : 'User'}</b><span>ClickHouse access control</span></div>
+        <span onclick={() => !busy && chUserWizard.close()} onkeydown={(e) => e.key === 'Enter' && !busy && chUserWizard.close()} role="button" tabindex="0" class="um-dlg-x" aria-label="Close" title="Close"><Icon name="close" size={16} /></span>
       </div>
-      <div style="flex:1;overflow:auto;min-height:0;padding:var(--px-16) var(--px-18);display:flex;flex-direction:column;gap:var(--px-10)">
-        <label style="font-size:var(--px-12);color:var(--text2)">{mode === 'role' ? 'Role name' : 'User name'}
-          <input bind:value={name} class="mono" style="display:block;margin-top:var(--px-4);width:100%;background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-8);color:var(--text)" />
+      <div class="um-dlg-body">
+        <label class="um-field">{mode === 'role' ? 'Role name' : 'User name'}
+          <input bind:value={name} class="um-input mono" style="width:100%" />
         </label>
         {#if mode === 'user'}
-          <label style="font-size:var(--px-12);color:var(--text2)">Authentication
-            <select bind:value={auth} class="mono" style="margin-left:var(--px-8);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4);color:var(--text)">{#each AUTHS as a (a)}<option value={a}>{a}</option>{/each}</select>
+          <label class="um-field">Authentication
+            <select bind:value={auth} class="um-select mono" style="margin-left:var(--px-8)">{#each AUTHS as a (a)}<option value={a}>{a}</option>{/each}</select>
           </label>
-          {#if auth === 'plaintext_password'}<div style="font-size:var(--px-11);color:var(--warn2)">⚠ plaintext_password stores the password unhashed on the server.</div>{/if}
-          {#if auth === 'no_password'}<div style="font-size:var(--px-11);color:var(--warn2)">⚠ no_password allows login without a password.</div>{/if}
+          {#if auth === 'plaintext_password'}<div class="um-callout warn" style="margin:0"><Icon name="warning" size={14} /><span>plaintext_password stores the password unhashed on the server.</span></div>{/if}
+          {#if auth === 'no_password'}<div class="um-callout warn" style="margin:0"><Icon name="warning" size={14} /><span>no_password allows login without a password.</span></div>{/if}
           {#if needsPassword}
             <div style="display:flex;gap:var(--px-6);align-items:flex-end">
-              <label style="font-size:var(--px-12);color:var(--text2);flex:1">Password
-                <input type={showPw ? 'text' : 'password'} bind:value={password} class="mono" style="display:block;margin-top:var(--px-4);width:100%;background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-8);color:var(--text)" />
+              <label class="um-field" style="flex:1">Password
+                <input type={showPw ? 'text' : 'password'} bind:value={password} class="um-input mono" style="width:100%" autocomplete="new-password" />
               </label>
-              <span onclick={() => (showPw = !showPw)} onkeydown={(e) => e.key === 'Enter' && (showPw = !showPw)} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-9);cursor:pointer">{showPw ? 'Hide' : 'Show'}</span>
-              <span onclick={generate} onkeydown={(e) => e.key === 'Enter' && generate()} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-9);cursor:pointer">Generate</span>
+              <span class="eg-btn" onclick={() => (showPw = !showPw)} onkeydown={(e) => e.key === 'Enter' && (showPw = !showPw)} role="button" tabindex="0"><Icon name={showPw ? 'eye-off' : 'eye'} size={13} /></span>
+              <span class="eg-btn" onclick={generate} onkeydown={(e) => e.key === 'Enter' && generate()} role="button" tabindex="0"><Icon name="sparkle" size={12} />Generate</span>
             </div>
           {/if}
-          <label style="font-size:var(--px-12);color:var(--text2)">Grant roles
-            <div style="margin-top:var(--px-4)"><MultiSelect bind:values={memberOf} options={allRoles.filter((r) => r !== name.trim())} placeholder="pick roles to grant…" /></div>
+          <label class="um-field">Grant roles
+            <div class="um-input" style="padding:0;display:block"><MultiSelect bind:values={memberOf} options={allRoles.filter((r) => r !== name.trim())} placeholder="pick roles to grant…" /></div>
           </label>
         {/if}
-        <div style="font-size:var(--px-11);color:var(--muted)">SQL preview</div>
-        <pre class="selectable mono" style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-10);font-size:var(--px-11_5);margin:0;max-height:var(--px-120);overflow:auto;color:var(--text2);white-space:pre-wrap">{previewSql || '-- enter a name'}</pre>
-        {#if err}<div style="font-size:var(--px-12);color:var(--error)">✗ {err}</div>{/if}
+        <div class="um-sql-head"><Icon name="code" size={13} />SQL that will run</div>
+        <pre class="um-sql selectable">{previewSql || '-- enter a name'}</pre>
+        {#if err}<div class="um-err" role="alert"><Icon name="warning" size={14} /><span>{err}</span></div>{/if}
       </div>
-      <div style="flex:none;display:flex;gap:var(--px-9);padding:var(--px-13) var(--px-18);border-top:var(--px-1) solid var(--border);background:var(--panel)">
-        <span onclick={() => !busy && chUserWizard.close()} onkeydown={(e) => e.key === 'Enter' && !busy && chUserWizard.close()} role="button" tabindex="0" style="font-size:var(--px-12_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-8);padding:var(--px-8) var(--px-16);cursor:pointer">Cancel</span>
-        <span onclick={run} onkeydown={(e) => e.key === 'Enter' && run()} role="button" tabindex="0" aria-disabled={!sql || busy} style="margin-left:auto;font-size:var(--px-12_5);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-8);padding:var(--px-8) var(--px-18);cursor:{sql && !busy ? 'pointer' : 'not-allowed'};opacity:{sql && !busy ? 1 : 0.5};font-weight:600">{busy ? 'Creating…' : 'Create'}</span>
+      <div class="um-dlg-foot">
+        <span class="cfm-btn" onclick={() => !busy && chUserWizard.close()} onkeydown={(e) => e.key === 'Enter' && !busy && chUserWizard.close()} role="button" tabindex="0">Cancel</span>
+        <span class="cfm-btn primary" onclick={run} onkeydown={(e) => e.key === 'Enter' && run()} role="button" tabindex="0" aria-disabled={!sql || busy} style="margin-left:auto;cursor:{sql && !busy ? 'pointer' : 'not-allowed'};opacity:{sql && !busy ? 1 : 0.5}">{busy ? 'Creating…' : 'Create'}</span>
       </div>
     </div>
   </div>

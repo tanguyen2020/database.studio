@@ -236,7 +236,30 @@ impl PgDriver {
     }
 
     pub async fn tables(&mut self, schema: &str) -> Result<Vec<TableInfo>, QueryError> {
-        let rows = sqlx::query(
+        self.tables_with(schema, true).await
+    }
+
+    /// `sizes = false` skips the on-disk size of every table (data_length = None).
+    /// pg_total_relation_size stats each table's files and opens every relation
+    /// in the session's relcache: on a fresh session with 3,000 tables that was
+    /// 2.6 s against 70 ms without it. The Explorer tree never shows the size —
+    /// only the Objects tab does, and it asks for sizes itself.
+    pub async fn tables_with(&mut self, schema: &str, sizes: bool) -> Result<Vec<TableInfo>, QueryError> {
+        let size_expr = if sizes {
+            "CASE WHEN c.relkind = 'p'
+                         -- SUM() over bigint returns numeric in PG; cast back or
+                         -- sqlx's try_get::<i64> yields None and the column reads empty.
+                         THEN (SELECT COALESCE(SUM(pg_catalog.pg_total_relation_size(ch.oid)), 0)::bigint
+                                 FROM pg_catalog.pg_inherits i
+                                 JOIN pg_catalog.pg_class ch ON ch.oid = i.inhrelid
+                                WHERE i.inhparent = c.oid)
+                         WHEN c.relkind IN ('r','m')
+                         THEN pg_catalog.pg_total_relation_size(c.oid)::bigint
+                         ELSE 0 END"
+        } else {
+            "NULL::bigint"
+        };
+        let sql = format!(
             // A declarative partition IS a table in pg_class, so listing pg_class
             // verbatim shows one row per partition and buries the parent. Every row is
             // still returned (autocomplete, Generate Scripts, Schema Compare and the
@@ -254,16 +277,7 @@ impl PgDriver {
                                  JOIN pg_catalog.pg_class ch ON ch.oid = i.inhrelid
                                 WHERE i.inhparent = c.oid)
                          ELSE GREATEST(c.reltuples::bigint, 0) END AS row_estimate,
-                    CASE WHEN c.relkind = 'p'
-                         -- SUM() over bigint returns numeric in PG; cast back or
-                         -- sqlx's try_get::<i64> yields None and the column reads empty.
-                         THEN (SELECT COALESCE(SUM(pg_catalog.pg_total_relation_size(ch.oid)), 0)::bigint
-                                 FROM pg_catalog.pg_inherits i
-                                 JOIN pg_catalog.pg_class ch ON ch.oid = i.inhrelid
-                                WHERE i.inhparent = c.oid)
-                         WHEN c.relkind IN ('r','m')
-                         THEN pg_catalog.pg_total_relation_size(c.oid)::bigint
-                         ELSE 0 END AS data_length,
+                    {size_expr} AS data_length,
                     (SELECT p.relname FROM pg_catalog.pg_inherits i
                        JOIN pg_catalog.pg_class p ON p.oid = i.inhparent
                       WHERE i.inhrelid = c.oid AND p.relkind = 'p') AS partition_of,
@@ -272,7 +286,8 @@ impl PgDriver {
              JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
              WHERE n.nspname = $1 AND c.relkind IN ('r','p','v','m')
              ORDER BY c.relname",
-        )
+        );
+        let rows = sqlx::query(&sql)
         .bind(schema)
         .fetch_all(&mut self.conn)
         .await
@@ -479,6 +494,36 @@ impl PgDriver {
             });
         }
         Ok(out)
+    }
+
+    /// Names + kinds of every object of the schema in ONE query — the same objects
+    /// tables() / routines() / triggers() / sequences() list, without the per-table
+    /// size (pg_total_relation_size stats every table's files) or routine signatures.
+    pub async fn object_names(&mut self, schema: &str) -> Result<Vec<ObjectName>, QueryError> {
+        let rows = sqlx::query(
+            "SELECT CASE c.relkind WHEN 'v' THEN 'view' WHEN 'm' THEN 'view'
+                                   WHEN 'S' THEN 'sequence' ELSE 'table' END, c.relname::text
+               FROM pg_catalog.pg_class c
+               JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+              WHERE n.nspname = $1 AND c.relkind IN ('r','p','v','m','S')
+             UNION ALL
+             SELECT CASE p.prokind WHEN 'p' THEN 'procedure' ELSE 'function' END, p.proname::text
+               FROM pg_catalog.pg_proc p
+               JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+              WHERE n.nspname = $1 AND p.prokind IN ('f','p')
+             UNION ALL
+             SELECT 'trigger', t.tgname::text
+               FROM pg_catalog.pg_trigger t
+               JOIN pg_catalog.pg_class c ON c.oid = t.tgrelid
+               JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+              WHERE n.nspname = $1 AND NOT t.tgisinternal
+             ORDER BY 2",
+        )
+        .bind(schema)
+        .fetch_all(&mut self.conn)
+        .await
+        .map_err(|e| map_error("postgres", &e))?;
+        Ok(rows.iter().map(|r| ObjectName { kind: r.get(0), name: r.get(1) }).collect())
     }
 
     pub async fn triggers(&mut self, schema: &str) -> Result<Vec<TriggerInfo>, QueryError> {

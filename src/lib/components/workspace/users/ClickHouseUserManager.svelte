@@ -1,4 +1,6 @@
 <script lang="ts">
+  import './um.css'
+  import PendingBar from './PendingBar.svelte'
   import Icon from '$lib/components/Icon.svelte'
   // ClickHouse User Manager (U4). SQL-driven RBAC: Users + Roles + per-database
   // grant grid. Users/roles in users.xml storage are read-only (badge); only
@@ -29,6 +31,8 @@
   } from '$lib/users/clickhouse'
   import PrivilegeGrid from './PrivilegeGrid.svelte'
   import PrincipalHeader from './PrincipalHeader.svelte'
+  import ManagerHeader from './ManagerHeader.svelte'
+  import Avatar from './Avatar.svelte'
   import { CARD, CARD_TITLE, EXPLAINER } from './ui'
   import type { TabState } from '$lib/types'
 
@@ -119,6 +123,8 @@
   }
 
   const list = $derived(kind === 'users' ? users : roles)
+  let listFilter = $state('')
+  const shownList = $derived(list.filter((r) => String(r.name).toLowerCase().includes(listFilter.trim().toLowerCase())))
   const selectedRow = $derived(list.find((x) => String(x.name) === selected))
   const isReadOnly = (r: Row | undefined) => !!r && String(r.storage) !== 'local_directory'
 
@@ -307,39 +313,41 @@
   const discard = () => (pending = [])
 </script>
 
-<div class="mono" style="flex:1;display:flex;flex-direction:column;min-height:0">
-  <div style="flex:none;display:flex;align-items:center;gap:var(--px-8);padding:var(--px-9) var(--px-14);border-bottom:var(--px-1) solid var(--border);background:var(--surface);flex-wrap:wrap">
-    <div style="display:flex;background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-7);overflow:hidden">
+<div class="um" style="flex:1;display:flex;flex-direction:column;min-height:0">
+  <ManagerHeader system="clickhouse" connectionId={cid} title="Access control" count={list.length} countLabel={kind === 'users' ? (list.length === 1 ? 'user' : 'users') : list.length === 1 ? 'role' : 'roles'} {refreshing} onRefresh={refresh}>
+    <div class="um-seg" role="group" aria-label="Show">
       {#each [['users', 'Users'], ['roles', 'Roles']] as [k, label] (k)}
-        <span onclick={() => (kind = k as typeof kind)} onkeydown={(e) => e.key === 'Enter' && (kind = k as typeof kind)} role="button" tabindex="0" style="padding:var(--px-4) var(--px-12);font-size:var(--px-12);font-weight:600;cursor:pointer;background:{kind === k ? 'var(--primary)' : 'transparent'};color:{kind === k ? 'var(--hex-fff)' : 'var(--text2)'}">{label}</span>
+        <span aria-pressed={kind === k} onclick={() => (kind = k as typeof kind)} onkeydown={(e) => e.key === 'Enter' && (kind = k as typeof kind)} role="button" tabindex="0">{label}</span>
       {/each}
     </div>
-    <span onclick={() => cid && chUserWizard.show(cid, kind === 'users' ? 'user' : 'role')} onkeydown={(e) => e.key === 'Enter' && cid && chUserWizard.show(cid, kind === 'users' ? 'user' : 'role')} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer;font-weight:600">+ New {kind === 'users' ? 'User' : 'Role'}</span>
-    <span onclick={refresh} onkeydown={(e) => e.key === 'Enter' && refresh()} role="button" tabindex="0" aria-busy={refreshing} style="margin-left:auto;font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer;opacity:{refreshing ? 0.6 : 1}"><Icon name="refresh" size={12} /> {refreshing ? 'Refreshing…' : 'Refresh'}</span>
-  </div>
+    <span class="eg-btn primary" onclick={() => cid && chUserWizard.show(cid, kind === 'users' ? 'user' : 'role')} onkeydown={(e) => e.key === 'Enter' && cid && chUserWizard.show(cid, kind === 'users' ? 'user' : 'role')} role="button" tabindex="0"><Icon name="plus" size={12} />New {kind === 'users' ? 'user' : 'role'}</span>
+  </ManagerHeader>
 
   <!-- Model explainer — ClickHouse SQL RBAC vs read-only users.xml principals. -->
-  <div style={EXPLAINER}>ClickHouse users come from <b style="color:var(--text2)">SQL</b> (created here, editable) or the server's <b style="color:var(--text2)">users.xml</b> (read-only). <b style="color:var(--text2)">Roles</b> bundle grants — grant a role to a user and set it as the default role to apply it. Access management must be enabled on the server.</div>
+  <div class="um-callout"><Icon name="info" size={15} /><span>Users created with <b>SQL</b> are editable here; users defined in the server's <b>users.xml</b> are read-only. <b>Roles</b> bundle grants — give a role to a user and make it a default role to apply it.</span></div>
 
   {#if !canManage}
-    <div style="flex:none;padding:var(--px-8) var(--px-14);background:var(--panel);border-bottom:var(--px-1) solid var(--border);color:var(--warn2);font-size:var(--px-11_5)">This connection lacks ACCESS MANAGEMENT — enable it (CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1 or access_management in users.xml).</div>
+    <div class="um-callout warn"><Icon name="warning" size={15} /><span>This connection's user has no <b>ACCESS MANAGEMENT</b> right, so changes will be refused. Enable it with <span class="mono">CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1</span> or <span class="mono">access_management</span> in users.xml.</span></div>
   {/if}
 
-  <div style="flex:1;display:flex;min-height:0">
-    <div role="listbox" tabindex="-1" aria-label={kind} style="flex:none;width:var(--px-240);border-right:var(--px-1) solid var(--border);overflow:auto;min-height:0">
-      {#if error}<div style="padding:var(--px-14);color:var(--error);font-size:var(--px-12)">{error}</div>
-      {:else if loading}<div style="padding:var(--px-14);color:var(--muted);font-size:var(--px-12)">Loading…</div>
+  <div class="um-body" style="margin-top:var(--px-12);border-top:var(--px-1) solid var(--border)">
+    <div class="um-list"><div class="um-list-search"><input class="um-input" style="width:100%" placeholder="Search {kind}" bind:value={listFilter} aria-label="Search {kind}" spellcheck="false" /></div>
+    <div class="um-list-scroll" role="listbox" tabindex="-1" aria-label={kind}>
+      {#if error}<div class="um-empty" style="color:var(--danger-solid)">{error}</div>
+      {:else if loading && !list.length}<div class="um-empty">Loading…</div>
+      {:else if !shownList.length}<div class="um-empty">{list.length ? 'Nothing matches your search.' : kind === 'users' ? 'No users yet.' : 'No roles yet.'}</div>
       {:else}
-        {#each list as r (r.name)}
+        {#each shownList as r (r.name)}
           {@const rn = String(r.name)}
           {@const sel = selected === rn}
           {@const ro = isReadOnly(r)}
           <ContextMenu.Root>
             <ContextMenu.Trigger>
-              <div onclick={() => (selected = rn)} onkeydown={(e) => e.key === 'Enter' && (selected = rn)} role="option" tabindex="0" aria-selected={sel} style="display:flex;align-items:center;gap:var(--px-6);padding:var(--px-5) var(--px-12);font-size:var(--px-12_5);cursor:pointer;border-bottom:var(--px-1) solid var(--border);background:{sel ? 'var(--grid-select)' : 'transparent'};color:{sel ? 'var(--hex-fff)' : 'var(--text)'}">
-                <span style="flex:1;overflow:hidden;text-overflow:ellipsis">{r.name}</span>
-                {#if ro}<span title="defined in {r.storage}" style="font-size:var(--px-9);color:{sel ? 'var(--hex-fff)' : 'var(--muted)'}">{r.storage}</span>
-                {:else}<span onclick={(e) => { e.stopPropagation(); dropTarget = rn }} onkeydown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); dropTarget = rn } }} role="button" tabindex="0" title="Drop {kind === 'users' ? 'user' : 'role'}" style="opacity:0.75;color:{sel ? 'var(--hex-fff)' : 'var(--error)'};font-size:var(--px-13);line-height:1;cursor:pointer">🗑</span>{/if}
+              <div class="um-row" onclick={() => (selected = rn)} onkeydown={(e) => e.key === 'Enter' && (selected = rn)} role="option" tabindex="0" aria-selected={sel}>
+                <Avatar name={rn} group={kind === 'roles'} size={28} />
+                <span class="um-row-text"><span class="um-row-name">{r.name}</span><span class="um-row-sub">{kind === 'roles' ? 'Role' : ro ? 'Defined in server config' : 'SQL user'}</span></span>
+                {#if ro}<span class="um-badge muted" title="defined in {r.storage} — read-only">{r.storage}</span>
+                {:else}<span class="um-row-act" onclick={(e) => { e.stopPropagation(); dropTarget = rn }} onkeydown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); dropTarget = rn } }} role="button" tabindex="0" title="Drop {kind === 'users' ? 'user' : 'role'}" aria-label="Drop {rn}"><Icon name="trash" size={13} /></span>{/if}
               </div>
             </ContextMenu.Trigger>
             <ContextMenu.Content>
@@ -349,31 +357,34 @@
           </ContextMenu.Root>
         {/each}
       {/if}
-    </div>
+    </div></div>
 
-    <div style="flex:1;display:flex;flex-direction:column;min-height:0">
+    <div class="um-detail">
       {#if selectedRow}
-        <div style="flex:none;padding:var(--px-12) var(--px-14) 0">
-          <PrincipalHeader
-            name={selected}
-            icon={kind === 'users' ? '👤' : '👥'}
-            subtitle={kind === 'users' ? `User · ${selectedRow.storage}` : 'Role'}
-            badge={isReadOnly(selectedRow) ? String(selectedRow.storage) : ''}
-            badgeDanger
-          />
-        </div>
+        <PrincipalHeader
+          name={selected}
+          group={kind === 'roles'}
+          subtitle={kind === 'users' ? (isReadOnly(selectedRow) ? `User defined in ${selectedRow.storage} — read-only` : 'SQL user — editable here') : 'Role — bundles grants for users'}
+          badges={isReadOnly(selectedRow) ? [{ label: `Read-only · ${selectedRow.storage}`, tone: 'muted' }] : []}
+        >
+          {#snippet actions()}
+            {#if !isReadOnly(selectedRow)}
+              <span class="eg-btn um-ghost-danger" onclick={() => (dropTarget = selected)} onkeydown={(e) => e.key === 'Enter' && (dropTarget = selected)} role="button" tabindex="0"><Icon name="trash" size={12} />Drop {kind === 'users' ? 'user' : 'role'}…</span>
+            {/if}
+          {/snippet}
+        </PrincipalHeader>
         {#if isReadOnly(selectedRow)}
-          <div style="flex:none;padding:var(--px-8) var(--px-14);background:var(--panel);border-bottom:var(--px-1) solid var(--border);color:var(--muted);font-size:var(--px-11_5)">Read-only — “{selected}” is defined in {selectedRow.storage}, not SQL. Edit it in users.xml.</div>
+          <div class="um-callout" style="margin:0 var(--px-20) var(--px-4)"><Icon name="lock" size={15} /><span>“{selected}” is defined in <b>{selectedRow.storage}</b>, not with SQL, so it can't be changed here. Edit it in the server configuration.</span></div>
         {/if}
-        <div style="flex:none;display:flex;gap:var(--px-2);padding:var(--px-8) var(--px-12) 0;border-bottom:var(--px-1) solid var(--border)">
+        <div class="um-tabs" role="tablist">
           {#each (kind === 'users' ? [['general', 'General'], ['grants', 'Grants'], ['access', 'Access'], ['roles', 'Roles']] : [['general', 'General'], ['grants', 'Grants'], ['access', 'Access']]) as [k, label] (k)}
-            <span onclick={() => (detailTab = k as typeof detailTab)} onkeydown={(e) => e.key === 'Enter' && (detailTab = k as typeof detailTab)} role="tab" tabindex="0" aria-selected={detailTab === k} style="padding:var(--px-6) var(--px-12);font-size:var(--px-12);cursor:pointer;font-weight:600;border-bottom:var(--px-2) solid {detailTab === k ? 'var(--primary)' : 'transparent'};color:{detailTab === k ? 'var(--text)' : 'var(--muted)'}">{label}</span>
+            <span onclick={() => (detailTab = k as typeof detailTab)} onkeydown={(e) => e.key === 'Enter' && (detailTab = k as typeof detailTab)} role="tab" tabindex="0" aria-selected={detailTab === k} class="um-tab">{label}</span>
           {/each}
         </div>
-        <div style="flex:1;overflow:auto;min-height:0;padding:var(--px-14)">
+        <div class="um-detail-scroll">
           {#if detailTab === 'general'}
-            <div style={CARD}>
-              <div style={CARD_TITLE}>Details</div>
+            <div class="um-card">
+              <div class="um-card-title">Details</div>
               <table class="mono" style="border-collapse:collapse;font-size:var(--px-12)">
                 <tbody>
                   {#each (kind === 'users' ? [['Name', selectedRow.name], ['Storage', selectedRow.storage], ['Auth type', selectedRow.auth_type], ['Default database', selectedRow.default_database], ['Default roles', selectedRow.default_roles]] : [['Name', selectedRow.name], ['Storage', selectedRow.storage]]) as [k, v] (k)}
@@ -383,24 +394,21 @@
               </table>
             </div>
             {#if kind === 'users' && !isReadOnly(selectedRow)}
-              <div style={CARD}>
-                <div style={CARD_TITLE}>Change password</div>
+              <div class="um-card">
+                <div class="um-card-title">Change password</div>
                 <div style="display:flex;gap:var(--px-6);align-items:flex-end">
-                  <label style="font-size:var(--px-12);color:var(--text2)" title="Sets a new SHA-256 password for this user">Change password
-                    <input type="password" bind:value={newPassword} class="mono" style="display:block;margin-top:var(--px-4);width:var(--px-220);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-8);color:var(--text)" />
+                  <label class="um-field" title="Sets a new SHA-256 password for this user">Change password
+                    <input type="password" bind:value={newPassword} class="um-input" style="width:var(--px-220)" autocomplete="new-password" placeholder="New password" />
                   </label>
-                  <span onclick={queuePassword} onkeydown={(e) => e.key === 'Enter' && queuePassword()} role="button" tabindex="0" aria-disabled={!newPassword} style="font-size:var(--px-11_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-10);cursor:{newPassword ? 'pointer' : 'not-allowed'};opacity:{newPassword ? 1 : 0.5}">Queue change</span>
+                  <span class="eg-btn" onclick={queuePassword} onkeydown={(e) => e.key === 'Enter' && queuePassword()} role="button" tabindex="0" aria-disabled={!newPassword} style="cursor:{newPassword ? 'pointer' : 'not-allowed'};opacity:{newPassword ? 1 : 0.5}">Change password</span>
                 </div>
               </div>
             {/if}
-            {#if !isReadOnly(selectedRow)}
-              <span onclick={() => (dropTarget = selected)} onkeydown={(e) => e.key === 'Enter' && (dropTarget = selected)} role="button" tabindex="0" style="font-size:var(--px-11_5);color:var(--error);border:var(--px-1) solid var(--error);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">Drop {kind === 'users' ? 'user' : 'role'}…</span>
-            {/if}
           {:else if detailTab === 'grants'}
-            <div style={CARD}>
-              <div style={CARD_TITLE}>Grants</div>
+            <div class="um-card">
+              <div class="um-card-title">Grants</div>
               <div style="display:flex;align-items:center;gap:var(--px-10);margin-bottom:var(--px-10);flex-wrap:wrap">
-                <span onclick={openGrantWizard} onkeydown={(e) => e.key === 'Enter' && openGrantWizard()} role="button" tabindex="0" title="Grant access to a database or table at a chosen level" style="font-size:var(--px-12_5);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-7);padding:var(--px-6) var(--px-14);cursor:pointer;font-weight:600">＋ Grant access…</span>
+                <span class="cfm-btn primary" onclick={openGrantWizard} onkeydown={(e) => e.key === 'Enter' && openGrantWizard()} role="button" tabindex="0" title="Grant access to a database or table at a chosen level"><Icon name="plus" size={12} />Grant access…</span>
                 <span style="font-size:var(--px-11);color:var(--muted)">Pick a database and an access level (Read-only / Read-Write / Full).</span>
               </div>
               <div onclick={() => (showMatrix = !showMatrix)} onkeydown={(e) => e.key === 'Enter' && (showMatrix = !showMatrix)} role="button" tabindex="0" title="Show the full per-database × privilege matrix" style="font-size:var(--px-11_5);color:var(--text2);cursor:pointer;margin-bottom:var(--px-8);user-select:none">{showMatrix ? '▾' : '▸'} Advanced — grant matrix</div>
@@ -427,55 +435,48 @@
                     <div style="display:flex;align-items:center;gap:var(--px-6);padding:var(--px-5) var(--px-10);background:var(--panel);border-bottom:var(--px-1) solid var(--border)">
                       <span class="mono" style="font-size:var(--px-12_5);font-weight:700;color:var(--text)">{d.db === '*' ? '*.* (all databases)' : d.db}</span>
                       {#if d.tableScoped}<span style="font-size:var(--px-10);color:var(--muted)">table-scoped grants</span>{/if}
-                      {#if d.inherited}<span style="font-size:var(--px-10);color:var(--muted)">◐ inherited</span>{/if}
+                      {#if d.inherited}<span class="um-badge muted">inherited</span>{/if}
                     </div>
                     <div style="padding:var(--px-6) var(--px-10);display:flex;gap:var(--px-4);flex-wrap:wrap">
-                      {#each d.accesses as a (a)}<span style="font-size:var(--px-10);color:var(--syntax-keyword);background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-4);padding:0 var(--px-5)">{a}</span>{/each}
+                      {#each d.accesses as a (a)}<span class="um-chip role">{a}</span>{/each}
                     </div>
                   </div>
                 {/each}
               </div>
             {:else}
-              <div style="font-size:var(--px-11_5);color:var(--muted)">No grants — this {kind === 'users' ? 'user' : 'role'} cannot access any database yet.</div>
+              <div class="um-field-hint">No grants — this {kind === 'users' ? 'user' : 'role'} cannot access any database yet.</div>
             {/if}
           {:else}
             <!-- Roles (users only) -->
-            <div style={CARD}>
-              <div style={CARD_TITLE}>Granted roles <span style="font-weight:400;color:var(--muted);font-size:var(--px-10_5)">— set one as default to apply it on login</span></div>
+            <div class="um-card">
+              <div class="um-card-title">Granted roles <span style="font-weight:400;color:var(--muted);font-size:var(--px-10_5)">— set one as default to apply it on login</span></div>
               {#if grantedRoles.length}
                 {#each grantedRoles as r (r)}
                   <div style="display:flex;align-items:center;gap:var(--px-8);font-size:var(--px-12);padding:var(--px-2) 0">
                     <span class="mono">{r}</span>
-                    <span onclick={() => queueRevokeRole(r)} onkeydown={(e) => e.key === 'Enter' && queueRevokeRole(r)} role="button" tabindex="0" title="Revoke this role from the user" style="font-size:var(--px-10_5);color:var(--error);cursor:pointer">revoke</span>
+                    <span onclick={() => queueRevokeRole(r)} onkeydown={(e) => e.key === 'Enter' && queueRevokeRole(r)} role="button" tabindex="0" title="Revoke this role from the user" class="um-link danger" style="font-size:var(--px-12)">Remove</span>
                     <span onclick={() => queueDefaultRole(r)} onkeydown={(e) => e.key === 'Enter' && queueDefaultRole(r)} role="button" tabindex="0" title="Make this the user's default role" style="font-size:var(--px-10_5);color:var(--text2);cursor:pointer">set default</span>
                   </div>
                 {/each}
               {:else}
-                <div style="font-size:var(--px-11_5);color:var(--muted)">No roles granted.</div>
+                <div class="um-field-hint">No roles granted.</div>
               {/if}
               <div style="display:flex;gap:var(--px-6);align-items:center;margin-top:var(--px-10)">
-                <select bind:value={grantRoleName} class="mono" style="background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4);color:var(--text);font-size:var(--px-12)">
+                <select bind:value={grantRoleName} class="um-select mono">
                   <option value="">— grant role —</option>
                   {#each roles.filter((r) => !grantedRoles.includes(String(r.name))) as r (r.name)}<option value={String(r.name)}>{r.name}</option>{/each}
                 </select>
-                <span onclick={queueGrantRole} onkeydown={(e) => e.key === 'Enter' && queueGrantRole()} role="button" tabindex="0" aria-disabled={!grantRoleName} style="font-size:var(--px-11_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:{grantRoleName ? 'pointer' : 'not-allowed'};opacity:{grantRoleName ? 1 : 0.5}">Queue grant</span>
+                <span class="eg-btn" onclick={queueGrantRole} onkeydown={(e) => e.key === 'Enter' && queueGrantRole()} role="button" tabindex="0" aria-disabled={!grantRoleName} style="cursor:{grantRoleName ? 'pointer' : 'not-allowed'};opacity:{grantRoleName ? 1 : 0.5}">Grant</span>
               </div>
             </div>
           {/if}
         </div>
       {:else if !loading}
-        <div style="padding:var(--px-14);color:var(--muted);font-size:var(--px-12)">Select a {kind === 'users' ? 'user' : 'role'}.</div>
+        <div class="um-empty" style="margin:auto"><div style="display:inline-flex;color:var(--muted);margin-bottom:var(--px-8)"><Icon name="users" size={28} /></div><div style="font-size:var(--px-13);font-weight:600;color:var(--text)">Select a {kind === 'users' ? 'user' : 'role'}</div><div>Pick one on the left to see and change its access.</div></div>
       {/if}
 
       {#if pending.length}
-        <div style="flex:none;border-top:var(--px-1) solid var(--border);background:var(--panel);padding:var(--px-10) var(--px-14);max-height:var(--px-220);overflow:auto">
-          <div style="display:flex;align-items:center;gap:var(--px-8);margin-bottom:var(--px-6)">
-            <span style="font-size:var(--px-11_5);font-weight:700;color:var(--text2)">Pending changes ({pending.length})</span>
-            <span onclick={execute} onkeydown={(e) => e.key === 'Enter' && execute()} role="button" tabindex="0" aria-disabled={executing} style="margin-left:auto;font-size:var(--px-11_5);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-6);padding:var(--px-4) var(--px-12);cursor:pointer;font-weight:600;opacity:{executing ? 0.6 : 1}">{executing ? 'Executing…' : 'Execute'}</span>
-            <span onclick={discard} onkeydown={(e) => e.key === 'Enter' && discard()} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-12);cursor:pointer">Discard</span>
-          </div>
-          <CodeView value={pending.join('\n')} language={editorLanguageId('clickhouse')} readOnly height="auto" maxHeight={200} ariaLabel="Pending SQL" />
-        </div>
+        <PendingBar count={pending.length} sql={pending.join('\n')} language={editorLanguageId('clickhouse')} {executing} onExecute={execute} onDiscard={discard} />
       {/if}
     </div>
   </div>

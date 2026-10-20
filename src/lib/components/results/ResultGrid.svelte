@@ -1025,7 +1025,7 @@ Original: ${was.isNull ? 'NULL' : was.text}`
 <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 <div
   bind:this={scrollEl}
-  class="selectable outline-none"
+  class="selectable outline-none rg-scroll"
   style="flex:1;min-height:0;overflow:auto"
   tabindex="0"
   role="grid"
@@ -1602,5 +1602,40 @@ Original: ${was.isNull ? 'NULL' : was.text}`
     overflow: hidden;
     text-overflow: ellipsis;
     min-width: 0;
+  }
+  /* The grid is the most scrolled surface in the app: the global pill
+     scrollbar (theme.css) is too thin to find and grab here.
+     Wider bar, a visible track and a thumb that reads in both themes. */
+  .rg-scroll::-webkit-scrollbar {
+    width: var(--px-14);
+    height: var(--px-14);
+  }
+  .rg-scroll::-webkit-scrollbar-track {
+    background: var(--panel);
+  }
+  .rg-scroll::-webkit-scrollbar-track:vertical {
+    border-left: var(--px-1) solid var(--border);
+  }
+  .rg-scroll::-webkit-scrollbar-track:horizontal {
+    border-top: var(--px-1) solid var(--border);
+  }
+  .rg-scroll::-webkit-scrollbar-corner {
+    background: var(--panel);
+  }
+  .rg-scroll::-webkit-scrollbar-thumb {
+    background: color-mix(in srgb, var(--text2) 45%, transparent);
+    border-radius: var(--px-7);
+    border: var(--px-3) solid transparent;
+    background-clip: padding-box;
+    min-height: var(--px-40);
+    min-width: var(--px-40);
+  }
+  .rg-scroll::-webkit-scrollbar-thumb:hover {
+    background: color-mix(in srgb, var(--text2) 70%, transparent);
+    background-clip: padding-box;
+  }
+  .rg-scroll::-webkit-scrollbar-thumb:active {
+    background: var(--primary);
+    background-clip: padding-box;
   }
 </style>

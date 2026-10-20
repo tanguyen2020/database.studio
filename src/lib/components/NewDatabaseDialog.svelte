@@ -19,6 +19,12 @@
   import { toasts } from '$lib/stores/toast.svelte'
   import { genCreateDatabase } from '$lib/sql/ddl'
   import SearchSelect from '$lib/components/SearchSelect.svelte'
+  import Icon from '$lib/components/Icon.svelte'
+  import SystemIcon from '$lib/components/SystemIcon.svelte'
+  import { connections } from '$lib/stores/connections.svelte'
+  import { systemMeta } from '$lib/systems'
+  import { highlightSql, sqlTokenColor } from '$lib/format/sql'
+  import '$lib/components/workspace/users/um.css'
   import {
     buildAllCollationsQuery,
     buildCharsetsQuery,
@@ -196,7 +202,7 @@
           await explorer.refresh(cid, { kind: 'connection' }).catch(() => {})
           newDatabaseWizard.close()
         } else {
-          toasts.error(res.error?.message ?? 'Failed to create database')
+          createError = res.error?.message ?? 'The server refused to create the database.'
         }
         return
       }
@@ -208,29 +214,56 @@
         await explorer.refresh(cid, { kind: 'connection' }).catch(() => {})
         newDatabaseWizard.close()
       } else {
-        toasts.error(res.error?.message ?? 'Failed to create database')
+        createError = res.error?.message ?? 'The server refused to create the database.'
       }
     } catch (e) {
-      toasts.error(String(e))
+      createError = String(e instanceof Error ? e.message : e)
     } finally {
       busy = false
     }
   }
 
-  const labelStyle = 'font-size:var(--px-12);color:var(--text2);display:flex;flex-direction:column;gap:var(--px-6)'
-  const inputStyle =
-    'background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-7);padding:var(--px-7) var(--px-10);color:var(--text);font-size:var(--px-13);outline:none'
-  const hintStyle = 'font-size:var(--px-11);color:var(--muted)'
+  // ---- presentation -----------------------------------------------------------
+  const profile = $derived(newDatabaseWizard.connId ? connections.byId(newDatabaseWizard.connId) : null)
+  const engineLabel = $derived(systemMeta(system).label)
+  // Databases the server already has (schema-as-database engines list schemas), so
+  // a duplicate name is caught before the server refuses it.
+  const existing = $derived.by(() => {
+    const c = newDatabaseWizard.connId ? explorer.cache[newDatabaseWizard.connId] : undefined
+    const names = [...(c?.databases ?? []).map((d) => d.name), ...(['mysql', 'mariadb', 'clickhouse'].includes(system) ? (c?.schemas ?? []).map((s) => s.name) : [])]
+    return new Set(names.map((n) => n.toLowerCase()))
+  })
+  const taken = $derived(!!name.trim() && existing.has(name.trim().toLowerCase()))
+  let createError = $state('')
+  $effect(() => {
+    void name
+    void coll
+    createError = ''
+  })
+  const optionsTitle = $derived(
+    optionKind === 'encoding-locale' ? 'Encoding & locale' : optionKind === 'collation' ? 'Collation' : 'Character set & collation',
+  )
+  const optionsDesc = $derived(
+    optionKind === 'encoding-locale'
+      ? 'How text is stored and sorted. Leave on server default unless your application needs a specific locale.'
+      : optionKind === 'collation'
+        ? 'How text is compared and sorted in this database.'
+        : 'How text is stored and compared. utf8mb4 stores every language and emoji.',
+  )
+  const usingDefaults = $derived(!charset && !collation && !encoding && !lcCollate && !lcCtype)
+  async function copySql() {
+    try {
+      await navigator.clipboard.writeText(ddl)
+      toasts.success('SQL copied')
+    } catch {
+      /* clipboard unavailable — the statement is selectable */
+    }
+  }
 </script>
 
 {#if dlgOpen}
   <!-- backdrop click does NOT close (avoid losing input); use × / Cancel / Escape -->
-  <div
-    onkeydown={(e) => e.key === 'Escape' && !busy && newDatabaseWizard.close()}
-    role="presentation"
-    style="position:fixed;inset:0;background:var(--rgba-0-0-0-_5);display:flex;align-items:center;justify-content:center;z-index:56"
-  >
-    <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
+  <div onkeydown={(e) => e.key === 'Escape' && !busy && newDatabaseWizard.close()} role="presentation" class="um-backdrop">
     <div
       onclick={(e) => e.stopPropagation()}
       onkeydown={(e) => e.key === 'Escape' && !busy && newDatabaseWizard.close()}
@@ -238,160 +271,181 @@
       aria-modal="true"
       aria-label="New Database"
       tabindex="-1"
-      style="width:var(--px-460);max-width:94vw;max-height:92vh;background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-14);box-shadow:0 var(--px-30) var(--px-70) var(--rgba-0-0-0-_55);overflow:hidden;display:flex;flex-direction:column"
+      class="um-dlg"
+      style="width:var(--px-520)"
     >
-      <div style="flex:none;display:flex;align-items:center;gap:var(--px-10);padding:var(--px-15) var(--px-18);border-bottom:var(--px-1) solid var(--border)">
-        <span style="font-weight:700;font-size:var(--px-15)">New Database</span>
-        <span style="font-size:var(--px-11_5);color:var(--muted)">{system}</span>
-        <span onclick={() => !busy && newDatabaseWizard.close()} onkeydown={(e) => e.key === 'Enter' && newDatabaseWizard.close()} role="button" tabindex="0" style="margin-left:auto;cursor:pointer;color:var(--muted);font-size:var(--px-20)">×</span>
+      <div class="um-dlg-head">
+        <span class="um-dlg-icon plain"><SystemIcon {system} size={20} /></span>
+        <div class="um-dlg-title">
+          <b>Create database</b>
+          <span title={profile?.name ?? ''}>{profile?.name && profile.name !== engineLabel ? `on ${profile.name} · ${engineLabel}` : `on ${engineLabel}`}</span>
+        </div>
+        <span class="um-dlg-x" onclick={() => !busy && newDatabaseWizard.close()} onkeydown={(e) => e.key === 'Enter' && !busy && newDatabaseWizard.close()} role="button" tabindex="0" aria-label="Close" title="Close"><Icon name="close" size={16} /></span>
       </div>
 
-      <div style="flex:1;min-height:0;overflow:auto;padding:var(--px-16) var(--px-18);display:flex;flex-direction:column;gap:var(--px-10)">
-        <label style={labelStyle}>
-          Database name
-          <!-- svelte-ignore a11y_autofocus -->
-          <input
-            bind:value={name}
-            autofocus
-            placeholder="new_database"
-            spellcheck="false"
-            onkeydown={(e) => { if (e.key === 'Enter' && valid) void create() }}
-            style={inputStyle}
-          />
-        </label>
-        {#if isMongo}
-          <label style={labelStyle}>
-            First collection
-            <input
-              bind:value={coll}
-              placeholder="e.g. items"
-              spellcheck="false"
-              onkeydown={(e) => { if (e.key === 'Enter' && valid) void create() }}
-              style={inputStyle}
-            />
-            <span style={hintStyle}>MongoDB creates a database with its first collection.</span>
-          </label>
-        {/if}
-
-        {#if optionKind === 'charset-collation'}
-          <!-- MySQL / MariaDB: CHARACTER SET + COLLATE, both read from the server -->
-          <label style={labelStyle}>
-            Character set
-            <SearchSelect
-              value={charset}
-              onChange={pickCharset}
-              legible
-              wide
-              limit={200}
-              title="CHARACTER SET — read from information_schema.CHARACTER_SETS"
-              placeholder={serverDefaultLabel(defaults.charset)}
-              options={[{ value: null, label: serverDefaultLabel(defaults.charset) }, ...charsets.map((c) => ({ value: c.name, label: c.name }))]}
-            />
-          </label>
-          <label style={labelStyle}>
-            Collation
-            <SearchSelect
-              bind:value={collation}
-              legible
-              wide
-              limit={200}
-              title="COLLATE — read from information_schema.COLLATIONS"
-              placeholder={serverDefaultLabel(defaults.collation)}
-              options={[{ value: null, label: serverDefaultLabel(defaults.collation) }, ...collationOptions.map((c) => ({ value: c, label: c }))]}
-            />
-            <span style={hintStyle}>Leave both on server default to inherit character_set_server / collation_server.</span>
-          </label>
-        {:else if optionKind === 'collation'}
-          <!-- SQL Server: COLLATE, from sys.fn_helpcollations() -->
-          <label style={labelStyle}>
-            Collation
-            <SearchSelect
-              bind:value={collation}
-              legible
-              wide
-              limit={200}
-              title="COLLATE — read from sys.fn_helpcollations()"
-              placeholder={serverDefaultLabel(defaults.collation)}
-              options={[{ value: null, label: serverDefaultLabel(defaults.collation) }, ...collationOptions.map((c) => ({ value: c, label: c }))]}
-            />
-            <span style={hintStyle}>Server default is the instance collation ({defaults.collation ?? 'unknown'}).</span>
-          </label>
-        {:else if optionKind === 'encoding-locale'}
-          <!-- PostgreSQL: ENCODING + LC_COLLATE + LC_CTYPE -->
-          <label style={labelStyle}>
-            Encoding
-            <SearchSelect
-              bind:value={encoding}
-              legible
-              wide
-              limit={200}
-              title="ENCODING — encodings this server build supports"
-              placeholder={serverDefaultLabel(defaults.encoding)}
-              options={[{ value: null, label: serverDefaultLabel(defaults.encoding) }, ...encodings.map((e) => ({ value: e, label: e }))]}
-            />
-          </label>
-          <label style={labelStyle}>
-            Collation locale (LC_COLLATE)
-            <SearchSelect
-              value={lcCollate}
-              onChange={pickLcCollate}
-              legible
-              wide
-              limit={200}
-              title="LC_COLLATE — locales known to this server"
-              placeholder={serverDefaultLabel(defaults.lcCollate)}
-              options={[{ value: null, label: serverDefaultLabel(defaults.lcCollate) }, ...locales.map((l) => ({ value: l, label: l }))]}
-            />
-          </label>
-          <label style={labelStyle}>
-            Character type (LC_CTYPE)
-            <SearchSelect
-              bind:value={lcCtype}
-              legible
-              wide
-              limit={200}
-              title="LC_CTYPE — locales known to this server"
-              placeholder={serverDefaultLabel(defaults.lcCtype)}
-              options={[{ value: null, label: serverDefaultLabel(defaults.lcCtype) }, ...locales.map((l) => ({ value: l, label: l }))]}
-            />
-            <span style={hintStyle}>Changing encoding or locale requires TEMPLATE template0 — it is added to the statement automatically.</span>
-          </label>
-        {:else if optionKind === 'server-charset'}
-          <div style={hintStyle}>
-            Oracle stores the character set per instance, not per schema{oracleCharset ? ` — ${oracleCharset}` : ''}.
-          </div>
-        {:else if !isMongo && !sqlite}
-          <div style={hintStyle}>{system} has no character set or collation at database level.</div>
-        {/if}
-
-        {#if optionsLoading}
-          <div style={hintStyle}>Reading character sets from the server…</div>
-        {:else if optionsError}
-          <div style="font-size:var(--px-11_5);color:var(--warn)">Could not read the server's character set list — {optionsError}. You can still create the database on the server defaults.</div>
-        {/if}
-
+      <div class="um-dlg-body">
         {#if sqlite}
-          <div style="font-size:var(--px-11_5);color:var(--warn)">SQLite databases are files — create a new connection with a new .sqlite path instead.</div>
-        {:else if ddl}
-          <pre class="mono selectable" style="margin:0;background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-8);padding:var(--px-8) var(--px-10);font-size:var(--px-11_5);color:var(--text2);white-space:pre-wrap">{ddl}</pre>
+          <div class="um-callout" style="margin:0"><Icon name="info" size={15} /><span>An SQLite database is a single file. To start a new one, create a <b>new connection</b> and pick a new <span class="mono">.sqlite</span> file path.</span></div>
+        {:else}
+          <label class="um-field">
+            Database name
+            <!-- svelte-ignore a11y_autofocus -->
+            <input
+              bind:value={name}
+              autofocus
+              placeholder="new_database"
+              spellcheck="false"
+              autocomplete="off"
+              class="um-input mono"
+              class:invalid={taken}
+              style="font-size:var(--px-13_5);min-height:var(--px-34)"
+              onkeydown={(e) => { if (e.key === 'Enter' && valid && !taken) void create() }}
+            />
+            {#if taken}
+              <span class="um-field-err">A database named “{name.trim()}” already exists on this server.</span>
+            {:else}
+              <span class="um-field-hint">Letters, digits and underscores are safest. Other characters are quoted automatically.</span>
+            {/if}
+          </label>
+          {#if isMongo}
+            <label class="um-field">
+              First collection
+              <input bind:value={coll} placeholder="e.g. items" spellcheck="false" autocomplete="off" class="um-input mono" onkeydown={(e) => { if (e.key === 'Enter' && valid && !taken) void create() }} />
+              <span class="um-field-hint">MongoDB only keeps a database once it has a collection, so the first one is created with it.</span>
+            </label>
+          {/if}
+
+          {#if optionKind === 'charset-collation' || optionKind === 'collation' || optionKind === 'encoding-locale'}
+            <div class="um-group">
+              <div class="um-group-title">{optionsTitle}</div>
+              <div class="um-field-hint" style="margin-top:calc(-1 * var(--px-4))">{optionsDesc}{usingDefaults ? ' Currently using the server defaults.' : ''}</div>
+              {#if optionKind === 'charset-collation'}
+                <!-- MySQL / MariaDB: CHARACTER SET + COLLATE, both read from the server -->
+                <div class="um-row2">
+                  <label class="um-field">
+                    Character set
+                    <SearchSelect
+                      value={charset}
+                      onChange={pickCharset}
+                      legible
+                      wide
+                      limit={200}
+                      title="CHARACTER SET — read from information_schema.CHARACTER_SETS"
+                      placeholder={serverDefaultLabel(defaults.charset)}
+                      options={[{ value: null, label: serverDefaultLabel(defaults.charset) }, ...charsets.map((c) => ({ value: c.name, label: c.name }))]}
+                    />
+                  </label>
+                  <label class="um-field">
+                    Collation
+                    <SearchSelect
+                      bind:value={collation}
+                      legible
+                      wide
+                      limit={200}
+                      title="COLLATE — read from information_schema.COLLATIONS"
+                      placeholder={serverDefaultLabel(defaults.collation)}
+                      options={[{ value: null, label: serverDefaultLabel(defaults.collation) }, ...collationOptions.map((c) => ({ value: c, label: c }))]}
+                    />
+                  </label>
+                </div>
+              {:else if optionKind === 'collation'}
+                <!-- SQL Server: COLLATE, from sys.fn_helpcollations() -->
+                <label class="um-field">
+                  Collation
+                  <SearchSelect
+                    bind:value={collation}
+                    legible
+                    wide
+                    limit={200}
+                    title="COLLATE — read from sys.fn_helpcollations()"
+                    placeholder={serverDefaultLabel(defaults.collation)}
+                    options={[{ value: null, label: serverDefaultLabel(defaults.collation) }, ...collationOptions.map((c) => ({ value: c, label: c }))]}
+                  />
+                  <span class="um-field-hint">Server default is the instance collation ({defaults.collation ?? 'unknown'}).</span>
+                </label>
+              {:else}
+                <!-- PostgreSQL: ENCODING + LC_COLLATE + LC_CTYPE -->
+                <label class="um-field">
+                  Encoding
+                  <SearchSelect
+                    bind:value={encoding}
+                    legible
+                    wide
+                    limit={200}
+                    title="ENCODING — encodings this server build supports"
+                    placeholder={serverDefaultLabel(defaults.encoding)}
+                    options={[{ value: null, label: serverDefaultLabel(defaults.encoding) }, ...encodings.map((e) => ({ value: e, label: e }))]}
+                  />
+                </label>
+                <div class="um-row2">
+                  <label class="um-field">
+                    Sort order (LC_COLLATE)
+                    <SearchSelect
+                      value={lcCollate}
+                      onChange={pickLcCollate}
+                      legible
+                      wide
+                      limit={200}
+                      title="LC_COLLATE — locales known to this server"
+                      placeholder={serverDefaultLabel(defaults.lcCollate)}
+                      options={[{ value: null, label: serverDefaultLabel(defaults.lcCollate) }, ...locales.map((l) => ({ value: l, label: l }))]}
+                    />
+                  </label>
+                  <label class="um-field">
+                    Character type (LC_CTYPE)
+                    <SearchSelect
+                      bind:value={lcCtype}
+                      legible
+                      wide
+                      limit={200}
+                      title="LC_CTYPE — locales known to this server"
+                      placeholder={serverDefaultLabel(defaults.lcCtype)}
+                      options={[{ value: null, label: serverDefaultLabel(defaults.lcCtype) }, ...locales.map((l) => ({ value: l, label: l }))]}
+                    />
+                  </label>
+                </div>
+                <span class="um-field-hint">Changing the encoding or locale copies from <span class="mono">template0</span> — that is added to the statement automatically.</span>
+              {/if}
+              {#if optionsLoading}
+                <span class="um-field-hint" style="display:inline-flex;align-items:center;gap:var(--px-6)"><span class="refresh-glyph um-spin"><Icon name="refresh" size={12} /></span>Reading the options this server supports…</span>
+              {:else if optionsError}
+                <div class="um-callout warn" style="margin:0"><Icon name="warning" size={15} /><span>Couldn't read the server's list ({optionsError}). You can still create the database with the server defaults.</span></div>
+              {/if}
+            </div>
+          {:else if optionKind === 'server-charset'}
+            <div class="um-callout" style="margin:0"><Icon name="info" size={15} /><span>Oracle sets the character set for the whole instance, not per schema{oracleCharset ? ` — this one uses ${oracleCharset}` : ''}.</span></div>
+          {:else if !isMongo}
+            <div class="um-callout" style="margin:0"><Icon name="info" size={15} /><span>{engineLabel} has no character set or collation at database level.</span></div>
+          {/if}
+
+          <div class="um-group">
+            <div class="um-sql-head">
+              <Icon name="code" size={13} />SQL that will run
+              {#if ddl}<span class="um-link" style="margin-left:auto;font-size:var(--px-12)" onclick={copySql} onkeydown={(e) => e.key === 'Enter' && void copySql()} role="button" tabindex="0">Copy</span>{/if}
+            </div>
+            <pre class="um-sql selectable">{#if ddl}{#each highlightSql(ddl) as tk, i (i)}<span style="color:{sqlTokenColor(tk.kind)}">{tk.text}</span>{/each}{:else}<span style="color:var(--muted)">-- type a database name{isMongo ? ' and a first collection' : ''}</span>{/if}</pre>
+          </div>
+
+          {#if createError}
+            <div class="um-err" role="alert"><Icon name="warning" size={14} /><span>{createError}</span></div>
+          {/if}
         {/if}
       </div>
 
-      <div style="flex:none;display:flex;gap:var(--px-9);padding:var(--px-14) var(--px-18);border-top:var(--px-1) solid var(--border);background:var(--panel)">
-        <span
-          onclick={() => !busy && newDatabaseWizard.close()}
-          onkeydown={(e) => e.key === 'Enter' && !busy && newDatabaseWizard.close()}
-          role="button"
-          tabindex="0"
-          style="margin-left:auto;font-size:var(--px-12_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-8);padding:var(--px-8) var(--px-16);cursor:pointer"
-        >Cancel</span>
-        <span
-          onclick={() => void create()}
-          onkeydown={(e) => e.key === 'Enter' && void create()}
-          role="button"
-          tabindex="0"
-          style="font-size:var(--px-12_5);font-weight:600;background:var(--primary);color:var(--hex-fff);border-radius:var(--px-8);padding:var(--px-8) var(--px-18);cursor:{valid && !busy ? 'pointer' : 'not-allowed'};opacity:{valid && !busy ? 1 : 0.5}"
-        >{busy ? 'Creating…' : 'Create'}</span>
+      <div class="um-dlg-foot">
+        <span class="um-dlg-foot-note">{sqlite ? '' : 'Shows up in the Explorer right away.'}</span>
+        <span class="um-spacer"></span>
+        <span class="cfm-btn" onclick={() => !busy && newDatabaseWizard.close()} onkeydown={(e) => e.key === 'Enter' && !busy && newDatabaseWizard.close()} role="button" tabindex="0">Cancel</span>
+        {#if !sqlite}
+          <span
+            class="cfm-btn primary"
+            onclick={() => !taken && void create()}
+            onkeydown={(e) => e.key === 'Enter' && !taken && void create()}
+            role="button"
+            tabindex="0"
+            aria-disabled={!valid || busy || taken}
+          >{busy ? 'Creating…' : 'Create database'}</span>
+        {/if}
       </div>
     </div>
   </div>

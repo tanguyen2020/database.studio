@@ -94,7 +94,7 @@ test('user manager: New Role opens a popup dialog (not a tab)', async ({ page })
   await openManager(page)
 
   const tabsBefore = await page.getByRole('tab').count()
-  await page.getByRole('button', { name: '+ New Role' }).click()
+  await page.getByRole('button', { name: 'New role' }).click()
   await page.waitForTimeout(300)
   // popup, not a new tab
   await expect(page.getByRole('dialog')).toBeVisible()
@@ -131,7 +131,7 @@ test('user manager: guided Grant access wizard queues GRANT statements', async (
   await page.waitForTimeout(200)
 
   // primary path: the guided "Grant access…" wizard (not the raw matrix)
-  await page.getByRole('button', { name: '＋ Grant access…' }).click()
+  await page.getByRole('button', { name: 'Grant access…' }).last().click()
   await page.waitForTimeout(300)
   await expect(page.getByRole('dialog')).toBeVisible()
   // pick a schema (multi-select) then the Read-only access level
@@ -161,7 +161,7 @@ test('user manager: creating a role opens the Grant access wizard on it', async 
   await blockRemoteFonts(page)
   await openManager(page)
 
-  await page.getByRole('button', { name: '+ New Role' }).click()
+  await page.getByRole('button', { name: 'New role' }).click()
   await page.waitForTimeout(300)
   await page.getByRole('dialog').locator('input').first().fill('app_user')
   await page.waitForTimeout(150)
@@ -200,7 +200,7 @@ test('user manager: Cassandra roles + keyspace permission preset', async ({ page
   await page.getByRole('tab', { name: 'Permissions' }).click()
   await page.waitForTimeout(200)
   // guided grant: pick keyspace (resource type) → a TABLE resource + Read-Write
-  await page.getByRole('button', { name: '＋ Grant access…' }).click()
+  await page.getByRole('button', { name: 'Grant access…' }).last().click()
   await page.waitForTimeout(300)
   const cDlg = page.getByRole('dialog')
   await cDlg.locator('label').filter({ hasText: 'public' }).first().click() // keyspace → loads its tables
@@ -250,7 +250,7 @@ test('user manager: Oracle users + system privs + object preset', async ({ page 
   // Object Privileges: unified Grant access wizard (Schema owner → object → level)
   await page.getByRole('tab', { name: 'Object Privileges' }).click()
   await page.waitForTimeout(150)
-  await page.getByRole('button', { name: '＋ Grant access…' }).click()
+  await page.getByRole('button', { name: 'Grant access…' }).last().click()
   await page.waitForTimeout(300)
   const oraDlg = page.getByRole('dialog')
   await oraDlg.locator('label').filter({ hasText: 'APP_USER' }).first().click() // pick owner schema
@@ -294,14 +294,14 @@ test('user manager: MongoDB users + role toggle + Add User popup', async ({ page
   await page.getByRole('tab', { name: 'Roles per Database' }).click()
   await page.waitForTimeout(150)
   // Quick grant: friendly access level → built-in role, applied to many databases
-  await expect(page.getByText('＋ Grant access', { exact: true }).first()).toBeVisible()
+  await expect(page.getByText('Grant access', { exact: true }).first()).toBeVisible()
   await page.getByRole('button', { name: 'Read-Write', exact: true }).click()
   await page.waitForTimeout(100)
   await expect(page.getByText(/Grant readWrite on/).first()).toBeVisible()
 
   // Add User → popup (not a tab)
   const tabsBefore = await page.getByRole('tab').count()
-  await page.getByRole('button', { name: '+ Add User' }).click()
+  await page.getByRole('button', { name: 'New user' }).click()
   await page.waitForTimeout(300)
   await expect(page.getByRole('dialog')).toBeVisible()
   expect(await page.getByRole('tab').count()).toBe(tabsBefore)
@@ -345,7 +345,7 @@ test('user manager: ClickHouse users + grant grid preset', async ({ page }) => {
   await expect(page.getByText('analytics', { exact: true }).first()).toBeVisible()
   await page.getByRole('tab', { name: 'Grants' }).click()
   await page.waitForTimeout(200)
-  await page.getByRole('button', { name: '＋ Grant access…' }).click()
+  await page.getByRole('button', { name: 'Grant access…' }).last().click()
   await page.waitForTimeout(300)
   // Database → Table: pick database "public", then whole database (public.*), Read-only
   const chGrant = page.getByRole('dialog')
@@ -380,7 +380,7 @@ test('user manager: MSSQL server logins + database permission grid', async ({ pa
   // Server scope: logins list
   await expect(page.getByRole('option', { name: /app_login/ }).first()).toBeVisible()
   // New Login button (server scope)
-  await expect(page.getByRole('button', { name: '+ New Login' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'New login' })).toBeVisible()
 
   // Access across databases (server scope): db roles + permissions per database
   await page.getByRole('option', { name: /app_login/ }).first().click()
@@ -398,7 +398,7 @@ test('user manager: MSSQL server logins + database permission grid', async ({ pa
   await page.waitForTimeout(150)
   // guided grant: grouped by SCHEMA — the "public" schema section lists its
   // objects (+ "*" whole schema). Grant action + whole schema + Read-only.
-  await page.getByRole('button', { name: '＋ Grant access…' }).click()
+  await page.getByRole('button', { name: 'Grant access…' }).last().click()
   await page.waitForTimeout(500) // objects load per schema
   const msDlg = page.getByRole('dialog')
   await msDlg.getByText('*', { exact: true }).first().click() // "*" = whole public schema
@@ -448,7 +448,7 @@ test('user manager: MySQL account list + preset + Add Account popup', async ({ p
   await expect(page.getByText('library_db', { exact: true }).first()).toBeVisible()
   await page.getByRole('tab', { name: 'Schema Privileges' }).click()
   await page.waitForTimeout(200)
-  await page.getByRole('button', { name: '＋ Grant access…' }).click()
+  await page.getByRole('button', { name: 'Grant access…' }).last().click()
   await page.waitForTimeout(300)
   // Database → Table: pick database "public", then whole database (public.*), Read-only
   const myGrant = page.getByRole('dialog')
@@ -467,7 +467,7 @@ test('user manager: MySQL account list + preset + Add Account popup', async ({ p
 
   // Add Account → popup (not a tab), host required, live preview
   const tabsBefore = await page.getByRole('tab').count()
-  await page.getByRole('button', { name: '+ Add Account' }).click()
+  await page.getByRole('button', { name: 'New account' }).click()
   await page.waitForTimeout(300)
   await expect(page.getByRole('dialog')).toBeVisible()
   expect(await page.getByRole('tab').count()).toBe(tabsBefore)
@@ -493,12 +493,12 @@ test('user manager: PG create popup assigns role membership (IN ROLE)', async ({
   await blockRemoteFonts(page)
   await openManager(page)
 
-  await page.getByRole('button', { name: '+ New Role' }).click()
+  await page.getByRole('button', { name: 'New role' }).click()
   await page.waitForTimeout(300)
   await page.getByRole('dialog').locator('input').first().fill('spec_user')
   await page.waitForTimeout(150)
   // pick an existing role in "Member of (roles)" → CREATE ROLE … IN ROLE "…"
-  await page.getByRole('dialog').getByPlaceholder('grant role membership…').click()
+  await page.getByRole('dialog').getByPlaceholder('Add to groups…').click()
   await page.waitForTimeout(150)
   await page.getByRole('dialog').getByRole('option', { name: 'readonly_group' }).click()
   await page.waitForTimeout(150)
@@ -519,7 +519,7 @@ test('user manager: PG Grant access spans multiple databases', async ({ page }) 
   await page.waitForTimeout(150)
   await page.getByRole('tab', { name: 'Privileges', exact: true }).click()
   await page.waitForTimeout(200)
-  await page.getByRole('button', { name: '＋ Grant access…' }).click()
+  await page.getByRole('button', { name: 'Grant access…' }).last().click()
   await page.waitForTimeout(300)
   const dialog = page.getByRole('dialog')
 

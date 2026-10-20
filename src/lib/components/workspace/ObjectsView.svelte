@@ -9,7 +9,7 @@
   // `list_tables` API the Explorer tree uses (no duplicate query).
   import { untrack } from 'svelte'
   import * as ipc from '$lib/ipc'
-  import * as ContextMenu from '$lib/components/ui/context-menu'
+  import SharedContextMenu from '$lib/components/ui/context-menu/SharedContextMenu.svelte'
   import TableContextMenu from '$lib/components/explorer/TableContextMenu.svelte'
   import { connections } from '$lib/stores/connections.svelte'
   import { tabs } from '$lib/stores/tabs.svelte'
@@ -41,6 +41,10 @@
   let refreshing = $state(false)
   let error = $state<string | null>(null)
   let selIndex = $state<number | null>(null)
+  /** One table menu for the whole list (a menu per row made a 3,000-table
+   *  database take seconds to draw); `ctxRow` is the row it was opened on. */
+  let objMenu = $state<SharedContextMenu | null>(null)
+  let ctxRow = $state<TableInfo | null>(null)
   let hoverIndex = $state<number | null>(null)
   // Exact row counts (real SELECT COUNT(*)) keyed by "schema.name". The list shows
   // the catalog ESTIMATE immediately (fast), then these replace it as each COUNT(*)
@@ -175,7 +179,23 @@
   const GRID_FONT = 'font-size:var(--px-12);font-variant-numeric:tabular-nums;font-feature-settings:\'tnum\' 1,\'zero\' 1'
 </script>
 
+{#snippet tableMenu()}
+  {#if connId && ctxRow}
+    <TableContextMenu
+      {connId}
+      schema={ctxRow.schema || schema || database}
+      table={ctxRow.name}
+      system={tab.systemType as SystemType}
+      locked={ctxRow.locked}
+      engine={ctxRow.engine}
+      database={systemIsSchemaDb ? ctxRow.schema || database : undefined}
+      onRefresh={refresh}
+    />
+  {/if}
+{/snippet}
+
 <div style="flex:1;display:flex;flex-direction:column;min-height:0;background:var(--bg)">
+  <SharedContextMenu bind:this={objMenu} />
   <!-- header: connection + database (colored); the tab title already says "Objects" -->
   <div style="flex:none;display:flex;align-items:center;gap:var(--px-9);padding:var(--px-10) var(--px-14);border-bottom:var(--px-1) solid var(--border);background:var(--surface)">
     <span style="width:var(--px-3);height:var(--px-20);border-radius:var(--px-2);background:{accent}"></span>
@@ -228,8 +248,6 @@
       </div>
       {#each rows as t, i (t.schema + '.' + t.name)}
         {@const exact = counts[rowKey(t)]}
-        <ContextMenu.Root>
-          <ContextMenu.Trigger>
             <div
               role="row"
               tabindex="0"
@@ -242,7 +260,12 @@
               }}
               onmouseenter={() => (hoverIndex = i)}
               onmouseleave={() => (hoverIndex === i ? (hoverIndex = null) : null)}
-              style="{GRID};cursor:default;border-bottom:var(--px-1) solid var(--border);background:{rowBg(i)};outline:none"
+              oncontextmenu={(e) => {
+                if (!connId) return
+                ctxRow = t
+                objMenu?.open(e, tableMenu)
+              }}
+              style="{GRID};cursor:default;border-bottom:var(--px-1) solid var(--border);background:{rowBg(i)};outline:none;user-select:none"
             >
               <span role="cell" class="mono" style="padding:var(--px-5) var(--px-10);text-align:right;font-size:var(--px-10_5);color:{cellColor(i, 'var(--muted)')};{SEP}">{i + 1}</span>
               <span role="cell" class="mono" style="padding:var(--px-5) var(--px-12);color:{cellColor(i, 'var(--text)')};font-weight:{selIndex === i ? 600 : 500};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;{SEP}">{t.name}</span>
@@ -254,20 +277,6 @@
                 style="padding:var(--px-5) var(--px-12);text-align:right;color:{cellColor(i, exact != null ? 'var(--syntax-number)' : 'var(--muted)')}"
               >{exact != null ? exact.toLocaleString() : t.row_estimate != null ? '~' + t.row_estimate.toLocaleString() : '—'}</span>
             </div>
-          </ContextMenu.Trigger>
-          {#if connId}
-            <TableContextMenu
-              {connId}
-              schema={t.schema || schema || database}
-              table={t.name}
-              system={tab.systemType as SystemType}
-              locked={t.locked}
-              engine={t.engine}
-              database={systemIsSchemaDb ? t.schema || database : undefined}
-              onRefresh={refresh}
-            />
-          {/if}
-        </ContextMenu.Root>
       {/each}
      </div>
     {/if}

@@ -1,7 +1,7 @@
 {
   "name": "database-studio",
   "private": true,
-  "version": "0.1.0-beta.32",
+  "version": "0.1.0-beta.33",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -12,6 +12,7 @@
     "beta:bump": "node scripts/bump-beta.mjs",
     "tokens": "node scripts/extract-tokens.mjs",
     "tokens:check": "node scripts/check-hardcoded-styles.mjs",
+    "tools:fetch": "cargo run --release --manifest-path tools/fetch-dump-tools/Cargo.toml --",
     "test": "vitest run",
     "test:visual": "playwright test"
   },

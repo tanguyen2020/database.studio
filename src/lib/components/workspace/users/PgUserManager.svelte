@@ -11,7 +11,6 @@
   import { toasts } from '$lib/stores/toast.svelte'
   import { pgRoleWizard } from '$lib/stores/pgrole.svelte'
   import { grantWizard, STANDARD_LEVELS } from '$lib/stores/grantwizard.svelte'
-  import { highlightSql, sqlTokenColor } from '$lib/format/sql'
   import {
     alterPassword,
     alterRoleOptions,
@@ -27,7 +26,12 @@
   } from '$lib/users/postgres'
   import PrivilegeGrid from './PrivilegeGrid.svelte'
   import PrincipalHeader from './PrincipalHeader.svelte'
-  import { CARD, CARD_TITLE, EXPLAINER } from './ui'
+  import ManagerHeader from './ManagerHeader.svelte'
+  import PendingBar from './PendingBar.svelte'
+  import DropConfirm from './DropConfirm.svelte'
+  import Avatar from './Avatar.svelte'
+  import Chevron from '$lib/components/Chevron.svelte'
+  import './um.css'
   import type { TabState } from '$lib/types'
 
   interface Props {
@@ -241,7 +245,7 @@
   // schema owner per (database, schema) — for ALTER DEFAULT PRIVILEGES on the
   // right owner in each database (future-tables). Filled by loadScopesFor.
   let ownersByDbSchema = $state<Record<string, string>>({})
-  const OKEY = (db: string, schema: string) => `${db} ${schema}`
+  const OKEY = (db: string, schema: string) => `${db}\u0000${schema}`
 
   // Guided grant wizard — grouped by database: each selected database shows its
   // OWN schemas; grants build per (database, schema) and run on that database.
@@ -311,15 +315,20 @@
 
   // Editable role attributes: toggling one queues an ALTER ROLE. Optimistically
   // reflect the new value on the selected row so the checkbox flips immediately.
-  const ATTRS: { field: keyof RoleOptions; col: string; label: string }[] = [
-    { field: 'login', col: 'rolcanlogin', label: 'Can login' },
-    { field: 'superuser', col: 'rolsuper', label: 'Superuser' },
-    { field: 'createrole', col: 'rolcreaterole', label: 'Create roles' },
-    { field: 'createdb', col: 'rolcreatedb', label: 'Create databases' },
-    { field: 'inherit', col: 'rolinherit', label: 'Inherit' },
-    { field: 'replication', col: 'rolreplication', label: 'Replication' },
-    { field: 'bypassrls', col: 'rolbypassrls', label: 'Bypass RLS' },
+  const ATTRS: { field: keyof RoleOptions; col: string; label: string; desc: string }[] = [
+    { field: 'login', col: 'rolcanlogin', label: 'Can login', desc: 'Can sign in. Without it the role is a group that only bundles privileges.' },
+    { field: 'superuser', col: 'rolsuper', label: 'Superuser', desc: 'Bypasses every permission check. Grant sparingly.' },
+    { field: 'createrole', col: 'rolcreaterole', label: 'Create roles', desc: 'Can create, alter and drop other roles.' },
+    { field: 'createdb', col: 'rolcreatedb', label: 'Create databases', desc: 'Can create new databases.' },
+    { field: 'inherit', col: 'rolinherit', label: 'Inherit', desc: 'Automatically uses the privileges of the roles it is a member of.' },
+    { field: 'replication', col: 'rolreplication', label: 'Replication', desc: 'Can start streaming replication and take base backups.' },
+    { field: 'bypassrls', col: 'rolbypassrls', label: 'Bypass RLS', desc: 'Ignores row-level security policies.' },
   ]
+  // role list search (client-side, by name)
+  let listFilter = $state('')
+  const shownRoles = $derived(roles.filter((r) => String(r.name).toLowerCase().includes(listFilter.trim().toLowerCase())))
+  const loginRoles = $derived(shownRoles.filter((r) => !isGroup(r)))
+  const groupRoles = $derived(shownRoles.filter((r) => isGroup(r)))
   function queueAttr(field: keyof RoleOptions, col: string, next: boolean) {
     if (!selected) return
     const sql = alterRoleOptions(selected, { [field]: next } as RoleOptions)
@@ -386,6 +395,7 @@
       // cache one sub-connection per target database (attachDatabase returns the
       // base connId for the current DB, so no extra work in the common case).
       const connFor = new Map<string, string>()
+      let done = 0
       for (const { sql, db } of pending) {
         let target = cid
         if (db) {
@@ -397,9 +407,12 @@
           toasts.error(`${db ? `[${db}] ` : ''}${res.error?.message ?? 'error'}`)
           break
         }
+        done++
       }
-      toasts.success('Applied', 'postgres')
-      pending = []
+      // keep what failed (and everything after it) queued so it can be fixed and re-run
+      if (done === pending.length) toasts.success(`Applied ${done} change${done === 1 ? '' : 's'}`, 'postgres')
+      else if (done) toasts.show(`Applied ${done} of ${pending.length} changes — the rest stay pending`)
+      pending = pending.slice(done)
       await load()
     } catch (e) {
       toasts.error(String(e))
@@ -499,198 +512,237 @@
   }
 </script>
 
-<div class="mono" style="flex:1;display:flex;flex-direction:column;min-height:0">
-  <div style="flex:none;display:flex;align-items:center;gap:var(--px-8);padding:var(--px-9) var(--px-14);border-bottom:var(--px-1) solid var(--border);background:var(--surface);flex-wrap:wrap">
-    <span style="font-size:var(--px-12);font-weight:700">Login/Group Roles</span>
-    <span style="font-size:var(--px-11);color:var(--muted)">{roles.length} roles</span>
-    <span onclick={() => cid && pgRoleWizard.show(cid)} onkeydown={(e) => e.key === 'Enter' && cid && pgRoleWizard.show(cid)} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer;font-weight:600">+ New Role</span>
-    <span onclick={refresh} onkeydown={(e) => e.key === 'Enter' && refresh()} role="button" tabindex="0" aria-busy={refreshing} style="margin-left:auto;font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer;opacity:{refreshing ? 0.6 : 1}"><Icon name="refresh" size={12} /> {refreshing ? 'Refreshing…' : 'Refresh'}</span>
-  </div>
+<div class="um" style="flex:1;display:flex;flex-direction:column;min-height:0">
+  <ManagerHeader system="postgres" connectionId={cid} title="Login/Group Roles" count={roles.length} countLabel={roles.length === 1 ? 'role' : 'roles'} {refreshing} onRefresh={refresh}>
+    <span class="eg-btn primary" onclick={() => cid && pgRoleWizard.show(cid)} onkeydown={(e) => e.key === 'Enter' && cid && pgRoleWizard.show(cid)} role="button" tabindex="0" title="Create a login or group role"><Icon name="plus" size={12} />New role</span>
+  </ManagerHeader>
 
   <!-- Model explainer — PostgreSQL merges "user" and "group" into one concept. -->
-  <div style={EXPLAINER}>
-    In PostgreSQL a <b style="color:var(--text2)">role</b> is both a user and a group. A role with <b style="color:var(--text2)">LOGIN</b> (👤) can sign in; a role without it (👥) is a group used to bundle privileges. Grant a role <b style="color:var(--text2)">membership</b> in a group to let it inherit that group's access.
+  <div class="um-callout">
+    <Icon name="info" size={15} />
+    <span>In PostgreSQL a <b>role</b> is both a user and a group. A <b>login role</b> can sign in; a <b>group role</b> has no login and bundles privileges. Make a role a <b>member</b> of a group to give it that group's access.</span>
   </div>
   {#if !canManage}
-    <div style="flex:none;padding:var(--px-8) var(--px-14);background:var(--panel);border-bottom:var(--px-1) solid var(--border);color:var(--warn2);font-size:var(--px-11_5)">Current role lacks CREATEROLE/SUPERUSER — management statements may fail.</div>
+    <div class="um-callout warn">
+      <Icon name="warning" size={15} />
+      <span>You are connected without <b>CREATEROLE</b> or <b>SUPERUSER</b> — you can look around, but changes will probably be refused by the server.</span>
+    </div>
   {/if}
 
-  <div style="flex:1;display:flex;min-height:0">
+  <div class="um-body" style="margin-top:var(--px-12);border-top:var(--px-1) solid var(--border)">
     <!-- Role list -->
-    <div role="listbox" tabindex="-1" aria-label="Login/Group Roles" style="flex:none;width:var(--px-240);border-right:var(--px-1) solid var(--border);overflow:auto;min-height:0">
-      {#if error}
-        <div style="padding:var(--px-14);color:var(--error);font-size:var(--px-12)">{error}</div>
-      {:else if loading}
-        <div style="padding:var(--px-14);color:var(--muted);font-size:var(--px-12)">Loading…</div>
-      {:else}
-        {#each roles as r (r.name)}
-          {@const rn = String(r.name)}
-          {@const sel = selected === rn}
-          <ContextMenu.Root>
-            <ContextMenu.Trigger>
-              <div onclick={() => (selected = rn)} onkeydown={(e) => e.key === 'Enter' && (selected = rn)} role="option" tabindex="0" aria-selected={sel} style="display:flex;align-items:center;gap:var(--px-6);padding:var(--px-6) var(--px-12);font-size:var(--px-12_5);cursor:pointer;border-bottom:var(--px-1) solid var(--border);background:{sel ? 'var(--grid-select)' : 'transparent'};color:{sel ? 'var(--hex-fff)' : 'var(--text)'}">
-                <span title={isGroup(r) ? 'Group role' : 'Login role'}>{isGroup(r) ? '👥' : '👤'}</span>
-                <span style="flex:1;overflow:hidden;text-overflow:ellipsis">{r.name}</span>
-                {#if boolY(r.rolsuper)}<span style="font-size:var(--px-9);font-weight:700;color:{sel ? 'var(--hex-fff)' : 'var(--warn2)'}">SUPER</span>{/if}
-                <span
-                  onclick={(e) => { e.stopPropagation(); dropConfirm = rn }}
-                  onkeydown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); dropConfirm = rn } }}
-                  role="button"
-                  tabindex="0"
-                  title="Drop role"
-                  style="opacity:0.75;color:{sel ? 'var(--hex-fff)' : 'var(--error)'};font-size:var(--px-13);line-height:1;cursor:pointer"
-                >🗑</span>
-              </div>
-            </ContextMenu.Trigger>
-            <ContextMenu.Content>
-              <ContextMenu.Item onclick={() => (selected = rn)}>Select</ContextMenu.Item>
-              <ContextMenu.Item onclick={() => (dropConfirm = rn)}>Drop role…</ContextMenu.Item>
-            </ContextMenu.Content>
-          </ContextMenu.Root>
-        {/each}
-      {/if}
+    <div class="um-list">
+      <div class="um-list-search">
+        <input class="um-input" style="width:100%" placeholder="Search roles" bind:value={listFilter} aria-label="Search roles" spellcheck="false" />
+      </div>
+      <div class="um-list-scroll" role="listbox" tabindex="-1" aria-label="Login/Group Roles">
+        {#if error}
+          <div class="um-empty" style="color:var(--danger-solid)">{error}</div>
+        {:else if loading && !roles.length}
+          <div class="um-empty">Loading roles…</div>
+        {:else if !shownRoles.length}
+          <div class="um-empty">{roles.length ? 'No role matches your search.' : 'No roles yet.'}</div>
+        {:else}
+          {#each [{ label: 'Login roles', list: loginRoles }, { label: 'Group roles', list: groupRoles }] as grp (grp.label)}
+            {#if grp.list.length}
+              <div class="um-list-group">{grp.label} · {grp.list.length}</div>
+              {#each grp.list as r (r.name)}
+                {@const rn = String(r.name)}
+                {@const sel = selected === rn}
+                <ContextMenu.Root>
+                  <ContextMenu.Trigger>
+                    <div class="um-row" onclick={() => (selected = rn)} onkeydown={(e) => e.key === 'Enter' && (selected = rn)} role="option" tabindex="0" aria-selected={sel}>
+                      <Avatar name={rn} group={isGroup(r)} size={28} />
+                      <span class="um-row-text">
+                        <span class="um-row-name">{r.name}</span>
+                        <span class="um-row-sub">{isGroup(r) ? 'Group role' : 'Login role'}{boolY(r.rolcreaterole) && !boolY(r.rolsuper) ? ' · can create roles' : ''}</span>
+                      </span>
+                      {#if boolY(r.rolsuper)}<span class="um-badge warn">Superuser</span>{/if}
+                      <span
+                        class="um-row-act"
+                        onclick={(e) => { e.stopPropagation(); dropConfirm = rn }}
+                        onkeydown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); dropConfirm = rn } }}
+                        role="button"
+                        tabindex="0"
+                        title="Drop role"
+                        aria-label="Drop role {rn}"
+                      ><Icon name="trash" size={13} /></span>
+                    </div>
+                  </ContextMenu.Trigger>
+                  <ContextMenu.Content>
+                    <ContextMenu.Item onclick={() => (selected = rn)}>Select</ContextMenu.Item>
+                    <ContextMenu.Item onclick={() => (dropConfirm = rn)}>Drop role…</ContextMenu.Item>
+                  </ContextMenu.Content>
+                </ContextMenu.Root>
+              {/each}
+            {/if}
+          {/each}
+        {/if}
+      </div>
     </div>
 
     <!-- Detail -->
-    <div style="flex:1;display:flex;flex-direction:column;min-height:0">
+    <div class="um-detail">
       {#if selectedRole}
-        <div style="flex:none;padding:var(--px-12) var(--px-14) 0">
-          <PrincipalHeader
-            name={selected}
-            icon={isGroup(selectedRole) ? '👥' : '👤'}
-            subtitle={isGroup(selectedRole) ? 'Group role — bundles privileges (no login)' : 'Login role — can sign in'}
-            badge={boolY(selectedRole.rolsuper) ? 'SUPERUSER' : ''}
-            badgeDanger
-          />
-        </div>
-        <div style="flex:none;display:flex;gap:var(--px-2);padding:var(--px-8) var(--px-12) 0;border-bottom:var(--px-1) solid var(--border)">
+        <PrincipalHeader
+          name={selected}
+          group={isGroup(selectedRole)}
+          subtitle={isGroup(selectedRole) ? 'Group role — bundles privileges, cannot sign in' : 'Login role — can sign in'}
+          badges={[
+            ...(boolY(selectedRole.rolsuper) ? [{ label: 'Superuser', tone: 'warn' as const }] : []),
+            ...(boolY(selectedRole.rolcreaterole) ? [{ label: 'Create roles', tone: 'muted' as const }] : []),
+            ...(boolY(selectedRole.rolcreatedb) ? [{ label: 'Create DB', tone: 'muted' as const }] : []),
+          ]}
+        >
+          {#snippet actions()}
+            <span class="eg-btn" onclick={openGrantWizard} onkeydown={(e) => e.key === 'Enter' && openGrantWizard()} role="button" tabindex="0"><Icon name="key" size={12} />Grant access…</span>
+            <span class="eg-btn um-ghost-danger" onclick={() => (dropConfirm = selected)} onkeydown={(e) => e.key === 'Enter' && (dropConfirm = selected)} role="button" tabindex="0"><Icon name="trash" size={12} />Drop role…</span>
+          {/snippet}
+        </PrincipalHeader>
+        <div class="um-tabs" role="tablist">
           {#each [['general', 'General'], ['membership', 'Membership'], ['privileges', 'Privileges'], ['access', 'Access'], ['default', 'Default privileges']] as [k, label] (k)}
-            <span onclick={() => (detailTab = k as typeof detailTab)} onkeydown={(e) => e.key === 'Enter' && (detailTab = k as typeof detailTab)} role="tab" tabindex="0" aria-selected={detailTab === k} style="padding:var(--px-6) var(--px-12);font-size:var(--px-12);cursor:pointer;font-weight:600;border-bottom:var(--px-2) solid {detailTab === k ? 'var(--primary)' : 'transparent'};color:{detailTab === k ? 'var(--text)' : 'var(--muted)'}">{label}</span>
+            <span class="um-tab" onclick={() => (detailTab = k as typeof detailTab)} onkeydown={(e) => e.key === 'Enter' && (detailTab = k as typeof detailTab)} role="tab" tabindex="0" aria-selected={detailTab === k}>{label}</span>
           {/each}
         </div>
-        <div style="flex:1;overflow:auto;min-height:0;padding:var(--px-14)">
+        <div class="um-detail-scroll">
           {#if detailTab === 'general'}
-            <!-- Attributes card: toggling queues ALTER ROLE (pgAdmin-style) -->
-            <div style={CARD}>
-              <div style={CARD_TITLE}>Attributes <span style="font-weight:400;color:var(--muted);font-size:var(--px-10_5)">— toggle to queue ALTER ROLE</span></div>
-              <div style="display:flex;flex-direction:column;gap:var(--px-4)">
+            <!-- Attributes: toggling queues ALTER ROLE (pgAdmin-style) -->
+            <div class="um-card">
+              <div class="um-card-title">Attributes</div>
+              <div class="um-card-desc">What this role is allowed to do on the server. Each change is queued as an ALTER ROLE and applied when you click Execute.</div>
+              <div class="um-toggles">
                 {#each ATTRS as a (a.field)}
-                  <label style="font-size:var(--px-12_5);color:var(--text);display:flex;align-items:center;gap:var(--px-7);cursor:pointer">
-                    <input type="checkbox" disabled={!canManage} checked={boolY(selectedRole[a.col])} onchange={(e) => queueAttr(a.field, a.col, (e.currentTarget as HTMLInputElement).checked)} /> {a.label}
+                  <label class="um-toggle">
+                    <span class="um-toggle-text"><span>{a.label}</span><span>{a.desc}</span></span>
+                    <input type="checkbox" class="um-switch" disabled={!canManage} checked={boolY(selectedRole[a.col])} onchange={(e) => queueAttr(a.field, a.col, (e.currentTarget as HTMLInputElement).checked)} />
                   </label>
                 {/each}
               </div>
             </div>
-            <!-- Limits & password card -->
-            <div style={CARD}>
-              <div style={CARD_TITLE}>Limits &amp; password</div>
-              <div style="display:flex;gap:var(--px-8);align-items:flex-end;margin-bottom:var(--px-10);flex-wrap:wrap">
-                <label style="font-size:var(--px-11_5);color:var(--text2)">Connection limit
-                  <input type="number" bind:value={newConnLimit} placeholder={String(selectedRole.rolconnlimit ?? -1)} class="mono" style="display:block;margin-top:var(--px-4);width:var(--px-110);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-8);color:var(--text)" />
-                </label>
-                <span onclick={queueConnLimit} onkeydown={(e) => e.key === 'Enter' && queueConnLimit()} role="button" tabindex="0" aria-disabled={newConnLimit == null} style="font-size:var(--px-11_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-10);cursor:{newConnLimit == null ? 'not-allowed' : 'pointer'};opacity:{newConnLimit == null ? 0.5 : 1}">Queue limit</span>
-                <span style="font-size:var(--px-11);color:var(--muted)">Valid until: {selectedRole.valid_until || '—'}</span>
-              </div>
-              <div style="display:flex;gap:var(--px-6);align-items:flex-end;flex-wrap:wrap">
-                <label style="font-size:var(--px-11_5);color:var(--text2)">Change password
-                  <input type="password" bind:value={newPassword} class="mono" style="display:block;margin-top:var(--px-4);width:var(--px-220);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-8);color:var(--text)" />
-                </label>
-                <span onclick={queuePassword} onkeydown={(e) => e.key === 'Enter' && queuePassword()} role="button" tabindex="0" aria-disabled={!newPassword} style="font-size:var(--px-11_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-10);cursor:{newPassword ? 'pointer' : 'not-allowed'};opacity:{newPassword ? 1 : 0.5}">Queue change</span>
+            <div class="um-card">
+              <div class="um-card-title">Password &amp; limits</div>
+              <div class="um-card-desc">Account expires: <b style="color:var(--text);font-weight:500">{selectedRole.valid_until || 'never'}</b></div>
+              <div style="display:flex;flex-direction:column;gap:var(--px-14)">
+                <div class="um-inline">
+                  <label class="um-field" style="width:var(--px-300)">New password
+                    <input type="password" bind:value={newPassword} class="um-input" placeholder="Leave empty to keep the current one" autocomplete="new-password" />
+                  </label>
+                  <span class="eg-btn" onclick={queuePassword} onkeydown={(e) => e.key === 'Enter' && queuePassword()} role="button" tabindex="0" aria-disabled={!newPassword}>Change password</span>
+                </div>
+                <div class="um-inline">
+                  <label class="um-field" style="width:var(--px-160)">Connection limit
+                    <input type="number" bind:value={newConnLimit} placeholder={String(selectedRole.rolconnlimit ?? -1)} class="um-input" />
+                  </label>
+                  <span class="eg-btn" onclick={queueConnLimit} onkeydown={(e) => e.key === 'Enter' && queueConnLimit()} role="button" tabindex="0" aria-disabled={newConnLimit == null}>Set limit</span>
+                  <span class="um-field-hint" style="align-self:center">−1 means unlimited.</span>
+                </div>
               </div>
             </div>
-            <span onclick={() => (dropConfirm = selected)} onkeydown={(e) => e.key === 'Enter' && (dropConfirm = selected)} role="button" tabindex="0" style="font-size:var(--px-11_5);color:var(--error);border:var(--px-1) solid var(--error);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">Drop role…</span>
           {:else if detailTab === 'membership'}
-            <div style="font-size:var(--px-12);color:var(--text2);font-weight:600;margin-bottom:var(--px-6)">Member of</div>
-            {#if memberOf.length}
-              {#each memberOf as m (m.role)}
-                <div style="display:flex;align-items:center;gap:var(--px-8);font-size:var(--px-12);padding:var(--px-2) 0">
-                  <span class="mono">{m.role}</span>
-                  {#if boolY(m.admin_option)}<span style="font-size:var(--px-9);color:var(--muted)">ADMIN</span>{/if}
-                  <span onclick={() => queueRevokeMembership(String(m.role))} onkeydown={(e) => e.key === 'Enter' && queueRevokeMembership(String(m.role))} role="button" tabindex="0" style="font-size:var(--px-10_5);color:var(--error);cursor:pointer">revoke</span>
+            <div class="um-card">
+              <div class="um-card-title">Member of</div>
+              <div class="um-card-desc">Groups whose privileges <span class="mono" style="color:var(--text)">{selected}</span> receives{boolY(selectedRole.rolinherit) ? '' : ' (Inherit is off — it must SET ROLE to use them)'}.</div>
+              {#if memberOf.length}
+                <div class="um-items" style="margin-bottom:var(--px-12)">
+                  {#each memberOf as m (m.role)}
+                    <div class="um-item">
+                      <Avatar name={String(m.role)} group size={22} />
+                      <span class="mono" style="flex:1">{m.role}</span>
+                      {#if boolY(m.admin_option)}<span class="um-badge info" title="Can grant this membership to others">Admin option</span>{/if}
+                      <span class="um-link danger" onclick={() => queueRevokeMembership(String(m.role))} onkeydown={(e) => e.key === 'Enter' && queueRevokeMembership(String(m.role))} role="button" tabindex="0" style="font-size:var(--px-12)">Remove</span>
+                    </div>
+                  {/each}
                 </div>
-              {/each}
-            {:else}
-              <div style="font-size:var(--px-11_5);color:var(--muted)">Not a member of any role.</div>
-            {/if}
-            <div style="display:flex;gap:var(--px-6);align-items:center;margin-top:var(--px-10)">
-              <select bind:value={grantRoleName} class="mono" style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4);color:var(--text);font-size:var(--px-12)">
-                <option value="">— grant membership in —</option>
-                {#each roles.filter((r) => String(r.name) !== selected) as r (r.name)}<option value={String(r.name)}>{r.name}</option>{/each}
-              </select>
-              <label style="font-size:var(--px-11_5);color:var(--text2);display:flex;align-items:center;gap:var(--px-4)"><input type="checkbox" bind:checked={grantAdmin} /> admin</label>
-              <span onclick={queueGrantMembership} onkeydown={(e) => e.key === 'Enter' && queueGrantMembership()} role="button" tabindex="0" aria-disabled={!grantRoleName} style="font-size:var(--px-11_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:{grantRoleName ? 'pointer' : 'not-allowed'};opacity:{grantRoleName ? 1 : 0.5}">Queue grant</span>
+              {:else}
+                <div class="um-field-hint" style="margin-bottom:var(--px-12)">Not a member of any group yet.</div>
+              {/if}
+              <div class="um-inline">
+                <label class="um-field" style="width:var(--px-252)">Add to group
+                  <select bind:value={grantRoleName} class="um-select">
+                    <option value="">Choose a role…</option>
+                    {#each roles.filter((r) => String(r.name) !== selected) as r (r.name)}<option value={String(r.name)}>{r.name}</option>{/each}
+                  </select>
+                </label>
+                <label class="um-checkline" style="align-self:center" title="Lets this role grant the membership to others"><input type="checkbox" class="um-check" bind:checked={grantAdmin} /> With admin option</label>
+                <span class="eg-btn primary" onclick={queueGrantMembership} onkeydown={(e) => e.key === 'Enter' && queueGrantMembership()} role="button" tabindex="0" aria-disabled={!grantRoleName}>Add</span>
+              </div>
             </div>
             {#if hasMembers.length}
-              <div style="font-size:var(--px-12);color:var(--text2);font-weight:600;margin:var(--px-12) 0 var(--px-6)">Members</div>
-              {#each hasMembers as m (m.member)}<div class="mono" style="font-size:var(--px-12);padding:var(--px-2) 0">{m.member}</div>{/each}
+              <div class="um-card">
+                <div class="um-card-title">Members</div>
+                <div class="um-card-desc">Roles that receive <span class="mono" style="color:var(--text)">{selected}</span>'s privileges.</div>
+                <div class="um-items">
+                  {#each hasMembers as m (m.member)}
+                    <div class="um-item"><Avatar name={String(m.member)} size={22} /><span class="mono">{m.member}</span></div>
+                  {/each}
+                </div>
+              </div>
             {/if}
           {:else if detailTab === 'privileges'}
             <!-- Guided grant (primary path) -->
-            <div style="display:flex;align-items:center;gap:var(--px-10);margin-bottom:var(--px-8);flex-wrap:wrap">
-              <span onclick={openGrantWizard} onkeydown={(e) => e.key === 'Enter' && openGrantWizard()} role="button" tabindex="0" style="font-size:var(--px-12_5);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-7);padding:var(--px-6) var(--px-14);cursor:pointer;font-weight:600">＋ Grant access…</span>
-              <span style="font-size:var(--px-11);color:var(--muted)">Pick database(s) → schema(s) → access level.</span>
-            </div>
-            <!-- #3: where the role already has grants, across databases → Access tab -->
-            <div style="font-size:var(--px-11);color:var(--muted);margin-bottom:var(--px-10)">To see which databases / schemas <span class="mono" style="color:var(--text2)">{selected}</span> is already granted on, open
-              <span onclick={() => (detailTab = 'access')} onkeydown={(e) => e.key === 'Enter' && (detailTab = 'access')} role="button" tabindex="0" style="color:var(--primary);cursor:pointer;font-weight:600">the Access tab →</span>
-              The matrix below covers the current database only.
+            <div class="um-card" style="display:flex;align-items:center;gap:var(--px-14);flex-wrap:wrap">
+              <span class="um-dlg-icon"><Icon name="key" size={18} /></span>
+              <div style="flex:1;min-width:var(--px-200)">
+                <div class="um-card-title">Grant access</div>
+                <div style="font-size:var(--px-12);color:var(--muted);line-height:1.45">Pick one or more databases and schemas, then an access level (read-only, read-write…). To see what <span class="mono" style="color:var(--text2)">{selected}</span> already has everywhere, open
+                  <span class="um-link" onclick={() => (detailTab = 'access')} onkeydown={(e) => e.key === 'Enter' && (detailTab = 'access')} role="button" tabindex="0">the Access tab →</span></div>
+              </div>
+              <span class="eg-btn primary" onclick={openGrantWizard} onkeydown={(e) => e.key === 'Enter' && openGrantWizard()} role="button" tabindex="0" style="font-size:var(--px-12_5);padding:var(--px-6) var(--px-14)"><Icon name="plus" size={12} />Grant access…</span>
             </div>
             <!-- Advanced: full permission matrix (collapsed) -->
-            <div onclick={() => (showMatrix = !showMatrix)} onkeydown={(e) => e.key === 'Enter' && (showMatrix = !showMatrix)} role="button" tabindex="0" style="font-size:var(--px-11_5);color:var(--text2);cursor:pointer;margin-bottom:var(--px-8);user-select:none">{showMatrix ? '▾' : '▸'} Advanced — permission matrix</div>
+            <div class="um-disclosure" onclick={() => (showMatrix = !showMatrix)} onkeydown={(e) => e.key === 'Enter' && (showMatrix = !showMatrix)} role="button" tabindex="0" aria-expanded={showMatrix}><Chevron open={showMatrix} />Advanced — permission matrix <span style="font-weight:400;color:var(--muted)">(this database only)</span></div>
             {#if showMatrix}
-            <div style="display:flex;align-items:center;gap:var(--px-10);margin-bottom:var(--px-8);flex-wrap:wrap">
-              <label style="font-size:var(--px-11_5);color:var(--text2);display:flex;align-items:center;gap:var(--px-4)"><input type="checkbox" bind:checked={futureTables} /> Also apply to future tables (ALTER DEFAULT PRIVILEGES)</label>
-            </div>
-            <PrivilegeGrid
-              columns={PG_GRID_COLUMNS.map((c) => ({ key: c.key, label: c.label, tip: c.tip }))}
-              scopes={gridScopes}
-              {cellState}
-              {cellTip}
-              {onCell}
-              presets={gridPresets}
-              onPreset={(s, kind) => applyPreset(s, kind as PresetKind)}
-              note="EXECUTE on functions defaults to PUBLIC in PostgreSQL."
-            />
+              <label class="um-checkline" style="margin-bottom:var(--px-10)"><input type="checkbox" class="um-check" bind:checked={futureTables} /> Also apply to tables created later (ALTER DEFAULT PRIVILEGES)</label>
+              <PrivilegeGrid
+                columns={PG_GRID_COLUMNS.map((c) => ({ key: c.key, label: c.label, tip: c.tip }))}
+                scopes={gridScopes}
+                {cellState}
+                {cellTip}
+                {onCell}
+                presets={gridPresets}
+                onPreset={(s, kind) => applyPreset(s, kind as PresetKind)}
+                note="EXECUTE on functions defaults to PUBLIC in PostgreSQL."
+              />
             {/if}
           {:else if detailTab === 'access'}
             <!-- Access overview: what this role can access per database → schema -->
-            <div style="display:flex;align-items:center;gap:var(--px-10);margin-bottom:var(--px-10);flex-wrap:wrap">
-              <span style="font-size:var(--px-12);color:var(--text2)">What <span class="mono" style="color:var(--text);font-weight:600">{selected}</span> can access, per database → schema.</span>
-              <span onclick={loadAccess} onkeydown={(e) => e.key === 'Enter' && loadAccess()} role="button" tabindex="0" aria-busy={accessLoading} style="margin-left:auto;font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer;opacity:{accessLoading ? 0.6 : 1}"><Icon name="refresh" size={12} /> {accessLoading ? 'Loading…' : 'Refresh'}</span>
+            <div style="display:flex;align-items:center;gap:var(--px-10);margin-bottom:var(--px-12);flex-wrap:wrap">
+              <span style="font-size:var(--px-12_5);color:var(--text2)">What <span class="mono" style="color:var(--text);font-weight:600">{selected}</span> can access, per database → schema.</span>
+              <span class="eg-btn" style="margin-left:auto" onclick={loadAccess} onkeydown={(e) => e.key === 'Enter' && loadAccess()} role="button" tabindex="0" aria-busy={accessLoading}><span class="refresh-glyph" class:um-spin={accessLoading}><Icon name="refresh" size={12} /></span>{accessLoading ? 'Loading…' : 'Refresh'}</span>
             </div>
             {#if boolY(selectedRole.rolsuper)}
-              <div style="font-size:var(--px-11_5);color:var(--warn2);margin-bottom:var(--px-8)">★ Superuser — full access to every database and schema (grants below are in addition).</div>
+              <div class="um-callout warn" style="margin:0 0 var(--px-12)"><Icon name="shield" size={15} /><span><b>Superuser</b> — full access to every database and schema. The grants below are in addition.</span></div>
             {/if}
             {#if accessLoading && !access.length}
-              <div style="font-size:var(--px-11_5);color:var(--muted)">Reading each database…</div>
+              <div class="um-empty">Reading each database…</div>
             {:else if !access.length}
-              <div style="font-size:var(--px-11_5);color:var(--muted)">No databases found.</div>
+              <div class="um-empty">No databases found.</div>
             {:else}
               <div style="display:flex;flex-direction:column;gap:var(--px-10)">
                 {#each access as d (d.db)}
-                  <div style="border:var(--px-1) solid var(--border);border-radius:var(--px-7);overflow:hidden">
-                    <div style="display:flex;align-items:center;gap:var(--px-6);padding:var(--px-6) var(--px-10);background:var(--panel);border-bottom:var(--px-1) solid var(--border)">
-                      <span style="color:{d.current ? 'var(--primary)' : 'var(--muted)'};font-size:var(--px-11)">{d.current ? '●' : '○'}</span>
-                      <span class="mono" style="font-size:var(--px-12_5);font-weight:700;color:var(--text)">{d.db}</span>
-                      {#if d.current}<span style="font-size:var(--px-10);color:var(--muted)">current</span>{/if}
-                      <span style="margin-left:auto;font-size:var(--px-10_5);color:var(--muted)">{d.loading ? '…' : d.schemas.length ? `${d.schemas.length} schema(s)` : ''}</span>
+                  <div class="um-card" style="padding:0;margin:0;overflow:hidden">
+                    <div style="display:flex;align-items:center;gap:var(--px-8);padding:var(--px-9) var(--px-14);background:var(--panel);border-bottom:var(--px-1) solid var(--border)">
+                      <span style="color:{d.current ? 'var(--primary)' : 'var(--muted)'};display:inline-flex"><Icon name="database" size={14} /></span>
+                      <span class="mono" style="font-size:var(--px-12_5);font-weight:600;color:var(--text)">{d.db}</span>
+                      {#if d.current}<span class="um-badge info">current</span>{/if}
+                      <span style="margin-left:auto;font-size:var(--px-11_5);color:var(--muted)">{d.loading ? 'Reading…' : d.schemas.length ? `${d.schemas.length} schema(s)` : ''}</span>
                     </div>
-                    <div style="padding:var(--px-6) var(--px-10)">
+                    <div style="padding:var(--px-8) var(--px-14)">
                       {#if d.loading}
-                        <div style="font-size:var(--px-11);color:var(--muted)">Reading…</div>
+                        <div class="um-field-hint">Reading…</div>
                       {:else if d.error}
-                        <div style="font-size:var(--px-11);color:var(--error)">Could not read: {d.error}</div>
+                        <div class="um-field-err">Could not read: {d.error}</div>
                       {:else if !d.schemas.length}
-                        <div style="font-size:var(--px-11);color:var(--muted)">— no explicit privileges in this database</div>
+                        <div class="um-field-hint">No explicit privileges in this database.</div>
                       {:else}
                         {#each d.schemas as s (s.schema)}
-                          <div style="display:flex;align-items:flex-start;gap:var(--px-8);padding:var(--px-3) 0;flex-wrap:wrap">
-                            <span class="mono" style="font-size:var(--px-12);color:var(--text);min-width:var(--px-110)">{s.schema}</span>
-                            <div style="display:flex;gap:var(--px-4);flex-wrap:wrap;flex:1">
-                              {#each s.schemaPrivs as p (p)}<span style="font-size:var(--px-10);color:var(--syntax-keyword);background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-4);padding:0 var(--px-5)">{p}</span>{/each}
-                              {#each s.tablePrivs as tp (tp.priv)}<span style="font-size:var(--px-10);color:var(--syntax-number);background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-4);padding:0 var(--px-5)">{tp.priv} ×{tp.n}</span>{/each}
-                              {#each s.seqPrivs as sp (sp)}<span style="font-size:var(--px-10);color:var(--syntax-type);background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-4);padding:0 var(--px-5)">SEQ {sp}</span>{/each}
-                              {#if s.inherited}<span title="granted via a role this role is a member of" style="font-size:var(--px-10);color:var(--muted)">◐ inherited</span>{/if}
+                          <div style="display:flex;align-items:flex-start;gap:var(--px-10);padding:var(--px-5) 0;flex-wrap:wrap">
+                            <span class="mono" style="font-size:var(--px-12);color:var(--text);min-width:var(--px-120);padding-top:var(--px-2)">{s.schema}</span>
+                            <div style="display:flex;gap:var(--px-5);flex-wrap:wrap;flex:1">
+                              {#each s.schemaPrivs as p (p)}<span class="um-chip role">{p}</span>{/each}
+                              {#each s.tablePrivs as tp (tp.priv)}<span class="um-chip grant">{tp.priv} ×{tp.n}</span>{/each}
+                              {#each s.seqPrivs as sp (sp)}<span class="um-chip seq">SEQ {sp}</span>{/each}
+                              {#if s.inherited}<span title="granted via a role this role is a member of" class="um-badge muted">inherited</span>{/if}
                             </div>
                           </div>
                         {/each}
@@ -699,61 +751,51 @@
                   </div>
                 {/each}
               </div>
-              <div style="font-size:var(--px-10_5);color:var(--muted);margin-top:var(--px-8)">Table privileges show a per-schema count (e.g. SELECT ×5 = on 5 tables). PostgreSQL grants CONNECT to PUBLIC by default, so a role can usually open every database; what it can actually read/write is the schema/table privileges above.</div>
+              <div class="um-field-hint" style="margin-top:var(--px-10)">Table privileges show a per-schema count (SELECT ×5 = on 5 tables). PostgreSQL grants CONNECT to PUBLIC by default, so a role can usually open every database; what it can actually read or change is the schema / table privileges above.</div>
             {/if}
           {:else}
             <!-- Default privileges (read-only, §2.3) — ALTER DEFAULT PRIVILEGES already granted -->
-            <div style="font-size:var(--px-11);color:var(--muted);margin-bottom:var(--px-8)">Privileges automatically granted on objects created LATER, by owner. (Read-only — set via the future-tables checkbox in Privileges.)</div>
+            <div class="um-card-desc">Privileges granted automatically on objects created later, by owner. Read-only here — set them with the "tables created later" option in Privileges.</div>
             {#each [defaultAcl.filter((d) => String(d.grantee) === selected)] as list (0)}
               {#if list.length}
-                <table class="mono" style="border-collapse:collapse;font-size:var(--px-12)">
-                  <thead><tr>{#each ['Owner', 'Schema', 'Object type', 'Privilege', 'Grantable'] as h (h)}<th style="text-align:left;padding:var(--px-4) var(--px-12) var(--px-4) 0;color:var(--text2);border-bottom:var(--px-1) solid var(--border2)">{h}</th>{/each}</tr></thead>
-                  <tbody>
-                    {#each list as d (`${d.owner}:${d.schema}:${d.objtype}:${d.privilege_type}`)}
-                      <tr>
-                        <td style="padding:var(--px-3) var(--px-12) var(--px-3) 0;color:var(--text)">{d.owner}</td>
-                        <td style="padding:var(--px-3) var(--px-12) var(--px-3) 0;color:var(--text)">{d.schema || '—'}</td>
-                        <td style="padding:var(--px-3) var(--px-12) var(--px-3) 0;color:var(--text2)">{d.objtype}</td>
-                        <td style="padding:var(--px-3) var(--px-12) var(--px-3) 0;color:var(--text)">{d.privilege_type}</td>
-                        <td style="padding:var(--px-3) 0;color:var(--muted)">{d.is_grantable ? 'yes' : ''}</td>
-                      </tr>
-                    {/each}
-                  </tbody>
-                </table>
+                <div class="um-card" style="padding:0;overflow:hidden">
+                  <table class="um-table">
+                    <thead><tr>{#each ['Owner', 'Schema', 'Object type', 'Privilege', 'Grantable'] as h (h)}<th>{h}</th>{/each}</tr></thead>
+                    <tbody>
+                      {#each list as d (`${d.owner}:${d.schema}:${d.objtype}:${d.privilege_type}`)}
+                        <tr>
+                          <td class="mono">{d.owner}</td>
+                          <td class="mono">{d.schema || '—'}</td>
+                          <td style="color:var(--text2)">{d.objtype}</td>
+                          <td><span class="um-chip grant">{d.privilege_type}</span></td>
+                          <td style="color:var(--muted)">{d.is_grantable ? 'Yes' : ''}</td>
+                        </tr>
+                      {/each}
+                    </tbody>
+                  </table>
+                </div>
               {:else}
-                <div style="font-size:var(--px-11_5);color:var(--muted)">No default privileges for this role.</div>
+                <div class="um-empty">No default privileges for this role.</div>
               {/if}
             {/each}
           {/if}
         </div>
       {:else if !loading}
-        <div style="padding:var(--px-14);color:var(--muted);font-size:var(--px-12)">Select a role.</div>
+        <div class="um-empty" style="margin:auto">
+          <div style="display:inline-flex;color:var(--muted);margin-bottom:var(--px-8)"><Icon name="users" size={28} /></div>
+          <div style="font-size:var(--px-13);font-weight:600;color:var(--text)">Select a role</div>
+          <div>Pick a role on the left to edit its attributes, memberships and privileges.</div>
+        </div>
       {/if}
 
       <!-- Pending changes -->
       {#if pending.length}
-        <div style="flex:none;border-top:var(--px-1) solid var(--border);background:var(--panel);padding:var(--px-10) var(--px-14);max-height:var(--px-220);overflow:auto">
-          <div style="display:flex;align-items:center;gap:var(--px-8);margin-bottom:var(--px-6)">
-            <span style="font-size:var(--px-11_5);font-weight:700;color:var(--text2)">Pending changes ({pending.length})</span>
-            <span onclick={execute} onkeydown={(e) => e.key === 'Enter' && execute()} role="button" tabindex="0" aria-disabled={executing} style="margin-left:auto;font-size:var(--px-11_5);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-6);padding:var(--px-4) var(--px-12);cursor:pointer;font-weight:600;opacity:{executing ? 0.6 : 1}">{executing ? 'Executing…' : 'Execute'}</span>
-            <span onclick={discard} onkeydown={(e) => e.key === 'Enter' && discard()} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-12);cursor:pointer">Discard</span>
-          </div>
-          <pre class="selectable mono" style="margin:0;font-size:var(--px-11);white-space:pre-wrap;color:var(--text2)">{#each pending as s (s)}{#each highlightSql((s.db ? `-- database: ${s.db}\n` : '') + s.sql + ';\n') as tk (tk)}<span style="color:{sqlTokenColor(tk.kind)}">{tk.text}</span>{/each}{/each}</pre>
-        </div>
+        <PendingBar count={pending.length} sql={pending.map((s) => (s.db ? `-- database: ${s.db}\n` : '') + s.sql + ';').join('\n')} {executing} onExecute={execute} onDiscard={discard} />
       {/if}
     </div>
   </div>
 </div>
 
 {#if dropConfirm}
-  <div onkeydown={(e) => { if (e.key === 'Escape') dropConfirm = null; if (e.key === 'Enter') void doDropRole() }} role="presentation" style="position:fixed;inset:0;background:var(--rgba-0-0-0-_5);display:flex;align-items:center;justify-content:center;z-index:58">
-    <div onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()} role="dialog" aria-modal="true" tabindex="-1" style="width:var(--px-420);max-width:92vw;background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-12);box-shadow:0 var(--px-30) var(--px-70) var(--rgba-0-0-0-_55);padding:var(--px-18)">
-      <div style="font-size:var(--px-14);font-weight:600;color:var(--text);margin-bottom:var(--px-8)">Drop role</div>
-      <div style="font-size:var(--px-12_5);color:var(--text2);line-height:1.45;margin-bottom:var(--px-16)">Drop role <span class="mono" style="color:var(--text);font-weight:600">{dropConfirm}</span>? This cannot be undone. (If it owns objects or holds grants, PostgreSQL will error — reassign / drop those first.)</div>
-      <div style="display:flex;gap:var(--px-9);justify-content:flex-end">
-        <span onclick={() => (dropConfirm = null)} onkeydown={(e) => e.key === 'Enter' && (dropConfirm = null)} role="button" tabindex="0" style="font-size:var(--px-12_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-8);padding:var(--px-8) var(--px-16);cursor:pointer">Cancel</span>
-        <span onclick={doDropRole} onkeydown={(e) => e.key === 'Enter' && doDropRole()} role="button" tabindex="0" aria-disabled={dropping} class="ds-danger" style="font-size:var(--px-12_5);border-radius:var(--px-8);padding:var(--px-8) var(--px-18);cursor:{dropping ? 'not-allowed' : 'pointer'};opacity:{dropping ? 0.6 : 1};font-weight:600">{dropping ? 'Dropping…' : 'Drop role'}</span>
-      </div>
-    </div>
-  </div>
+  <DropConfirm name={dropConfirm} kind="role" busy={dropping} note="If it owns objects or holds grants, PostgreSQL refuses — reassign or drop those first." oncancel={() => (dropConfirm = null)} onconfirm={doDropRole} />
 {/if}

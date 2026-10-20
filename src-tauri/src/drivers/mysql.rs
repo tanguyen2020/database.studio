@@ -368,12 +368,18 @@ impl MySqlDriver {
         .fetch_all(&mut self.conn)
         .await
         .map_err(|e| map_error(self.system, &e))?;
+        // Every routine's parameters in ONE query (it used to be one query per
+        // routine: on a schema with hundreds of routines that was hundreds of round
+        // trips, each a full information_schema.PARAMETERS scan, before the
+        // Explorer could show the folder). A failed read leaves parameters empty,
+        // exactly as the per-routine version did.
+        let mut params_by = self.schema_routine_params(schema).await.unwrap_or_default();
         let mut out = Vec::new();
         for r in &rows {
             let name: String = text(r, 0);
             let kind: String = text(r, 1);
             let ret: String = text(r, 2);
-            let params = self.routine_params(schema, &name).await.unwrap_or_default();
+            let params = params_by.remove(&(kind.clone(), name.clone())).unwrap_or_default();
             out.push(RoutineInfo {
                 schema: schema.to_string(),
                 name,
@@ -385,30 +391,67 @@ impl MySqlDriver {
         Ok(out)
     }
 
-    async fn routine_params(&mut self, schema: &str, routine: &str) -> Result<Vec<ParamInfo>, QueryError> {
+    /// Parameters of every routine of the schema, keyed by (kind, name) — kind is
+    /// `procedure` / `function` as routines() reports it. Keyed by kind as well as
+    /// name because MySQL keeps procedures and functions in separate namespaces: a
+    /// procedure and a function may share a name, and must not share parameters.
+    async fn schema_routine_params(
+        &mut self,
+        schema: &str,
+    ) -> Result<std::collections::HashMap<(String, String), Vec<ParamInfo>>, QueryError> {
         let rows = sqlx::query(
             // CONVERT both operands to utf8mb4 to avoid the "Illegal mix of collations"
             // error against information_schema.PARAMETERS (see routines()).
-            "SELECT COALESCE(PARAMETER_NAME, ''), COALESCE(DTD_IDENTIFIER, ''), COALESCE(PARAMETER_MODE, 'IN')
+            "SELECT LOWER(ROUTINE_TYPE), SPECIFIC_NAME, COALESCE(PARAMETER_NAME, ''),
+                    COALESCE(DTD_IDENTIFIER, ''), COALESCE(PARAMETER_MODE, 'IN')
              FROM information_schema.PARAMETERS
-             WHERE CONVERT(SPECIFIC_SCHEMA USING utf8mb4) = CONVERT(? USING utf8mb4)
-               AND CONVERT(SPECIFIC_NAME USING utf8mb4) = CONVERT(? USING utf8mb4) AND ORDINAL_POSITION > 0
-             ORDER BY ORDINAL_POSITION",
+             WHERE CONVERT(SPECIFIC_SCHEMA USING utf8mb4) = CONVERT(? USING utf8mb4) AND ORDINAL_POSITION > 0
+             ORDER BY SPECIFIC_NAME, ROUTINE_TYPE, ORDINAL_POSITION",
         )
         .bind(schema)
-        .bind(routine)
         .fetch_all(&mut self.conn)
         .await
         .map_err(|e| map_error(self.system, &e))?;
-        Ok(rows
-            .iter()
-            .map(|r| ParamInfo {
-                name: text(r, 0),
-                data_type: text(r, 1),
-                mode: text(r, 2),
+        let mut by: std::collections::HashMap<(String, String), Vec<ParamInfo>> = std::collections::HashMap::new();
+        for r in &rows {
+            by.entry((text(r, 0), text(r, 1))).or_default().push(ParamInfo {
+                name: text(r, 2),
+                data_type: text(r, 3),
+                mode: text(r, 4),
                 default: None,
-            })
-            .collect())
+            });
+        }
+        Ok(by)
+    }
+
+    /// Names + kinds of every table, view, routine and trigger of the schema in ONE
+    /// query. tables() also reads each table's statistics (TABLE_ROWS / DATA_LENGTH
+    /// — MySQL may open every table to refresh them) and checks PARTITIONS per
+    /// table; routines() runs one PARAMETERS query per routine. A picker needs
+    /// none of it. Same CONVERT guard as the other queries (collation mix).
+    pub async fn object_names(&mut self, schema: &str) -> Result<Vec<ObjectName>, QueryError> {
+        let rows = sqlx::query(
+            "SELECT CONVERT(CASE TABLE_TYPE WHEN 'VIEW' THEN 'view' ELSE 'table' END USING utf8mb4) AS k,
+                    CONVERT(TABLE_NAME USING utf8mb4) AS n
+               FROM information_schema.TABLES
+              WHERE CONVERT(TABLE_SCHEMA USING utf8mb4) = CONVERT(? USING utf8mb4)
+             UNION ALL
+             SELECT CONVERT(LOWER(ROUTINE_TYPE) USING utf8mb4), CONVERT(ROUTINE_NAME USING utf8mb4)
+               FROM information_schema.ROUTINES
+              WHERE CONVERT(ROUTINE_SCHEMA USING utf8mb4) = CONVERT(? USING utf8mb4)
+             UNION ALL
+             SELECT CONVERT('trigger' USING utf8mb4), CONVERT(TRIGGER_NAME USING utf8mb4)
+               FROM information_schema.TRIGGERS
+              WHERE CONVERT(TRIGGER_SCHEMA USING utf8mb4) = CONVERT(? USING utf8mb4)
+             ORDER BY n",
+        )
+        .bind(schema)
+        .bind(schema)
+        .bind(schema)
+        .fetch_all(&mut self.conn)
+        .await
+        .map_err(|e| map_error(self.system, &e))?;
+        Ok(rows.iter().map(|r| ObjectName { kind: text(r, 0), name: text(r, 1) }).collect())
     }
 
     pub async fn triggers(&mut self, schema: &str) -> Result<Vec<TriggerInfo>, QueryError> {

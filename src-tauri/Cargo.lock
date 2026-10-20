@@ -1584,6 +1584,7 @@ dependencies = [
  "duckdb",
  "futures",
  "keyring",
+ "libc",
  "mongodb",
  "oracle",
  "rand 0.8.6",

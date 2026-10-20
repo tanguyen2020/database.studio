@@ -1,4 +1,7 @@
 <script lang="ts">
+  import '$lib/components/workspace/users/um.css'
+  import { focusOnMount } from '$lib/elastic/actions'
+  import Icon from '$lib/components/Icon.svelte'
   // Create a PostgreSQL Login/Group Role (U1). Popup (not a tab); pgAdmin-style
   // attribute checkboxes; live CREATE ROLE preview; runs then refreshes the
   // Explorer roles node. "Can login?" flips the primary button label.
@@ -119,52 +122,79 @@
 
 {#if dlgOpen}
   <!-- backdrop click does NOT close (avoid losing input); use × / Cancel / Escape -->
-  <div onkeydown={(e) => e.key === 'Escape' && !busy && pgRoleWizard.close()} role="presentation" style="position:fixed;inset:0;background:var(--rgba-0-0-0-_5);display:flex;align-items:center;justify-content:center;z-index:56">
-    <div onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.key === 'Escape' && !busy && pgRoleWizard.close()} role="dialog" aria-modal="true" tabindex="-1" style="width:var(--px-560);max-width:95vw;max-height:90vh;background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-14);box-shadow:0 var(--px-30) var(--px-70) var(--rgba-0-0-0-_55);overflow:hidden;display:flex;flex-direction:column">
-      <div style="flex:none;display:flex;align-items:center;gap:var(--px-10);padding:var(--px-15) var(--px-18);border-bottom:var(--px-1) solid var(--border)">
-        <span style="font-weight:700;font-size:var(--px-15)">Create Login/Group Role</span>
-        <span onclick={() => !busy && pgRoleWizard.close()} onkeydown={(e) => e.key === 'Enter' && !busy && pgRoleWizard.close()} role="button" tabindex="0" style="margin-left:auto;cursor:pointer;color:var(--muted);font-size:var(--px-20)">×</span>
+  <div onkeydown={(e) => e.key === 'Escape' && !busy && pgRoleWizard.close()} role="presentation" class="um-backdrop">
+    <div onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.key === 'Escape' && !busy && pgRoleWizard.close()} role="dialog" aria-modal="true" tabindex="-1" use:focusOnMount class="um-dlg">
+      <div class="um-dlg-head">
+        <span class="um-dlg-icon"><Icon name="user" size={18} /></span>
+        <div class="um-dlg-title"><b>Create Login/Group Role</b><span>PostgreSQL · a login role can sign in, a group role only bundles privileges</span></div>
+        <span onclick={() => !busy && pgRoleWizard.close()} onkeydown={(e) => e.key === 'Enter' && !busy && pgRoleWizard.close()} role="button" tabindex="0" class="um-dlg-x" aria-label="Close" title="Close"><Icon name="close" size={16} /></span>
       </div>
-      <div style="flex:1;overflow:auto;min-height:0;padding:var(--px-16) var(--px-18);display:flex;flex-direction:column;gap:var(--px-10)">
-        <label style="font-size:var(--px-12);color:var(--text2)">Role name
-          <input bind:value={name} class="mono" style="display:block;margin-top:var(--px-4);width:100%;background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-8);color:var(--text)" />
+      <div class="um-dlg-body">
+        <label class="um-field">Role name
+          <!-- svelte-ignore a11y_autofocus -->
+          <input bind:value={name} class="um-input mono" style="width:100%" placeholder="e.g. app_reader" autofocus spellcheck="false" autocomplete="off" />
         </label>
-        <div style="display:flex;flex-direction:column;gap:var(--px-4)">
-          <label style="font-size:var(--px-12_5);color:var(--text);display:flex;align-items:center;gap:var(--px-6)"><input type="checkbox" bind:checked={canLogin} /> Can login?</label>
-          <label style="font-size:var(--px-12_5);color:var(--text);display:flex;align-items:center;gap:var(--px-6)"><input type="checkbox" bind:checked={superuser} /> Superuser?</label>
-          <label style="font-size:var(--px-12_5);color:var(--text);display:flex;align-items:center;gap:var(--px-6)"><input type="checkbox" bind:checked={createrole} /> Create roles?</label>
-          <label style="font-size:var(--px-12_5);color:var(--text);display:flex;align-items:center;gap:var(--px-6)"><input type="checkbox" bind:checked={createdb} /> Create databases?</label>
-          <label style="font-size:var(--px-12_5);color:var(--text);display:flex;align-items:center;gap:var(--px-6)"><input type="checkbox" bind:checked={inheritRights} /> Inherit rights from the parent roles?</label>
-          <label style="font-size:var(--px-12_5);color:var(--text);display:flex;align-items:center;gap:var(--px-6)"><input type="checkbox" bind:checked={replication} /> Can initiate streaming replication and backups?</label>
-          <label style="font-size:var(--px-12_5);color:var(--text);display:flex;align-items:center;gap:var(--px-6)"><input type="checkbox" bind:checked={bypassrls} /> Bypass RLS?</label>
+        <div class="um-group">
+          <div class="um-group-title">Type</div>
+          <div class="um-seg" role="group" aria-label="Role type" style="align-self:flex-start">
+            <span aria-pressed={canLogin} onclick={() => (canLogin = true)} onkeydown={(e) => e.key === 'Enter' && (canLogin = true)} role="button" tabindex="0" title="A role that can sign in"><Icon name="user" size={13} />Login role</span>
+            <span aria-pressed={!canLogin} onclick={() => (canLogin = false)} onkeydown={(e) => e.key === 'Enter' && (canLogin = false)} role="button" tabindex="0" title="A role without login that bundles privileges for other roles"><Icon name="users" size={13} />Group role</span>
+          </div>
         </div>
         {#if canLogin}
-          <div style="display:flex;gap:var(--px-6);align-items:flex-end">
-            <label style="font-size:var(--px-12);color:var(--text2);flex:1">Password
-              <input type={showPw ? 'text' : 'password'} bind:value={password} class="mono" style="display:block;margin-top:var(--px-4);width:100%;background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-8);color:var(--text)" />
+          <div class="um-group">
+            <div class="um-group-title">Sign-in</div>
+            <label class="um-field">Password
+              <div class="um-pw">
+                <input type={showPw ? 'text' : 'password'} bind:value={password} class="um-input mono" autocomplete="new-password" placeholder="Leave empty for no password" />
+                <span class="eg-btn" onclick={() => (showPw = !showPw)} onkeydown={(e) => e.key === 'Enter' && (showPw = !showPw)} role="button" tabindex="0" title={showPw ? 'Hide password' : 'Show password'} aria-label={showPw ? 'Hide password' : 'Show password'}><Icon name={showPw ? 'eye-off' : 'eye'} size={13} /></span>
+                <span class="eg-btn" onclick={generate} onkeydown={(e) => e.key === 'Enter' && generate()} role="button" tabindex="0" title="Generate a strong random password"><Icon name="sparkle" size={12} />Generate</span>
+              </div>
             </label>
-            <span onclick={() => (showPw = !showPw)} onkeydown={(e) => e.key === 'Enter' && (showPw = !showPw)} role="button" tabindex="0" title="Show/hide password" style="font-size:var(--px-11_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-9);cursor:pointer">{showPw ? 'Hide' : 'Show'}</span>
-            <span onclick={generate} onkeydown={(e) => e.key === 'Enter' && generate()} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-5) var(--px-9);cursor:pointer">Generate</span>
+            <div class="um-row2">
+              <label class="um-field">Connection limit
+                <input class="um-input" type="number" bind:value={connLimit} placeholder="-1 (unlimited)" />
+              </label>
+              <label class="um-field">Account expires
+                <input type="text" bind:value={validUntil} placeholder="YYYY-MM-DD, empty = never" class="um-input mono" />
+              </label>
+            </div>
           </div>
         {/if}
-        <div style="display:flex;gap:var(--px-12);flex-wrap:wrap">
-          <label style="font-size:var(--px-12);color:var(--text2)">Connection limit
-            <input type="number" bind:value={connLimit} placeholder="-1" style="width:var(--px-90);margin-left:var(--px-6);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-8);color:var(--text)" />
-          </label>
-          <label style="font-size:var(--px-12);color:var(--text2)">Account expires
-            <input type="text" bind:value={validUntil} placeholder="2026-12-31 or empty" class="mono" style="width:var(--px-180);margin-left:var(--px-6);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-8);color:var(--text)" />
-          </label>
+        <div class="um-group">
+          <div class="um-group-title">Privileges</div>
+          <div class="um-toggles">
+            {#each [
+              ['Superuser', 'Bypasses every permission check. Grant sparingly.', 'superuser'],
+              ['Create roles', 'Can create, alter and drop other roles.', 'createrole'],
+              ['Create databases', 'Can create new databases.', 'createdb'],
+              ['Inherit', 'Uses the privileges of the roles it is a member of.', 'inherit'],
+              ['Replication', 'Can start streaming replication and take base backups.', 'replication'],
+              ['Bypass RLS', 'Ignores row-level security policies.', 'bypassrls'],
+            ] as [label, desc, key] (key)}
+              <label class="um-toggle">
+                <span class="um-toggle-text"><span>{label}</span><span>{desc}</span></span>
+                {#if key === 'superuser'}<input type="checkbox" class="um-switch" bind:checked={superuser} />
+                {:else if key === 'createrole'}<input type="checkbox" class="um-switch" bind:checked={createrole} />
+                {:else if key === 'createdb'}<input type="checkbox" class="um-switch" bind:checked={createdb} />
+                {:else if key === 'inherit'}<input type="checkbox" class="um-switch" bind:checked={inheritRights} />
+                {:else if key === 'replication'}<input type="checkbox" class="um-switch" bind:checked={replication} />
+                {:else}<input type="checkbox" class="um-switch" bind:checked={bypassrls} />{/if}
+              </label>
+            {/each}
+          </div>
         </div>
-        <label style="font-size:var(--px-12);color:var(--text2)">Member of (roles)
-          <div style="margin-top:var(--px-4)"><MultiSelect bind:values={memberOf} options={allRoles.filter((r) => r !== name.trim())} placeholder="grant role membership…" /></div>
+        <label class="um-field">Member of
+          <div class="um-input" style="padding:0;display:block"><MultiSelect bind:values={memberOf} options={allRoles.filter((r) => r !== name.trim())} placeholder="Add to groups…" /></div>
+          <span class="um-field-hint">The new role gets the privileges of every group you pick.</span>
         </label>
-        <div style="font-size:var(--px-11);color:var(--muted)">SQL preview</div>
-        <pre class="selectable mono" style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-10);font-size:var(--px-11_5);margin:0;max-height:var(--px-120);overflow:auto;color:var(--text2);white-space:pre-wrap">{previewSql || '-- enter a role name'}</pre>
-        {#if err}<div style="font-size:var(--px-12);color:var(--error)">✗ {err}</div>{/if}
+        <div class="um-sql-head"><Icon name="code" size={13} />SQL that will run</div>
+        <pre class="um-sql selectable">{previewSql || '-- enter a role name'}</pre>
+        {#if err}<div class="um-err" role="alert"><Icon name="warning" size={14} /><span>{err}</span></div>{/if}
       </div>
-      <div style="flex:none;display:flex;gap:var(--px-9);padding:var(--px-13) var(--px-18);border-top:var(--px-1) solid var(--border);background:var(--panel)">
-        <span onclick={() => !busy && pgRoleWizard.close()} onkeydown={(e) => e.key === 'Enter' && !busy && pgRoleWizard.close()} role="button" tabindex="0" style="font-size:var(--px-12_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-8);padding:var(--px-8) var(--px-16);cursor:pointer">Cancel</span>
-        <span onclick={run} onkeydown={(e) => e.key === 'Enter' && run()} role="button" tabindex="0" aria-disabled={!sql || busy} style="margin-left:auto;font-size:var(--px-12_5);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-8);padding:var(--px-8) var(--px-18);cursor:{sql && !busy ? 'pointer' : 'not-allowed'};opacity:{sql && !busy ? 1 : 0.5};font-weight:600">{busy ? 'Creating…' : canLogin ? 'Create login role' : 'Create group role'}</span>
+      <div class="um-dlg-foot">
+        <span class="cfm-btn" onclick={() => !busy && pgRoleWizard.close()} onkeydown={(e) => e.key === 'Enter' && !busy && pgRoleWizard.close()} role="button" tabindex="0">Cancel</span>
+        <span class="cfm-btn primary" onclick={run} onkeydown={(e) => e.key === 'Enter' && run()} role="button" tabindex="0" aria-disabled={!sql || busy} style="margin-left:auto;cursor:{sql && !busy ? 'pointer' : 'not-allowed'};opacity:{sql && !busy ? 1 : 0.5}">{busy ? 'Creating…' : canLogin ? 'Create login role' : 'Create group role'}</span>
       </div>
     </div>
   </div>

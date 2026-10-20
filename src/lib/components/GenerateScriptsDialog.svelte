@@ -133,15 +133,16 @@
     }
   }
   /** Run `work` for one object, keeping its row in the list up to date. */
-  async function track<R>(o: ObjRef, work: () => Promise<R>): Promise<R> {
+  async function track<R>(o: ObjRef, gen: number, work: () => Promise<R>): Promise<R> {
     mark(o, 'running')
     const t0 = performance.now()
     try {
       const r = await work()
-      mark(o, 'done', Math.round(performance.now() - t0))
+      // a run abandoned by Stop must not touch the rows of the run shown now
+      if (gen === runGen) mark(o, 'done', Math.round(performance.now() - t0))
       return r
     } catch (e) {
-      mark(o, e === STOPPED || stopRequested ? 'stopped' : 'failed')
+      if (gen === runGen) mark(o, e === STOPPED || stopRequested ? 'stopped' : 'failed')
       throw e
     }
   }
@@ -172,9 +173,56 @@
   // connections the current run uses, so Stop can cancel their queries.
   let stopRequested = false
   let runLanes: string[] = []
+  /** worker connections opened for the current run (closed when it ends/stops) */
+  let runExtra: string[] = []
+  /** Bumped by every new run and by Stop: work still in flight from an older run
+   *  sees a different number and drops its result instead of writing into the
+   *  run shown now. */
+  let runGen = 0
+  let writingFile = false
   const STOPPED = Symbol('generate-stopped')
   const checkpoint = () => {
     if (stopRequested) throw STOPPED
+  }
+
+  // ---- the dialog's own connection ---------------------------------------------
+  // Everything this dialog reads (the object list, columns, definitions, data) goes
+  // through a connection of its OWN, never the profile's main one. A connection
+  // runs one call at a time and an introspection call cannot be interrupted, so a
+  // slow catalog query used to keep the main connection busy long after Cancel —
+  // the Explorer, Open Data and everything else on that connection then queued
+  // behind it and the app looked frozen. Now Cancel / Stop simply let go of this
+  // connection (closed in the background) and the rest of the app never waited.
+  let sessionConn: string | null = null
+  let sessionSeq = 0
+  let loadGen = 0
+  const isOwnConn = (id: string | null) => !!id && id.includes('#tab-scripts-')
+
+  /** Open the dialog's connection; falls back to the main one if it can't. */
+  async function openSession(connId: string): Promise<string> {
+    const tag = `scripts-${Date.now().toString(36)}-${++sessionSeq}`
+    try {
+      return await ipc.openTabConnection(connId, tag, connections.databaseOf(connId) ?? '')
+    } catch {
+      return connId
+    }
+  }
+  /** Close a connection of ours without waiting on whatever is still running on it. */
+  function dropConn(id: string | null) {
+    if (!isOwnConn(id)) return
+    void ipc.cancelQuery(id!).catch(() => {})
+    void ipc.closeTabConnection(id!).catch(() => {})
+  }
+  function releaseSession() {
+    const s = sessionConn
+    sessionConn = null
+    dropConn(s)
+  }
+  /** The dialog closed: forget the load in flight and let its connection go. */
+  function endSession() {
+    loadGen++
+    loading = false
+    releaseSession()
   }
 
   // The progress popup takes focus so Escape reaches it (= Stop while running).
@@ -190,12 +238,32 @@
 
   /** Stop the running generation: no new object starts, the query running on
    *  each lane (the data-mode SELECT can be long) is cancelled, and no file is
-   *  written. Worker connections are closed in generate()'s finally. */
+   *  written.
+   *
+   *  It does NOT wait for the calls in flight. A column list or a definition is
+   *  an introspection call that cannot be interrupted, and on a slow server it can
+   *  take minutes — waiting for it used to leave the modal progress popup stuck on
+   *  "Stopping…" with no way out, covering the whole app. The run is finished
+   *  here and now; its connections are closed in the background and whatever
+   *  they still return is ignored (runGen). */
   function stop() {
-    if (!running || stopRequested) return
+    if (!running || stopRequested || writingFile) return
     stopRequested = true
-    if (prog) prog.stopping = true
+    runGen++
     for (const id of runLanes) void ipc.cancelQuery(id).catch(() => {})
+    for (const id of runExtra) dropConn(id)
+    // the dialog's own connection may still be busy with the abandoned work — a
+    // new one is opened by the next Generate
+    releaseSession()
+    runItems.forEach((it, i) => it.status === 'running' && setStatus(i, 'stopped'))
+    if (prog) {
+      prog.stopping = false
+      prog.cancelled = true
+      toasts.show(`Generate stopped after ${prog.cur} of ${prog.total} object(s) — no file written`)
+    }
+    runLanes = []
+    runExtra = []
+    running = false
   }
 
   const system = $derived(connections.byId(scriptsWizard.connId)?.system ?? 'postgres')
@@ -220,9 +288,11 @@
 
   $effect(() => {
     if (scriptsWizard.open) untrack(() => void load())
+    else untrack(endSession)
   })
 
   async function load() {
+    const gen = ++loadGen
     mode = 'structure'
     running = false
     loading = true
@@ -230,30 +300,59 @@
     picked = new Set()
     search = ''
     collapsed = new Set()
+    releaseSession()
     const connId = scriptsWizard.connId
     const schema = scriptsWizard.schema
-    if (!connId) return
+    if (!connId) {
+      loading = false
+      return
+    }
     try {
-      const [tbls, routines, triggers, sequences] = await Promise.all([
-        ipc.listTables(connId, schema).catch(() => []),
-        ipc.listRoutines(connId, schema).catch(() => []),
-        ipc.listTriggers(connId, schema).catch(() => []),
-        ipc.listSequences(connId, schema).catch(() => []),
-      ])
-      objects = [
-        ...tbls.filter((t) => t.kind !== 'view').map((t): ObjRef => ({ kind: 'table', name: t.name })),
-        ...tbls.filter((t) => t.kind === 'view').map((t): ObjRef => ({ kind: 'view', name: t.name })),
-        ...routines.filter((r) => r.kind === 'procedure').map((r): ObjRef => ({ kind: 'procedure', name: r.name })),
-        ...routines.filter((r) => r.kind !== 'procedure').map((r): ObjRef => ({ kind: 'function', name: r.name })),
-        ...triggers.map((t): ObjRef => ({ kind: 'trigger', name: t.name })),
-        ...sequences.map((s): ObjRef => ({ kind: 'sequence', name: s.name })),
-      ]
+      const conn = await openSession(connId)
+      if (gen !== loadGen) {
+        // closed (or reopened) while the connection was opening
+        dropConn(conn)
+        return
+      }
+      sessionConn = conn
+      // One call, names only. The full list_* calls also compute row counts and
+      // sizes (one stat per table) and, on MySQL, routine parameters (one query per
+      // routine) — none of which a picker needs, and on a big schema they were what
+      // made this list take ages. The old calls stay as a fallback.
+      const found = await ipc.listObjectNames(conn, schema).catch(() => loadObjectsTheLongWay(conn, schema))
+      // Cancelled while loading: drop the late answer (it would otherwise fill the
+      // next dialog with this schema's objects)
+      if (gen !== loadGen) return
+      // group by kind in GROUPS order; overloads (PG) share a name → one row
+      const seen = new Set<string>()
+      objects = GROUPS.flatMap((g) =>
+        found
+          .filter((o) => o.kind === g.kind)
+          .map((o): ObjRef => ({ kind: o.kind, name: o.name }))
+          .filter((o) => !seen.has(okey(o)) && (seen.add(okey(o)), true)),
+      )
       picked = new Set(objects.map(okey))
     } catch (e) {
-      toasts.error(String(e))
+      if (gen === loadGen) toasts.error(String(e))
     } finally {
-      loading = false
+      if (gen === loadGen) loading = false
     }
+  }
+
+  /** The four separate list_* calls — used only if list_object_names fails. */
+  async function loadObjectsTheLongWay(conn: string, schema: string): Promise<ObjRef[]> {
+    const [tbls, routines, triggers, sequences] = await Promise.all([
+      ipc.listTables(conn, schema).catch(() => []),
+      ipc.listRoutines(conn, schema).catch(() => []),
+      ipc.listTriggers(conn, schema).catch(() => []),
+      ipc.listSequences(conn, schema).catch(() => []),
+    ])
+    return [
+      ...tbls.map((t): ObjRef => ({ kind: t.kind === 'view' ? 'view' : 'table', name: t.name })),
+      ...routines.map((r): ObjRef => ({ kind: r.kind === 'procedure' ? 'procedure' : 'function', name: r.name })),
+      ...triggers.map((t): ObjRef => ({ kind: 'trigger', name: t.name })),
+      ...sequences.map((q): ObjRef => ({ kind: 'sequence', name: q.name })),
+    ]
   }
 
   function toggle(o: ObjRef) {
@@ -387,16 +486,16 @@
 
   /** The existing connection plus a few worker connections for a big job. A
    *  worker that fails to open is simply not used. */
-  async function openLanes(connId: string, work: number): Promise<{ lanes: string[]; extra: string[] }> {
+  async function openLanes(connId: string, first: string, work: number): Promise<{ lanes: string[]; extra: string[] }> {
     const n = extraLanes(system, work)
-    if (!n || !IS_TAURI) return { lanes: [connId], extra: [] }
-    const tag = `scripts-${Date.now().toString(36)}`
+    if (!n || !IS_TAURI) return { lanes: [first], extra: [] }
+    const tag = `scripts-lane-${Date.now().toString(36)}`
     const database = connections.databaseOf(connId) ?? ''
     const opened = await Promise.allSettled(
       Array.from({ length: n }, (_, i) => ipc.openTabConnection(connId, `${tag}-${i}`, database)),
     )
     const extra = opened.flatMap((r) => (r.status === 'fulfilled' ? [r.value] : []))
-    return { lanes: [connId, ...extra], extra }
+    return { lanes: [first, ...extra], extra }
   }
 
   async function generate() {
@@ -425,11 +524,18 @@
 
     running = true
     stopRequested = false
+    const gen = ++runGen
+    // shadows the outer one: a run that was stopped (or replaced) stops here too
+    const checkpoint = () => {
+      if (stopRequested || gen !== runGen) throw STOPPED
+    }
     runLanes = []
+    runExtra = []
     const total = chosen.length
     let cur = 0
     prog = { pct: 0, cur: 0, total, label: '', done: false, path: savePath ?? filename, lanes: 1 }
     const step = (label: string) => {
+      if (gen !== runGen) return
       cur++
       if (prog) {
         prog.cur = cur
@@ -450,8 +556,23 @@
     currentIdx = -1
     follow = true
     const roundTrips = tvs.length + (mode !== 'data' ? routines.length : 0)
-    const { lanes, extra } = await openLanes(connId, roundTrips)
+    // the dialog's own connection (a Stop let the previous one go — open a fresh one)
+    let first = sessionConn
+    if (!first) {
+      const opened = await openSession(connId)
+      if (gen !== runGen || !scriptsWizard.open) {
+        dropConn(opened)
+        return
+      }
+      first = sessionConn = opened
+    }
+    const { lanes, extra } = await openLanes(connId, first, roundTrips)
+    if (gen !== runGen) {
+      for (const id of extra) dropConn(id)
+      return
+    }
     runLanes = lanes
+    runExtra = extra
     if (prog) prog.lanes = lanes.length
 
     try {
@@ -469,7 +590,7 @@
       }
       // Tables + Views → dependency-ordered structure/data (reuse generateScript).
       if (tvs.length) {
-        const fks = await ipc.listForeignKeys(connId, schema).catch(() => [])
+        const fks = await ipc.listForeignKeys(first, schema).catch(() => [])
         checkpoint()
         const tableNames = tvs.filter((o) => o.kind === 'table').map((o) => o.name)
         const scriptOne = async (o: ObjRef, cid: string): Promise<DbObject> => {
@@ -498,7 +619,7 @@
         }
         const objs = await mapPool(tvs, lanes.length, async (o, lane): Promise<DbObject> => {
           checkpoint()
-          const obj = await track(o, async () => {
+          const obj = await track(o, gen, async () => {
             const r = await scriptOne(o, lanes[lane])
             checkpoint()
             return r
@@ -518,7 +639,7 @@
             step(o.name)
             return null
           }
-          const out = await track(o, async () => {
+          const out = await track(o, gen, async () => {
             const def = await ipc.objectDefinition(lanes[lane], schema, o.kind, o.name).catch(() => null)
             checkpoint()
             return `-- ${o.kind}: ${o.name}\n${def ?? `-- definition unavailable`}`
@@ -534,6 +655,7 @@
       const header = `-- Generated scripts for ${schema} (${mode}) — ${chosen.length} object(s)\n\n`
       const content = header + parts.filter(Boolean).join('\n\n')
       checkpoint() // last chance — once the file is written there is nothing to stop
+      writingFile = true // the file is going out: Stop can no longer promise "no file written"
 
       if (IS_TAURI && savePath) {
         await ipc.writeTextFile(savePath, content)
@@ -548,6 +670,8 @@
       // The popup stays up (it no longer vanishes after a second) so the run list
       // can be read; closing it after a successful run closes the wizard too.
     } catch (e) {
+      // Stop already finished this run (and may have started another): nothing to report
+      if (gen !== runGen) return
       if (stopRequested || e === STOPPED) {
         // Stopped: report it as such (not as a failure) and write nothing.
         runItems.forEach((it, i) => it.status === 'running' && setStatus(i, 'stopped'))
@@ -561,9 +685,13 @@
         toasts.error(`Generate failed: ${e}`)
       }
     } finally {
-      for (const id of extra) void ipc.closeTabConnection(id).catch(() => {})
-      runLanes = []
-      running = false
+      if (gen === runGen) {
+        writingFile = false
+        for (const id of extra) void ipc.closeTabConnection(id).catch(() => {})
+        runLanes = []
+        runExtra = []
+        running = false
+      }
     }
   }
 </script>

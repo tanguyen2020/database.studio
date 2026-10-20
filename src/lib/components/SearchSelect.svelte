@@ -24,8 +24,10 @@
      *  Only needed for very long server lists — SQL Server ships ~5,500 collations
      *  and painting them all would stall the menu; the rest surface as you type. */
     limit?: number
+    /** accessible name of the field (falls back to `title`). */
+    ariaLabel?: string
   }
-  let { value = $bindable(), options, placeholder = 'Select…', title = '', disabled = false, legible = false, onChange, limit, wide = false }: Props = $props()
+  let { value = $bindable(), options, placeholder = 'Select…', title = '', disabled = false, legible = false, onChange, limit, wide = false, ariaLabel }: Props = $props()
 
   const textFont = $derived(legible ? 'font-size:var(--px-13);font-weight:500' : 'font-size:var(--px-12)')
 
@@ -116,6 +118,7 @@
     bind:this={inputEl}
     class={legible ? '' : 'mono'}
     {title}
+    aria-label={ariaLabel || undefined}
     {disabled}
     value={open ? query : selectedLabel}
     placeholder={selectedLabel || placeholder}

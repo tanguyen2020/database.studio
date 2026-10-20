@@ -202,6 +202,23 @@ fn oracle_connect(t: &BackupTarget) -> String {
     format!("{}@//{}:{}/{}", t.user, t.host, t.port, t.database)
 }
 
+/// Data Pump parameter file carrying the login, so the password is neither on
+/// the command line nor typed at a prompt (on Windows expdp/impdp read the
+/// password from the console, not from a piped stdin). The caller writes it to
+/// a private temp file, passes `PARFILE=<file>` and deletes it afterwards.
+pub fn oracle_parfile(t: &BackupTarget, password: &str) -> String {
+    // `"` cannot appear in an Oracle password; quoting keeps @ / : … literal
+    format!("USERID={}/\"{}\"@//{}:{}/{}\n", t.user, password.replace('"', ""), t.host, t.port, t.database)
+}
+
+/// expdp / impdp argv with the login (first argument) replaced by `PARFILE=…`.
+pub fn oracle_with_parfile(mut args: Vec<String>, parfile: &str) -> Vec<String> {
+    if !args.is_empty() {
+        args[0] = format!("PARFILE={parfile}");
+    }
+    args
+}
+
 /// `CREATE OR REPLACE DIRECTORY` mapping a logical name → OS path on the DB server.
 pub fn oracle_dir_sql(dir_name: &str, os_path: &str) -> String {
     format!(
@@ -356,6 +373,12 @@ mod tests {
         assert_eq!(prog, "expdp");
         assert_eq!(args[0], "APP@//db.host:1521/ORCLPDB1"); // service = database; no password in argv
         assert!(args.iter().any(|a| a == "SCHEMAS=APP"));
+        // the login moves into a parameter file; the password never reaches argv
+        assert_eq!(oracle_parfile(&t, "p@ss/w:rd"), "USERID=APP/\"p@ss/w:rd\"@//db.host:1521/ORCLPDB1\n");
+        let with = oracle_with_parfile(args.clone(), "/tmp/x.par");
+        assert_eq!(with[0], "PARFILE=/tmp/x.par");
+        assert_eq!(&with[1..], &args[1..]);
+        assert!(!with.iter().any(|a| a.contains("p@ss")));
         assert!(args.iter().any(|a| a == "DIRECTORY=DBSTUDIO_DUMP"));
         assert!(args.iter().any(|a| a == "DUMPFILE=app.dmp"));
         assert!(!args.iter().any(|a| a.to_lowercase().contains("password")), "password must not be in argv");

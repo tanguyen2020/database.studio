@@ -273,6 +273,14 @@ pub struct TriggerInfo {
     pub event: String,
 }
 
+/// One object of a schema — kind + name only (Generate Scripts object list).
+/// kind: table | view | procedure | function | trigger | sequence
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ObjectName {
+    pub kind: String,
+    pub name: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SequenceInfo {
     pub schema: String,

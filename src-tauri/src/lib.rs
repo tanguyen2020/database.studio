@@ -36,10 +36,17 @@ pub fn run() {
             // present (e.g. a platform we didn't ship IC for), we leave ODPI-C on its
             // default search so a system-installed client still works.
             if let Ok(res_dir) = app.path().resource_dir() {
-                let ic = res_dir.join("instantclient");
-                if let Some(lib_dir) = crate::drivers::oracle::instant_client_lib(&ic) {
+                // Resources keep their `resources/` prefix inside the bundle, so look
+                // in both places (the flat one first, as before).
+                let found = [res_dir.join("instantclient"), res_dir.join("resources").join("instantclient")]
+                    .iter()
+                    .find_map(|ic| crate::drivers::oracle::instant_client_lib(ic));
+                if let Some(lib_dir) = found {
                     crate::drivers::oracle::init_client_dir(&lib_dir);
                 }
+                // Backup & Restore: the pg_dump / mysqldump / mongodump / expdp copies
+                // shipped inside the installer (see tools/fetch-dump-tools).
+                crate::drivers::bundled_tools::set_resource_dir(&res_dir);
             }
 
             let data_dir = app
@@ -242,6 +249,7 @@ pub fn run() {
             commands::schema::list_functions,
             commands::schema::list_triggers,
             commands::schema::list_sequences,
+            commands::schema::list_object_names,
             commands::schema::list_foreign_keys,
             commands::schema::scan_indexes,
             commands::schema::object_definition,
@@ -249,6 +257,9 @@ pub fn run() {
             commands::backup::backup_tool_status,
             commands::backup::backup_database,
             commands::backup::restore_database,
+            commands::backup::backup_plan,
+            commands::backup::cancel_backup,
+            commands::files::reveal_path,
             commands::admin::admin_view,
             commands::admin::kill_session,
             commands::admin::drop_database,

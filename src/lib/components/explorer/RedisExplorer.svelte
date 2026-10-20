@@ -10,6 +10,7 @@
   import * as ipc from '$lib/ipc'
   import * as ContextMenu from '$lib/components/ui/context-menu'
   import { explorer } from '$lib/stores/explorer.svelte'
+  import { backupWizard } from '$lib/stores/backup.svelte'
   import { tabs } from '$lib/stores/tabs.svelte'
   import { toasts } from '$lib/stores/toast.svelte'
   import { buildRedisTree, flattenRedisTree, keysUnderPrefix, mergeRedisKeys, type RedisKeyInfo } from '$lib/redis/tree'
@@ -317,9 +318,19 @@
 <div style="display:flex;flex-direction:column;min-height:0">
   <!-- sticky header: DB selector + SCAN count + actions -->
   <div style="position:sticky;top:0;z-index:2;background:var(--sidebar);flex:none;padding:var(--px-8) var(--px-10) var(--px-8);border-bottom:var(--px-1) solid var(--border);display:flex;align-items:center;gap:var(--px-8);flex-wrap:wrap">
+    <ContextMenu.Root>
+      <ContextMenu.Trigger>
     <select value={curDb} onchange={switchDb} disabled={switching} title="Select logical database" aria-label="Redis database" style="font-size:var(--px-12);font-weight:500;background:var(--raised);border:var(--px-1) solid var(--border2);border-radius:var(--px-6);padding:var(--px-3) var(--px-6);color:var(--text);cursor:pointer;outline:none{switching ? ';opacity:.6' : ''}">
       {#each Array.from({ length: dbCount }, (_, i) => i) as n (n)}<option value={n}>db{n}</option>{/each}
     </select>
+      </ContextMenu.Trigger>
+      <!-- the logical database's own menu (right-click its picker) -->
+      <ContextMenu.Content class="w-48">
+        <ContextMenu.Item onclick={() => backupWizard.show(connId, 'redis', { database: String(curDb), tab: 'backup' })}>Backup &amp; Restore…</ContextMenu.Item>
+        <ContextMenu.Separator />
+        <ContextMenu.Item onclick={() => load()}>Refresh</ContextMenu.Item>
+      </ContextMenu.Content>
+    </ContextMenu.Root>
     {#if busy}
       <!-- Any scan in flight (mount, DB switch, pattern, Refresh, Scan more) shows a
            spinning glyph so the sidebar never looks idle while it is working. -->
@@ -332,6 +343,7 @@
     <span style="width:100%;display:flex;gap:var(--px-6);align-items:center">
       <span onclick={openAdd} onkeydown={(e) => e.key === 'Enter' && openAdd()} role="button" tabindex="0" title="Add a new key" class="eg-btn primary">＋ Key</span>
       <span onclick={() => tabs.openRedisPubSubTab(connId)} onkeydown={(e) => e.key === 'Enter' && tabs.openRedisPubSubTab(connId)} role="button" tabindex="0" title="Pub/Sub Monitor" class="eg-btn">Pub/Sub ▸</span>
+      <span onclick={() => backupWizard.show(connId, 'redis', { database: String(curDb) })} onkeydown={(e) => e.key === 'Enter' && backupWizard.show(connId, 'redis', { database: String(curDb) })} role="button" tabindex="0" title={`Backup & Restore db${curDb}`} aria-label={`Backup & Restore db${curDb}`} class="eg-btn"><Icon name="download" size={12} /></span>
       <span onclick={() => (flushOpen = true)} onkeydown={(e) => e.key === 'Enter' && (flushOpen = true)} role="button" tabindex="0" title="FLUSHDB (clear entire DB)" class="eg-btn rx-flush">Flush</span>
     </span>
     <input

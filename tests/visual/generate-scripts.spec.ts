@@ -339,3 +339,75 @@ test('Generate Scripts: 1,500 tables run fast and never freeze the window', asyn
   expect(await progress.locator('[data-status="done"]').count()).toBeGreaterThanOrEqual(1500)
   await expect(progress.locator('[role="listitem"]:not([data-status="done"])')).toHaveCount(0)
 })
+
+// Generate Scripts used to read through the profile's MAIN connection. A connection
+// runs one call at a time and an introspection call cannot be interrupted, so a slow
+// catalog query kept that connection busy long after Cancel and everything else on
+// it (Explorer, Open Data…) queued behind it — the app looked frozen. The dialog now
+// works on a connection of its own and lets it go on Cancel.
+test('Generate Scripts: reads through its own connection and releases it on Cancel', async ({ page }) => {
+  const dialog = await openWizard(page)
+  const conns = (cmd: string) =>
+    page.evaluate((c) => (window as unknown as { __ipcConns?: Record<string, string[]> }).__ipcConns?.[c] ?? [], cmd)
+
+  // ONE call for the whole list (names only — no row counts / sizes / routine
+  // parameters), on the dialog's own connection
+  const listed = await conns('list_object_names')
+  expect(listed, 'the object list is one call').toHaveLength(1)
+  expect(listed[0], 'the object list is read on the dialog connection').toContain('#tab-scripts-')
+  expect(await conns('close_tab_connection')).not.toContain(listed[0])
+
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(dialog).toHaveCount(0)
+  await expect.poll(() => conns('close_tab_connection')).toContain(listed[0])
+})
+
+// A call that never comes back (a slow server) must not trap the user: Stop finishes
+// the run at once instead of waiting for it behind a modal popup.
+test('Generate Scripts: Stop does not wait for a call that never comes back', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(String(e)))
+  const dialog = await openWizard(page, '?hangIntrospect=1')
+  const conns = (cmd: string) =>
+    page.evaluate((c) => (window as unknown as { __ipcConns?: Record<string, string[]> }).__ipcConns?.[c] ?? [], cmd)
+  let downloads = 0
+  page.on('download', () => downloads++)
+
+  await dialog.getByRole('button', { name: 'Generate', exact: true }).click()
+  const progress = page.getByRole('dialog', { name: 'Generate progress' })
+  const rows = progress.getByRole('list', { name: 'Generate objects' }).getByRole('listitem')
+  // a table is stuck on its column list
+  await expect(rows.and(page.locator('[data-status="running"]')).first()).toBeVisible()
+  const stuckOn = (await conns('list_columns')).at(-1) ?? ''
+  expect(stuckOn).toContain('#tab-scripts-')
+
+  const t0 = Date.now()
+  await progress.getByRole('button', { name: 'Stop' }).click()
+  await expect(progress.getByText('Generate stopped')).toBeVisible({ timeout: 2000 })
+  expect(Date.now() - t0, 'Stop must not wait for the hung call').toBeLessThan(2000)
+  await expect(rows.and(page.locator('[data-status="running"]'))).toHaveCount(0)
+  // the busy connection is let go
+  await expect.poll(() => conns('close_tab_connection')).toContain(stuckOn)
+
+  // back on the wizard, which works again — on a FRESH connection
+  await progress.getByRole('button', { name: 'Close', exact: true }).click()
+  await expect(progress).toHaveCount(0)
+  await dialog.getByRole('button', { name: 'Generate', exact: true }).click()
+  await expect(rows.and(page.locator('[data-status="running"]')).first()).toBeVisible()
+  const second = (await conns('list_columns')).at(-1) ?? ''
+  expect(second).toContain('#tab-scripts-')
+  expect(second).not.toBe(stuckOn)
+  await progress.getByRole('button', { name: 'Stop' }).click()
+  await progress.getByRole('button', { name: 'Close', exact: true }).click()
+
+  // and the rest of the app is usable: close the wizard, the Explorer answers
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(dialog).toHaveCount(0)
+  await page.getByRole('treeitem', { name: /public/ }).first().click({ button: 'right' })
+  await expect(page.getByRole('menuitem', { name: 'Generate Scripts…' }).first()).toBeVisible()
+  await page.keyboard.press('Escape')
+
+  await page.waitForTimeout(1000)
+  expect(downloads).toBe(0)
+  expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
+})

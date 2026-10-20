@@ -1,4 +1,6 @@
 <script lang="ts">
+  import './um.css'
+  import PendingBar from './PendingBar.svelte'
   import Icon from '$lib/components/Icon.svelte'
   // SQL Server User Manager (U3). Two tiers: Server (Logins + fixed server roles)
   // and Database (Users + Roles + permission grid with GRANT/DENY/REVOKE — DENY
@@ -34,6 +36,9 @@
   } from '$lib/users/mssql'
   import PrivilegeGrid from './PrivilegeGrid.svelte'
   import PrincipalHeader from './PrincipalHeader.svelte'
+  import ManagerHeader from './ManagerHeader.svelte'
+  import Avatar from './Avatar.svelte'
+  import Chevron from '$lib/components/Chevron.svelte'
   import { CARD, CARD_TITLE, CHIP_ROLE, CHIP_GRANT, CHIP_DENY, BTN } from './ui'
   import type { TabState } from '$lib/types'
 
@@ -77,6 +82,13 @@
   let executing = $state(false)
 
   const boolY = (v: unknown) => v === true || v === 1 || v === '1' || v === 't'
+  // login type in words (sys.server_principals.type_desc)
+  const loginKind = (l: Row) => {
+    const t = String(l.type_desc ?? '')
+    return t === 'SQL_LOGIN' ? 'SQL Server login' : t === 'WINDOWS_LOGIN' ? 'Windows login' : t === 'WINDOWS_GROUP' ? 'Windows group' : t.startsWith('EXTERNAL') ? 'Microsoft Entra ID' : t ? t.toLowerCase().replace(/_/g, ' ') : 'Login'
+  }
+  let listFilter = $state('')
+  const shownLogins = $derived(logins.filter((l) => String(l.name).toLowerCase().includes(listFilter.trim().toLowerCase())))
 
   // Plain-language help for the fixed roles (shown as tooltips).
   const SERVER_ROLE_HELP: Record<string, string> = {
@@ -486,61 +498,65 @@
   }
 </script>
 
-<div class="mono" style="flex:1;display:flex;flex-direction:column;min-height:0">
-  <div style="flex:none;display:flex;align-items:center;gap:var(--px-8);padding:var(--px-9) var(--px-14);border-bottom:var(--px-1) solid var(--border);background:var(--surface);flex-wrap:wrap">
-    <span style="font-size:var(--px-10_5);color:var(--muted);font-weight:700">Security</span>
+<div class="um" style="flex:1;display:flex;flex-direction:column;min-height:0">
+  <ManagerHeader system="mssql" connectionId={baseCid} title="Security" count={scope === 'server' ? logins.length : undefined} countLabel={logins.length === 1 ? 'login' : 'logins'} {refreshing} onRefresh={refresh}>
     <!-- SQL Server's two security levels, mirroring SSMS's tree: Server →
          Security → Logins, and Database → Security → Users. -->
-    <div style="display:flex;background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-7);overflow:hidden">
+    <div class="um-seg" role="group" aria-label="Security level">
       {#each [['server', '🖥', 'Server logins', 'Instance-level accounts that sign in (SSMS: Server → Security → Logins)'], ['database', '🗄', 'Database users', 'Principals inside one database (SSMS: Database → Security → Users)']] as [k, icon, label, tip] (k)}
-        <span onclick={() => (scope = k as typeof scope)} onkeydown={(e) => e.key === 'Enter' && (scope = k as typeof scope)} role="button" tabindex="0" title={tip} style="display:flex;align-items:center;gap:var(--px-5);padding:var(--px-4) var(--px-12);font-size:var(--px-12);font-weight:600;cursor:pointer;background:{scope === k ? 'var(--primary)' : 'transparent'};color:{scope === k ? 'var(--hex-fff)' : 'var(--text2)'}"><span style="font-size:var(--px-13)">{icon}</span>{label}</span>
+        <span aria-pressed={scope === k} onclick={() => (scope = k as typeof scope)} onkeydown={(e) => e.key === 'Enter' && (scope = k as typeof scope)} role="button" tabindex="0" title={tip}><Icon name={icon === '🖥' ? 'shield' : 'database'} size={13} />{label}</span>
       {/each}
     </div>
-    <span onclick={openCreate} onkeydown={(e) => e.key === 'Enter' && openCreate()} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer;font-weight:600">{scope === 'server' ? '+ New Login' : '+ New User'}</span>
-    <span onclick={refresh} onkeydown={(e) => e.key === 'Enter' && refresh()} role="button" tabindex="0" aria-busy={refreshing} style="margin-left:auto;font-size:var(--px-11_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer;opacity:{refreshing ? 0.6 : 1}"><Icon name="refresh" size={12} /> {refreshing ? 'Refreshing…' : 'Refresh'}</span>
-  </div>
+    <span class="eg-btn primary" onclick={openCreate} onkeydown={(e) => e.key === 'Enter' && openCreate()} role="button" tabindex="0"><Icon name="plus" size={12} />{scope === 'server' ? 'New login' : 'New user'}</span>
+  </ManagerHeader>
 
   <!-- Two-level model explainer — the #1 source of SQL Server confusion. -->
-  <div style="flex:none;padding:var(--px-6) var(--px-14);border-bottom:var(--px-1) solid var(--border);background:var(--panel);font-size:var(--px-11);color:var(--muted);line-height:1.45">
+  <div class="um-callout">
+    <Icon name="info" size={15} />
+    <span>
     {#if scope === 'server'}
-      SQL Server has two security levels. <b style="color:var(--text2)">Logins</b> are instance-level accounts that sign in to the whole server (SSMS: <i>Server → Security → Logins</i>). A login can only reach a database once it is mapped to a <b style="color:var(--text2)">user</b> there — do that below under “Database access”, or on the <b style="color:var(--text2)">Database users</b> tab.
+      SQL Server has two security levels. <b>Logins</b> are instance-level accounts that sign in to the whole server (SSMS: <i>Server → Security → Logins</i>). A login can only reach a database once it is mapped to a <b>user</b> there — do that below under “Database access”, or on the <b>Database users</b> tab.
     {:else}
-      <b style="color:var(--text2)">Users</b> live inside <span class="mono" style="color:var(--text)">{selectedDb}</span> and control access within that one database (SSMS: <i>Database → Security → Users</i>). A user is normally backed by a <b style="color:var(--text2)">server login</b> — manage those on the <b style="color:var(--text2)">Server logins</b> tab.
+      <b>Users</b> live inside <span class="mono" style="color:var(--text)">{selectedDb}</span> and control access within that one database (SSMS: <i>Database → Security → Users</i>). A user is normally backed by a <b>server login</b> — manage those on the <b>Server logins</b> tab.
     {/if}
-    <span onclick={() => (showGuide = !showGuide)} onkeydown={(e) => e.key === 'Enter' && (showGuide = !showGuide)} role="button" tabindex="0" style="display:inline-block;margin-top:var(--px-4);color:var(--primary);cursor:pointer;font-weight:600">{showGuide ? '▾' : '▸'} How do I give a user access?</span>
+    <span class="um-link" onclick={() => (showGuide = !showGuide)} onkeydown={(e) => e.key === 'Enter' && (showGuide = !showGuide)} role="button" tabindex="0" style="display:inline-flex;align-items:center;gap:var(--px-4);margin-top:var(--px-4)" aria-expanded={showGuide}><Chevron open={showGuide} />How do I give a user access?</span>
+    </span>
   </div>
 
   {#if showGuide}
     <!-- End-to-end grant workflow, native to SQL Server's two-level model. -->
-    <div style="flex:none;padding:var(--px-10) var(--px-14);border-bottom:var(--px-1) solid var(--border);background:var(--surface);font-size:var(--px-11_5);color:var(--text2);line-height:1.5">
+    <div class="um-card" style="flex:none;margin:var(--px-10) var(--px-16) 0;font-size:var(--px-12);color:var(--text2);line-height:1.55">
       <div style="font-weight:700;color:var(--text);margin-bottom:var(--px-6)">Give a user access — the SQL Server way</div>
       <ol style="margin:0;padding-left:var(--px-18);display:flex;flex-direction:column;gap:var(--px-4)">
-        <li><span onclick={() => (scope = 'server')} onkeydown={(e) => e.key === 'Enter' && (scope = 'server')} role="button" tabindex="0" style="color:var(--primary);cursor:pointer;font-weight:600">Server logins</span> → <b style="color:var(--text)">+ New Login</b> to create the account (or pick an existing login).</li>
+        <li><span onclick={() => (scope = 'server')} onkeydown={(e) => e.key === 'Enter' && (scope = 'server')} role="button" tabindex="0" style="color:var(--primary);cursor:pointer;font-weight:600">Server logins</span> → <b style="color:var(--text)">New login</b> to create the account (or pick an existing login).</li>
         <li>On that login, open <b style="color:var(--text)">Database access</b> → <b style="color:var(--text)">Load access</b>, then <b style="color:var(--text)">tick the database(s)</b> the login should reach. This creates a <i>user</i> for it in each ticked database.</li>
         <li><span onclick={() => (scope = 'database')} onkeydown={(e) => e.key === 'Enter' && (scope = 'database')} role="button" tabindex="0" style="color:var(--primary);cursor:pointer;font-weight:600">Database users</span> — the list is grouped by database; pick the user under its database (each row shows its default schema).</li>
-        <li>Give permissions: tick <span class="mono" style="color:var(--text)">db_datareader</span> / <span class="mono" style="color:var(--text)">db_datawriter</span> for whole-database read/write, or use <b style="color:var(--text)">＋ Grant access…</b> for a specific schema/object (Read-only / Read-Write / Full, or Deny).</li>
+        <li>Give permissions: tick <span class="mono" style="color:var(--text)">db_datareader</span> / <span class="mono" style="color:var(--text)">db_datawriter</span> for whole-database read/write, or use <b style="color:var(--text)">Grant access…</b> for a specific schema/object (Read-only / Read-Write / Full, or Deny).</li>
         <li>Click <b style="color:var(--text)">Execute</b> in the <b style="color:var(--text)">Pending changes</b> bar to apply. Deletes/drops run immediately after a confirm; everything else queues here first.</li>
       </ol>
-      <div style="margin-top:var(--px-6);color:var(--muted)">Tip: a <b style="color:var(--text2)">DENY</b> always beats a GRANT (even one inherited from a role) — use it to carve out an exception.</div>
+      <div style="margin-top:var(--px-6);color:var(--muted)">Tip: a <b>DENY</b> always beats a GRANT (even one inherited from a role) — use it to carve out an exception.</div>
     </div>
   {/if}
 
-  <div style="flex:1;display:flex;min-height:0">
+  <div class="um-body" style="margin-top:var(--px-12);border-top:var(--px-1) solid var(--border)">
     {#if scope === 'server'}
       <!-- Logins list -->
-      <div role="listbox" tabindex="-1" aria-label="Logins" style="flex:none;width:var(--px-240);border-right:var(--px-1) solid var(--border);overflow:auto;min-height:0">
-        {#if error}<div style="padding:var(--px-14);color:var(--error);font-size:var(--px-12)">{error}</div>
-        {:else if loading}<div style="padding:var(--px-14);color:var(--muted);font-size:var(--px-12)">Loading…</div>
+      <div class="um-list"><div class="um-list-search"><input class="um-input" style="width:100%" placeholder="Search logins" bind:value={listFilter} aria-label="Search logins" spellcheck="false" /></div>
+      <div class="um-list-scroll" role="listbox" tabindex="-1" aria-label="Logins">
+        {#if error}<div class="um-empty" style="color:var(--danger-solid)">{error}</div>
+        {:else if loading && !logins.length}<div class="um-empty">Loading logins…</div>
+        {:else if !shownLogins.length}<div class="um-empty">{logins.length ? 'No login matches your search.' : 'No logins yet.'}</div>
         {:else}
-          {#each logins as l (l.name)}
+          {#each shownLogins as l (l.name)}
             {@const ln = String(l.name)}
             {@const sel = selectedLogin === ln}
             <ContextMenu.Root>
               <ContextMenu.Trigger>
-                <div onclick={() => (selectedLogin = ln)} onkeydown={(e) => e.key === 'Enter' && (selectedLogin = ln)} role="option" tabindex="0" aria-selected={sel} style="display:flex;align-items:center;gap:var(--px-6);padding:var(--px-5) var(--px-12);font-size:var(--px-12_5);cursor:pointer;border-bottom:var(--px-1) solid var(--border);background:{sel ? 'var(--grid-select)' : 'transparent'};color:{sel ? 'var(--hex-fff)' : 'var(--text)'}">
-                  <span style="flex:1;overflow:hidden;text-overflow:ellipsis">{l.name}</span>
-                  {#if boolY(l.is_disabled)}<span style="font-size:var(--px-9);color:{sel ? 'var(--hex-fff)' : 'var(--muted)'}">disabled</span>{/if}
-                  <span onclick={(e) => { e.stopPropagation(); dropTarget = { name: ln, kind: 'login' } }} onkeydown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); dropTarget = { name: ln, kind: 'login' } } }} role="button" tabindex="0" title="Drop login" style="opacity:0.75;color:{sel ? 'var(--hex-fff)' : 'var(--error)'};font-size:var(--px-13);line-height:1;cursor:pointer">🗑</span>
+                <div class="um-row" onclick={() => (selectedLogin = ln)} onkeydown={(e) => e.key === 'Enter' && (selectedLogin = ln)} role="option" tabindex="0" aria-selected={sel}>
+                  <Avatar name={ln} size={28} />
+                  <span class="um-row-text"><span class="um-row-name">{l.name}</span><span class="um-row-sub">{loginKind(l)}</span></span>
+                  {#if boolY(l.is_disabled)}<span class="um-badge muted">Disabled</span>{/if}
+                  <span class="um-row-act" onclick={(e) => { e.stopPropagation(); dropTarget = { name: ln, kind: 'login' } }} onkeydown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); dropTarget = { name: ln, kind: 'login' } } }} role="button" tabindex="0" title="Drop login" aria-label="Drop login {ln}"><Icon name="trash" size={13} /></span>
                 </div>
               </ContextMenu.Trigger>
               <ContextMenu.Content>
@@ -550,51 +566,54 @@
             </ContextMenu.Root>
           {/each}
         {/if}
-      </div>
+      </div></div>
       <!-- Login detail -->
-      <div style="flex:1;display:flex;flex-direction:column;min-height:0">
+      <div class="um-detail">
         {#if selectedLoginRow}
-          <div style="flex:1;overflow:auto;min-height:0;padding:var(--px-14)">
             <PrincipalHeader
               name={String(selectedLoginRow.name)}
-              subtitle={`Server login · ${selectedLoginRow.type_desc}${selectedLoginRow.default_database_name ? ` · default DB ${selectedLoginRow.default_database_name}` : ''}`}
-              badge={boolY(selectedLoginRow.is_disabled) ? 'disabled' : ''}
-              badgeDanger
-            />
+              subtitle={`${loginKind(selectedLoginRow)} · server level${selectedLoginRow.default_database_name ? ` · default database ${selectedLoginRow.default_database_name}` : ''}`}
+              badges={boolY(selectedLoginRow.is_disabled) ? [{ label: 'Disabled', tone: 'danger' }] : [{ label: 'Enabled', tone: 'ok' }]}
+            >
+              {#snippet actions()}
+                <span class="eg-btn um-ghost-danger" onclick={() => (dropTarget = { name: String(selectedLoginRow.name), kind: 'login' })} onkeydown={(e) => e.key === 'Enter' && (dropTarget = { name: String(selectedLoginRow.name), kind: 'login' })} role="button" tabindex="0"><Icon name="trash" size={12} />Drop login…</span>
+              {/snippet}
+            </PrincipalHeader>
+          <div class="um-detail-scroll">
 
             <!-- Sign-in card -->
-            <div style={CARD}>
-              <div style={CARD_TITLE}>Sign-in</div>
+            <div class="um-card">
+              <div class="um-card-title">Sign-in</div>
               <div style="display:flex;gap:var(--px-6);align-items:flex-end;flex-wrap:wrap">
-                <label style="font-size:var(--px-11_5);color:var(--text2)">Change password
-                  <input type="password" bind:value={newLoginPw} class="mono" style="display:block;margin-top:var(--px-4);width:var(--px-220);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-8);color:var(--text)" />
+                <label class="um-field">Change password
+                  <input type="password" bind:value={newLoginPw} class="um-input" style="width:var(--px-220)" autocomplete="new-password" placeholder="New password" />
                 </label>
-                <span onclick={queueLoginPassword} onkeydown={(e) => e.key === 'Enter' && queueLoginPassword()} role="button" tabindex="0" aria-disabled={!newLoginPw} style="{BTN};cursor:{newLoginPw ? 'pointer' : 'not-allowed'};opacity:{newLoginPw ? 1 : 0.5}">Queue change</span>
+                <span onclick={queueLoginPassword} onkeydown={(e) => e.key === 'Enter' && queueLoginPassword()} role="button" tabindex="0" aria-disabled={!newLoginPw} class="eg-btn" style="cursor:{newLoginPw ? 'pointer' : 'not-allowed'};opacity:{newLoginPw ? 1 : 0.5}">Change password</span>
                 {#if boolY(selectedLoginRow.is_disabled)}
-                  <span onclick={() => queueLoginEnabled(true)} onkeydown={(e) => e.key === 'Enter' && queueLoginEnabled(true)} role="button" tabindex="0" style={BTN}>Enable login</span>
+                  <span onclick={() => queueLoginEnabled(true)} onkeydown={(e) => e.key === 'Enter' && queueLoginEnabled(true)} role="button" tabindex="0" class="eg-btn">Enable login</span>
                 {:else}
-                  <span onclick={() => queueLoginEnabled(false)} onkeydown={(e) => e.key === 'Enter' && queueLoginEnabled(false)} role="button" tabindex="0" style={BTN}>Disable login</span>
+                  <span onclick={() => queueLoginEnabled(false)} onkeydown={(e) => e.key === 'Enter' && queueLoginEnabled(false)} role="button" tabindex="0" class="eg-btn">Disable login</span>
                 {/if}
               </div>
             </div>
 
             <!-- Server roles card -->
-            <div style={CARD}>
-              <div style={CARD_TITLE}>Server roles <span style="font-weight:400;color:var(--muted);font-size:var(--px-10_5)">— instance-wide privileges (hover for details)</span></div>
+            <div class="um-card">
+              <div class="um-card-title">Server roles <span style="font-weight:400;color:var(--muted);font-size:var(--px-10_5)">— instance-wide privileges (hover for details)</span></div>
               <div style="display:flex;flex-wrap:wrap;gap:var(--px-6) var(--px-16)">
                 {#each FIXED_SERVER_ROLES as role (role)}
                   <label title={SERVER_ROLE_HELP[role] ?? ''} style="font-size:var(--px-11_5);color:var(--text);display:flex;align-items:center;gap:var(--px-5);cursor:help">
-                    <input type="checkbox" checked={serverRolesOf.includes(role)} onchange={(e) => queueServerRole(role, (e.currentTarget as HTMLInputElement).checked)} /> {role}
+                    <input class="um-check" type="checkbox" checked={serverRolesOf.includes(role)} onchange={(e) => queueServerRole(role, (e.currentTarget as HTMLInputElement).checked)} /> {role}
                   </label>
                 {/each}
               </div>
             </div>
 
             <!-- Database access card — mapping + roles/perms per database, one view -->
-            <div style={CARD}>
+            <div class="um-card">
               <div style="display:flex;align-items:center;gap:var(--px-8);margin-bottom:var(--px-8)">
                 <span style="font-size:var(--px-12_5);font-weight:700;color:var(--text)">Database access</span>
-                <span onclick={loadDbAccess} onkeydown={(e) => e.key === 'Enter' && loadDbAccess()} role="button" tabindex="0" aria-busy={dbAccessBusy} style="{BTN};margin-left:auto;opacity:{dbAccessBusy ? 0.6 : 1}">{#if dbAccessLoaded && !dbAccessBusy}<Icon name="refresh" size={12} /> {/if}{dbAccessBusy ? 'Loading…' : dbAccessLoaded ? 'Reload' : 'Load access'}</span>
+                <span onclick={loadDbAccess} onkeydown={(e) => e.key === 'Enter' && loadDbAccess()} role="button" tabindex="0" aria-busy={dbAccessBusy} class="eg-btn" style="margin-left:auto;opacity:{dbAccessBusy ? 0.6 : 1}">{#if dbAccessLoaded && !dbAccessBusy}<Icon name="refresh" size={12} /> {/if}{dbAccessBusy ? 'Loading…' : dbAccessLoaded ? 'Reload' : 'Load access'}</span>
               </div>
               {#if dbAccessLoaded}
                 <div style="display:flex;flex-direction:column;gap:var(--px-6)">
@@ -602,7 +621,7 @@
                     <div style="border:var(--px-1) solid var(--border);border-radius:var(--px-6);overflow:hidden;opacity:{a.mapped ? 1 : 0.65}">
                       <div style="display:flex;align-items:center;gap:var(--px-8);padding:var(--px-5) var(--px-9);background:var(--surface)">
                         <label style="display:flex;align-items:center;gap:var(--px-6);cursor:pointer;font-size:var(--px-12);color:var(--text)" title="Tick to create a database user for this login here; untick to drop it.">
-                          <input type="checkbox" checked={a.mapped} disabled={dbAccessBusy} onchange={(e) => toggleMapUser(a.db, (e.currentTarget as HTMLInputElement).checked)} />
+                          <input class="um-check" type="checkbox" checked={a.mapped} disabled={dbAccessBusy} onchange={(e) => toggleMapUser(a.db, (e.currentTarget as HTMLInputElement).checked)} />
                           <span class="mono" style="font-weight:700">{a.db}</span>
                         </label>
                         {#if a.mapped}<span style="font-size:var(--px-10);color:var(--muted)">user {a.user}</span>{:else}<span style="font-size:var(--px-10);color:var(--muted)">no access — tick to add a user</span>{/if}
@@ -611,16 +630,16 @@
                         <div style="padding:var(--px-5) var(--px-9);display:flex;flex-direction:column;gap:var(--px-3)">
                           <div style="display:flex;gap:var(--px-4);flex-wrap:wrap;align-items:center">
                             <span style="font-size:var(--px-10);color:var(--muted);min-width:var(--px-52)">roles</span>
-                            {#if a.roles.length}{#each a.roles as r (r)}<span style={CHIP_ROLE}>{r}</span>{/each}{:else}<span style="font-size:var(--px-10);color:var(--muted)">—</span>{/if}
+                            {#if a.roles.length}{#each a.roles as r (r)}<span class="um-chip role">{r}</span>{/each}{:else}<span style="font-size:var(--px-10);color:var(--muted)">—</span>{/if}
                           </div>
                           <div style="display:flex;gap:var(--px-4);flex-wrap:wrap;align-items:center">
                             <span style="font-size:var(--px-10);color:var(--muted);min-width:var(--px-52)">granted</span>
-                            {#if a.grants.length}{#each a.grants as g (`${g.perm}:${g.securable}`)}<span style={CHIP_GRANT}>{g.perm} on {g.securable}</span>{/each}{:else}<span style="font-size:var(--px-10);color:var(--muted)">—</span>{/if}
+                            {#if a.grants.length}{#each a.grants as g (`${g.perm}:${g.securable}`)}<span class="um-chip grant">{g.perm} on {g.securable}</span>{/each}{:else}<span style="font-size:var(--px-10);color:var(--muted)">—</span>{/if}
                           </div>
                           {#if a.denies.length}
                             <div style="display:flex;gap:var(--px-4);flex-wrap:wrap;align-items:center">
                               <span style="font-size:var(--px-10);color:var(--error);min-width:var(--px-52)">denied</span>
-                              {#each a.denies as g (`${g.perm}:${g.securable}`)}<span style={CHIP_DENY}>{g.perm} on {g.securable}</span>{/each}
+                              {#each a.denies as g (`${g.perm}:${g.securable}`)}<span class="um-chip deny">{g.perm} on {g.securable}</span>{/each}
                             </div>
                           {/if}
                         </div>
@@ -628,42 +647,42 @@
                     </div>
                   {/each}
                 </div>
-                <div style="font-size:var(--px-10);color:var(--muted);margin-top:var(--px-6)">Tick a database to give this login a user there; untick to remove it. For schema/object-level <b style="color:var(--text2)">GRANT/DENY</b>, DENY exceptions, or <b style="color:var(--text2)">orphaned users</b> (users with no login), use the <span onclick={() => (scope = 'database')} onkeydown={(e) => e.key === 'Enter' && (scope = 'database')} role="button" tabindex="0" style="color:var(--primary);cursor:pointer;font-weight:600">Database users tab →</span></div>
+                <div style="font-size:var(--px-10);color:var(--muted);margin-top:var(--px-6)">Tick a database to give this login a user there; untick to remove it. For schema/object-level <b>GRANT/DENY</b>, DENY exceptions, or <b>orphaned users</b> (users with no login), use the <span onclick={() => (scope = 'database')} onkeydown={(e) => e.key === 'Enter' && (scope = 'database')} role="button" tabindex="0" style="color:var(--primary);cursor:pointer;font-weight:600">Database users tab →</span></div>
               {:else}
-                <div style="font-size:var(--px-11);color:var(--muted)">Click <b style="color:var(--text2)">Load access</b> to see which databases this login can reach and what it can do in each.</div>
+                <div class="um-field-hint">Click <b>Load access</b> to see which databases this login can reach and what it can do in each.</div>
               {/if}
             </div>
 
-            <span onclick={() => (dropTarget = { name: selectedLogin, kind: 'login' })} onkeydown={(e) => e.key === 'Enter' && (dropTarget = { name: selectedLogin, kind: 'login' })} role="button" tabindex="0" style="font-size:var(--px-11_5);color:var(--error);border:var(--px-1) solid var(--error);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">Drop login…</span>
           </div>
         {:else if !loading}
-          <div style="padding:var(--px-14);color:var(--muted);font-size:var(--px-12)">Select a login.</div>
+          <div class="um-empty" style="margin:auto"><div style="display:inline-flex;color:var(--muted);margin-bottom:var(--px-8)"><Icon name="users" size={28} /></div><div style="font-size:var(--px-13);font-weight:600;color:var(--text)">Select a login</div><div>Pick one on the left to see and change its access.</div></div>
         {/if}
       </div>
     {:else}
       <!-- Database: users grouped by database (transparent — shows which
            database + default schema each user belongs to, no dropdown). -->
-      <div role="listbox" tabindex="-1" aria-label="Database users" style="flex:none;width:var(--px-260);border-right:var(--px-1) solid var(--border);overflow:auto;min-height:0">
-        {#if error}<div style="padding:var(--px-14);color:var(--error);font-size:var(--px-12)">{error}</div>
-        {:else if loading || (dbUsersBusy && !dbUsersLoaded)}<div style="padding:var(--px-14);color:var(--muted);font-size:var(--px-12)">Loading…</div>
+      <div class="um-list" style="width:var(--px-300)"><div class="um-list-search"><input class="um-input" style="width:100%" placeholder="Search users" bind:value={listFilter} aria-label="Search users" spellcheck="false" /></div>
+      <div class="um-list-scroll" role="listbox" tabindex="-1" aria-label="Database users">
+        {#if error}<div class="um-empty" style="color:var(--danger-solid)">{error}</div>
+        {:else if loading || (dbUsersBusy && !dbUsersLoaded)}<div class="um-empty">Loading users…</div>
         {:else}
           {#each allDbUsers as grp (grp.db)}
-            <div style="display:flex;align-items:center;gap:var(--px-6);padding:var(--px-5) var(--px-10);background:var(--panel);border-bottom:var(--px-1) solid var(--border);position:sticky;top:0">
-              <span style="font-size:var(--px-11)">🗄</span>
-              <span class="mono" style="font-size:var(--px-11_5);font-weight:700;color:var(--text)">{grp.db}</span>
-              {#if grp.db === currentDbName}<span style="font-size:var(--px-9);color:var(--muted)">current</span>{/if}
-              <span style="margin-left:auto;font-size:var(--px-9);color:var(--muted)">{grp.users.length}</span>
+            <div class="um-list-group" style="display:flex;align-items:center;gap:var(--px-6);text-transform:none;letter-spacing:0;font-size:var(--px-11_5);color:var(--text2)">
+              <Icon name="database" size={12} />
+              <span class="mono" style="font-weight:600;color:var(--text)">{grp.db}</span>
+              {#if grp.db === currentDbName}<span class="um-badge info">current</span>{/if}
+              <span style="margin-left:auto;font-weight:500;color:var(--muted)">{grp.users.length}</span>
             </div>
             {#if grp.users.length}
-              {#each grp.users as u (u.name)}
+              {#each grp.users.filter((u) => u.name.toLowerCase().includes(listFilter.trim().toLowerCase())) as u (u.name)}
                 {@const sel = selectedUser === u.name && selectedDb === grp.db}
                 <ContextMenu.Root>
                   <ContextMenu.Trigger>
-                    <div onclick={() => selectDbUser(grp.db, u.name)} onkeydown={(e) => e.key === 'Enter' && selectDbUser(grp.db, u.name)} role="option" tabindex="0" aria-selected={sel} style="display:flex;align-items:center;gap:var(--px-6);padding:var(--px-4) var(--px-12) var(--px-4) var(--px-22);font-size:var(--px-12_5);cursor:pointer;border-bottom:var(--px-1) solid var(--border);background:{sel ? 'var(--grid-select)' : 'transparent'};color:{sel ? 'var(--hex-fff)' : 'var(--text)'}">
-                      <span style="flex:1;overflow:hidden;text-overflow:ellipsis">{u.name}</span>
-                      <span class="mono" style="font-size:var(--px-9_5);color:{sel ? 'var(--hex-fff)' : 'var(--muted)'}" title="Default schema">{u.schema}</span>
-                      {#if u.orphaned}<span style="font-size:var(--px-9);color:{sel ? 'var(--hex-fff)' : 'var(--warn2)'}" title="No matching server login">orphaned</span>{/if}
-                      <span onclick={(e) => { e.stopPropagation(); selectDbUser(grp.db, u.name); dropTarget = { name: u.name, kind: 'user' } }} onkeydown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); selectDbUser(grp.db, u.name); dropTarget = { name: u.name, kind: 'user' } } }} role="button" tabindex="0" title="Drop user" style="opacity:0.75;color:{sel ? 'var(--hex-fff)' : 'var(--error)'};font-size:var(--px-13);line-height:1;cursor:pointer">🗑</span>
+                    <div class="um-row" onclick={() => selectDbUser(grp.db, u.name)} onkeydown={(e) => e.key === 'Enter' && selectDbUser(grp.db, u.name)} role="option" tabindex="0" aria-selected={sel}>
+                      <Avatar name={u.name} size={26} />
+                      <span class="um-row-text"><span class="um-row-name">{u.name}</span><span class="um-row-sub" title="Default schema">default schema <span class="mono">{u.schema}</span></span></span>
+                      {#if u.orphaned}<span class="um-badge warn" title="No matching server login">Orphaned</span>{/if}
+                      <span class="um-row-act" onclick={(e) => { e.stopPropagation(); selectDbUser(grp.db, u.name); dropTarget = { name: u.name, kind: 'user' } }} onkeydown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); selectDbUser(grp.db, u.name); dropTarget = { name: u.name, kind: 'user' } } }} role="button" tabindex="0" title="Drop user" aria-label="Drop user {u.name}"><Icon name="trash" size={13} /></span>
                     </div>
                   </ContextMenu.Trigger>
                   <ContextMenu.Content>
@@ -673,45 +692,48 @@
                 </ContextMenu.Root>
               {/each}
             {:else}
-              <div style="padding:var(--px-4) var(--px-12) var(--px-4) var(--px-22);font-size:var(--px-10_5);color:var(--muted)">no users</div>
+              <div class="um-field-hint" style="padding:var(--px-2) var(--px-8) var(--px-6)">No users in this database.</div>
             {/if}
           {/each}
         {/if}
-      </div>
+      </div></div>
       <!-- User detail: permission grid + roles -->
-      <div style="flex:1;display:flex;flex-direction:column;min-height:0">
+      <div class="um-detail">
         {#if selectedUser}
-          <div style="flex:1;overflow:auto;min-height:0;padding:var(--px-14)">
             <PrincipalHeader
               name={selectedUser}
-              subtitle={`Database user · in ${selectedDb} · default schema ${selectedUserRow?.default_schema || 'dbo'}`}
-              badge={selectedUserRow && boolY(selectedUserRow.orphaned) ? 'orphaned' : ''}
-              badgeDanger
-            />
+              subtitle={`Database user in ${selectedDb} · default schema ${selectedUserRow?.default_schema || 'dbo'}`}
+              badges={selectedUserRow && boolY(selectedUserRow.orphaned) ? [{ label: 'Orphaned — no server login', tone: 'warn' }] : []}
+            >
+              {#snippet actions()}
+                <span class="eg-btn um-ghost-danger" onclick={() => (dropTarget = { name: selectedUser, kind: 'user' })} onkeydown={(e) => e.key === 'Enter' && (dropTarget = { name: selectedUser, kind: 'user' })} role="button" tabindex="0"><Icon name="trash" size={12} />Drop user…</span>
+              {/snippet}
+            </PrincipalHeader>
+          <div class="um-detail-scroll">
 
             <!-- Database roles card -->
-            <div style={CARD}>
-              <div style={CARD_TITLE}>Database roles</div>
+            <div class="um-card">
+              <div class="um-card-title">Database roles</div>
               <div style="display:flex;gap:var(--px-16);flex-wrap:wrap">
                 {#each QUICK_DB_ROLES as role (role)}
-                  <label title={DB_ROLE_HELP[role] ?? ''} style="font-size:var(--px-11_5);color:var(--text);display:flex;align-items:center;gap:var(--px-5);cursor:help">
-                    <input type="checkbox" checked={rolesOfUser.includes(role)} onchange={(e) => queueFixedRole(role, (e.currentTarget as HTMLInputElement).checked)} /> {role}
+                  <label class="um-checkline" title={DB_ROLE_HELP[role] ?? ''}>
+                    <input class="um-check" type="checkbox" checked={rolesOfUser.includes(role)} onchange={(e) => queueFixedRole(role, (e.currentTarget as HTMLInputElement).checked)} /> {role}
                   </label>
                 {/each}
               </div>
               {#if otherRolesOfUser.length}
                 <div style="display:flex;gap:var(--px-4);flex-wrap:wrap;align-items:center;margin-top:var(--px-8)">
                   <span style="font-size:var(--px-10);color:var(--muted);min-width:var(--px-72)">other roles</span>
-                  {#each otherRolesOfUser as r (r)}<span style={CHIP_ROLE}>{r}</span>{/each}
+                  {#each otherRolesOfUser as r (r)}<span class="um-chip role">{r}</span>{/each}
                 </div>
               {/if}
             </div>
 
             <!-- Permissions card -->
-            <div style={CARD}>
-              <div style={CARD_TITLE}>Permissions</div>
+            <div class="um-card">
+              <div class="um-card-title">Permissions</div>
               <div style="display:flex;align-items:center;gap:var(--px-10);flex-wrap:wrap">
-                <span onclick={openGrantWizard} onkeydown={(e) => e.key === 'Enter' && openGrantWizard()} role="button" tabindex="0" style="font-size:var(--px-12_5);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-7);padding:var(--px-6) var(--px-14);cursor:pointer;font-weight:600">＋ Grant access…</span>
+                <span class="cfm-btn primary" onclick={openGrantWizard} onkeydown={(e) => e.key === 'Enter' && openGrantWizard()} role="button" tabindex="0"><Icon name="plus" size={12} />Grant access…</span>
                 <span style="font-size:var(--px-11);color:var(--muted)">Guided: pick a schema/object and an access level (Read-only / Read-Write / Full), or Deny.</span>
               </div>
               <div onclick={() => (showMatrix = !showMatrix)} onkeydown={(e) => e.key === 'Enter' && (showMatrix = !showMatrix)} role="button" tabindex="0" style="font-size:var(--px-11_5);color:var(--text2);cursor:pointer;margin-top:var(--px-10);user-select:none">{showMatrix ? '▾' : '▸'} Advanced — permission matrix (GRANT / DENY per privilege)</div>
@@ -731,25 +753,16 @@
                 </div>
               {/if}
             </div>
-
-            <span onclick={() => (dropTarget = { name: selectedUser, kind: 'user' })} onkeydown={(e) => e.key === 'Enter' && (dropTarget = { name: selectedUser, kind: 'user' })} role="button" tabindex="0" style="display:inline-block;font-size:var(--px-11_5);color:var(--error);border:var(--px-1) solid var(--error);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer">Drop user…</span>
           </div>
         {:else if !loading}
-          <div style="padding:var(--px-14);color:var(--muted);font-size:var(--px-12)">Select a user.</div>
+          <div class="um-empty" style="margin:auto"><div style="display:inline-flex;color:var(--muted);margin-bottom:var(--px-8)"><Icon name="users" size={28} /></div><div style="font-size:var(--px-13);font-weight:600;color:var(--text)">Select a user</div><div>Pick one on the left to see and change its access.</div></div>
         {/if}
       </div>
     {/if}
   </div>
 
   {#if pending.length}
-    <div style="flex:none;border-top:var(--px-1) solid var(--border);background:var(--panel);padding:var(--px-10) var(--px-14);max-height:var(--px-220);overflow:auto">
-      <div style="display:flex;align-items:center;gap:var(--px-8);margin-bottom:var(--px-6)">
-        <span style="font-size:var(--px-11_5);font-weight:700;color:var(--text2)">Pending changes ({pending.length}) · {scope === 'database' ? selectedDb : 'server'}</span>
-        <span onclick={execute} onkeydown={(e) => e.key === 'Enter' && execute()} role="button" tabindex="0" aria-disabled={executing} style="margin-left:auto;font-size:var(--px-11_5);background:var(--primary);color:var(--hex-fff);border-radius:var(--px-6);padding:var(--px-4) var(--px-12);cursor:pointer;font-weight:600;opacity:{executing ? 0.6 : 1}">{executing ? 'Executing…' : 'Execute'}</span>
-        <span onclick={discard} onkeydown={(e) => e.key === 'Enter' && discard()} role="button" tabindex="0" style="font-size:var(--px-11_5);background:var(--surface);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-12);cursor:pointer">Discard</span>
-      </div>
-      <CodeView value={pending.join('\n')} language={editorLanguageId('mssql')} readOnly height="auto" maxHeight={200} ariaLabel="Pending SQL" />
-    </div>
+    <PendingBar count={pending.length} sql={pending.join('\n')} language={editorLanguageId('mssql')} {executing} scope={scope === 'database' ? selectedDb : 'server'} onExecute={execute} onDiscard={discard} />
   {/if}
 </div>
 

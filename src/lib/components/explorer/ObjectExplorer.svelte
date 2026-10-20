@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { armCollapse, treeOut } from '$lib/ui/tree-motion'
+  import { armCollapse, treeOut, limitRowAnimations } from '$lib/ui/tree-motion'
   import Icon from '$lib/components/Icon.svelte'
   import Chevron from '$lib/components/Chevron.svelte'
   // Object Explorer — port 1:1 từ Database Studio.dc.html:
@@ -11,6 +11,7 @@
   // MSSQL Schemas/TVF/Scalar; SQLite file → main → Tables 🔒/Views/Triggers).
   // Introspection lazy qua explorer store (IPC thật).
   import * as ContextMenu from '$lib/components/ui/context-menu'
+  import SharedContextMenu from '$lib/components/ui/context-menu/SharedContextMenu.svelte'
   import * as ipc from '$lib/ipc'
   import SystemIcon from '$lib/components/SystemIcon.svelte'
   import RedisExplorer from '$lib/components/explorer/RedisExplorer.svelte'
@@ -53,6 +54,7 @@
   import { dropRole as cassDropRole } from '$lib/users/cassandra'
   import { collationWizard } from '$lib/stores/collation.svelte'
   import { backupWizard } from '$lib/stores/backup.svelte'
+  import { supportsBackup } from '$lib/backup/plan'
   import { duckAttach, duckExport, duckImport } from '$lib/stores/duckdb.svelte'
   import * as chops from '$lib/sql/chops'
   import { toasts } from '$lib/stores/toast.svelte'
@@ -125,6 +127,8 @@
 
   let expanded = $state<Set<string>>(new Set())
   let treeSel = $state<string | null>(null)
+  /** The one context menu every tree row opens (see SharedContextMenu). */
+  let rowMenu = $state<SharedContextMenu | null>(null)
 
   // Schema-wide index list (the "Indexes" folder) — loaded on demand via
   // scan_indexes (same source as the Index Scanner), cached per conn+schema.
@@ -1823,6 +1827,7 @@
         if (p.expandable && expanded.has(p.key)) armCollapse()
         ;(p.onDblClick ?? p.onClick)?.()
       }}
+      oncontextmenu={menu ? (e) => rowMenu?.open(e, menu) : undefined}
       onkeydown={(e) => {
         if (e.key !== 'Enter') return
         if (p.expandable && expanded.has(p.key)) armCollapse()
@@ -1840,7 +1845,7 @@
         e.dataTransfer.setData('text/plain', p.dragData) // fallback mime for strict engines
       }}
       title={p.name}
-      style="display:flex;align-items:center;gap:var(--px-5);padding:var(--px-3) var(--px-6);border-radius:var(--px-5);cursor:pointer;white-space:nowrap;padding-left:calc(var(--px-6) + {p.depth} * var(--px-15))"
+      style="display:flex;align-items:center;gap:var(--px-5);padding:var(--px-3) var(--px-6);border-radius:var(--px-5);cursor:pointer;white-space:nowrap;user-select:none;padding-left:calc(var(--px-6) + {p.depth} * var(--px-15))"
     >
       <!-- chevron: single-click toggles expansion (row single-click only selects) -->
       <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
@@ -1884,14 +1889,9 @@
       {/if}
     </div>
   {/snippet}
-  {#if menu}
-    <ContextMenu.Root>
-      <ContextMenu.Trigger>{@render inner()}</ContextMenu.Trigger>
-      {@render menu()}
-    </ContextMenu.Root>
-  {:else}
-    {@render inner()}
-  {/if}
+  <!-- the row's menu opens through the one shared menu (rowMenu) — no per-row
+       ContextMenu.Root, which made a 3,000-table folder take seconds to draw -->
+  {@render inner()}
 {/snippet}
 
 <!-- The "Partitions" node of one table, shared by the main tree and the
@@ -2057,6 +2057,15 @@
   {/if}
 {/snippet}
 
+<!-- Backup & Restore… for a database node (every engine that backs up; see
+     BackupDialog). `db` = the database / keyspace / file the node stands for. -->
+{#snippet backupItems(cid: string, db: string)}
+  {#if selected && cid && supportsBackup(selected.system)}
+    {@const sys = selected.system}
+    <ContextMenu.Item onclick={() => backupWizard.show(cid, sys, { database: db, tab: 'backup' })}>Backup &amp; Restore…</ContextMenu.Item>
+  {/if}
+{/snippet}
+
 <!-- context-menu items: Filter… / Clear Filter (shared by every folder header) -->
 {#snippet filterMenuItems(key: string)}
   <ContextMenu.Item onclick={() => openFolderFilter(key)}>Filter…</ContextMenu.Item>
@@ -2070,7 +2079,9 @@
   style="flex:1;display:flex;flex-direction:column;min-height:0"
   role="tree"
   tabindex="-1"
+  use:limitRowAnimations
 >
+  <SharedContextMenu bind:this={rowMenu} />
   <!-- header — dòng 137-142 -->
   <div style="flex:none;display:flex;align-items:center;gap:var(--px-8);padding:var(--px-9) var(--px-12) var(--px-7)">
     <span style="font-size:var(--px-10_5);font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)">Explorer</span>
@@ -2263,6 +2274,8 @@
               <ContextMenu.Item onclick={() => cassCreateTab(ks, 'table')}>Create Table…</ContextMenu.Item>
               <ContextMenu.Item onclick={() => cassCreateTab(ks, 'type')}>Create Type…</ContextMenu.Item>
               <ContextMenu.Item onclick={() => cassCreateTab(ks, 'materialized-view')}>Create Materialized View…</ContextMenu.Item>
+              <ContextMenu.Separator />
+              {@render backupItems(selected?.id ?? '', ks)}
               <ContextMenu.Separator />
               <ContextMenu.Item onclick={() => cassDrop('keyspace', ks, ks)}>Drop Keyspace</ContextMenu.Item>
               <ContextMenu.Item onclick={() => selected && refreshCassKeyspace(ks)}>Refresh</ContextMenu.Item>
@@ -2525,7 +2538,7 @@
               <ContextMenu.Item onclick={() => newSchema()}>New Schema…</ContextMenu.Item>
             {/if}
             <ContextMenu.Item onclick={() => selected && scriptsWizard.show(selected.id, cache?.schemas?.[0]?.name ?? '')}>Generate Scripts…</ContextMenu.Item>
-            <ContextMenu.Item onclick={() => selected && backupWizard.show(selected.id, selected.system)}>Backup & Restore…</ContextMenu.Item>
+            {@render backupItems(selected?.id ?? '', curDb?.name ?? selected?.database ?? '')}
             <ContextMenu.Item onclick={() => selected && tabs.openSchemaCompare(selected.id)}>Compare Schemas…</ContextMenu.Item>
             <ContextMenu.Item onclick={() => selected && tabs.openSchemaCompare(selected.id, { tgtConnId: selected.id })}>Compare Databases…</ContextMenu.Item>
             <ContextMenu.Separator />
@@ -2545,6 +2558,15 @@
       {/if}
 
       {#if isSqlite}
+        {#snippet fileMenu()}
+          <ContextMenu.Content class="w-52">
+            <ContextMenu.Item onclick={() => newQuery('')}>New Query</ContextMenu.Item>
+            <ContextMenu.Separator />
+            {@render backupItems(selected?.id ?? '', '')}
+            <ContextMenu.Separator />
+            <ContextMenu.Item onclick={() => selected && explorer.refresh(selected.id, { kind: 'connection' })}>Refresh</ContextMenu.Item>
+          </ContextMenu.Content>
+        {/snippet}
         {@render row({
           key: 'file',
           depth: 0,
@@ -2556,7 +2578,7 @@
           head: true,
           expandable: true,
           onClick: () => toggle('file'),
-        })}
+        }, fileMenu)}
       {/if}
 
       {#each schemaListOpen ? visibleSchemas : [] as schema (schema.name)}
@@ -2584,6 +2606,7 @@
               <!-- database-node ops apply to every schema-as-database system (MySQL/
                    MariaDB/ClickHouse). Unify Collation is MySQL/MariaDB-only. -->
               <ContextMenu.Item onclick={() => selected && tabs.openSchemaCompare(selected.id, { tgtConnId: selected.id, srcDb: schema.name })}>Compare Databases…</ContextMenu.Item>
+              {@render backupItems(selected?.id ?? '', schema.name)}
               {#if schemaIsDatabase}
                 <ContextMenu.Item onclick={() => selected && collationWizard.show(selected.id, schema.name)}>Unify Collation…</ContextMenu.Item>
               {/if}
@@ -3271,6 +3294,7 @@
               {/if}
               <ContextMenu.Separator />
               <ContextMenu.Item onclick={() => selected && tabs.openSchemaCompare(selected.id, { tgtConnId: selected.id, srcDb: db.name })}>Compare Databases…</ContextMenu.Item>
+              {@render backupItems(selected?.id ?? '', db.name)}
               {#if selected && hasRealSchemas(selected.system)}
                 <ContextMenu.Item onclick={() => sub && newSchema(sub, db.name)}>New Schema…</ContextMenu.Item>
               {/if}

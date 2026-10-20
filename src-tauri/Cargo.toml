@@ -134,6 +134,10 @@ keyring = { version = "3", features = ["apple-native"] }
 [target.'cfg(target_os = "linux")'.dependencies]
 keyring = { version = "3", features = ["sync-secret-service", "crypto-rust"] }
 
+# Backup & Restore runs client tools `nice`d (see commands/backup.rs::hidden).
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 # Integration test: container tự bật/tắt cho từng hệ (không phụ thuộc DB cài sẵn)
 testcontainers = "0.23"

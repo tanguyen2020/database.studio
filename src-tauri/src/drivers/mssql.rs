@@ -563,6 +563,36 @@ impl MssqlDriver {
         Ok(out)
     }
 
+    /// Names + kinds of every table, view, routine and trigger of the schema in ONE
+    /// query (tables() also sums partition stats per table; routines() reads every
+    /// parameter). Same objects: DML triggers are the 'TR' rows of sys.objects.
+    pub async fn object_names(&mut self, schema: &str) -> Result<Vec<ObjectName>, QueryError> {
+        let rows = self
+            .client
+            .query(
+                "SELECT CASE o.type WHEN 'U' THEN 'table' WHEN 'V' THEN 'view' WHEN 'P' THEN 'procedure'
+                                    WHEN 'TR' THEN 'trigger' ELSE 'function' END,
+                        o.name
+                 FROM sys.objects o
+                 JOIN sys.schemas s ON s.schema_id = o.schema_id
+                 WHERE s.name = @P1 AND o.type IN ('U','V','P','FN','IF','TF','TR')
+                 ORDER BY o.name",
+                &[&schema],
+            )
+            .await
+            .map_err(|e| map_error(&e))?
+            .into_first_result()
+            .await
+            .map_err(|e| map_error(&e))?;
+        Ok(rows
+            .iter()
+            .map(|r| ObjectName {
+                kind: r.get::<&str, _>(0).unwrap_or("table").to_string(),
+                name: r.get::<&str, _>(1).unwrap_or_default().to_string(),
+            })
+            .collect())
+    }
+
     pub async fn triggers(&mut self, schema: &str) -> Result<Vec<TriggerInfo>, QueryError> {
         let rows = self
             .client

@@ -40,9 +40,12 @@ pub async fn list_tables(
     state: State<'_, AppState>,
     conn_id: String,
     schema: String,
+    // false = skip each table's on-disk size (data_length) where it is costly;
+    // absent = sizes included, as before
+    sizes: Option<bool>,
 ) -> Result<Vec<TableInfo>, AppError> {
     introspect!(state, conn_id, |driver| async move {
-        driver.lock().await.tables(&schema).await
+        driver.lock().await.tables_with(&schema, sizes.unwrap_or(true)).await
     })
 }
 
@@ -135,6 +138,18 @@ pub async fn list_sequences(
 ) -> Result<Vec<SequenceInfo>, AppError> {
     introspect!(state, conn_id, |driver| async move {
         driver.lock().await.sequences(&schema).await
+    })
+}
+
+/// Names + kinds of every object of a schema in one call (Generate Scripts).
+#[tauri::command]
+pub async fn list_object_names(
+    state: State<'_, AppState>,
+    conn_id: String,
+    schema: String,
+) -> Result<Vec<ObjectName>, AppError> {
+    introspect!(state, conn_id, |driver| async move {
+        driver.lock().await.object_names(&schema).await
     })
 }
 

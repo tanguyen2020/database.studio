@@ -241,7 +241,7 @@ test('mongo UI: connection New Database (name + first collection)', async ({ pag
   await dlg.getByPlaceholder('new_database').fill('shop')
   await dlg.getByPlaceholder('e.g. items').fill('products')
   await page.waitForTimeout(150)
-  await dlg.getByText('Create', { exact: true }).click()
+  await dlg.getByRole('button', { name: 'Create database' }).click()
   await page.waitForTimeout(400)
   await expect(page.getByRole('dialog', { name: 'New Database' })).toHaveCount(0)
 

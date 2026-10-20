@@ -234,6 +234,35 @@ async fn pg_full_introspection_surfaces_every_object_type() {
     let seqs = drv.sequences("public").await.unwrap();
     assert!(seqs.iter().any(|s| s.name == "seq_emp"), "sequence listed: {seqs:?}");
 
+    // Generate Scripts object list: one names-only query == the four lists above.
+    let mut got: Vec<(String, String)> =
+        drv.object_names("public").await.unwrap().into_iter().map(|o| (o.kind, o.name)).collect();
+    got.sort();
+    let mut want: Vec<(String, String)> = tbls
+        .iter()
+        .map(|t| (if t.kind == "view" { "view" } else { "table" }.to_string(), t.name.clone()))
+        .collect();
+    want.extend(routines.iter().map(|r| (r.kind.clone(), r.name.clone())));
+    want.extend(trigs.iter().map(|t| ("trigger".to_string(), t.name.clone())));
+    want.extend(seqs.iter().map(|s| ("sequence".to_string(), s.name.clone())));
+    want.sort();
+    assert_eq!(got, want, "object_names == tables + routines + triggers + sequences");
+
+    // Explorer tree list: same relations, kinds, row estimates and partition flags
+    // as tables() — only the on-disk size is left out.
+    let light = drv.tables_with("public", false).await.unwrap();
+    assert!(light.iter().all(|t| t.data_length.is_none()), "no sizes: {light:?}");
+    let strip = |v: &[database_studio_lib::drivers::types::TableInfo]| {
+        v.iter()
+            .map(|t| (t.name.clone(), t.kind.clone(), t.row_estimate, t.partition_of.clone(), t.is_partitioned))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(strip(&light), strip(&tbls), "tables_with(false) == tables() minus data_length");
+    assert!(
+        drv.tables_with("public", true).await.unwrap().iter().any(|t| t.name == "emp" && t.data_length.is_some_and(|b| b > 0)),
+        "tables_with(true) still reports sizes"
+    );
+
     eprintln!("CHK pg_full_introspection_surfaces_every_object_type OK");
 }
 
@@ -1208,6 +1237,38 @@ async fn mysql_like_roundtrip(image: (&str, &str), env_prefix: &str, system: &'s
     let err = drv.exec("SELEC * FROM x").await.expect_err("phải fail");
     assert_eq!(err.system, system);
     assert!(!err.raw.is_empty());
+
+    // routines(): every routine's parameters come from ONE schema-wide query keyed
+    // by (kind, name). A failure there degrades to "no parameters" silently, so
+    // check the real values on BOTH engines (MariaDB's information_schema differs).
+    drv.exec("CREATE PROCEDURE rp(IN a INT, OUT b VARCHAR(7)) BEGIN SET b = 'x'; END").await.unwrap();
+    drv.exec("CREATE PROCEDURE same_name(IN only_one INT) BEGIN END").await.unwrap();
+    drv.exec("CREATE FUNCTION same_name(x INT, y DATE) RETURNS INT DETERMINISTIC RETURN x").await.unwrap();
+    let rs = drv.routines("testdb").await.unwrap();
+    let find = |kind: &str, name: &str| {
+        let r = rs.iter().find(|r| r.kind == kind && r.name == name).unwrap_or_else(|| panic!("{system}: {kind} {name} in {rs:?}"));
+        r.params.iter().map(|p| format!("{} {} {}", p.mode, p.name, p.data_type)).collect::<Vec<_>>()
+    };
+    // ground truth: the per-routine query the driver used to run, on this engine
+    // (type text is the engine's own DTD_IDENTIFIER — `int` on MySQL, `int(11)`
+    // on MariaDB — so it is compared, not hard-coded)
+    let out = drv
+        .exec(
+            "SELECT CONCAT(COALESCE(PARAMETER_MODE, 'IN'), ' ', PARAMETER_NAME, ' ', DTD_IDENTIFIER) AS p \
+             FROM information_schema.PARAMETERS \
+             WHERE SPECIFIC_SCHEMA = 'testdb' AND SPECIFIC_NAME = 'rp' AND ORDINAL_POSITION > 0 \
+             ORDER BY ORDINAL_POSITION",
+        )
+        .await
+        .unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    let truth: Vec<String> = result.rows.iter().map(|r| r["p"].as_str().unwrap().to_string()).collect();
+    assert_eq!(truth.len(), 2, "{system}: {truth:?}");
+    assert_eq!(find("procedure", "rp"), truth, "{system}");
+    // same name, different kinds: each keeps only its own parameters
+    let names = |v: Vec<String>| v.iter().map(|s| s.split(' ').take(2).collect::<Vec<_>>().join(" ")).collect::<Vec<_>>();
+    assert_eq!(names(find("procedure", "same_name")), ["IN only_one"], "{system}");
+    assert_eq!(names(find("function", "same_name")), ["IN x", "IN y"], "{system}");
 }
 
 #[tokio::test]
@@ -1403,6 +1464,19 @@ async fn mysql_explorer_tree_introspection() {
     assert_eq!(proc.params.len(), 1, "procedure IN param read (routine_params collation-safe)");
     let func = routines.iter().find(|r| r.name == "f_double").expect("function listed");
     assert_eq!(func.kind, "function");
+    // parameters are read for the whole schema in one query and matched by
+    // (kind, name): a procedure and a function may share a name in MySQL, and
+    // each must keep its own parameters (they used to be merged)
+    drv.exec("CREATE PROCEDURE dupname(IN a INT) BEGIN END").await.unwrap();
+    drv.exec("CREATE FUNCTION dupname(x INT, y VARCHAR(5)) RETURNS INT DETERMINISTIC RETURN x").await.unwrap();
+    let routines = drv.routines("testdb").await.unwrap();
+    let dp = routines.iter().find(|r| r.name == "dupname" && r.kind == "procedure").expect("procedure dupname");
+    let df = routines.iter().find(|r| r.name == "dupname" && r.kind == "function").expect("function dupname");
+    assert_eq!(dp.params.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), ["a"]);
+    assert_eq!(df.params.iter().map(|p| (p.name.as_str(), p.data_type.as_str())).collect::<Vec<_>>(), [("x", "int"), ("y", "varchar(5)")]);
+    assert_eq!(df.return_type.as_deref(), Some("int"));
+    let p_touch = routines.iter().find(|r| r.name == "p_touch").unwrap();
+    assert_eq!((p_touch.params[0].name.as_str(), p_touch.params[0].mode.as_str()), ("v", "IN"));
 
     // functions() (Query Editor autocomplete): MySQL built-ins aren't in any catalog
     // (the frontend merges those in statically), so this surfaces the USER function.
@@ -1414,6 +1488,25 @@ async fn mysql_explorer_tree_introspection() {
     assert!(!drv.constraints("testdb", "students").await.unwrap().is_empty(), "constraints read");
     drv.foreign_keys("testdb").await.unwrap();
     drv.scan_indexes("testdb").await.unwrap();
+
+    // Generate Scripts object list: one names-only query, same objects, also under
+    // the mismatched collation (it UNIONs three information_schema views).
+    let mut got: Vec<(String, String)> =
+        drv.object_names("testdb").await.unwrap().into_iter().map(|o| (o.kind, o.name)).collect();
+    got.sort();
+    let want: Vec<(String, String)> = [
+        ("function", "dupname"),
+        ("function", "f_double"),
+        ("procedure", "dupname"),
+        ("procedure", "p_touch"),
+        ("table", "students"),
+        ("trigger", "trg_students_ins"),
+        ("view", "v_students"),
+    ]
+    .iter()
+    .map(|(k, n)| (k.to_string(), n.to_string()))
+    .collect();
+    assert_eq!(got, want, "object_names lists every object with its kind");
 }
 
 /// Item 7 — executing MySQL stored functions/procedures of assorted parameter and
@@ -6016,6 +6109,30 @@ async fn mssql_alter_and_execute_objects_end_to_end() {
     assert_eq!(scalar(&mut drv, "SELECT dbo.addone(41) AS n").await, 42, "execute function");
     drv.exec("CREATE OR ALTER FUNCTION dbo.addone(@x int) RETURNS int AS BEGIN RETURN @x + 2 END").await.unwrap();
     assert_eq!(scalar(&mut drv, "SELECT dbo.addone(41) AS n").await, 43, "alter function took effect");
+
+    // Generate Scripts object list: one names-only query lists exactly what the
+    // regular lists do (tables/views/routines/triggers), with the right kinds.
+    drv.exec("CREATE TABLE dbo.gs_t (id int)").await.unwrap();
+    drv.exec("CREATE TRIGGER dbo.gs_tr ON dbo.gs_t AFTER INSERT AS SELECT 1").await.unwrap();
+    let mut got: Vec<(String, String)> =
+        drv.object_names("dbo").await.unwrap().into_iter().map(|o| (o.kind, o.name)).collect();
+    got.sort();
+    let mut want: Vec<(String, String)> = drv
+        .tables("dbo")
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|t| (if t.kind == "view" { "view" } else { "table" }.to_string(), t.name))
+        .collect();
+    want.extend(drv.routines("dbo").await.unwrap().into_iter().map(|r| {
+        (if r.kind == "procedure" { "procedure" } else { "function" }.to_string(), r.name)
+    }));
+    want.extend(drv.triggers("dbo").await.unwrap().into_iter().map(|t| ("trigger".to_string(), t.name)));
+    want.sort();
+    assert_eq!(got, want, "object_names == tables + routines + triggers");
+    for k in ["table", "view", "procedure", "function", "trigger"] {
+        assert!(got.iter().any(|(kind, _)| kind == k), "{k} listed: {got:?}");
+    }
     eprintln!("CHK mssql_alter_and_execute_objects_end_to_end OK");
 }
 

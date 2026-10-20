@@ -338,6 +338,19 @@ impl Registry {
         Ok((e.profile.clone(), e.password.clone(), e.ssh_password.clone()))
     }
 
+    /// Endpoint a live connection really talks to — `127.0.0.1:<port>` when it
+    /// goes through an SSH tunnel. External tools (pg_dump…) must use this, not
+    /// the profile's host, or they bypass the tunnel.
+    pub fn live_endpoint(&self, id: &str) -> Option<Endpoint> {
+        self.entries.lock().unwrap().get(id).map(|e| e.endpoint.clone())
+    }
+
+    /// Reconnect a live connection in place (e.g. after a restore killed its
+    /// session on the server).
+    pub async fn reconnect_now(&self, id: &str) -> AppResult<()> {
+        self.reconnect(id).await
+    }
+
     /// Opens tunnel (if configured) + driver connection and registers it.
     pub async fn connect(
         &self,

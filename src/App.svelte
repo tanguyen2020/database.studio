@@ -58,6 +58,7 @@
   import ExportDialog from '$lib/components/ExportDialog.svelte'
   import GenerateScriptsDialog from '$lib/components/GenerateScriptsDialog.svelte'
   import BackupDialog from '$lib/components/BackupDialog.svelte'
+  import BackupProgressWindow from '$lib/components/BackupProgressWindow.svelte'
   import CopyTableDialog from '$lib/components/CopyTableDialog.svelte'
   import CollationDialog from '$lib/components/CollationDialog.svelte'
   import GenerateTestDataDialog from '$lib/components/GenerateTestDataDialog.svelte'
@@ -573,6 +574,7 @@
 <ExportDialog />
 <GenerateScriptsDialog />
 <BackupDialog />
+<BackupProgressWindow />
 <CopyTableDialog />
 <CollationDialog />
 <GenerateTestDataDialog />

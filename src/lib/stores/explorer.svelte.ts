@@ -216,7 +216,9 @@ class ExplorerStore {
           assign([])
         })
       await Promise.all([
-        load('tables', (v) => (sc.tables = v), ipc.listTables(connId, schema)),
+        // no per-table size: the tree shows row counts, never sizes, and on
+        // PostgreSQL the size alone was seconds on a schema of thousands
+        load('tables', (v) => (sc.tables = v), ipc.listTables(connId, schema, { sizes: false })),
         load('routines', (v) => (sc.routines = v), ipc.listRoutines(connId, schema)),
         load('triggers', (v) => (sc.triggers = v), ipc.listTriggers(connId, schema)),
         load('sequences', (v) => (sc.sequences = v), ipc.listSequences(connId, schema)),

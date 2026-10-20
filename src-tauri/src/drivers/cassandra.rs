@@ -980,9 +980,17 @@ impl CassandraDriver {
 /// Pure CREATE TABLE builder — composite partition key `((p1, p2), c1, c2)` +
 /// `WITH CLUSTERING ORDER BY`. Extracted for unit testing without a cluster.
 pub fn format_table_ddl(keyspace: &str, table: &str, cols: &[CassColumn]) -> String {
+    // `static` is part of the column definition — dropping it would recreate a
+    // different table (and a restore would put one value per ROW, not per partition).
     let mut lines: Vec<String> = cols
         .iter()
-        .map(|c| format!("  {} {}", c.name, c.data_type))
+        .map(|c| {
+            if c.kind == "static" {
+                format!("  {} {} static", c.name, c.data_type)
+            } else {
+                format!("  {} {}", c.name, c.data_type)
+            }
+        })
         .collect();
 
     let partition: Vec<&str> = cols

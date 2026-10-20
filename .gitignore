@@ -37,3 +37,11 @@ release-beta/
 # build (see src-tauri/resources/instantclient/README.md). Track only the README.
 src-tauri/resources/instantclient/*
 !src-tauri/resources/instantclient/README.md
+
+# Backup & Restore client tools (pg_dump, mariadb-dump, mongodump) shipped in the
+# installer — fetched per build by tools/fetch-dump-tools. Track only the README.
+src-tauri/resources/tools/*
+!src-tauri/resources/tools/README.md
+
+# build output of the fetcher
+tools/fetch-dump-tools/target/

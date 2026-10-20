@@ -1,6 +1,8 @@
 //! Driver layer: one adapter per system, unified behind `LiveConnection`.
 
 pub mod backup;
+pub mod backup_tools;
+pub mod bundled_tools;
 pub mod cancel;
 pub mod cassandra;
 pub mod clickhouse;
@@ -305,7 +307,7 @@ fn oracle_params(p: &ConnectionProfile, ep: &Endpoint, password: &str) -> Oracle
     }
 }
 
-fn mongo_params(p: &ConnectionProfile, ep: &Endpoint, password: &str) -> MongoConnParams {
+pub(crate) fn mongo_params(p: &ConnectionProfile, ep: &Endpoint, password: &str) -> MongoConnParams {
     MongoConnParams {
         host: ep.host.clone(),
         port: ep.port,
@@ -599,6 +601,16 @@ impl LiveConnection {
         }
     }
 
+    /// tables() without the per-table on-disk size where computing it is costly
+    /// and nobody looks at it (the Explorer tree). Engines where the size comes
+    /// for free with the row count return the same as tables().
+    pub async fn tables_with(&mut self, schema: &str, sizes: bool) -> Result<Vec<TableInfo>, QueryError> {
+        match self {
+            Self::Postgres(d) => d.tables_with(schema, sizes).await,
+            _ => self.tables(schema).await,
+        }
+    }
+
     pub async fn columns(&mut self, schema: &str, table: &str) -> Result<Vec<ColumnInfo>, QueryError> {
         match self {
             Self::Postgres(d) => d.columns(schema, table).await,
@@ -728,6 +740,39 @@ impl LiveConnection {
             Self::Duckdb(d) => d.sequences(schema).await,
             // MySQL/MariaDB/MSSQL(Phase1)/SQLite: no sequences node
             _ => Ok(Vec::new()),
+        }
+    }
+
+    /// Every table / view / routine / trigger / sequence of a schema, names only,
+    /// in ONE round trip where the engine allows it. The regular lists also
+    /// compute row counts and sizes (one stat per table) and, on MySQL, routine
+    /// parameters (one query per routine) — a picker needs none of that, and on a
+    /// big schema that is what made the Generate Scripts list take ages.
+    pub async fn object_names(&mut self, schema: &str) -> Result<Vec<ObjectName>, QueryError> {
+        match self {
+            Self::Postgres(d) => d.object_names(schema).await,
+            Self::MySql(d) => d.object_names(schema).await,
+            Self::Mssql(d) => d.object_names(schema).await,
+            _ => {
+                // no dedicated query: the regular lists (exactly the same objects)
+                let obj = |kind: &str, name: String| ObjectName { kind: kind.into(), name };
+                let mut out: Vec<ObjectName> = self
+                    .tables(schema)
+                    .await?
+                    .into_iter()
+                    .map(|t| obj(if t.kind == "view" { "view" } else { "table" }, t.name))
+                    .collect();
+                for r in self.routines(schema).await.unwrap_or_default() {
+                    out.push(obj(if r.kind == "procedure" { "procedure" } else { "function" }, r.name));
+                }
+                for t in self.triggers(schema).await.unwrap_or_default() {
+                    out.push(obj("trigger", t.name));
+                }
+                for s in self.sequences(schema).await.unwrap_or_default() {
+                    out.push(obj("sequence", s.name));
+                }
+                Ok(out)
+            }
         }
     }
 

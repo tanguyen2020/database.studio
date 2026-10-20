@@ -698,10 +698,92 @@ export interface BackupToolStatus {
 }
 export const backupToolStatus = (connId: string) =>
   invoke<BackupToolStatus>('backup_tool_status', { connId })
-export const backupDatabase = (connId: string, dest: string) =>
-  invoke<string>('backup_database', { connId, dest })
-export const restoreDatabase = (connId: string, src: string) =>
-  invoke<string>('restore_database', { connId, src })
+export interface BackupToolInfo {
+  name: string
+  path: string | null
+  version: string | null
+  found: boolean
+  /** The copy shipped inside the installer (not one installed on the machine). */
+  bundled: boolean
+}
+export interface ServerBackup {
+  path: string
+  finished: string
+  size: number | null
+}
+/** What Backup & Restore can do on one connection + database right now. */
+export interface BackupPlan {
+  system: string
+  database: string
+  method: 'tool' | 'server' | 'in-process' | 'built-in' | 'unsupported'
+  method_label: string
+  server_side: boolean
+  backup_tool: BackupToolInfo | null
+  restore_tools: BackupToolInfo[]
+  backup_ready: boolean
+  restore_ready: boolean
+  default_dir: string
+  /** Folder on this computer (differs from default_dir for server-side engines). */
+  local_dir: string
+  server_version: string | null
+  warnings: string[]
+  install_hint: string | null
+  recent: ServerBackup[]
+  disks: string[]
+  needs_connection: boolean
+  connected: boolean
+}
+/** Options sent with a backup / restore. Every field is optional. */
+export interface BackupOptions {
+  database?: string
+  format?: string
+  content?: 'all' | 'schema' | 'data'
+  clean?: boolean
+  owner?: boolean
+  copyOnly?: boolean
+  compression?: boolean
+  disk?: string
+  toolDir?: string
+  jobId?: string
+  singleTransaction?: boolean
+  asDatabase?: string
+}
+export interface BackupOutcome {
+  message: string
+  path: string
+  bytes: number | null
+  duration_ms: number
+  server_side: boolean
+  log: string
+  notes: string[]
+  items: number | null
+}
+export const backupPlan = (connId: string, database?: string, toolDir?: string) =>
+  invoke<BackupPlan>('backup_plan', { connId, database: database ?? null, toolDir: toolDir ?? null })
+/** Live progress of a backup / restore (commands/backup.rs BackupProgress). */
+export interface BackupProgress {
+  jobId: string
+  stage: string
+  done: number
+  total: number | null
+  /** "tables" · "collections" · "keys" · "bytes" · "statements" · "%" · "" */
+  unit: string
+  current: string | null
+}
+// In the app the progress travels over a Tauri Channel; the demo calls back directly.
+function progressArg(cb?: (p: BackupProgress) => void): unknown {
+  if (!IS_TAURI) return cb ?? null
+  const ch = new Channel<BackupProgress>()
+  if (cb) ch.onmessage = cb
+  return ch
+}
+export const backupDatabase = (connId: string, dest: string, options?: BackupOptions, onProgress?: (p: BackupProgress) => void) =>
+  invoke<BackupOutcome>('backup_database', { connId, dest, options: options ?? null, onProgress: progressArg(onProgress) })
+export const restoreDatabase = (connId: string, src: string, options?: BackupOptions, onProgress?: (p: BackupProgress) => void) =>
+  invoke<BackupOutcome>('restore_database', { connId, src, options: options ?? null, onProgress: progressArg(onProgress) })
+export const cancelBackup = (jobId: string) => invoke<boolean>('cancel_backup', { jobId })
+/** Show a file in Explorer / Finder. Tauri-only. */
+export const revealPath = (path: string) => invoke<void>('reveal_path', { path })
 
 /** Admin views (T23): sessions/locks/users/extensions từ system views thật. */
 export const adminView = (connId: string, view: string) =>
@@ -893,8 +975,11 @@ export const writeFileBase64 = (path: string, base64: string) =>
 
 export const listSchemas = (connId: string) => invoke<SchemaInfo[]>('list_schemas', { connId })
 
-export const listTables = (connId: string, schema: string) =>
-  invoke<TableInfo[]>('list_tables', { connId, schema })
+/** `sizes: false` skips each table's on-disk size (`data_length` comes back
+ *  null) where computing it is costly — PostgreSQL stats every table's files for
+ *  it. The Explorer tree never shows the size; omit the option to get it. */
+export const listTables = (connId: string, schema: string, opts?: { sizes?: boolean }) =>
+  invoke<TableInfo[]>('list_tables', opts?.sizes === false ? { connId, schema, sizes: false } : { connId, schema })
 
 export const listColumns = (connId: string, schema: string, table: string) =>
   invoke<ColumnInfo[]>('list_columns', { connId, schema, table })
@@ -919,6 +1004,17 @@ export const listTriggers = (connId: string, schema: string) =>
 
 export const listSequences = (connId: string, schema: string) =>
   invoke<SequenceInfo[]>('list_sequences', { connId, schema })
+
+/** One object of a schema, name + kind only (Generate Scripts object list). */
+export interface ObjectName {
+  kind: 'table' | 'view' | 'procedure' | 'function' | 'trigger' | 'sequence'
+  name: string
+}
+/** Every table / view / routine / trigger / sequence of a schema in ONE call, names
+ *  only — no row counts, sizes or routine parameters (those cost a lot on a big
+ *  schema and a picker does not need them). */
+export const listObjectNames = (connId: string, schema: string) =>
+  invoke<ObjectName[]>('list_object_names', { connId, schema })
 
 // ---- tabs + app state --------------------------------------------------------
 

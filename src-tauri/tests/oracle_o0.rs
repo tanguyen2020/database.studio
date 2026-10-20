@@ -118,8 +118,7 @@ async fn o_editor_dml_is_committed_and_reads_are_fresh() {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "needs a live Oracle container + Instant Client Tools (expdp/impdp) on PATH"]
 async fn o_datapump_backup_restore_roundtrip() {
-    use database_studio_lib::drivers::backup::{oracle_dir_sql, oracle_expdp_cmd, oracle_impdp_cmd, BackupTarget};
-    use tokio::io::AsyncWriteExt;
+    use database_studio_lib::drivers::backup::{oracle_dir_sql, oracle_expdp_cmd, oracle_impdp_cmd, oracle_parfile, oracle_with_parfile, BackupTarget};
 
     let mut d = OracleDriver::connect(&params()).await.expect("connect");
     let _ = d.exec("BEGIN EXECUTE IMMEDIATE 'DROP TABLE dp_t'; EXCEPTION WHEN OTHERS THEN NULL; END;").await;
@@ -131,33 +130,37 @@ async fn o_datapump_backup_restore_roundtrip() {
     d.exec(&oracle_dir_sql("DBSTUDIO_DUMP", "/tmp")).await.expect("create directory");
 
     let t = BackupTarget { host: "127.0.0.1".into(), port: 1521, database: "FREEPDB1".into(), user: "system".into() };
-    async fn run(cmd: (String, Vec<String>)) -> std::process::Output {
-        let (prog, args) = cmd;
-        let mut child = tokio::process::Command::new(&prog)
-            .args(&args)
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-            .expect("spawn data pump tool");
-        if let Some(mut s) = child.stdin.take() {
-            let _ = s.write_all(b"Oracle123\n").await;
+    // the login in a parameter file, as the app does (on Windows expdp reads a
+    // password from the console, never from a piped stdin)
+    let par = std::env::temp_dir().join(format!("o0-dp-{}.par", std::process::id()));
+    std::fs::write(&par, oracle_parfile(&t, "Oracle123")).unwrap();
+    let par_s = par.to_string_lossy().to_string();
+    let run = |cmd: (String, Vec<String>)| {
+        let par_s = par_s.clone();
+        async move {
+            let (prog, args) = cmd;
+            tokio::process::Command::new(&prog)
+                .args(oracle_with_parfile(args, &par_s))
+                .stdin(std::process::Stdio::null())
+                .output()
+                .await
+                .expect("run data pump tool")
         }
-        child.wait_with_output().await.expect("wait data pump")
-    }
+    };
 
     let out = run(oracle_expdp_cmd(&t, "DBSTUDIO_DUMP", "dp.dmp", "dp.log")).await;
-    assert!(out.status.success(), "expdp: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(out.status.success(), "expdp: {}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
 
     // đổi dữ liệu rồi import lại (REPLACE) → về đúng 2 dòng
     d.exec("INSERT INTO dp_t VALUES (3)").await.expect("i3");
     let out = run(oracle_impdp_cmd(&t, "DBSTUDIO_DUMP", "dp.dmp", "dp.log")).await;
-    assert!(out.status.success(), "impdp: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(out.status.success(), "impdp: {}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
 
     let res = d.exec("SELECT count(*) AS N FROM dp_t").await.expect("count");
     let StatementOutcome::Rows { result } = res else { panic!("rows") };
     assert!(result.rows[0]["N"].to_string().contains('2'), "restore về 2 dòng: {}", result.rows[0]["N"]);
     let _ = d.exec("DROP TABLE dp_t").await;
+    let _ = std::fs::remove_file(&par);
     println!("Oracle Data Pump backup/restore round-trip OK");
 }
 

@@ -308,7 +308,9 @@ body {
     transform: none;
   }
 }
-[role='tree'] :is([role='treeitem'], [role='button']):not(:is([role='treeitem'], [role='button']) *) {
+/* data-noanim: set by limitRowAnimations on the rows past the first few of a big
+   batch (a folder of thousands) — they appear at once instead of animating. */
+[role='tree'] :is([role='treeitem'], [role='button']):not(:is([role='treeitem'], [role='button']) *):not([data-noanim]) {
   animation: ds-row-in 0.18s cubic-bezier(0.2, 0.7, 0.3, 1) both;
 }
 @media (prefers-reduced-motion: reduce) {

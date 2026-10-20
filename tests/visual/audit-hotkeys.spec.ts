@@ -245,7 +245,7 @@ test('connection New Database dialog: form → Create', async ({ page }) => {
   await page.waitForTimeout(150)
   // live DDL preview reflects the dialect + name
   await expect(dialog).toContainText('CREATE DATABASE "shopdb";')
-  await dialog.getByText('Create', { exact: true }).click()
+  await dialog.getByRole('button', { name: 'Create database' }).click()
   await page.waitForTimeout(400)
   // demo exec returns ok → dialog closes
   await expect(page.getByRole('dialog', { name: 'New Database' })).toHaveCount(0)

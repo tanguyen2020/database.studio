@@ -1,26 +1,41 @@
 <script lang="ts">
-  // Shared header for a User Manager detail pane: an icon + the principal name
-  // and a muted one-line context subtitle. Keeps every engine's manager oriented
-  // ("who am I editing?"). Optional `badge` renders a small emphasized tag.
+  // Shared header for a User Manager detail pane: avatar + the principal name, a
+  // one-line context subtitle and status badges. Keeps every engine's manager
+  // oriented ("who am I editing?"). Optional `actions` render on the right.
+  //
+  // `icon` is kept for backwards compatibility: callers used to pass an emoji
+  // ('👤' login / '👥' group) — '👥' still means "group" and draws the group avatar.
+  import type { Snippet } from 'svelte'
+  import Avatar from './Avatar.svelte'
+
   interface Props {
     name: string
     subtitle: string
     icon?: string
+    group?: boolean
     badge?: string
     badgeDanger?: boolean
+    badges?: { label: string; tone?: 'warn' | 'danger' | 'ok' | 'info' | 'muted' }[]
+    actions?: Snippet
   }
-  let { name, subtitle, icon = '👤', badge = '', badgeDanger = false }: Props = $props()
+  let { name, subtitle, icon = '', group, badge = '', badgeDanger = false, badges = [], actions }: Props = $props()
+
+  const isGroup = $derived(group ?? icon === '👥')
+  const allBadges = $derived([...(badge ? [{ label: badge, tone: badgeDanger ? ('danger' as const) : ('info' as const) }] : []), ...badges])
 </script>
 
-<div style="display:flex;align-items:center;gap:var(--px-9);margin-bottom:var(--px-14)">
-  <span style="font-size:var(--px-20);line-height:1">{icon}</span>
-  <div style="display:flex;flex-direction:column;min-width:0">
-    <div style="display:flex;align-items:center;gap:var(--px-8)">
-      <span class="mono" style="font-size:var(--px-14);font-weight:700;color:var(--text);overflow:hidden;text-overflow:ellipsis">{name}</span>
-      {#if badge}
-        <span style="font-size:var(--px-9_5);font-weight:700;border-radius:var(--px-4);padding:var(--px-1) var(--px-6);color:{badgeDanger ? 'var(--error)' : 'var(--syntax-type)'};border:var(--px-1) solid {badgeDanger ? 'var(--error)' : 'var(--border2)'};background:var(--surface)">{badge}</span>
-      {/if}
+<div class="um-ph">
+  <Avatar {name} group={isGroup} size={44} />
+  <div class="um-ph-text">
+    <div class="um-ph-name">
+      <b title={name}>{name}</b>
+      {#each allBadges as b (b.label)}
+        <span class="um-badge {b.tone ?? 'muted'}">{b.label}</span>
+      {/each}
     </div>
-    <span style="font-size:var(--px-10_5);color:var(--muted)">{subtitle}</span>
+    <span class="um-ph-sub">{subtitle}</span>
   </div>
+  {#if actions}
+    <div class="um-ph-actions">{@render actions()}</div>
+  {/if}
 </div>

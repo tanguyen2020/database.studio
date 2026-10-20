@@ -8,12 +8,20 @@ const listColumns = vi.fn()
 const listIndexes = vi.fn()
 const listConstraints = vi.fn()
 const listPartitions = vi.fn()
+const listTables = vi.fn()
+const listRoutines = vi.fn()
+const listTriggers = vi.fn()
+const listSequences = vi.fn()
 
 vi.mock('$lib/ipc', () => ({
   listColumns: (...a: unknown[]) => listColumns(...a),
   listIndexes: (...a: unknown[]) => listIndexes(...a),
   listConstraints: (...a: unknown[]) => listConstraints(...a),
   listPartitions: (...a: unknown[]) => listPartitions(...a),
+  listTables: (...a: unknown[]) => listTables(...a),
+  listRoutines: (...a: unknown[]) => listRoutines(...a),
+  listTriggers: (...a: unknown[]) => listTriggers(...a),
+  listSequences: (...a: unknown[]) => listSequences(...a),
 }))
 
 import { explorer } from './explorer.svelte'
@@ -134,3 +142,16 @@ describe('explorer.loadTableDetail request coalescing', () => {
     ).toEqual(['newest'])
   })
 })
+
+describe('explorer.loadSchemaChildren — the tree does not pay for table sizes', () => {
+  it('asks for the table list WITHOUT per-table sizes (the tree never shows them)', async () => {
+    listTables.mockResolvedValue([{ schema: 'public', name: 't1', kind: 'table', row_estimate: 5, locked: false }])
+    listRoutines.mockResolvedValue([])
+    listTriggers.mockResolvedValue([])
+    listSequences.mockResolvedValue([])
+    await explorer.loadSchemaChildren('c-sizes', 'public')
+    expect(listTables).toHaveBeenCalledWith('c-sizes', 'public', { sizes: false })
+    expect(explorer.cache['c-sizes']?.bySchema['public']?.tables?.map((t) => t.name)).toEqual(['t1'])
+  })
+})
+

@@ -108,6 +108,15 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      # Backup & Restore ships its client tools inside the installer (pg_dump,
+      # mariadb-dump, mongodump, expdp + the Oracle Instant Client) — fetched,
+      # checksum-verified and trimmed into src-tauri/resources/ for this
+      # platform. Fails the build when a download does not match its checksum.
+      - name: Fetch bundled backup client tools
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm run tools:fetch
+
       # tauri-action runs the config's beforeBuildCommand (npm run build) then
       # `tauri build`. Windows/Ubuntu use the config's bundle targets; macOS
       # overrides them with a universal app+dmg via `args`.

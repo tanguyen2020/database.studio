@@ -35,51 +35,50 @@
   }
   let { columns, scopes, cellState, cellTip, onCell, presets, onPreset, onDeny, note }: Props = $props()
 
-  const glyph = (s: CellState) => (s === 'direct' ? '✓' : s === 'partial' ? '■' : s === 'inherited' ? '◐' : s === 'deny' ? '✕' : '☐')
-  const color = (s: CellState) =>
-    s === 'direct'
-      ? 'var(--sacc-green)'
-      : s === 'partial'
-        ? 'var(--warn2)'
-        : s === 'inherited'
-          ? 'var(--muted)'
-          : s === 'deny'
-            ? 'var(--error)'
-            : 'var(--muted)'
+  // Legend text for each state (also the cell's accessible name).
+  const STATE_LABEL: Record<CellState, string> = {
+    direct: 'Granted',
+    partial: 'Partly granted',
+    inherited: 'Inherited',
+    deny: 'Denied',
+    none: 'Not granted',
+  }
 </script>
 
-<div style="overflow:auto">
-  <table class="mono" style="border-collapse:collapse;font-size:var(--px-12)">
+<div class="um-grid-wrap">
+  <table class="um-grid">
     <thead>
       <tr>
-        <th style="position:sticky;left:0;background:var(--surface);text-align:left;padding:var(--px-5) var(--px-10);border-bottom:var(--px-1) solid var(--border2);color:var(--text2);z-index:1">Scope</th>
+        <th class="um-grid-scope">Scope</th>
         {#each columns as c (c.key)}
-          <th title={c.tip} style="padding:var(--px-5) var(--px-8);border-bottom:var(--px-1) solid var(--border2);color:var(--text2);white-space:nowrap;font-size:var(--px-11)">{c.label}</th>
+          <th title={c.tip}>{c.label}</th>
         {/each}
-        <th style="padding:var(--px-5) var(--px-10);border-bottom:var(--px-1) solid var(--border2);color:var(--text2)">Presets</th>
+        <th class="um-grid-presets">Quick set</th>
       </tr>
     </thead>
     <tbody>
       {#each scopes as s (s.value)}
         <tr>
-          <td style="position:sticky;left:0;background:var(--surface);padding:var(--px-4) var(--px-10);border-bottom:var(--px-1) solid var(--border);color:var(--text);white-space:nowrap">
-            {s.label}{#if s.badge}<span style="font-size:var(--px-9);color:var(--muted);margin-left:var(--px-4)">{s.badge}</span>{/if}
+          <td class="um-grid-scope">
+            <span class="mono">{s.label}</span>{#if s.badge}<span class="um-badge muted" style="margin-left:var(--px-6)">{s.badge}</span>{/if}
           </td>
           {#each columns as c (c.key)}
             {@const st = cellState(s.value, c.key)}
             <td
+              class="um-cell"
+              data-state={st}
               onclick={() => st !== 'inherited' && onCell(s.value, c.key, st)}
               oncontextmenu={(e) => { if (onDeny) { e.preventDefault(); onDeny(s.value, c.key) } }}
               onkeydown={(e) => e.key === 'Enter' && st !== 'inherited' && onCell(s.value, c.key, st)}
               role="button"
               tabindex="0"
-              title={cellTip ? cellTip(s.value, c.key) : `${c.label}${onDeny ? ' — click: grant/revoke · right-click: deny' : ''}`}
-              style="text-align:center;padding:var(--px-4) var(--px-8);border-bottom:var(--px-1) solid var(--border);color:{color(st)};cursor:{st === 'inherited' ? 'default' : 'pointer'}"
-            >{glyph(st)}</td>
+              aria-label="{c.label}: {STATE_LABEL[st]}"
+              title={cellTip ? cellTip(s.value, c.key) : `${c.label} — ${STATE_LABEL[st]}${st === 'inherited' ? ' (via a role)' : ''}${onDeny ? ' · click: grant/revoke · right-click: deny' : ' · click to toggle'}`}
+            ><span class="um-dot" aria-hidden="true"></span></td>
           {/each}
-          <td style="padding:var(--px-4) var(--px-10);border-bottom:var(--px-1) solid var(--border);white-space:nowrap">
+          <td class="um-grid-presets">
             {#each presets as p (p.kind)}
-              <span onclick={() => onPreset(s.value, p.kind)} onkeydown={(e) => e.key === 'Enter' && onPreset(s.value, p.kind)} role="button" tabindex="0" style="font-size:var(--px-10_5);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-5);padding:var(--px-2) var(--px-7);margin-right:var(--px-4);cursor:pointer;color:{p.danger ? 'var(--error)' : 'var(--text2)'}">{p.label}</span>
+              <span class="um-preset" class:danger={p.danger} onclick={() => onPreset(s.value, p.kind)} onkeydown={(e) => e.key === 'Enter' && onPreset(s.value, p.kind)} role="button" tabindex="0">{p.label}</span>
             {/each}
           </td>
         </tr>
@@ -87,6 +86,11 @@
     </tbody>
   </table>
 </div>
-<div style="font-size:var(--px-10_5);color:var(--muted);margin-top:var(--px-8)">
-  ✓ direct · ■ partial (some objects) · ◐ inherited via role (read-only) · {onDeny ? '✕ DENY · ' : ''}☐ none — click a cell to grant/revoke.{note ? ` ${note}` : ''}
+<div class="um-legend">
+  <span><span class="um-cell" data-state="direct"><span class="um-dot"></span></span>Granted</span>
+  <span><span class="um-cell" data-state="partial"><span class="um-dot"></span></span>Partly (some objects)</span>
+  <span><span class="um-cell" data-state="inherited"><span class="um-dot"></span></span>Inherited via a role</span>
+  {#if onDeny}<span><span class="um-cell" data-state="deny"><span class="um-dot"></span></span>Denied</span>{/if}
+  <span><span class="um-cell" data-state="none"><span class="um-dot"></span></span>Not granted</span>
+  <span class="um-legend-note">Click a cell to grant or revoke it{onDeny ? ' · right-click to deny' : ''}.{note ? ` ${note}` : ''}</span>
 </div>

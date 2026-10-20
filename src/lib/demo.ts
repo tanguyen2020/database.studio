@@ -7,6 +7,7 @@ import type { ProfilePublic, SystemType } from './types'
 import { rabbitDemo, rabbitDemoEnabled } from './rabbitmq/demo'
 import { DUCK_DEMO_ID, duckDemo, duckDemoEnabled, isDuckConn } from './duckdb/demo'
 import { ES_DEMO_ID, esDemo, esDemoEnabled } from './elastic/demo'
+import { backupDemo } from './backup/demo'
 
 export const IS_TAURI =
   typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
@@ -308,6 +309,11 @@ function lagFor(param: string): number {
   return Number.isFinite(ms) && ms > 0 ? Math.min(ms, 2000) : 0
 }
 
+/** A seam that is on by its mere presence (`?hangIntrospect=1`). */
+function hasParam(param: string): boolean {
+  return typeof window !== 'undefined' && new URLSearchParams(window.location.search).has(param)
+}
+
 function redisLagMs(): number {
   return lagFor('slowRedis')
 }
@@ -484,7 +490,11 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
   const lag = cmd.startsWith('redis_')
     ? redisLagMs()
     : SLOW_INTROSPECT.has(cmd)
-      ? lagFor('slowIntrospect')
+      ? // `?hangIntrospect=1`: the call does not come back for a minute — a catalog
+        // query on a slow server. Nothing may wait on it (Stop, Cancel, other work).
+        hasParam('hangIntrospect')
+        ? 60_000
+        : lagFor('slowIntrospect')
       : SLOW_CONNECT.has(cmd)
         ? lagFor('slowConnect')
         : 0
@@ -505,6 +515,11 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
     } catch (e) {
       return Promise.reject(String((e as Error).message ?? e))
     }
+  }
+  // Backup & Restore (every engine) — its own mock with the backend's shapes.
+  {
+    const b = backupDemo(cmd, args ?? {})
+    if (b !== undefined) return ok(b)
   }
   // DuckDB (opt-in `?duckdb=1`): database/schema/macro shape of an embedded file.
   if (duckDemoEnabled() && isDuckConn(args?.connId)) {
@@ -955,12 +970,6 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
         return ok({ cols: [['can_manage', 'bool']], rows: [{ can_manage: true }], total: 1 })
       return ok({ cols: [] as [string, string][], rows: [] as Record<string, unknown>[], total: 0 })
     }
-    case 'backup_tool_status':
-      return ok({ tool: 'pg_dump', available: true })
-    case 'backup_database':
-      return ok(`✓ backup → ${String(args?.dest ?? 'backup.sql')} (demo)`)
-    case 'restore_database':
-      return ok(`✓ restored ← ${String(args?.src ?? 'backup.sql')} (demo)`)
     case 'object_definition': {
       const kind = String(args?.kind ?? 'object')
       const name = String(args?.name ?? 'obj')
@@ -995,6 +1004,20 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
             ]
           : [],
       )
+    case 'list_object_names': {
+      // same objects the four list_* commands return, names + kind only
+      return Promise.all([
+        demoInvoke<{ name: string; kind: string }[]>('list_tables', args),
+        demoInvoke<{ name: string; kind: string }[]>('list_routines', args),
+        demoInvoke<{ name: string }[]>('list_triggers', args),
+        demoInvoke<{ name: string }[]>('list_sequences', args),
+      ]).then(([t, r, g, q]) => [
+        ...t.map((x) => ({ kind: x.kind === 'view' ? 'view' : 'table', name: x.name })),
+        ...r.map((x) => ({ kind: x.kind === 'procedure' ? 'procedure' : 'function', name: x.name })),
+        ...g.map((x) => ({ kind: 'trigger', name: x.name })),
+        ...q.map((x) => ({ kind: 'sequence', name: x.name })),
+      ]) as Promise<T>
+    }
     case 'list_routines':
       return ok([
         { schema: 'public', name: 'add_one', kind: 'function', params: [{ name: 'x', data_type: 'int4' }], return_type: 'int4' },

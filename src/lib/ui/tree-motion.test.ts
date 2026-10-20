@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { COLLAPSE_MS, armCollapse, collapseArmed, treeOut } from './tree-motion'
+import { ANIMATED_ROWS, COLLAPSE_MS, armCollapse, collapseArmed, limitRowAnimations, treeOut } from './tree-motion'
 
 describe('tree collapse motion', () => {
   it('only an armed (user) collapse animates; any other removal is instant', () => {
@@ -30,3 +30,56 @@ describe('tree collapse motion', () => {
     vi.unstubAllGlobals()
   })
 })
+
+describe('big folders do not animate every row', () => {
+  it('a collapse animates the first rows only — the rest are removed at once', () => {
+    // Svelte runs every outro synchronously right after the arm; freeze the clock
+    // so a slow test machine cannot fall out of the arm window halfway through
+    const now = vi.spyOn(performance, 'now').mockReturnValue(1_000)
+    armCollapse()
+    const durations = Array.from({ length: ANIMATED_ROWS + 25 }, () => treeOut(document.createElement('div')).duration)
+    expect(durations.slice(0, ANIMATED_ROWS).every((d) => d === COLLAPSE_MS)).toBe(true)
+    expect(durations.slice(ANIMATED_ROWS).every((d) => d === 0)).toBe(true)
+    // the next collapse gets a fresh budget
+    armCollapse()
+    expect(treeOut(document.createElement('div')).duration).toBe(COLLAPSE_MS)
+    now.mockRestore()
+  })
+
+  const row = () => {
+    const r = document.createElement('div')
+    r.setAttribute('role', 'treeitem')
+    const chevron = document.createElement('span')
+    chevron.setAttribute('role', 'button') // a control INSIDE a row
+    r.append(chevron)
+    return r
+  }
+  const flush = () => new Promise((r) => setTimeout(r, 0))
+
+  it('a small insert keeps the enter animation on every row', async () => {
+    const tree = document.createElement('div')
+    const action = limitRowAnimations(tree)
+    for (let i = 0; i < ANIMATED_ROWS; i++) tree.append(row())
+    await flush()
+    expect(tree.querySelectorAll('[data-noanim]').length).toBe(0)
+    action.destroy()
+  })
+
+  it('a big insert (opening a folder of thousands) marks every row past the first few', async () => {
+    const tree = document.createElement('div')
+    const action = limitRowAnimations(tree)
+    const rows = Array.from({ length: 3000 }, row)
+    tree.append(...rows)
+    await flush()
+    expect(rows.slice(0, ANIMATED_ROWS).some((r) => r.hasAttribute('data-noanim'))).toBe(false)
+    expect(rows.slice(ANIMATED_ROWS).every((r) => r.hasAttribute('data-noanim'))).toBe(true)
+    // rows arriving inside a wrapper (a nested component mounting) count too
+    const wrap = document.createElement('div')
+    wrap.append(...Array.from({ length: ANIMATED_ROWS + 5 }, row))
+    tree.append(wrap)
+    await flush()
+    expect(wrap.querySelectorAll(':scope > [data-noanim]').length).toBe(5)
+    action.destroy()
+  })
+})
+

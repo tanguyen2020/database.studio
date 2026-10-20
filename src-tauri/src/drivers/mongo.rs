@@ -93,6 +93,12 @@ fn userinfo_encode(s: &str) -> String {
 
 /// Build a `mongodb://` URI from the profile params. If `host` already looks
 /// like a full connection string, it is used verbatim.
+/// The same connection string the driver uses — mongodump/mongorestore get it
+/// (through a temp --config file, never argv) so they connect exactly like the app.
+pub fn connection_uri(p: &MongoConnParams) -> String {
+    build_uri(p)
+}
+
 fn build_uri(p: &MongoConnParams) -> String {
     let h = p.host.trim();
     if h.starts_with("mongodb://") || h.starts_with("mongodb+srv://") {

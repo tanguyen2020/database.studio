@@ -16,6 +16,8 @@
   import { groupByFolder } from '$lib/connections/grouping'
   import { newDatabaseWizard } from '$lib/stores/newdatabase.svelte'
   import { scriptsWizard } from '$lib/stores/scripts.svelte'
+  import { backupWizard } from '$lib/stores/backup.svelte'
+  import { supportsBackup } from '$lib/backup/plan'
   import { explorer } from '$lib/stores/explorer.svelte'
   import { connections } from '$lib/stores/connections.svelte'
   import { tabs } from '$lib/stores/tabs.svelte'
@@ -539,6 +541,9 @@
       {/if}
       {#if hasUserMgr(p.system)}
         <ContextMenu.Item onclick={() => tabs.openUserManager(p.id)}>Users &amp; Privileges…</ContextMenu.Item>
+      {/if}
+      {#if supportsBackup(p.system)}
+        <ContextMenu.Item onclick={() => backupWizard.show(p.id, p.system)}>Backup &amp; Restore…</ContextMenu.Item>
       {/if}
       <ContextMenu.Separator />
       {#if p.ephemeral}

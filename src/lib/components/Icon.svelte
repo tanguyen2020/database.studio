@@ -2,6 +2,8 @@
   export type IconName = 'refresh' | 'plus' | 'close' | 'chevron-down' | 'merge' | 'search' | 'panel-right' | 'query' | 'expand' | 'copy' | 'trash'
     | 'download' | 'filter' | 'sort' | 'chevron-left' | 'chevron-right' | 'first' | 'last' | 'paste' | 'edit' | 'table' | 'braces' | 'code' | 'file' | 'columns' | 'rows' | 'sliders' | 'check'
     | 'database' | 'puzzle' | 'upload' | 'link' | 'unlink' | 'chart' | 'cpu' | 'play' | 'folder' | 'zap' | 'info' | 'warning'
+    | 'user' | 'users' | 'shield' | 'key' | 'lock' | 'eye' | 'eye-off' | 'sparkle'
+    | 'clock' | 'archive' | 'server'
 </script>
 
 <script lang="ts">
@@ -125,5 +127,35 @@
   {:else if name === 'warning'}
     <path d="M8 2.6 14 13H2z" />
     <path d="M8 6.6v3M8 11.3v.1" />
+  {:else if name === 'user'}
+    <circle cx="8" cy="5.4" r="2.6" />
+    <path d="M3 13.6c.6-2.6 2.6-4 5-4s4.4 1.4 5 4" />
+  {:else if name === 'users'}
+    <circle cx="6" cy="5.6" r="2.3" />
+    <path d="M1.8 13.4c.5-2.3 2.2-3.6 4.2-3.6s3.7 1.3 4.2 3.6" />
+    <path d="M10.6 3.5a2.2 2.2 0 0 1 0 4.3M12.2 9.9c1.1.6 1.8 1.8 2 3.5" />
+  {:else if name === 'shield'}
+    <path d="M8 1.8 13 3.7v4c0 3.1-2.1 5.5-5 6.5-2.9-1-5-3.4-5-6.5v-4z" />
+    <path d="m5.8 8 1.5 1.5 2.9-3" />
+  {:else if name === 'key'}
+    <circle cx="5.2" cy="10.8" r="2.8" />
+    <path d="m7.2 8.8 6-6M11.2 4.8l1.6 1.6M9.8 6.2l1.2 1.2" />
+  {:else if name === 'lock'}
+    <rect x="3.2" y="7.2" width="9.6" height="6.6" rx="1.4" />
+    <path d="M5.4 7.2V5.1a2.6 2.6 0 0 1 5.2 0v2.1" />
+  {:else if name === 'eye'}
+    <path d="M1.6 8S4 3.6 8 3.6 14.4 8 14.4 8 12 12.4 8 12.4 1.6 8 1.6 8z" />
+    <circle cx="8" cy="8" r="2" />
+  {:else if name === 'eye-off'}
+    <path d="M6.3 3.8A6.5 6.5 0 0 1 8 3.6C12 3.6 14.4 8 14.4 8a12 12 0 0 1-1.7 2.2M10 11.9a6 6 0 0 1-2 .5C4 12.4 1.6 8 1.6 8a12 12 0 0 1 2.6-3" />
+    <path d="M6.6 6.6a2 2 0 0 0 2.8 2.8M2.4 2.4l11.2 11.2" />
+  {:else if name === 'sparkle'}
+    <path d="M8 1.8 9.3 6.7 14.2 8 9.3 9.3 8 14.2 6.7 9.3 1.8 8l4.9-1.3z" />
+  {:else if name === 'clock'}
+    <circle cx="8" cy="8" r="6" /><path d="M8 4.8V8l2.2 1.5" />
+  {:else if name === 'archive'}
+    <rect x="2" y="2.6" width="12" height="3.4" rx="1" /><path d="M3.2 6v6.4c0 .6.4 1 1 1h7.6c.6 0 1-.4 1-1V6M6.4 8.8h3.2" />
+  {:else if name === 'server'}
+    <rect x="2.4" y="2.4" width="11.2" height="4.6" rx="1" /><rect x="2.4" y="9" width="11.2" height="4.6" rx="1" /><path d="M5 4.7h.01M5 11.3h.01" />
   {/if}
 </svg>
