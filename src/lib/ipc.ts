@@ -150,6 +150,12 @@ export type RedisEditOp =
   | { op: 'zRem'; member: string }
   | { op: 'xAdd'; fields: [string, string][] }
   | { op: 'xDel'; id: string }
+  // single-item edits (atomic on the server; refused when the item changed / the name is taken)
+  | { op: 'lSetAt'; index: number; expected: string; value: string }
+  | { op: 'lDelAt'; index: number; expected: string }
+  | { op: 'hReplace'; from: string; to: string; value: string }
+  | { op: 'sReplace'; from: string; to: string }
+  | { op: 'zReplace'; from: string; to: string; score: number }
 
 export const redisEdit = (connId: string, key: string, op: RedisEditOp) =>
   invoke<void>('redis_edit', { connId, key, op })
@@ -179,6 +185,44 @@ export interface RedisPubSubMsg {
   channel: string
   payload: string
 }
+
+// ---- stream-workspace:redis (SPEC-REDIS-BROWSER.md §3) ----------------------
+/** One INFO section ("Server", "Memory", …) with its metric/value pairs in server order. */
+export interface RedisInfoSection {
+  name: string
+  entries: [string, string][]
+}
+export interface RedisInfo {
+  sections: RedisInfoSection[]
+}
+export const redisInfo = (connId: string) => invoke<RedisInfo>('redis_info', { connId })
+
+export interface RedisSlowlogEntry {
+  id: number
+  /** unix seconds */
+  timestamp: number
+  duration_us: number
+  args: string[]
+  client: string
+  client_name: string
+}
+export interface RedisSlowlog {
+  entries: RedisSlowlogEntry[]
+  /** `slowlog-log-slower-than` µs; null when the server hides CONFIG */
+  threshold_us: number | null
+  max_len: number | null
+}
+export const redisSlowlog = (connId: string, count: number) =>
+  invoke<RedisSlowlog>('redis_slowlog', { connId, count })
+
+/** Size + encoding of a key; null = key gone or the server refused the command. */
+export interface RedisKeyMeta {
+  key: string
+  bytes: number | null
+  encoding: string | null
+}
+export const redisKeyMeta = (connId: string, keys: string[]) =>
+  invoke<RedisKeyMeta[]>('redis_key_meta', { connId, keys })
 
 // ---- nats (Phase 3) ---------------------------------------------------------
 
@@ -212,6 +256,21 @@ export interface NatsMsg {
   subject: string
   reply: string
   payload: string
+}
+
+/** Messages of the live core subscription of one connection (Tauri event "nats-msg",
+ *  or the demo broker in the browser). Returns the function that stops listening. */
+export async function onNatsMsg(connId: string, cb: (m: NatsMsg) => void): Promise<() => void> {
+  if (!IS_TAURI) {
+    const { natsDemoListen } = await import('./demo')
+    return natsDemoListen((m) => {
+      if (m.conn_id === connId) cb(m)
+    })
+  }
+  const { listen } = await import('@tauri-apps/api/event')
+  return listen<NatsMsg>('nats-msg', (e) => {
+    if (e.payload.conn_id === connId) cb(e.payload)
+  })
 }
 
 // ---- nats JetStream (Phase 3 · T10) ----------------------------------------
@@ -411,6 +470,8 @@ export interface KafkaMsg {
   timestamp: number
   key: string
   value: string
+  /** the value's original bytes (base64) — only when they are not valid UTF-8 */
+  value_b64?: string
   headers: [string, string][]
 }
 
@@ -436,7 +497,28 @@ export const kafkaFetchPage = (
   partition: number | null,
   until: number,
   limit: number,
-) => invoke<KafkaPage>('kafka_fetch_page', { connId, topic, partition, until, limit })
+  /** ms since epoch: start each partition at the first message at/after this time */
+  fromTime: number | null = null,
+) => invoke<KafkaPage>('kafka_fetch_page', { connId, topic, partition, until, limit, fromTime })
+
+/** One topic setting. `source`: set on this topic · inherited from the broker · default. */
+export interface KafkaConfigEntry {
+  name: string
+  value: string | null
+  source: 'topic' | 'broker' | 'default'
+  is_default: boolean
+  is_read_only: boolean
+  is_sensitive: boolean
+}
+export const kafkaTopicConfigs = (connId: string, topic: string) =>
+  invoke<KafkaConfigEntry[]>('kafka_topic_configs', { connId, topic })
+/** `changes`: value = set it, null = back to the default. Other values set on the topic are kept. */
+export const kafkaAlterTopicConfigs = (connId: string, topic: string, changes: Record<string, string | null>) =>
+  invoke<void>('kafka_alter_topic_configs', { connId, topic, changes })
+export const kafkaDeleteGroup = (connId: string, group: string) => invoke<void>('kafka_delete_group', { connId, group })
+/** [partition, position of the first message at/after `ts` | null = none that recent] */
+export const kafkaOffsetsForTime = (connId: string, topic: string, ts: number) =>
+  invoke<[number, number | null][]>('kafka_offsets_for_time', { connId, topic, ts })
 
 /**
  * Consume topic → messages arrive BATCHED via the `kafka-msgs` event.
@@ -1497,3 +1579,230 @@ export const esIndices = (connId: string) => invoke<EsIndex[]>('es_indices', { c
 
 export const esMappingFields = (connId: string, index: string) =>
   invoke<[string, string][]>('es_mapping_fields', { connId, index })
+
+// ---- stream-workspace:rabbitmq — cluster workspace (SPEC-RABBITMQ-WORKSPACE.md §2) ----
+// Rate fields are optional additions to the RabbitMQ types above (interface merging
+// keeps this block append-only). null = the broker reported no rate.
+
+export interface RabbitOverview {
+  /** messages per second published into the broker */
+  publish_rate?: number | null
+  /** messages per second delivered to consumers (deliver + get) */
+  deliver_rate?: number | null
+  /** messages per second acknowledged */
+  ack_rate?: number | null
+}
+
+export interface RabbitQueue {
+  publish_rate?: number | null
+  deliver_rate?: number | null
+  ack_rate?: number | null
+}
+
+export interface RabbitNode {
+  name: string
+  /** disc | ram */
+  node_type: string
+  running: boolean
+  mem_used: number | null
+  /** memory high watermark (bytes) — above it publishers are paused */
+  mem_limit: number | null
+  mem_alarm: boolean
+  disk_free: number | null
+  /** disk free limit (bytes) — below it publishers are paused */
+  disk_free_limit: number | null
+  disk_free_alarm: boolean
+  fd_used: number | null
+  fd_total: number | null
+  proc_used: number | null
+  proc_total: number | null
+  sockets_used: number | null
+  sockets_total: number | null
+  uptime_ms: number | null
+  partitions: string[]
+}
+
+export interface RabbitConnection {
+  /** the broker's id for the connection */
+  name: string
+  user: string
+  vhost: string
+  node: string
+  peer_host: string
+  peer_port: number | null
+  /** the application's own label (client_properties.connection_name) */
+  client_name: string
+  client_product: string
+  client_version: string
+  client_platform: string
+  protocol: string
+  state: string
+  channels: number | null
+  ssl: boolean
+  recv_bytes: number | null
+  send_bytes: number | null
+  recv_rate: number | null
+  send_rate: number | null
+  /** ms since epoch */
+  connected_at: number | null
+}
+
+export interface RabbitConsumer {
+  queue: string
+  vhost: string
+  consumer_tag: string
+  /** messages held at once — 0 = no limit */
+  prefetch_count: number | null
+  ack_required: boolean
+  exclusive: boolean
+  active: boolean
+  activity_status: string
+  channel_name: string
+  channel_number: number | null
+  connection_name: string
+  peer_host: string
+  user: string
+}
+
+export const rabbitNodes = (connId: string) => invoke<RabbitNode[]>('rabbit_nodes', { connId })
+export const rabbitConnections = (connId: string) => invoke<RabbitConnection[]>('rabbit_connections', { connId })
+export const rabbitCloseConnection = (connId: string, name: string, reason?: string) =>
+  invoke<void>('rabbit_close_connection', { connId, name, reason: reason ?? null })
+export const rabbitConsumers = (connId: string, vhost: string) =>
+  invoke<RabbitConsumer[]>('rabbit_consumers', { connId, vhost })
+
+// ---- stream-workspace:nats (W4) — account usage + KV versions / history / watch ----
+
+/** Retention limits + sequence range of a stream (extra fields of `nats_js_streams`).
+ *  `-1` / `0` = no limit, as the server reports them. */
+export interface NatsStreamLimits {
+  max_age_ms?: number
+  max_msgs?: number
+  max_bytes?: number
+  max_msgs_per_subject?: number
+  max_msg_size?: number
+  replicas?: number
+  /** 'old' = drop the oldest · 'new' = refuse new messages */
+  discard?: string
+  duplicate_window_ms?: number
+  description?: string | null
+  first_seq?: number
+  last_seq?: number
+  /** ISO, '' when the stream has never held a message */
+  last_time?: string
+  created?: string
+  subjects_count?: number
+  sealed?: boolean
+  deny_delete?: boolean
+  deny_purge?: boolean
+}
+export type NatsJsStreamFull = NatsJsStream & NatsStreamLimits
+
+export interface NatsAccount {
+  /** false = persistence (JetStream) is not available to this account */
+  enabled: boolean
+  reason: string | null
+  memory: number
+  storage: number
+  streams: number
+  consumers: number
+  /** null = no limit */
+  max_memory: number | null
+  max_storage: number | null
+  max_streams: number | null
+  max_consumers: number | null
+  domain: string | null
+  api_total: number
+  api_errors: number
+}
+
+export interface NatsKvStatus {
+  bucket: string
+  description: string | null
+  keys: number
+  values: number
+  /** versions kept per key */
+  history: number
+  /** 0 = keys never expire */
+  max_age_ms: number
+  bytes: number
+  max_bytes: number | null
+  max_value_size: number | null
+  storage: 'file' | 'memory' | string
+  replicas: number
+  created: string
+  last_time: string
+}
+
+export interface NatsKvEntry {
+  key: string
+  value: string
+  revision: number
+  /** ISO time of the write */
+  created: string
+  operation: 'put' | 'delete' | 'purge' | string
+  size: number
+}
+
+export interface NatsKvEntries {
+  entries: NatsKvEntry[]
+  truncated: boolean
+}
+
+export interface NatsKvCreate {
+  bucket: string
+  description?: string
+  history: number
+  max_age_secs: number
+  storage: 'file' | 'memory'
+  max_bytes: number
+  replicas: number
+}
+
+export const natsAccountInfo = (connId: string) => invoke<NatsAccount>('nats_account_info', { connId })
+export const natsKvStatus = (connId: string, bucket: string) => invoke<NatsKvStatus>('nats_kv_status', { connId, bucket })
+export const natsKvBucketList = (connId: string) => invoke<NatsKvStatus[]>('nats_kv_bucket_list', { connId })
+export const natsKvEntries = (connId: string, bucket: string, limit?: number) =>
+  invoke<NatsKvEntries>('nats_kv_entries', { connId, bucket, limit: limit ?? null })
+export const natsKvEntry = (connId: string, bucket: string, key: string) =>
+  invoke<NatsKvEntry | null>('nats_kv_entry', { connId, bucket, key })
+export const natsKvHistory = (connId: string, bucket: string, key: string) =>
+  invoke<NatsKvEntry[]>('nats_kv_history', { connId, bucket, key })
+export const natsKvPutVersion = (connId: string, bucket: string, key: string, value: string) =>
+  invoke<number>('nats_kv_put_version', { connId, bucket, key, value })
+export const natsKvPurge = (connId: string, bucket: string, key: string) => invoke<void>('nats_kv_purge', { connId, bucket, key })
+export const natsKvCreateBucket = (connId: string, config: NatsKvCreate) =>
+  invoke<NatsKvStatus>('nats_kv_create_bucket', { connId, config })
+export const natsKvWatch = (connId: string, session: string, bucket: string, pattern?: string) =>
+  invoke<void>('nats_kv_watch', { connId, session, bucket, pattern: pattern ?? null })
+export const natsKvUnwatch = (session: string) => invoke<void>('nats_kv_unwatch', { session })
+
+export interface NatsKvWatchStatus {
+  session: string
+  state: 'stopped' | 'error'
+  message: string
+}
+
+/** Subscribe to one KV watch session. Desktop: Tauri events from the backend task;
+ *  browser demo: the demo KV store's change bus. Returns an unsubscribe. */
+export async function onNatsKvWatch(
+  session: string,
+  onEntry: (e: NatsKvEntry) => void,
+  onStatus: (s: NatsKvWatchStatus) => void,
+): Promise<() => void> {
+  if (!IS_TAURI) {
+    const { natsKvDemoSubscribe } = await import('./stream/nats-kv-demo')
+    return natsKvDemoSubscribe(session, onEntry)
+  }
+  const { listen } = await import('@tauri-apps/api/event')
+  const off1 = await listen<{ session: string; entry: NatsKvEntry }>('nats-kv-watch', (e) => {
+    if (e.payload.session === session) onEntry(e.payload.entry)
+  })
+  const off2 = await listen<NatsKvWatchStatus>('nats-kv-watch-status', (e) => {
+    if (e.payload.session === session) onStatus(e.payload)
+  })
+  return () => {
+    off1()
+    off2()
+  }
+}

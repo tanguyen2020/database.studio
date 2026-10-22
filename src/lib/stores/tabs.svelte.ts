@@ -7,6 +7,7 @@ import type { SystemType, TabContentType, TabState } from '$lib/types'
 import { baseConnId, connections } from './connections.svelte'
 import { results } from './results.svelte'
 import { explorer } from './explorer.svelte'
+import { messagesSection } from '$lib/stream/workspace-systems'
 
 const MAX_CLOSED_STACK = 20
 
@@ -158,146 +159,13 @@ class TabsStore {
     return tab
   }
 
-  /** Redis key browser tab — 1 tab / connection (focus nếu đã mở). */
-  openRedisTab(connectionId: string): TabState {
-    const existing = this.tabs.find(
-      (t) => t.contentType === 'redis' && t.connectionId === connectionId,
-    )
-    if (existing) {
-      this.activeTabId = existing.id
-      return existing
-    }
-    const profile = connections.byId(connectionId)
-    const tab: TabState = {
-      id: uuid(),
-      connectionId,
-      connectionName: profile?.name ?? '',
-      systemType: (profile?.system as SystemType) ?? 'orphan',
-      contentType: 'redis',
-      title: `${profile?.name ?? 'Redis'} · keys`,
-      isPinned: false,
-      isDirty: false,
-      state: {},
-    }
-    this.tabs.push(tab)
-    this.activeTabId = tab.id
-    this.schedulePersist()
-    return tab
-  }
-
-  /** Redis single-key viewer tab — 1 tab / (connection, key); focus if already open. */
-  openRedisKey(connectionId: string, key: string): TabState {
-    const existing = this.tabs.find(
-      (t) =>
-        t.contentType === 'redis-key' &&
-        t.connectionId === connectionId &&
-        (t.state as { key?: string }).key === key,
-    )
-    if (existing) {
-      this.activeTabId = existing.id
-      return existing
-    }
-    const profile = connections.byId(connectionId)
-    const tab: TabState = {
-      id: uuid(),
-      connectionId,
-      connectionName: profile?.name ?? '',
-      systemType: (profile?.system as SystemType) ?? 'orphan',
-      contentType: 'redis-key',
-      title: `${key} · key`,
-      isPinned: false,
-      isDirty: false,
-      state: { key },
-    }
-    this.tabs.push(tab)
-    this.activeTabId = tab.id
-    this.schedulePersist()
-    return tab
-  }
-
-  /** Redis Pub/Sub monitor tab — 1 tab / connection. */
-  openRedisPubSubTab(connectionId: string): TabState {
-    const existing = this.tabs.find(
-      (t) => t.contentType === 'redis-pubsub' && t.connectionId === connectionId,
-    )
-    if (existing) {
-      this.activeTabId = existing.id
-      return existing
-    }
-    const profile = connections.byId(connectionId)
-    const tab: TabState = {
-      id: uuid(),
-      connectionId,
-      connectionName: profile?.name ?? '',
-      systemType: (profile?.system as SystemType) ?? 'orphan',
-      contentType: 'redis-pubsub',
-      title: `${profile?.name ?? 'Redis'} · Pub/Sub`,
-      isPinned: false,
-      isDirty: false,
-      state: {},
-    }
-    this.tabs.push(tab)
-    this.activeTabId = tab.id
-    this.schedulePersist()
-    return tab
-  }
-
-  /** NATS workspace tab (subscriber/publish/request) — 1 tab / connection. */
-  openNatsTab(connectionId: string): TabState {
-    const existing = this.tabs.find(
-      (t) => t.contentType === 'nats' && t.connectionId === connectionId,
-    )
-    if (existing) {
-      this.activeTabId = existing.id
-      return existing
-    }
-    const profile = connections.byId(connectionId)
-    const tab: TabState = {
-      id: uuid(),
-      connectionId,
-      connectionName: profile?.name ?? '',
-      systemType: (profile?.system as SystemType) ?? 'orphan',
-      contentType: 'nats',
-      title: `${profile?.name ?? 'NATS'} · subjects`,
-      isPinned: false,
-      isDirty: false,
-      state: {},
-    }
-    this.tabs.push(tab)
-    this.activeTabId = tab.id
-    this.schedulePersist()
-    return tab
-  }
-
-  /** NATS subject messages tab — 1 tab per (stream, subject). */
+  /** A subject's messages = the NATS workspace's stream details on that subject
+   *  (SPEC-NATS-WORKSPACE.md §3: one workspace tab per connection, no tab per subject). */
   openNatsSubject(connectionId: string, stream: string, subject: string): TabState {
-    const existing = this.tabs.find(
-      (t) =>
-        t.contentType === 'nats-subject' &&
-        t.connectionId === connectionId &&
-        (t.state as { stream?: string }).stream === stream &&
-        (t.state as { subject?: string }).subject === subject,
-    )
-    if (existing) {
-      this.activeTabId = existing.id
-      return existing
-    }
-    const profile = connections.byId(connectionId)
-    const tab: TabState = {
-      id: uuid(),
-      connectionId,
-      connectionName: profile?.name ?? '',
-      systemType: (profile?.system as SystemType) ?? 'orphan',
-      contentType: 'nats-subject',
-      title: `${subject} · messages`,
-      isPinned: false,
-      isDirty: false,
-      state: { stream, subject },
-    }
-    this.tabs.push(tab)
-    this.activeTabId = tab.id
-    this.schedulePersist()
-    return tab
+    const ws = this.openStreamWorkspace(connectionId, 'streams', stream)
+    this.patchState(ws.id, { sub: 'subjects', subject })
+    // patchState replaces the tab's state: hand back the live tab, not the stale copy
+    return this.tabs.find((t) => t.id === ws.id) ?? ws
   }
 
   /** Elasticsearch index tab (Discover · Mappings · Settings · Stats · Aliases) — 1 tab per index/pattern. */
@@ -383,32 +251,19 @@ class TabsStore {
     return tab
   }
 
-  /** RabbitMQ queue tab (details · messages · bindings · publish) — 1 tab per (vhost, queue). */
-  openRabbitQueue(connectionId: string, vhost: string, queue: string): TabState {
-    return this.openRabbitObject('rabbit-queue', connectionId, vhost, queue, `${queue} · queue`)
-  }
-
-  /** RabbitMQ exchange tab (details · bindings · publish) — 1 tab per (vhost, exchange). */
-  openRabbitExchange(connectionId: string, vhost: string, exchange: string): TabState {
-    return this.openRabbitObject('rabbit-exchange', connectionId, vhost, exchange, `${exchange || '(AMQP default)'} · exchange`)
-  }
-
-  private openRabbitObject(
-    contentType: 'rabbit-queue' | 'rabbit-exchange',
-    connectionId: string,
-    vhost: string,
-    name: string,
-    title: string,
-  ): TabState {
+  /**
+   * Cache & Streaming cluster workspace (SPEC-STREAM-SHELL.md) — ONE tab per
+   * connection; opening it again switches its section / focused item instead of
+   * creating a second tab.
+   */
+  openStreamWorkspace(connectionId: string, section?: string, focus?: string): TabState {
     const existing = this.tabs.find(
-      (t) =>
-        t.contentType === contentType &&
-        t.connectionId === connectionId &&
-        (t.state as { vhost?: string }).vhost === vhost &&
-        (t.state as { name?: string }).name === name,
+      (t) => t.contentType === 'stream-workspace' && t.connectionId === connectionId,
     )
     if (existing) {
+      if (section) existing.state = { ...existing.state, section, focus }
       this.activeTabId = existing.id
+      this.schedulePersist()
       return existing
     }
     const profile = connections.byId(connectionId)
@@ -417,11 +272,13 @@ class TabsStore {
       connectionId,
       connectionName: profile?.name ?? '',
       systemType: (profile?.system as SystemType) ?? 'orphan',
-      contentType,
-      title,
+      contentType: 'stream-workspace',
+      title: profile?.name ?? 'Workspace',
       isPinned: false,
       isDirty: false,
-      state: { vhost, name },
+      // opened without a destination (a click on the connection): land on the messages
+      // list and let the workspace pick its first item once the list has loaded
+      state: section ? { section, focus } : { section: messagesSection(profile?.system), focus, autoPick: true },
     }
     this.tabs.push(tab)
     this.activeTabId = tab.id
@@ -429,86 +286,21 @@ class TabsStore {
     return tab
   }
 
-  /** Kafka workspace tab (cluster + topic browser) — 1 tab / connection. */
-  openKafkaTab(connectionId: string): TabState {
-    const existing = this.tabs.find(
-      (t) => t.contentType === 'kafka' && t.connectionId === connectionId,
-    )
-    if (existing) {
-      this.activeTabId = existing.id
-      return existing
-    }
-    const profile = connections.byId(connectionId)
-    const tab: TabState = {
-      id: uuid(),
-      connectionId,
-      connectionName: profile?.name ?? '',
-      systemType: (profile?.system as SystemType) ?? 'orphan',
-      contentType: 'kafka',
-      title: `${profile?.name ?? 'Kafka'} · cluster`,
-      isPinned: false,
-      isDirty: false,
-      state: {},
-    }
-    this.tabs.push(tab)
-    this.activeTabId = tab.id
-    this.schedulePersist()
-    return tab
+  /** Merge keys into a tab's view state (section, selected item…) from inside the tab. */
+  patchState(tabId: string, patch: Record<string, unknown>, persist = true) {
+    const t = this.tabs.find((x) => x.id === tabId)
+    if (!t) return
+    t.state = { ...t.state, ...patch }
+    if (persist) this.schedulePersist()
   }
 
-  /** Kafka consumer/producer tab cho 1 topic (contentType 'kafka-consumer'|'kafka-producer'). */
+  /** A topic's messages / produce form = the Kafka workspace's topic details on that
+   *  screen (SPEC-KAFKA-WORKSPACE.md §3: one workspace tab per connection, no tab per topic). */
   openKafkaTool(connectionId: string, kind: 'kafka-consumer' | 'kafka-producer', topic: string): TabState {
-    const existing = this.tabs.find(
-      (t) => t.contentType === kind && t.connectionId === connectionId && (t.state as { topic?: string }).topic === topic,
-    )
-    if (existing) {
-      this.activeTabId = existing.id
-      return existing
-    }
-    const profile = connections.byId(connectionId)
-    const label = kind === 'kafka-consumer' ? 'consume' : 'produce'
-    const tab: TabState = {
-      id: uuid(),
-      connectionId,
-      connectionName: profile?.name ?? '',
-      systemType: (profile?.system as SystemType) ?? 'orphan',
-      contentType: kind,
-      title: `${topic} · ${label}`,
-      isPinned: false,
-      isDirty: false,
-      state: { topic },
-    }
-    this.tabs.push(tab)
-    this.activeTabId = tab.id
-    this.schedulePersist()
-    return tab
-  }
-
-  /** Mở (hoặc focus) tab Schema Registry — singleton per connection. */
-  openKafkaSchemaRegistry(connectionId: string): TabState {
-    const existing = this.tabs.find(
-      (t) => t.contentType === 'kafka-schema-registry' && t.connectionId === connectionId,
-    )
-    if (existing) {
-      this.activeTabId = existing.id
-      return existing
-    }
-    const profile = connections.byId(connectionId)
-    const tab: TabState = {
-      id: uuid(),
-      connectionId,
-      connectionName: profile?.name ?? '',
-      systemType: (profile?.system as SystemType) ?? 'orphan',
-      contentType: 'kafka-schema-registry',
-      title: 'Schema Registry',
-      isPinned: false,
-      isDirty: false,
-      state: {},
-    }
-    this.tabs.push(tab)
-    this.activeTabId = tab.id
-    this.schedulePersist()
-    return tab
+    const ws = this.openStreamWorkspace(connectionId, 'topics', topic)
+    this.patchState(ws.id, { sub: kind === 'kafka-consumer' ? 'messages' : 'produce' })
+    // patchState replaces the tab's state: hand back the live tab, not the stale copy
+    return this.tabs.find((t) => t.id === ws.id) ?? ws
   }
 
   /** Mở tab Index Scanner cho một schema (singleton per conn+schema). */
@@ -1229,6 +1021,56 @@ class TabsStore {
         if (p.connectionId && !connections.byId(p.connectionId)) {
           p.connectionId = null
           p.systemType = 'orphan'
+        }
+        // the old Redis screens (keys / one key / Pub/Sub tabs) became sections of the
+        // Redis workspace — a tab saved by an older version opens there instead
+        const legacy = p.contentType as string
+        if (legacy === 'rabbit-queue' || legacy === 'rabbit-exchange') {
+          // a queue / exchange tab of an older version opens in the RabbitMQ workspace
+          const st = (p.state ?? {}) as { vhost?: string; name?: string }
+          if (p.connectionId && restored.some((t) => t.contentType === 'stream-workspace' && t.connectionId === p.connectionId)) continue
+          p.contentType = 'stream-workspace'
+          p.title = p.connectionName || 'RabbitMQ'
+          const isQueue = legacy === 'rabbit-queue'
+          const focus = isQueue ? st.name : st.name === '' ? '(AMQP default)' : st.name
+          p.state = { section: isQueue ? 'queues' : 'exchanges', ...(focus ? { focus } : {}), ...(st.vhost ? { vhost: st.vhost } : {}) }
+        }
+        if (legacy === 'kafka' || legacy === 'kafka-schema-registry') {
+          // the classic Kafka tab and the separate Schema Registry tab are sections of
+          // the Kafka workspace now
+          if (p.connectionId && restored.some((t) => t.contentType === 'stream-workspace' && t.connectionId === p.connectionId)) continue
+          p.contentType = 'stream-workspace'
+          p.title = p.connectionName || 'Kafka'
+          p.state = { section: legacy === 'kafka' ? 'overview' : 'registry' }
+        }
+        if (legacy === 'kafka-consumer' || legacy === 'kafka-producer') {
+          const topic = (p.state as { topic?: string } | undefined)?.topic
+          if (p.connectionId && restored.some((t) => t.contentType === 'stream-workspace' && t.connectionId === p.connectionId)) continue
+          p.contentType = 'stream-workspace'
+          p.title = p.connectionName || 'Kafka'
+          p.state = { section: 'topics', ...(topic ? { focus: topic, sub: legacy === 'kafka-consumer' ? 'messages' : 'produce' } : {}) }
+        }
+        if (legacy === 'nats') {
+          // the classic NATS tab (subscribe / publish / request / object store) is now
+          // the Publish & subscribe section of the NATS workspace
+          if (p.connectionId && restored.some((t) => t.contentType === 'stream-workspace' && t.connectionId === p.connectionId)) continue
+          p.contentType = 'stream-workspace'
+          p.title = p.connectionName || 'NATS'
+          p.state = { section: 'messaging' }
+        }
+        if (legacy === 'nats-subject') {
+          const st = (p.state ?? {}) as { stream?: string; subject?: string }
+          if (p.connectionId && restored.some((t) => t.contentType === 'stream-workspace' && t.connectionId === p.connectionId)) continue
+          p.contentType = 'stream-workspace'
+          p.title = p.connectionName || 'NATS'
+          p.state = { section: 'streams', ...(st.stream ? { focus: st.stream } : {}), ...(st.subject ? { sub: 'subjects', subject: st.subject } : {}) }
+        }
+        if (legacy === 'redis' || legacy === 'redis-key' || legacy === 'redis-pubsub') {
+          const key = (p.state as { key?: string } | undefined)?.key
+          if (p.connectionId && restored.some((t) => t.contentType === 'stream-workspace' && t.connectionId === p.connectionId)) continue
+          p.contentType = 'stream-workspace'
+          p.title = p.connectionName || 'Redis'
+          p.state = legacy === 'redis-pubsub' ? { section: 'pubsub' } : { section: 'browser', ...(key ? { focus: key } : {}) }
         }
         // split layout không persist → gộp về pane 0 để không có tab "ẩn"
         p.pane = 0

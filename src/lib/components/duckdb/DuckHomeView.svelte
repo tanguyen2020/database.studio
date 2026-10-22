@@ -632,7 +632,7 @@
                     <Icon name="download" size={12} /> Export
                   </button>
                   {#if !bool(d.current)}
-                    <button class="eg-btn danger" onclick={() => askDetach(d)} title="Close this database (the file is kept)"><Icon name="unlink" size={12} /> Detach</button>
+                    <button class="eg-btn ds-danger-outline" onclick={() => askDetach(d)} title="Close this database (the file is kept)"><Icon name="unlink" size={12} /> Detach</button>
                   {/if}
                 </td>
               </tr>

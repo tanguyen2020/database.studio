@@ -610,3 +610,208 @@ pub async fn nats_obj_delete(state: State<'_, AppState>, conn_id: String, bucket
     }).await?;
     inner.map_err(|e| AppError::Driver(e.message))
 }
+
+// ---- stream-workspace:nats (W4) — account usage + KV versions / history / watch ----
+
+use crate::drivers::nats::{KvCreate, KvEntries, KvEntry, KvStatus, NatsAccount};
+
+/// Run one driver call on the NATS connection (shared plumbing of the W4 commands).
+async fn with_nats<T, F, Fut>(state: &State<'_, AppState>, conn_id: &str, f: F) -> Result<T, AppError>
+where
+    T: Send + 'static,
+    F: FnOnce(crate::drivers::nats::NatsDriver) -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = Result<T, QueryError>> + Send,
+{
+    let inner = state
+        .registry
+        .with_driver(conn_id, move |driver| async move {
+            let client = {
+                let d = driver.lock().await;
+                match &*d {
+                    LiveConnection::Nats(n) => n.client(),
+                    _ => return Err(not_nats()),
+                }
+            };
+            // the client is multiplexed: clone it and release the lock for the round trip
+            f(crate::drivers::nats::NatsDriver { client }).await
+        })
+        .await?;
+    inner.map_err(|e| AppError::Driver(e.message))
+}
+
+/// JetStream usage + limits of the account (`enabled = false` when JetStream is off).
+#[tauri::command]
+pub async fn nats_account_info(state: State<'_, AppState>, conn_id: String) -> Result<NatsAccount, AppError> {
+    with_nats(&state, &conn_id, |n| async move { n.account_info().await }).await
+}
+
+/// Settings + size of one key-value bucket.
+#[tauri::command]
+pub async fn nats_kv_status(state: State<'_, AppState>, conn_id: String, bucket: String) -> Result<KvStatus, AppError> {
+    with_nats(&state, &conn_id, move |n| async move { n.kv_status(&bucket).await }).await
+}
+
+/// Every key-value bucket with its settings and size (one stream listing).
+#[tauri::command]
+pub async fn nats_kv_bucket_list(state: State<'_, AppState>, conn_id: String) -> Result<Vec<KvStatus>, AppError> {
+    with_nats(&state, &conn_id, |n| async move { n.kv_bucket_list().await }).await
+}
+
+/// Latest value + version + time of every key in a bucket (deleted keys as markers).
+#[tauri::command]
+pub async fn nats_kv_entries(
+    state: State<'_, AppState>,
+    conn_id: String,
+    bucket: String,
+    limit: Option<usize>,
+) -> Result<KvEntries, AppError> {
+    with_nats(&state, &conn_id, move |n| async move { n.kv_entries(&bucket, limit.unwrap_or(2_000)).await }).await
+}
+
+/// Current entry of one key (value + version + time), `None` = never set.
+#[tauri::command]
+pub async fn nats_kv_entry(
+    state: State<'_, AppState>,
+    conn_id: String,
+    bucket: String,
+    key: String,
+) -> Result<Option<KvEntry>, AppError> {
+    with_nats(&state, &conn_id, move |n| async move { n.kv_entry(&bucket, &key).await }).await
+}
+
+/// Every version still kept for a key, oldest first, delete / purge markers included.
+#[tauri::command]
+pub async fn nats_kv_history(
+    state: State<'_, AppState>,
+    conn_id: String,
+    bucket: String,
+    key: String,
+) -> Result<Vec<KvEntry>, AppError> {
+    with_nats(&state, &conn_id, move |n| async move { n.kv_history(&bucket, &key).await }).await
+}
+
+/// Save a value as a new version; returns the version number.
+#[tauri::command]
+pub async fn nats_kv_put_version(
+    state: State<'_, AppState>,
+    conn_id: String,
+    bucket: String,
+    key: String,
+    value: String,
+) -> Result<u64, AppError> {
+    with_nats(&state, &conn_id, move |n| async move { n.kv_put_version(&bucket, &key, value).await }).await
+}
+
+/// Remove a key and every earlier version of it.
+#[tauri::command]
+pub async fn nats_kv_purge(state: State<'_, AppState>, conn_id: String, bucket: String, key: String) -> Result<(), AppError> {
+    with_nats(&state, &conn_id, move |n| async move { n.kv_purge(&bucket, &key).await }).await
+}
+
+/// Create a bucket with explicit settings; returns its status.
+#[tauri::command]
+pub async fn nats_kv_create_bucket(state: State<'_, AppState>, conn_id: String, config: KvCreate) -> Result<KvStatus, AppError> {
+    with_nats(&state, &conn_id, move |n| async move { n.kv_create_bucket(config).await }).await
+}
+
+// Live watch: a background task streams every change of the bucket as
+// "nats-kv-watch" events until the tab stops it, the connection closes, or the
+// server ends the subscription ("nats-kv-watch-status" says which).
+
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock};
+use tauri::Manager;
+use tokio_util::sync::CancellationToken;
+
+fn kv_watches() -> &'static Mutex<HashMap<String, (u64, CancellationToken)>> {
+    static WATCHES: OnceLock<Mutex<HashMap<String, (u64, CancellationToken)>>> = OnceLock::new();
+    WATCHES.get_or_init(Default::default)
+}
+static KV_WATCH_GEN: AtomicU64 = AtomicU64::new(1);
+
+#[derive(serde::Serialize, Clone)]
+struct KvWatchEvent {
+    session: String,
+    entry: KvEntry,
+}
+
+#[derive(serde::Serialize, Clone)]
+struct KvWatchStatus {
+    session: String,
+    /// "stopped" (ended normally / connection closed) | "error"
+    state: &'static str,
+    message: String,
+}
+
+/// Start watching a bucket (`pattern` = key filter, default every key). The same
+/// `session` id replaces an earlier watch of that session.
+#[tauri::command]
+pub async fn nats_kv_watch(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    conn_id: String,
+    session: String,
+    bucket: String,
+    pattern: Option<String>,
+) -> Result<(), AppError> {
+    let client = state.registry.nats_client(&conn_id).await?;
+    let driver = crate::drivers::nats::NatsDriver { client };
+    let mut watch = driver
+        .kv_watch(&bucket, pattern.as_deref().unwrap_or(">"))
+        .await
+        .map_err(|e| AppError::Driver(e.message))?;
+    let token = CancellationToken::new();
+    let gen = KV_WATCH_GEN.fetch_add(1, Ordering::Relaxed);
+    if let Some((_, old)) = kv_watches().lock().unwrap().insert(session.clone(), (gen, token.clone())) {
+        old.cancel();
+    }
+    tokio::spawn(async move {
+        let status = |state: &'static str, message: String| {
+            let _ = app.emit("nats-kv-watch-status", KvWatchStatus { session: session.clone(), state, message });
+        };
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(2));
+        loop {
+            tokio::select! {
+                _ = token.cancelled() => break,
+                _ = tick.tick() => {
+                    // a closed connection ends the watch instead of keeping a hidden client alive
+                    if !app.state::<AppState>().registry.is_connected(&conn_id) {
+                        status("stopped", "The connection was closed.".into());
+                        break;
+                    }
+                }
+                item = watch.next() => match item {
+                    Some(Ok(e)) => {
+                        let _ = app.emit("nats-kv-watch", KvWatchEvent {
+                            session: session.clone(),
+                            entry: crate::drivers::nats::kv_entry_from(e),
+                        });
+                    }
+                    Some(Err(e)) => {
+                        status("error", format!("Watching stopped: {e}"));
+                        break;
+                    }
+                    None => {
+                        status("stopped", "The server ended the watch.".into());
+                        break;
+                    }
+                }
+            }
+        }
+        let mut map = kv_watches().lock().unwrap();
+        if map.get(&session).is_some_and(|(g, _)| *g == gen) {
+            map.remove(&session);
+        }
+    });
+    Ok(())
+}
+
+/// Stop a watch (tab closed, toggle off).
+#[tauri::command]
+pub async fn nats_kv_unwatch(session: String) -> Result<(), AppError> {
+    if let Some((_, t)) = kv_watches().lock().unwrap().remove(&session) {
+        t.cancel();
+    }
+    Ok(())
+}

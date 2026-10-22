@@ -28,6 +28,19 @@
   --muted: #646c7b;
   --header: #f8f9fb;
   --hover: #eceef2;
+
+  /* — Data tables (stream workspaces): names carry the row, everything else reads
+     a step quieter, zeros quieter still. — */
+  --tbl-name: #1c2230;
+  --tbl-name-weight: 500;
+  --tbl-cell: #4b5363;
+  --tbl-zero: #8b92a0;
+  --tbl-th: #5b6372;
+  /* grouped tables (NATS stream → subject): the parent row is a quiet band, the
+     children read in a soft amber hung off a thin guide line */
+  --tbl-group: #f2f3f6;
+  --tbl-child: #8a5a1f;
+  --tbl-guide: #d3d7de;
   --primary: #4f6bed;
   --grid-zebra: #fafbfc;
   --grid-select: #4f6bed;
@@ -70,6 +83,17 @@
   --muted: #868d9c; /* >= 4.5:1 on every dark surface incl. hover */
   --header: #14161b;
   --hover: #22252e;
+
+  /* data tables: near-white text glares on the graphite surface, so names use a soft
+     light grey at a lighter weight and the other cells sit lower again */
+  --tbl-name: #cdd2db;
+  --tbl-name-weight: 450;
+  --tbl-cell: #9aa1ad;
+  --tbl-zero: #636a78;
+  --tbl-th: #8d94a2;
+  --tbl-group: #1d2028;
+  --tbl-child: #d2b08a;
+  --tbl-guide: #363b47;
   --primary: #6b84ff;
   --grid-zebra: #181a20;
   --grid-select: #5872f0;
@@ -511,6 +535,54 @@ body {
   font-family: var(--font-main);
   font-size: 12.5px;
   padding: 0;
+}
+.ds-search input::placeholder {
+  color: var(--muted);
+}
+/* compact search field for tight places (inside a tree) */
+.ds-search.sm {
+  height: 28px;
+  gap: 6px;
+  padding: 0 8px;
+  border-radius: 7px;
+}
+.ds-search.sm input {
+  font-size: 12px;
+}
+/* round "clear" button at the end of a search field */
+.ds-search-clear {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--text) 9%, transparent);
+  color: var(--text2);
+  cursor: pointer;
+}
+.ds-search-clear:hover {
+  background: color-mix(in srgb, var(--text) 16%, transparent);
+  color: var(--text);
+}
+/* the name of an item in a list (topic, stream, queue, key…): plain text,
+   a faint underline on hover, bolder when its row is selected — no link blue */
+.ds-name {
+  color: var(--tbl-name);
+  font-family: var(--font-main);
+  font-weight: var(--tbl-name-weight);
+  text-underline-offset: 2px;
+  text-decoration-color: color-mix(in srgb, var(--tbl-name) 35%, transparent);
+}
+tr:hover .ds-name,
+button.ds-name:hover {
+  text-decoration-line: underline;
+}
+tr[aria-selected='true'] .ds-name {
+  font-weight: 600;
 }
 .ds-meta {
   font-size: 12px;

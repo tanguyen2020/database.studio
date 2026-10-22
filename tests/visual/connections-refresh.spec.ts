@@ -87,7 +87,7 @@ const CASES: { pick: RegExp; cmd: string }[] = [
   { pick: /Analytics ClickHouse/, cmd: 'list_schemas' },
 ]
 
-test('Refresh reloads the Explorer of every connection type', async ({ page }) => {
+test('Refresh reloads the Explorer — or, for Redis · Kafka · NATS · RabbitMQ, the workspace — of every connection type', async ({ page }) => {
   const errors: string[] = []
   page.on('pageerror', (e) => errors.push(String(e)))
   await blockRemoteFonts(page)

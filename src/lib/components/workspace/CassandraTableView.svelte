@@ -111,9 +111,9 @@
     <span
       class="mono"
       title={`Keyspace: ${keyspace} · ${keyspace}.${table}`}
-      style="display:inline-flex;align-items:center;gap:var(--px-5);font-size:var(--px-11_5);font-weight:600;color:{systemMeta(profile?.system).accent};background:color-mix(in srgb, {systemMeta(profile?.system).accent} 14%, transparent);border:var(--px-1) solid color-mix(in srgb, {systemMeta(profile?.system).accent} 45%, transparent);border-radius:var(--px-6);padding:var(--px-2) var(--px-8)"
+      style="display:inline-flex;align-items:center;gap:var(--px-5);font-size:var(--px-11_5);font-weight:600;color:var(--text);background:var(--panel);border:var(--px-1) solid var(--border2);border-radius:var(--px-6);padding:var(--px-2) var(--px-8)"
     >
-      <span style="font-size:var(--px-11)">▤</span>{keyspace}
+      <span style="font-size:var(--px-11);color:var(--muted)">▤</span>{keyspace}
     </span>
     <span class="mono" style="color:var(--text2)">{keyspace}.{table}</span>
     <input

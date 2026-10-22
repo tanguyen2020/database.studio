@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { APP_URL, blockRemoteFonts, previewBox, showFormatted } from './helpers'
+import { APP_URL, blockRemoteFonts, previewBox, showFormatted, natsSubjectView } from './helpers'
 
 // Fixed timezone so the localized Time column renders deterministically.
 test.use({ timezoneId: 'America/New_York' })
@@ -26,14 +26,14 @@ test('nats subject messages: per-message copy + clear (delete by seq)', async ({
 
   // cursor-paginated newest-first: 250 total, page 1 = the newest 100 (the subject is
   // sparse in the stream: one message every 4th sequence, so seq 604..1000)
-  await expect(page.getByText('250 records').first()).toBeVisible()
-  const copyBtns = page.locator('[title="Copy full payload"]')
-  const clearBtns = page.locator('[title="Delete this message (by sequence)"]')
+  await expect(natsSubjectView(page).getByText('250 records').first()).toBeVisible()
+  const copyBtns = natsSubjectView(page).locator('[title="Copy full payload"]')
+  const clearBtns = natsSubjectView(page).locator('[title="Delete this message (by sequence)"]')
   await expect(copyBtns).toHaveCount(100)
   await expect(clearBtns).toHaveCount(100)
 
   // newest first: top row is the subject's last seq (1000); Time is localized (UTC-4)
-  const firstRow = page.locator('tbody tr').first()
+  const firstRow = natsSubjectView(page).locator('tbody tr').first()
   await expect(firstRow.locator('td').first()).toHaveText('1000')
   await expect(firstRow.locator('td').nth(1)).toHaveText('2026-06-30 06:16:40')
 
@@ -50,17 +50,17 @@ test('nats subject messages: per-message copy + clear (delete by seq)', async ({
   await expect(dialog.getByText('Delete this message').first()).toBeVisible()
   await dialog.getByRole('button', { name: 'Cancel' }).click()
   await page.waitForTimeout(150)
-  await expect(page.locator('[title="Delete this message (by sequence)"]')).toHaveCount(100)
+  await expect(natsSubjectView(page).locator('[title="Delete this message (by sequence)"]')).toHaveCount(100)
 
   // delete again → Confirm this time → row count drops by one
   await clearBtns.first().click()
   await page.waitForTimeout(150)
   await page.getByRole('dialog').getByRole('button', { name: 'Confirm' }).click()
   await page.waitForTimeout(300)
-  await expect(page.locator('[title="Delete this message (by sequence)"]')).toHaveCount(99)
+  await expect(natsSubjectView(page).locator('[title="Delete this message (by sequence)"]')).toHaveCount(99)
 
   // "Clear messages" also opens a confirm popup
-  await page.getByText('Clear messages', { exact: true }).first().click()
+  await natsSubjectView(page).getByText('Clear messages', { exact: true }).first().click()
   await page.waitForTimeout(150)
   await expect(page.getByRole('dialog').getByText('Clear messages').first()).toBeVisible()
   await page.getByRole('dialog').getByRole('button', { name: 'Cancel' }).click()
@@ -85,7 +85,7 @@ test('nats subject messages: selecting a row keeps the 3 action icons visible', 
   await page.getByText('orders.eu', { exact: true }).first().click()
   await page.waitForTimeout(400)
 
-  const row = page.locator('tbody tr').first()
+  const row = natsSubjectView(page).locator('tbody tr').first()
   // click a data cell (not an icon) to select the record
   await row.locator('td').nth(1).click()
   await expect(row).toHaveAttribute('aria-selected', 'true')
@@ -107,7 +107,7 @@ test('nats subject messages: selecting a row keeps the 3 action icons visible', 
   expect(natsView.text).toContain('"id"')
   expect(natsView.height, `payload viewer collapsed (${natsView.height}px)`).toBeGreaterThan(100)
   expect(natsView.rendered).toContain('"id"')
-  await page.getByRole('button', { name: 'Close' }).first().click()
+  await page.getByRole('dialog').getByRole('button', { name: 'Close', exact: true }).click()
   await page.waitForTimeout(200)
   // they turn white on selection (contrast with the blue highlight = not hidden)
   expect(await copy.evaluate((el) => getComputedStyle(el).color)).toBe('rgb(255, 255, 255)')

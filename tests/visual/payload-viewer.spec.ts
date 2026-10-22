@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
-import { APP_URL, blockRemoteFonts } from './helpers'
+import { APP_URL, blockRemoteFonts, natsSubjectView, openKafkaTopic } from './helpers'
 
 // "View payload as JSON" must never open an empty box. Monaco is loaded on demand,
 // so anything that stops it coming up (a chunk that fails, a language registration
@@ -18,7 +18,7 @@ async function openNatsPayload(page: Page, query: string) {
   await page.waitForTimeout(300)
   await page.getByText('orders.eu', { exact: true }).first().click()
   await page.waitForTimeout(600)
-  await page.locator('[title="View payload as JSON"]').first().click()
+  await natsSubjectView(page).locator('[title="View payload as JSON"]').first().click()
   await page.waitForTimeout(400)
   // JSON opens as a Tree; these tests are about the code view behind Formatted
   await page.getByRole('dialog').getByRole('button', { name: 'Formatted', exact: true }).click()
@@ -72,8 +72,16 @@ test('payload viewer degrades to plain text when Monaco cannot load', async ({ p
 })
 
 test('a failed Monaco load is not cached — the next viewer gets the real editor', async ({ page }) => {
-  // only the FIRST load fails: the JSON popup must still come up with a real editor
+  // only the FIRST Monaco load fails. Whichever editor asked first (this popup, or one
+  // elsewhere on the workspace page) got the failure — by the time a popup has opened,
+  // it has happened. The failure must not be cached: the next popup gets the real editor.
   await openNatsPayload(page, '?noMonaco=once')
+  await page.getByRole('dialog').getByRole('button', { name: 'Close', exact: true }).click()
+  await page.waitForTimeout(300)
+  await natsSubjectView(page).locator('[title="View payload as JSON"]').first().click()
+  await page.waitForTimeout(400)
+  await page.getByRole('dialog').getByRole('button', { name: 'Formatted', exact: true }).click()
+  await page.waitForTimeout(700)
   // a real Monaco surface (not the fallback <pre>)
   await expect(page.locator('[role="dialog"] .view-lines')).toHaveCount(1)
   await expect(page.locator('[role="dialog"] .view-lines').first()).toContainText('"id"')
@@ -124,10 +132,8 @@ for (const view of [
   {
     name: 'Kafka message value',
     open: async (page: Page) => {
-      await page.getByRole('button', { name: /Events Kafka/ }).dblclick()
-      await page.waitForTimeout(800)
-      await page.getByText('payments', { exact: true }).first().click()
-      await page.waitForTimeout(1200)
+      await openKafkaTopic(page, 'payments')
+      await page.waitForTimeout(600)
       await page.locator('[title="View value as JSON"]').first().click()
     },
   },
@@ -171,9 +177,8 @@ test('a JSON payload opens as a Tree: keys, typed values, collapse / expand, cop
   await page.goto(APP_URL)
   await page.waitForSelector('#app > *', { timeout: 15_000 })
   await page.waitForTimeout(300)
-  await page.getByRole('button', { name: /Events Kafka/ }).dblclick()
-  await page.getByText('payments', { exact: true }).first().click()
-  const pane = page.locator('[data-tab-pane][data-active="true"]')
+  await openKafkaTopic(page, 'payments')
+  const pane = page.locator('[data-kafka-topic-view="payments"]')
   await expect(pane.locator('tbody tr').first()).toBeVisible({ timeout: 8000 })
   // the grid previews the value as key / value pairs, not a raw JSON string
   const cell = pane.locator('tbody tr').first().locator('td').nth(4)

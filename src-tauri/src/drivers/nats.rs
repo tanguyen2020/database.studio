@@ -179,6 +179,162 @@ impl NatsDriver {
         Ok(())
     }
 
+    // ---- stream-workspace:nats (W4) — account usage + KV versions / history / watch ----
+
+    /// JetStream usage and limits of this connection's account. When JetStream is
+    /// not enabled for the account (or not running on the server) this is NOT an
+    /// error: `enabled = false` + the server's reason, so the Overview can say so.
+    pub async fn account_info(&self) -> Result<NatsAccount, QueryError> {
+        use async_nats::jetstream::context::AccountErrorKind;
+        let js = async_nats::jetstream::new(self.client.clone());
+        match js.query_account().await {
+            Ok(a) => Ok(NatsAccount {
+                enabled: true,
+                reason: None,
+                memory: a.memory,
+                storage: a.storage,
+                streams: a.streams as u64,
+                consumers: a.consumers as u64,
+                max_memory: a.limits.max_memory,
+                max_storage: a.limits.max_storage,
+                max_streams: a.limits.max_streams,
+                max_consumers: a.limits.max_consumers,
+                domain: a.domain.filter(|d| !d.is_empty()),
+                api_total: a.requests.total,
+                api_errors: a.requests.errors,
+            }),
+            Err(e) => {
+                let raw = e.to_string();
+                if matches!(e.kind(), AccountErrorKind::JetStreamUnavailable) || persistence_off(&raw) {
+                    Ok(NatsAccount::disabled(raw))
+                } else {
+                    Err(err("Failed to read the account's JetStream usage", raw))
+                }
+            }
+        }
+    }
+
+    async fn kv_store(&self, bucket: &str) -> Result<async_nats::jetstream::kv::Store, QueryError> {
+        let js = async_nats::jetstream::new(self.client.clone());
+        js.get_key_value(bucket)
+            .await
+            .map_err(|e| err(format!("Key-value bucket '{bucket}' could not be opened"), e))
+    }
+
+    /// Settings + size of one KV bucket (fresh from the server).
+    pub async fn kv_status(&self, bucket: &str) -> Result<KvStatus, QueryError> {
+        let store = self.kv_store(bucket).await?;
+        let st = store.status().await.map_err(|e| err("KV status error", e))?;
+        Ok(kv_status_from_info(&st.bucket, &st.info))
+    }
+
+    /// Every KV bucket with its settings and size, from ONE stream listing (a KV
+    /// bucket is the stream `KV_<bucket>`), instead of one status call per bucket.
+    pub async fn kv_bucket_list(&self) -> Result<Vec<KvStatus>, QueryError> {
+        use futures::TryStreamExt;
+        let js = async_nats::jetstream::new(self.client.clone());
+        let mut infos = js.streams();
+        let mut out = Vec::new();
+        while let Some(info) = infos.try_next().await.map_err(|e| err("List key-value buckets error", e))? {
+            if let Some(b) = info.config.name.strip_prefix("KV_") {
+                out.push(kv_status_from_info(b, &info));
+            }
+        }
+        out.sort_by(|a, b| a.bucket.cmp(&b.bucket));
+        Ok(out)
+    }
+
+    /// Latest entry of every key in a bucket (value + version + time), deleted keys
+    /// included as markers so the UI can show "Deleted". One ordered consumer
+    /// delivering the last message per key — not one request per key. At most
+    /// `limit` keys; `truncated` says when there were more.
+    pub async fn kv_entries(&self, bucket: &str, limit: usize) -> Result<KvEntries, QueryError> {
+        use futures::StreamExt;
+        let limit = limit.clamp(1, 10_000);
+        let store = self.kv_store(bucket).await?;
+        let mut watch = store.watch_with_history(">").await.map_err(|e| err("KV read error", e))?;
+        let mut entries = Vec::new();
+        let mut truncated = false;
+        loop {
+            let next = tokio::time::timeout(std::time::Duration::from_secs(5), watch.next()).await;
+            let Ok(Some(item)) = next else { break };
+            let e = item.map_err(|e| err("KV read error", e))?;
+            let done = e.delta == 0 || e.seen_current;
+            entries.push(kv_entry_from(e));
+            if done {
+                break;
+            }
+            if entries.len() >= limit {
+                truncated = true;
+                break;
+            }
+        }
+        entries.sort_by(|a, b| a.key.cmp(&b.key));
+        Ok(KvEntries { entries, truncated })
+    }
+
+    /// Current entry of one key — the value with its version and time. A deleted
+    /// key comes back with `operation = "delete"` (its marker), `None` = never set.
+    pub async fn kv_entry(&self, bucket: &str, key: &str) -> Result<Option<KvEntry>, QueryError> {
+        let store = self.kv_store(bucket).await?;
+        let e = store.entry(key).await.map_err(|e| err("KV read error", e))?;
+        Ok(e.map(kv_entry_from))
+    }
+
+    /// Every version the bucket still keeps for a key, oldest first, including the
+    /// delete / purge markers. A key that was never written has no history (the
+    /// history stream would wait forever for it, so it is checked first).
+    pub async fn kv_history(&self, bucket: &str, key: &str) -> Result<Vec<KvEntry>, QueryError> {
+        use futures::StreamExt;
+        let store = self.kv_store(bucket).await?;
+        if store.entry(key).await.map_err(|e| err("KV read error", e))?.is_none() {
+            return Ok(Vec::new());
+        }
+        let mut hist = store.history(key).await.map_err(|e| err("KV history error", e))?;
+        let mut out = Vec::new();
+        loop {
+            let next = tokio::time::timeout(std::time::Duration::from_secs(5), hist.next()).await;
+            let Ok(Some(item)) = next else { break };
+            let e = item.map_err(|e| err("KV history error", e))?;
+            let done = e.delta == 0;
+            out.push(kv_entry_from(e));
+            if done || out.len() >= 1_000 {
+                break;
+            }
+        }
+        Ok(out)
+    }
+
+    /// Put a value and return the new version number.
+    pub async fn kv_put_version(&self, bucket: &str, key: &str, value: String) -> Result<u64, QueryError> {
+        let store = self.kv_store(bucket).await?;
+        store.put(key, value.into_bytes().into()).await.map_err(|e| err("KV put error", e))
+    }
+
+    /// Remove a key AND all its earlier versions (a purge marker is left).
+    pub async fn kv_purge(&self, bucket: &str, key: &str) -> Result<(), QueryError> {
+        let store = self.kv_store(bucket).await?;
+        store.purge(key).await.map_err(|e| err("KV purge error", e))
+    }
+
+    /// Create a bucket with explicit settings (versions kept, expiry, storage…).
+    pub async fn kv_create_bucket(&self, req: KvCreate) -> Result<KvStatus, QueryError> {
+        let js = async_nats::jetstream::new(self.client.clone());
+        let store = js
+            .create_key_value(kv_config_from(&req))
+            .await
+            .map_err(|e| err(format!("Failed to create key-value bucket '{}'", req.bucket), e))?;
+        let st = store.status().await.map_err(|e| err("KV status error", e))?;
+        Ok(kv_status_from_info(&st.bucket, &st.info))
+    }
+
+    /// Live changes of a bucket (`pattern`, default every key), from now on.
+    pub async fn kv_watch(&self, bucket: &str, pattern: &str) -> Result<async_nats::jetstream::kv::Watch, QueryError> {
+        let store = self.kv_store(bucket).await?;
+        let p = if pattern.trim().is_empty() { ">" } else { pattern.trim() };
+        store.watch(p).await.map_err(|e| err("KV watch error", e))
+    }
+
     // ---- Object Store (T9) --------------------------------------------------
 
     /// List Object Store buckets (stream tên "OBJ_<bucket>").
@@ -268,7 +424,9 @@ impl NatsDriver {
         let mut out = Vec::new();
         let mut infos = js.streams();
         while let Some(info) = infos.try_next().await.map_err(|e| err("List streams error", e))? {
+            let limits = stream_limits(&info); // stream-workspace:nats
             out.push(JsStream {
+                limits,
                 name: info.config.name,
                 subjects: info.config.subjects,
                 retention: format!("{:?}", info.config.retention),
@@ -553,9 +711,14 @@ impl NatsDriver {
         }
 
         let cap = page_size.saturating_mul(2).saturating_add(1);
-        // window estimate needs a density; without a known total assume dense and
-        // let the doubling find the right width (a wrong guess costs one probe).
-        let est_total = stream_messages.max(1);
+        // The first window is sized from the subject's DENSITY in the stream. An exact
+        // subject is counted with one cheap request (a single subject-index entry) —
+        // far cheaper than the extra probes a wrong guess costs on a sparse subject
+        // (assuming the whole stream's density took 7 probes per page for a subject
+        // holding 1% of it). A wildcard may span a huge subject space, so it keeps the
+        // stream estimate and lets the doubling find the width.
+        let counted = if !is_wildcard(subject) || want_count { self.subject_total_best_effort(stream, subject).await } else { 0 };
+        let est_total = if counted > 0 { counted } else { stream_messages.max(1) };
         let mut w = initial_window(page_size, est_total, stream_last.max(1));
         let mut probes = 0u32;
         let mut widest: Vec<JsMessage> = Vec::new();
@@ -564,7 +727,12 @@ impl NatsDriver {
             let start = end.saturating_sub(w.saturating_sub(1)).max(stream_first.max(1));
             let mut rows = self.fetch_window(stream, subject, start, end, cap).await?;
             probes += 1;
-            let step = window_step(rows.len(), page_size, cap, start.min(stream_first.max(1)));
+            // window_step reads "position 1" as "the window reaches the start of the stream":
+            // pass the window start RELATIVE to the stream's first sequence. (Passing
+            // start.min(stream_first) made it 1 for every stream that begins at seq 1, so
+            // the first probe always counted as complete — a sparse subject came back with
+            // a couple of rows per page instead of a full page.)
+            let step = window_step(rows.len(), page_size, cap, start.saturating_sub(stream_first.max(1)) + 1);
             trace(|| format!("page {stream}/{subject}: probe {probes} window=[{start},{end}] w={w} rows={} → {step:?}", rows.len()));
             match step {
                 WindowStep::Done => {
@@ -587,7 +755,7 @@ impl NatsDriver {
             let keep = widest.len().saturating_sub(page_size);
             widest.split_off(keep)
         });
-        let total = if want_count { self.subject_total_best_effort(stream, subject).await } else { 0 };
+        let total = if want_count { counted } else { 0 };
         trace(|| format!("page {stream}/{subject}: returning {} rows (probes={probes}, total={total})", msgs.len()));
         Ok(JsPage { msgs, probes, total, last_seq: stream_last })
     }
@@ -787,6 +955,69 @@ pub struct JsStream {
     pub messages: u64,
     pub bytes: u64,
     pub consumers: u64,
+    // stream-workspace:nats — limits + state for the Streams detail (rule U4: the
+    // UI reads them in words). Additive: older callers ignore them.
+    /// stream config limits as the server reports them (see `StreamLimits`)
+    #[serde(flatten)]
+    pub limits: StreamLimits,
+}
+
+/// stream-workspace:nats — a stream's retention limits and sequence range, read
+/// from its info. `-1` / `0` mean "no limit" exactly as the server reports them;
+/// the frontend turns them into words ("Keep messages forever").
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct StreamLimits {
+    /// 0 = keep forever
+    pub max_age_ms: u64,
+    /// -1 = no limit
+    pub max_msgs: i64,
+    /// -1 = no limit
+    pub max_bytes: i64,
+    /// -1 = no limit; KV buckets use this as "versions kept"
+    pub max_msgs_per_subject: i64,
+    /// -1 = no limit
+    pub max_msg_size: i64,
+    pub replicas: u64,
+    /// "old" (drop oldest) | "new" (refuse new)
+    pub discard: String,
+    pub duplicate_window_ms: u64,
+    pub description: Option<String>,
+    pub first_seq: u64,
+    pub last_seq: u64,
+    /// ISO-8601, empty when the stream has never held a message
+    pub last_time: String,
+    pub created: String,
+    pub subjects_count: u64,
+    pub sealed: bool,
+    pub deny_delete: bool,
+    pub deny_purge: bool,
+}
+
+/// stream-workspace:nats — limits + state of a stream, from its server info.
+pub fn stream_limits(info: &async_nats::jetstream::stream::Info) -> StreamLimits {
+    let c = &info.config;
+    StreamLimits {
+        max_age_ms: c.max_age.as_millis() as u64,
+        max_msgs: c.max_messages,
+        max_bytes: c.max_bytes,
+        max_msgs_per_subject: c.max_messages_per_subject,
+        max_msg_size: c.max_message_size as i64,
+        replicas: c.num_replicas as u64,
+        discard: match c.discard {
+            async_nats::jetstream::stream::DiscardPolicy::New => "new".into(),
+            _ => "old".into(),
+        },
+        duplicate_window_ms: c.duplicate_window.as_millis() as u64,
+        description: c.description.clone().filter(|d| !d.is_empty()),
+        first_seq: info.state.first_sequence,
+        last_seq: info.state.last_sequence,
+        last_time: if info.state.last_sequence == 0 { String::new() } else { iso_with_offset(info.state.last_timestamp) },
+        created: iso_with_offset(info.created),
+        subjects_count: info.state.subjects_count,
+        sealed: c.sealed,
+        deny_delete: c.deny_delete,
+        deny_purge: c.deny_purge,
+    }
 }
 
 /// All subject filters of a consumer, deduped: the legacy single `filter_subject` and
@@ -934,6 +1165,179 @@ pub(crate) fn initial_window(page_size: usize, total: u64, last_seq: u64) -> u64
     est.clamp(page, u64::MAX as u128) as u64
 }
 
+// ---- stream-workspace:nats (W4) — types + pure mapping -------------------------
+
+/// JetStream usage of the account behind this connection.
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct NatsAccount {
+    /// false = persistence (JetStream) is not available to this account
+    pub enabled: bool,
+    /// the server's reason when `enabled` is false
+    pub reason: Option<String>,
+    pub memory: u64,
+    pub storage: u64,
+    pub streams: u64,
+    pub consumers: u64,
+    /// `None` = no limit
+    pub max_memory: Option<i64>,
+    pub max_storage: Option<i64>,
+    pub max_streams: Option<i64>,
+    pub max_consumers: Option<i64>,
+    pub domain: Option<String>,
+    pub api_total: u64,
+    pub api_errors: u64,
+}
+
+impl NatsAccount {
+    pub fn disabled(reason: String) -> Self {
+        NatsAccount { enabled: false, reason: Some(reason), ..Default::default() }
+    }
+}
+
+/// True when an account-info failure means "JetStream is off" rather than a real
+/// error: the server answers 10039 "jetstream not enabled for account", or nobody
+/// answers the JetStream API at all (no responders / 503).
+pub(crate) fn persistence_off(raw: &str) -> bool {
+    let r = raw.to_ascii_lowercase();
+    r.contains("not enabled") || r.contains("10039") || r.contains("no responders") || r.contains("unavailable") || r.contains("503")
+}
+
+/// Settings + size of a key-value bucket.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct KvStatus {
+    pub bucket: String,
+    pub description: Option<String>,
+    /// distinct keys present (deleted keys still count until their marker expires)
+    pub keys: u64,
+    /// stored values including earlier versions and delete markers
+    pub values: u64,
+    /// versions kept per key
+    pub history: i64,
+    /// 0 = keys never expire
+    pub max_age_ms: u64,
+    pub bytes: u64,
+    /// `None` = no size limit
+    pub max_bytes: Option<i64>,
+    /// `None` = no per-value limit
+    pub max_value_size: Option<i64>,
+    /// "file" | "memory"
+    pub storage: String,
+    pub replicas: u64,
+    pub created: String,
+    /// last write time (ISO), empty when the bucket is empty
+    pub last_time: String,
+}
+
+/// One version of a key.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct KvEntry {
+    pub key: String,
+    pub value: String,
+    /// the version number (stream sequence)
+    pub revision: u64,
+    /// ISO-8601 time of the write
+    pub created: String,
+    /// "put" | "delete" | "purge"
+    pub operation: String,
+    /// value size in bytes
+    pub size: u64,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct KvEntries {
+    pub entries: Vec<KvEntry>,
+    pub truncated: bool,
+}
+
+/// Settings for a new bucket. Seconds / bytes; 0 or negative = no limit.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct KvCreate {
+    pub bucket: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default = "one")]
+    pub history: i64,
+    #[serde(default)]
+    pub max_age_secs: u64,
+    /// "file" (default) | "memory"
+    #[serde(default)]
+    pub storage: String,
+    #[serde(default)]
+    pub max_bytes: i64,
+    #[serde(default = "one_usize")]
+    pub replicas: usize,
+}
+fn one() -> i64 {
+    1
+}
+fn one_usize() -> usize {
+    1
+}
+
+/// `-1` / `0` from the server mean "no limit" → `None`.
+pub(crate) fn limit_opt(v: i64) -> Option<i64> {
+    if v > 0 { Some(v) } else { None }
+}
+
+pub(crate) fn op_name(op: async_nats::jetstream::kv::Operation) -> &'static str {
+    use async_nats::jetstream::kv::Operation;
+    match op {
+        Operation::Put => "put",
+        Operation::Delete => "delete",
+        Operation::Purge => "purge",
+    }
+}
+
+pub(crate) fn kv_entry_from(e: async_nats::jetstream::kv::Entry) -> KvEntry {
+    KvEntry {
+        size: e.value.len() as u64,
+        value: String::from_utf8_lossy(&e.value).into_owned(),
+        key: e.key,
+        revision: e.revision,
+        created: iso_with_offset(e.created),
+        operation: op_name(e.operation).to_string(),
+    }
+}
+
+/// A bucket's settings and size from the info of its backing stream `KV_<bucket>`.
+pub fn kv_status_from_info(bucket: &str, info: &async_nats::jetstream::stream::Info) -> KvStatus {
+    let c = &info.config;
+    KvStatus {
+        bucket: bucket.to_string(),
+        description: c.description.clone().filter(|d| !d.is_empty()),
+        keys: info.state.subjects_count,
+        values: info.state.messages,
+        history: c.max_messages_per_subject,
+        max_age_ms: c.max_age.as_millis() as u64,
+        bytes: info.state.bytes,
+        max_bytes: limit_opt(c.max_bytes),
+        max_value_size: limit_opt(c.max_message_size as i64),
+        storage: match c.storage {
+            async_nats::jetstream::stream::StorageType::Memory => "memory".into(),
+            _ => "file".into(),
+        },
+        replicas: c.num_replicas.max(1) as u64,
+        created: iso_with_offset(info.created),
+        last_time: if info.state.last_sequence == 0 { String::new() } else { iso_with_offset(info.state.last_timestamp) },
+    }
+}
+
+/// The client config for a new bucket: versions kept clamped to the server's
+/// 1–64, memory storage only when asked, limits only when positive.
+pub fn kv_config_from(req: &KvCreate) -> async_nats::jetstream::kv::Config {
+    use async_nats::jetstream::stream::StorageType;
+    async_nats::jetstream::kv::Config {
+        bucket: req.bucket.trim().to_string(),
+        description: req.description.trim().to_string(),
+        history: req.history.clamp(1, 64),
+        max_age: std::time::Duration::from_secs(req.max_age_secs),
+        max_bytes: if req.max_bytes > 0 { req.max_bytes } else { -1 },
+        storage: if req.storage.eq_ignore_ascii_case("memory") { StorageType::Memory } else { StorageType::File },
+        num_replicas: req.replicas.clamp(1, 5),
+        ..Default::default()
+    }
+}
+
 /// Format a server timestamp as ISO-8601 keeping the server's own UTC offset
 /// (e.g. `2026-06-30T10:23:14Z` or `2026-06-30T17:23:14+07:00`). The datetime's
 /// components are already expressed in its offset, so the frontend can render the
@@ -1054,5 +1458,118 @@ mod tests {
             steps += 1;
         }
         assert!(steps < MAX_PAGE_PROBES, "{steps} doublings must stay under the probe budget");
+    }
+
+    // ---- stream-workspace:nats (W4) ----
+
+    fn kv_info_json(storage: &str, max_bytes: i64, max_age_ns: u64, last_seq: u64) -> async_nats::jetstream::stream::Info {
+        serde_json::from_value(serde_json::json!({
+            "config": {
+                "name": "KV_flags",
+                "subjects": ["$KV.flags.>"],
+                "retention": "limits",
+                "max_consumers": -1,
+                "max_msgs": -1,
+                "max_bytes": max_bytes,
+                "max_age": max_age_ns,
+                "max_msgs_per_subject": 10,
+                "max_msg_size": -1,
+                "discard": "new",
+                "storage": storage,
+                "num_replicas": 3,
+                "duplicate_window": 120_000_000_000u64,
+                "description": "feature flags"
+            },
+            "created": "2026-10-21T08:00:00Z",
+            "state": {
+                "messages": 42,
+                "bytes": 2048,
+                "first_seq": 1,
+                "first_ts": "2026-10-21T08:00:00Z",
+                "last_seq": last_seq,
+                "last_ts": "2026-10-21T09:30:00Z",
+                "consumer_count": 0,
+                "num_subjects": 7
+            }
+        }))
+        .expect("stream info json")
+    }
+
+    #[test]
+    fn kv_status_reads_bucket_settings_from_its_stream() {
+        let s = kv_status_from_info("flags", &kv_info_json("memory", 1_048_576, 1_800_000_000_000, 42));
+        assert_eq!(s.bucket, "flags");
+        assert_eq!(s.keys, 7, "distinct keys = subjects of the stream");
+        assert_eq!(s.values, 42, "values include earlier versions");
+        assert_eq!(s.history, 10, "versions kept = max messages per subject");
+        assert_eq!(s.max_age_ms, 1_800_000, "30 min");
+        assert_eq!(s.max_bytes, Some(1_048_576));
+        assert_eq!(s.max_value_size, None, "-1 = no per-value limit");
+        assert_eq!(s.storage, "memory");
+        assert_eq!(s.replicas, 3);
+        assert_eq!(s.description.as_deref(), Some("feature flags"));
+        assert_eq!(s.last_time, "2026-10-21T09:30:00Z");
+
+        let unlimited = kv_status_from_info("flags", &kv_info_json("file", -1, 0, 0));
+        assert_eq!(unlimited.max_bytes, None);
+        assert_eq!(unlimited.max_age_ms, 0, "0 = never expire");
+        assert_eq!(unlimited.storage, "file");
+        assert_eq!(unlimited.last_time, "", "empty bucket has no last write");
+    }
+
+    #[test]
+    fn stream_limits_keep_server_values_for_the_ui() {
+        let l = stream_limits(&kv_info_json("file", 5_000, 3_600_000_000_000, 42));
+        assert_eq!(l.max_age_ms, 3_600_000);
+        assert_eq!(l.max_msgs, -1);
+        assert_eq!(l.max_bytes, 5_000);
+        assert_eq!(l.max_msgs_per_subject, 10);
+        assert_eq!(l.replicas, 3);
+        assert_eq!(l.discard, "new");
+        assert_eq!(l.duplicate_window_ms, 120_000);
+        assert_eq!((l.first_seq, l.last_seq), (1, 42));
+        assert_eq!(l.subjects_count, 7);
+        assert_eq!(l.created, "2026-10-21T08:00:00Z");
+    }
+
+    #[test]
+    fn kv_create_config_clamps_and_maps_limits() {
+        let req: KvCreate = serde_json::from_value(serde_json::json!({ "bucket": " flags ", "history": 500, "storage": "Memory", "max_age_secs": 60, "replicas": 9 })).unwrap();
+        let c = kv_config_from(&req);
+        assert_eq!(c.bucket, "flags");
+        assert_eq!(c.history, 64, "server maximum");
+        assert_eq!(c.max_age, std::time::Duration::from_secs(60));
+        assert_eq!(c.max_bytes, -1, "no size limit unless asked");
+        assert_eq!(c.num_replicas, 5);
+        assert!(matches!(c.storage, async_nats::jetstream::stream::StorageType::Memory));
+
+        let d: KvCreate = serde_json::from_value(serde_json::json!({ "bucket": "b", "history": 0 })).unwrap();
+        let c = kv_config_from(&d);
+        assert_eq!(c.history, 1);
+        assert_eq!(c.num_replicas, 1);
+        assert!(matches!(c.storage, async_nats::jetstream::stream::StorageType::File));
+    }
+
+    #[test]
+    fn markers_and_limits_read_as_words() {
+        use async_nats::jetstream::kv::Operation;
+        assert_eq!(op_name(Operation::Put), "put");
+        assert_eq!(op_name(Operation::Delete), "delete");
+        assert_eq!(op_name(Operation::Purge), "purge");
+        assert_eq!(limit_opt(-1), None);
+        assert_eq!(limit_opt(0), None);
+        assert_eq!(limit_opt(10), Some(10));
+    }
+
+    #[test]
+    fn jetstream_off_is_recognised_not_reported_as_a_failure() {
+        assert!(persistence_off("jetstream error: jetstream not enabled for account (code 503, error code 10039)"));
+        assert!(persistence_off("jetstream unavailable"));
+        assert!(persistence_off("no responders"));
+        assert!(!persistence_off("timed out"));
+        assert!(!persistence_off("authorization violation"));
+        let d = NatsAccount::disabled("jetstream not enabled".into());
+        assert!(!d.enabled);
+        assert_eq!(d.reason.as_deref(), Some("jetstream not enabled"));
     }
 }

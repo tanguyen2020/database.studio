@@ -18,10 +18,6 @@
   import ObjectExplorer from '$lib/components/explorer/ObjectExplorer.svelte'
   import SqlWorkspace from '$lib/components/workspace/SqlWorkspace.svelte'
   import TableViewerTab from '$lib/components/workspace/TableViewerTab.svelte'
-  import RedisWorkspace from '$lib/components/workspace/RedisWorkspace.svelte'
-  import RedisKeyView from '$lib/components/workspace/RedisKeyView.svelte'
-  import RedisPubSub from '$lib/components/workspace/RedisPubSub.svelte'
-  import NatsWorkspace from '$lib/components/workspace/NatsWorkspace.svelte'
   import NatsSubjectMessages from '$lib/components/workspace/NatsSubjectMessages.svelte'
   import RabbitQueueView from '$lib/components/workspace/RabbitQueueView.svelte'
   import RabbitExchangeView from '$lib/components/workspace/RabbitExchangeView.svelte'
@@ -36,10 +32,8 @@
   import DuckImportDialog from '$lib/components/duckdb/DuckImportDialog.svelte'
   import DuckExportDialog from '$lib/components/duckdb/DuckExportDialog.svelte'
   import DuckAttachDialog from '$lib/components/duckdb/DuckAttachDialog.svelte'
-  import KafkaWorkspace from '$lib/components/workspace/KafkaWorkspace.svelte'
-  import KafkaConsumer from '$lib/components/workspace/KafkaConsumer.svelte'
-  import KafkaProducer from '$lib/components/workspace/KafkaProducer.svelte'
-  import SchemaRegistryWorkspace from '$lib/components/workspace/SchemaRegistryWorkspace.svelte'
+  import StreamWorkspace from '$lib/components/stream/StreamWorkspace.svelte'
+  import { opensWorkspace } from '$lib/stream/workspace-systems'
   import CassandraRing from '$lib/components/workspace/CassandraRing.svelte'
   import CassandraTableView from '$lib/components/workspace/CassandraTableView.svelte'
   import MongoCollectionView from '$lib/components/workspace/MongoCollectionView.svelte'
@@ -275,9 +269,8 @@
     untrack(() => tabs.closeObjectsTab(base))
   })
 
-  // ---- resizers (sidebar width + connection-list height) ----
+  // ---- resizers (sidebar width + split panel width) ----
   let draggingSidebar = $state(false)
-  let draggingConnList = $state(false)
   let draggingConnPanel = $state(false)
   // Measured, not computed: a split sidebar puts one panel after the other, so a
   // panel's width is pointer − that panel's own left edge.
@@ -293,10 +286,15 @@
     ui.persistSizes()
   }
 
+  // Two-panel layout: Redis · Kafka · NATS · RabbitMQ have no object tree (their
+  // workspace tab is the view), so the Explorer panel steps aside while one of them
+  // is the selected connection.
+  const explorerHidden = $derived(ui.sidebarSplit && opensWorkspace(connections.selected?.system))
+
   // Each vertical resizer resizes the panel on its LEFT, so the handle the user
   // grabs is always the edge of the panel that moves.
   const middlePanel: 'conn' | 'explorer' = 'conn'
-  const outerPanel: 'conn' | 'explorer' = 'explorer'
+  const outerPanel = $derived<'conn' | 'explorer'>(explorerHidden ? 'conn' : 'explorer')
 
   function dragSidebar(e: PointerEvent) {
     if (!draggingSidebar) return
@@ -307,13 +305,6 @@
   function dragConnPanel(e: PointerEvent) {
     if (!draggingConnPanel) return
     setPanelWidth(middlePanel, e)
-  }
-
-  function dragConnList(e: PointerEvent) {
-    if (!draggingConnList) return
-    // relative to viewport: dưới title bar 42px (HTML dòng 46) + header/toolbar khu Connections
-    ui.connListHeight = Math.min(Math.max(e.clientY - 42 - 66, 120), window.innerHeight - 260)
-    ui.persistSizes()
   }
 </script>
 
@@ -362,32 +353,21 @@
       {/snippet}
 
       {@render connectionsPanel()}
-      {@render connectionsResizer()}
-      {@render explorerPanel()}
+      {#if !explorerHidden}
+        {@render connectionsResizer()}
+        {@render explorerPanel()}
+      {/if}
     {:else}
-      <!-- LEFT SIDEBAR — dòng 71 -->
+      <!-- ONE SIDEBAR — one tree: every connection opens in place into its own
+           objects (several at a time). The selected connection's Properties +
+           toolbar are pinned in the footer host at the bottom. -->
       <aside
         bind:this={explorerAside}
         data-sidebar-panel="stacked"
         style="width:{ui.sidebarWidth}px;flex:none;display:flex;flex-direction:column;background:var(--sidebar);border-right:var(--px-1) solid var(--border);min-height:0"
       >
-        <ConnectionList />
-        <!-- resizer chiều cao connection list (persist) -->
-        <div
-          style="flex:none;height:var(--px-5);cursor:row-resize;background:var(--border)"
-          role="separator"
-          aria-orientation="horizontal"
-          title="Drag to resize"
-          onpointerdown={(e) => {
-            draggingConnList = true
-            ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
-          }}
-          onpointermove={dragConnList}
-          onpointerup={() => (draggingConnList = false)}
-        ></div>
-        <div style="min-height:0;flex:1;overflow:hidden;display:flex;flex-direction:column">
-          <ObjectExplorer />
-        </div>
+        <ConnectionList unified />
+        <div data-explorer-footer-host style="flex:none;display:flex;flex-direction:column"></div>
       </aside>
     {/if}
 
@@ -416,20 +396,6 @@
             <HistoryTab />
           {:else if t.contentType === 'saved'}
             <SavedQueriesTab />
-          {:else if t.contentType === 'redis'}
-            <RedisWorkspace tab={t} />
-          {:else if t.contentType === 'redis-key'}
-            <RedisKeyView tab={t} />
-          {:else if t.contentType === 'redis-pubsub'}
-            <RedisPubSub tab={t} />
-          {:else if t.contentType === 'nats'}
-            <NatsWorkspace tab={t} />
-          {:else if t.contentType === 'nats-subject'}
-            <NatsSubjectMessages tab={t} />
-          {:else if t.contentType === 'rabbit-queue'}
-            <RabbitQueueView tab={t} />
-          {:else if t.contentType === 'rabbit-exchange'}
-            <RabbitExchangeView tab={t} />
           {:else if t.contentType === 'es-index'}
             <EsIndexView tab={t} />
           {:else if t.contentType === 'es-console'}
@@ -446,14 +412,8 @@
             <DuckHomeView tab={t} />
           {:else if t.contentType === 'duckdb-profile'}
             <DuckProfileView tab={t} />
-          {:else if t.contentType === 'kafka'}
-            <KafkaWorkspace tab={t} />
-          {:else if t.contentType === 'kafka-consumer'}
-            <KafkaConsumer tab={t} />
-          {:else if t.contentType === 'kafka-producer'}
-            <KafkaProducer tab={t} />
-          {:else if t.contentType === 'kafka-schema-registry'}
-            <SchemaRegistryWorkspace tab={t} />
+          {:else if t.contentType === 'stream-workspace'}
+            <StreamWorkspace tab={t} />
           {:else if t.contentType === 'cassandra-ring'}
             <CassandraRing tab={t} />
           {:else if t.contentType === 'cassandra-table'}

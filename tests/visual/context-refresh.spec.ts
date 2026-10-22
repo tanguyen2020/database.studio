@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { APP_URL, blockRemoteFonts, openDatabaseNode } from './helpers'
+import { APP_URL, blockRemoteFonts, openDatabaseNode, wsSection } from './helpers'
 
 // Rule: every ObjectExplorer context menu offers Refresh; and clear/delete
 // confirm popups open with Cancel focused by default.
@@ -37,13 +37,12 @@ test('NATS delete-stream confirm opens with Cancel focused', async ({ page }) =>
   await page.goto(APP_URL)
   await page.waitForSelector('#app > *', { timeout: 15_000 })
   await page.waitForTimeout(400)
+  // NATS has no object tree: the connection opens its workspace; streams are a table there
   await page.getByRole('button', { name: /Messaging NATS/ }).first().click()
-  await page.waitForTimeout(500)
-  await expect(page.getByText('ORDERS', { exact: true }).first()).toBeVisible({ timeout: 8000 })
-  await page.getByText('ORDERS', { exact: true }).first().click({ button: 'right' })
-  await page.waitForTimeout(150)
-  await page.getByText('Delete stream', { exact: true }).first().click()
-  await page.waitForTimeout(200)
-  const dialog = page.getByRole('dialog')
+  await wsSection(page, 'streams')
+  const ws = page.locator('[data-stream-shell="nats"]')
+  await ws.getByRole('grid', { name: 'Streams' }).locator('tbody tr[data-kind="stream"]').filter({ hasText: 'ORDERS' }).click()
+  await ws.getByRole('button', { name: 'Delete stream…' }).click()
+  const dialog = page.getByRole('alertdialog', { name: 'Delete stream' })
   await expect(dialog.getByRole('button', { name: 'Cancel' })).toBeFocused()
 })

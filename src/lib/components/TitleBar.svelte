@@ -34,7 +34,7 @@
   // re-applied on the next start (ui.setSidebarLayout).
   const LAYOUTS: { mode: import('$lib/stores/ui.svelte').SidebarLayout; label: string; title: string }[] = [
     { mode: 'left', label: 'Connections left', title: 'Two panels — Connections on the left, Explorer on the right' },
-    { mode: 'stacked', label: 'One sidebar', title: 'One sidebar — Connections above the Explorer' },
+    { mode: 'stacked', label: 'One sidebar', title: 'One sidebar — each connection opens in place into its databases, schemas and tables' },
   ]
 
   // Session Monitor (T23) — mở Admin view cho connection đang chọn.

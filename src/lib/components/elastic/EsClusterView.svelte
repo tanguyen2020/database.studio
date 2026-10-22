@@ -353,7 +353,7 @@
                   <td style="max-width:var(--px-340)" class="es-ellipsis" title={t.description}>{t.description || '—'}</td>
                   <td>{t.node}</td>
                   <td class="num">{(t.runningMs / 1000).toFixed(1)} s</td>
-                  <td style="text-align:right">{#if t.cancellable}<button class="eg-btn danger" onclick={() => (cancelTask = { id: t.id, action: t.action })}>Cancel</button>{/if}</td>
+                  <td style="text-align:right">{#if t.cancellable}<button class="eg-btn ds-danger-outline" onclick={() => (cancelTask = { id: t.id, action: t.action })}>Cancel</button>{/if}</td>
                 </tr>
               {/each}
             </tbody>

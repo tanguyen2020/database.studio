@@ -37,7 +37,8 @@ test('connections: groups start collapsed, open on demand, and reveal a connecti
   await input.fill('Cache Redis')
   await page.waitForTimeout(200)
   await page.keyboard.press('Enter')
-  await expect(page.getByText('10.0.1.7:6379')).toBeVisible()
+  // scoped to the list: picking Redis also opens its workspace, whose header names the host
+  await expect(page.getByRole('tree', { name: 'Connections' }).getByText('10.0.1.7:6379')).toBeVisible()
   await expect(groups.filter({ hasText: 'Redis' }).first()).toHaveAttribute('aria-expanded', 'true')
   // …and only that one — the others stay collapsed
   await expect(pg).toHaveAttribute('aria-expanded', 'false')

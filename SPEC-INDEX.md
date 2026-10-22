@@ -88,6 +88,11 @@ Driver module `drivers/<system>.rs` + variant trong `LiveConnection` + **nhánh 
 | `SPEC-MONGODB-FEATURE.md` | MongoDB engine (khuôn non-SQL) | Đã implement; §0.0 lệch nhỏ |
 | `SPEC-BACKUP-RESTORE.md` | Backup & Restore per-engine (SQLite in-process; PG/MySQL/CH/Mongo shell tool) | Viết mới theo code |
 | `SPEC-PARTITIONS.md` | Table partitioning per-engine (View/Manage/Create/Convert/Add) | Viết mới theo code; ma trận 12 engine + gap ở §11 |
+| `SPEC-STREAM-SHELL.md` | Khung workspace dùng chung cho Cache & Streaming (W0) + One sidebar, không cây cho 4 engine | **Đã code** (chưa commit, cập nhật 2026-10-22) |
+| `SPEC-KAFKA-WORKSPACE.md` | Kafka workspace: Overview, Topics, Consumer groups (W1) | **Đã code W1 (chưa commit)** — còn Copy to Produce, Hex (§3a) |
+| `SPEC-RABBITMQ-WORKSPACE.md` | RabbitMQ workspace: Overview + tốc độ, Queues, Connections, Nodes (W2) | **Đã code W2 (chưa commit)** |
+| `SPEC-REDIS-BROWSER.md` | Redis Browser, bỏ kiểu mỗi key một tab (W3) | **Đã code W3 (chưa commit)** |
+| `SPEC-NATS-WORKSPACE.md` | NATS workspace: Overview, Streams (cây), KV, Object stores, Publish & subscribe (W4) | **Đã code W4 (chưa commit)** — Peek theo sequence đã làm |
 
 ### Addendum thiết kế theo hệ (phần lớn còn đúng — override spec gốc khi mâu thuẫn)
 `spec/Database Studio design/design_handoff_database_studio/`:

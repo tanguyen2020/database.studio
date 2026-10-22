@@ -8,7 +8,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use rdkafka::admin::{AdminClient, AdminOptions, NewPartitions, NewTopic, TopicReplication};
+use rdkafka::admin::{
+    AdminClient, AdminOptions, AlterConfig, ConfigSource, NewPartitions, NewTopic, ResourceSpecifier, TopicReplication,
+};
 use rdkafka::client::DefaultClientContext;
 use rdkafka::config::ClientConfig;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
@@ -447,6 +449,21 @@ impl KafkaDriver {
         until: i64,
         limit: i64,
     ) -> Result<KafkaPage, QueryError> {
+        self.fetch_page_from(topic, partition, until, limit, None).await
+    }
+
+    /// Like [`Self::fetch_page`], but with `from_time` (ms since epoch) the window of
+    /// each partition STARTS at the first message whose timestamp is at or after that
+    /// time (Kafka ListOffsets by timestamp) and reads forward `limit` messages.
+    /// Partitions with nothing that recent contribute nothing.
+    pub async fn fetch_page_from(
+        &self,
+        topic: &str,
+        partition: Option<i32>,
+        until: i64,
+        limit: i64,
+        from_time: Option<i64>,
+    ) -> Result<KafkaPage, QueryError> {
         let meta = self.consumer.clone();
         let cfg = self.config.clone();
         let topic = topic.to_string();
@@ -472,6 +489,11 @@ impl KafkaDriver {
             let targets: Vec<(String, i32)> =
                 parts.iter().map(|p| (topic.clone(), *p)).collect();
             let (marks, offsets_error) = watermarks(&meta, &targets);
+            // offset of the first message at/after `from_time`, per partition
+            let time_offsets: Option<HashMap<i32, i64>> = match from_time {
+                None => None,
+                Some(ts) => Some(offsets_at_time(&meta, &topic, &parts, ts)?),
+            };
 
             let mut tpl = TopicPartitionList::new();
             let mut window: HashMap<i32, (i64, i64)> = HashMap::new();
@@ -486,8 +508,17 @@ impl KafkaDriver {
                 };
                 known = true;
                 retained += (high - low).max(0);
-                let end = if until < 0 { high } else { until.min(high) };
-                let start = (end - limit).max(low);
+                let (start, end) = match &time_offsets {
+                    // reading forward from a moment in time; nothing that recent → empty
+                    Some(map) => {
+                        let s = map.get(p).copied().unwrap_or(high).clamp(low, high);
+                        (s, (s + limit).min(high))
+                    }
+                    None => {
+                        let end = if until < 0 { high } else { until.min(high) };
+                        ((end - limit).max(low), end)
+                    }
+                };
                 if start > low {
                     has_older = true;
                 }
@@ -873,6 +904,172 @@ impl KafkaDriver {
         }
         Ok(())
     }
+
+    /// Every configuration entry of a topic (DescribeConfigs).
+    pub async fn topic_configs(&self, topic: &str) -> Result<Vec<KafkaConfigEntry>, QueryError> {
+        let admin: AdminClient<DefaultClientContext> =
+            self.config.create().map_err(|e| err("Failed to create admin client", e))?;
+        let opts = AdminOptions::new().request_timeout(Some(Duration::from_secs(30)));
+        let spec = ResourceSpecifier::Topic(topic);
+        let res = admin
+            .describe_configs([&spec], &opts)
+            .await
+            .map_err(|e| err("Failed to read the topic configuration", e))?;
+        let mut out = Vec::new();
+        for r in res {
+            let resource = r.map_err(|e| err("Failed to read the topic configuration", e))?;
+            for e in resource.entries {
+                let source = match e.source {
+                    ConfigSource::DynamicTopic => "topic",
+                    ConfigSource::Default => "default",
+                    ConfigSource::Unknown if e.is_default => "default",
+                    ConfigSource::Unknown => "topic",
+                    _ => "broker",
+                };
+                out.push(KafkaConfigEntry {
+                    source: source.to_string(),
+                    name: e.name,
+                    value: e.value,
+                    is_default: e.is_default,
+                    is_read_only: e.is_read_only,
+                    is_sensitive: e.is_sensitive,
+                });
+            }
+        }
+        out.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(out)
+    }
+
+    /// Change topic settings. `changes`: Some(value) = set, None = back to the default.
+    /// Keeps every other value already set on the topic (see [`merge_topic_config`]).
+    pub async fn alter_topic_configs(&self, topic: &str, changes: HashMap<String, Option<String>>) -> Result<(), QueryError> {
+        let current = self.topic_configs(topic).await?;
+        let merged = merge_topic_config(&current, &changes);
+        let admin: AdminClient<DefaultClientContext> =
+            self.config.create().map_err(|e| err("Failed to create admin client", e))?;
+        let opts = AdminOptions::new().request_timeout(Some(Duration::from_secs(30)));
+        let mut alter = AlterConfig::new(ResourceSpecifier::Topic(topic));
+        for (k, v) in &merged {
+            alter = alter.set(k, v);
+        }
+        let res = admin
+            .alter_configs([&alter], &opts)
+            .await
+            .map_err(|e| err("Failed to change the topic configuration", e))?;
+        for r in res {
+            r.map_err(|(_, code)| err("Kafka refused the configuration change", code))?;
+        }
+        Ok(())
+    }
+
+    /// Delete a consumer group (its committed positions). Kafka refuses while the
+    /// group still has running consumers.
+    pub async fn delete_group(&self, group: &str) -> Result<(), QueryError> {
+        let admin: AdminClient<DefaultClientContext> =
+            self.config.create().map_err(|e| err("Failed to create admin client", e))?;
+        let opts = AdminOptions::new().request_timeout(Some(Duration::from_secs(30)));
+        let res = admin
+            .delete_groups(&[group], &opts)
+            .await
+            .map_err(|e| err("Failed to delete the group", e))?;
+        for r in res {
+            r.map_err(|(_, code)| {
+                let msg = if code == rdkafka::types::RDKafkaErrorCode::NonEmptyGroup {
+                    "The group still has running consumers. Stop them, then delete the group.".to_string()
+                } else {
+                    format!("Kafka refused to delete the group: {code}")
+                };
+                QueryError::new("kafka", msg, code.to_string())
+            })?;
+        }
+        Ok(())
+    }
+
+    /// Position of the first message at or after `ts` (ms since epoch) in every
+    /// partition of the topic. `None` for a partition = no message that recent.
+    pub async fn offsets_for_time(&self, topic: &str, ts: i64) -> Result<Vec<(i32, Option<i64>)>, QueryError> {
+        let meta = self.consumer.clone();
+        let topic = topic.to_string();
+        tokio::task::spawn_blocking(move || -> Result<Vec<(i32, Option<i64>)>, String> {
+            let md = meta.fetch_metadata(Some(&topic), META_TIMEOUT).map_err(|e| e.to_string())?;
+            let parts: Vec<i32> = md
+                .topics()
+                .iter()
+                .find(|t| t.name() == topic)
+                .map(|t| t.partitions().iter().map(|p| p.id()).collect())
+                .ok_or_else(|| format!("topic '{topic}' not found"))?;
+            let map = offsets_at_time(&meta, &topic, &parts, ts)?;
+            Ok(parts.iter().map(|p| (*p, map.get(p).copied())).collect())
+        })
+        .await
+        .map_err(|e| err("spawn_blocking error", e))?
+        .map_err(|e| err("Failed to find positions for that time", e))
+    }
+}
+
+/// Offset of the first message at or after `ts` (ms since epoch) for each partition
+/// (Kafka ListOffsets by timestamp). A partition with no message that recent answers
+/// "end of log" and is left out — reading from its high watermark returns nothing.
+fn offsets_at_time(meta: &BaseConsumer, topic: &str, parts: &[i32], ts: i64) -> Result<HashMap<i32, i64>, String> {
+    let mut tpl = TopicPartitionList::new();
+    for p in parts {
+        tpl.add_partition_offset(topic, *p, Offset::Offset(ts)).map_err(|e| e.to_string())?;
+    }
+    let found = meta.offsets_for_times(tpl, META_TIMEOUT).map_err(|e| e.to_string())?;
+    let mut out = HashMap::new();
+    for e in found.elements() {
+        if let Some(off) = time_offset(e.offset()) {
+            out.insert(e.partition(), off);
+        }
+    }
+    Ok(out)
+}
+
+/// The position a ListOffsets-by-time answer points to; `None` = "no message that
+/// recent" (Kafka answers end-of-log) or an answer that is not a real position.
+pub fn time_offset(o: Offset) -> Option<i64> {
+    match o {
+        Offset::Offset(n) if n >= 0 => Some(n),
+        _ => None,
+    }
+}
+
+/// One topic configuration entry, as the Configuration page shows it.
+#[derive(Debug, serde::Serialize, Clone, PartialEq)]
+pub struct KafkaConfigEntry {
+    pub name: String,
+    pub value: Option<String>,
+    /// "topic" = set on this topic · "broker" = inherited from the broker · "default"
+    pub source: String,
+    pub is_default: bool,
+    pub is_read_only: bool,
+    pub is_sensitive: bool,
+}
+
+/// What to send to AlterConfigs. That (non-incremental) API **resets every key it is
+/// not given to the default**, so the request must carry every value already set on
+/// the topic plus the user's changes — sending only the edited key would silently wipe
+/// the topic's other settings. `changes`: Some(v) = set, None = back to the default.
+pub fn merge_topic_config(
+    current: &[KafkaConfigEntry],
+    changes: &HashMap<String, Option<String>>,
+) -> Vec<(String, String)> {
+    let mut out: std::collections::BTreeMap<String, String> = current
+        .iter()
+        .filter(|e| e.source == "topic" && !e.is_read_only)
+        .filter_map(|e| e.value.clone().map(|v| (e.name.clone(), v)))
+        .collect();
+    for (k, v) in changes {
+        match v {
+            Some(v) => {
+                out.insert(k.clone(), v.clone());
+            }
+            None => {
+                out.remove(k);
+            }
+        }
+    }
+    out.into_iter().collect()
 }
 
 /// Message consume được (value/key decode UTF-8 lossy; frontend tự pretty JSON).
@@ -883,13 +1080,32 @@ pub struct KafkaMessage {
     pub timestamp: i64,
     pub key: String,
     pub value: String,
+    /// The value's original bytes as base64 — only when they are NOT valid UTF-8,
+    /// so the lossy `value` text cannot stand for them (hex view, binary payloads).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value_b64: Option<String>,
     pub headers: Vec<(String, String)>,
+}
+
+/// A payload as text, plus its raw bytes (base64) when the text is lossy.
+pub fn payload_text(bytes: Option<&[u8]>) -> (String, Option<String>) {
+    use base64::Engine;
+    match bytes {
+        None => (String::new(), None),
+        Some(b) => match std::str::from_utf8(b) {
+            Ok(t) => (t.to_string(), None),
+            Err(_) => (
+                String::from_utf8_lossy(b).into_owned(),
+                Some(base64::engine::general_purpose::STANDARD.encode(b)),
+            ),
+        },
+    }
 }
 
 /// Convert 1 BorrowedMessage (từ StreamConsumer.recv) → KafkaMessage.
 pub fn borrowed_to_message(m: &rdkafka::message::BorrowedMessage) -> KafkaMessage {
     let key = m.key().map(|b| String::from_utf8_lossy(b).into_owned()).unwrap_or_default();
-    let value = m.payload().map(|b| String::from_utf8_lossy(b).into_owned()).unwrap_or_default();
+    let (value, value_b64) = payload_text(m.payload());
     let mut headers = Vec::new();
     if let Some(hs) = m.headers() {
         for i in 0..hs.count() {
@@ -904,6 +1120,7 @@ pub fn borrowed_to_message(m: &rdkafka::message::BorrowedMessage) -> KafkaMessag
         timestamp: m.timestamp().to_millis().unwrap_or(0),
         key,
         value,
+        value_b64,
         headers,
     }
 }
@@ -1020,6 +1237,82 @@ pub struct KafkaTopic {
 
 #[cfg(test)]
 mod tests {
+    use super::{merge_topic_config, payload_text, time_offset, KafkaConfigEntry};
+    use rdkafka::Offset;
+    use std::collections::HashMap;
+
+    #[test]
+    fn binary_payloads_keep_their_original_bytes() {
+        // text stays text, no second copy
+        assert_eq!(payload_text(Some("{\"id\":1}".as_bytes())), ("{\"id\":1}".to_string(), None));
+        assert_eq!(payload_text(Some("Nguyễn".as_bytes())), ("Nguyễn".to_string(), None));
+        assert_eq!(payload_text(None), (String::new(), None));
+        // bytes that are not UTF-8: the text is lossy, the base64 copy is exact
+        let (text, b64) = payload_text(Some(&[0xff, 0x00, 0x41]));
+        assert_eq!(text, "\u{FFFD}\u{0}A");
+        assert_eq!(b64.as_deref(), Some("/wBB"));
+    }
+
+    fn entry(name: &str, value: &str, source: &str) -> KafkaConfigEntry {
+        KafkaConfigEntry {
+            name: name.into(),
+            value: Some(value.into()),
+            source: source.into(),
+            is_default: source == "default",
+            is_read_only: false,
+            is_sensitive: false,
+        }
+    }
+
+    #[test]
+    fn changing_one_setting_keeps_the_others_already_set_on_the_topic() {
+        // AlterConfigs resets every key it is not given: the request must carry the
+        // topic's own values, never broker/default ones, plus the change.
+        let current = vec![
+            entry("cleanup.policy", "compact", "topic"),
+            entry("retention.ms", "604800000", "topic"),
+            entry("segment.bytes", "1073741824", "default"),
+            entry("max.message.bytes", "1048588", "broker"),
+        ];
+        let mut changes = HashMap::new();
+        changes.insert("retention.ms".to_string(), Some("86400000".to_string()));
+        assert_eq!(
+            merge_topic_config(&current, &changes),
+            vec![
+                ("cleanup.policy".to_string(), "compact".to_string()),
+                ("retention.ms".to_string(), "86400000".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn resetting_a_setting_drops_it_and_new_keys_are_added() {
+        let current = vec![entry("retention.ms", "1000", "topic"), entry("cleanup.policy", "compact", "topic")];
+        let mut changes = HashMap::new();
+        changes.insert("retention.ms".to_string(), None);
+        changes.insert("retention.bytes".to_string(), Some("5368709120".to_string()));
+        assert_eq!(
+            merge_topic_config(&current, &changes),
+            vec![
+                ("cleanup.policy".to_string(), "compact".to_string()),
+                ("retention.bytes".to_string(), "5368709120".to_string()),
+            ]
+        );
+        // read-only topic values are never sent back
+        let mut ro = entry("message.format.version", "3.0", "topic");
+        ro.is_read_only = true;
+        assert!(merge_topic_config(&[ro], &HashMap::new()).is_empty());
+    }
+
+    #[test]
+    fn a_time_lookup_with_no_message_that_recent_is_not_a_position() {
+        assert_eq!(time_offset(Offset::Offset(42)), Some(42));
+        assert_eq!(time_offset(Offset::Offset(0)), Some(0));
+        assert_eq!(time_offset(Offset::End), None);
+        assert_eq!(time_offset(Offset::Invalid), None);
+        assert_eq!(time_offset(Offset::Offset(-1)), None);
+    }
+
     fn assignment(topics: &[(&str, &[i32])]) -> Vec<u8> {
         let mut b = vec![0u8, 1]; // version 1
         b.extend((topics.len() as i32).to_be_bytes());

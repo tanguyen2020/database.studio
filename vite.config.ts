@@ -17,6 +17,9 @@ export default defineConfig({
     },
   },
   clearScreen: false,
+  // several dev servers (parallel worktrees sharing one node_modules) must not share
+  // the dependency-optimizer cache — each can point DS_VITE_CACHE at its own folder
+  cacheDir: process.env.DS_VITE_CACHE ?? 'node_modules/.vite',
   server: {
     port: 5173,
     strictPort: true,

@@ -570,3 +570,253 @@ async fn rabbitmq_non_admin_user_gets_a_tag_error_not_an_auth_error() {
     bad.user = "mg".into();
     assert!(RabbitDriver::connect(&bad).await.err().unwrap().message.contains("Authentication failed"));
 }
+
+// ---------------------------------------------------------------------------------------
+// Cluster workspace (SPEC-RABBITMQ-WORKSPACE.md §2/§4): rates, nodes, connections,
+// consumers. A real AMQP 0-9-1 client is needed to open a connection and register a
+// consumer; the crate has no AMQP dependency, so the handful of frames involved are
+// written by hand below (protocol header → Start/StartOk → Tune/TuneOk → Open →
+// Channel.Open → Basic.Qos → Basic.Consume).
+// ---------------------------------------------------------------------------------------
+
+mod amqp {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpStream;
+
+    fn shortstr(b: &mut Vec<u8>, s: &str) {
+        b.push(s.len() as u8);
+        b.extend_from_slice(s.as_bytes());
+    }
+    fn longstr(b: &mut Vec<u8>, s: &[u8]) {
+        b.extend_from_slice(&(s.len() as u32).to_be_bytes());
+        b.extend_from_slice(s);
+    }
+    /// A field table of string values.
+    fn table(entries: &[(&str, &str)]) -> Vec<u8> {
+        let mut body = Vec::new();
+        for (k, v) in entries {
+            shortstr(&mut body, k);
+            body.push(b'S');
+            longstr(&mut body, v.as_bytes());
+        }
+        let mut out = (body.len() as u32).to_be_bytes().to_vec();
+        out.extend(body);
+        out
+    }
+    fn method_frame(channel: u16, class: u16, method: u16, args: &[u8]) -> Vec<u8> {
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&class.to_be_bytes());
+        payload.extend_from_slice(&method.to_be_bytes());
+        payload.extend_from_slice(args);
+        let mut f = vec![1u8];
+        f.extend_from_slice(&channel.to_be_bytes());
+        f.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+        f.extend(payload);
+        f.push(0xCE);
+        f
+    }
+
+    /// Next frame: (type, channel, payload). `None` = the broker closed the socket.
+    pub async fn read_frame(s: &mut TcpStream) -> Option<(u8, u16, Vec<u8>)> {
+        let mut h = [0u8; 7];
+        s.read_exact(&mut h).await.ok()?;
+        let size = u32::from_be_bytes([h[3], h[4], h[5], h[6]]) as usize;
+        let mut p = vec![0u8; size + 1];
+        s.read_exact(&mut p).await.ok()?;
+        assert_eq!(p[size], 0xCE, "frame end");
+        p.truncate(size);
+        Some((h[0], u16::from_be_bytes([h[1], h[2]]), p))
+    }
+
+    /// Wait for one method (skipping heartbeats); returns its arguments.
+    async fn expect(s: &mut TcpStream, class: u16, method: u16) -> Vec<u8> {
+        loop {
+            let (ty, _ch, p) = read_frame(s).await.expect("broker closed the socket during the handshake");
+            if ty == 8 {
+                continue; // heartbeat
+            }
+            assert_eq!(ty, 1, "expected a method frame");
+            let got = (u16::from_be_bytes([p[0], p[1]]), u16::from_be_bytes([p[2], p[3]]));
+            if got == (10, 50) || got == (20, 40) {
+                let text_len = p[6] as usize;
+                panic!("broker closed: {}", String::from_utf8_lossy(&p[7..7 + text_len]));
+            }
+            assert_eq!(got, (class, method), "unexpected AMQP method");
+            return p[4..].to_vec();
+        }
+    }
+
+    /// Open an AMQP connection labelled `connection_name`, one channel with
+    /// `prefetch` and one consumer on `queue`. Returns the socket (kept open by the caller).
+    pub async fn consume(port: u16, user: &str, pass: &str, connection_name: &str, queue: &str, prefetch: u16) -> TcpStream {
+        let mut s = TcpStream::connect(("127.0.0.1", port)).await.expect("AMQP port");
+        s.write_all(b"AMQP\x00\x00\x09\x01").await.unwrap();
+        expect(&mut s, 10, 10).await; // Connection.Start
+
+        let mut args = table(&[("connection_name", connection_name), ("product", "dbstudio-it"), ("platform", "Rust")]);
+        shortstr(&mut args, "PLAIN");
+        longstr(&mut args, format!("\0{user}\0{pass}").as_bytes());
+        shortstr(&mut args, "en_US");
+        s.write_all(&method_frame(0, 10, 11, &args)).await.unwrap(); // StartOk
+
+        let tune = expect(&mut s, 10, 30).await; // Connection.Tune
+        let mut ok = tune[0..6].to_vec(); // channel-max (u16) + frame-max (u32) as proposed
+        ok.extend_from_slice(&0u16.to_be_bytes()); // no heartbeats
+        s.write_all(&method_frame(0, 10, 31, &ok)).await.unwrap(); // TuneOk
+
+        let mut open = Vec::new();
+        shortstr(&mut open, "/");
+        shortstr(&mut open, "");
+        open.push(0);
+        s.write_all(&method_frame(0, 10, 40, &open)).await.unwrap();
+        expect(&mut s, 10, 41).await; // OpenOk
+
+        let mut ch = Vec::new();
+        shortstr(&mut ch, "");
+        s.write_all(&method_frame(1, 20, 10, &ch)).await.unwrap();
+        expect(&mut s, 20, 11).await; // Channel.OpenOk
+
+        let mut qos = 0u32.to_be_bytes().to_vec();
+        qos.extend_from_slice(&prefetch.to_be_bytes());
+        qos.push(0);
+        s.write_all(&method_frame(1, 60, 10, &qos)).await.unwrap();
+        expect(&mut s, 60, 11).await; // Basic.QosOk
+
+        let mut cons = 0u16.to_be_bytes().to_vec();
+        shortstr(&mut cons, queue);
+        shortstr(&mut cons, "it-consumer");
+        cons.push(0); // no-local / no-ack / exclusive / no-wait all false → acks required
+        cons.extend_from_slice(&0u32.to_be_bytes()); // empty arguments table
+        s.write_all(&method_frame(1, 60, 20, &cons)).await.unwrap();
+        expect(&mut s, 60, 21).await; // Basic.ConsumeOk
+        s
+    }
+}
+
+async fn start_with_amqp() -> (ContainerAsync<GenericImage>, u16, u16) {
+    let c = GenericImage::new("rabbitmq", "3.13-management-alpine")
+        .with_exposed_port(15672.tcp())
+        .with_exposed_port(5672.tcp())
+        .with_env_var("RABBITMQ_DEFAULT_USER", USER)
+        .with_env_var("RABBITMQ_DEFAULT_PASS", PASS)
+        .start()
+        .await
+        .expect("start rabbitmq container (Docker daemon must be running)");
+    let http = c.get_host_port_ipv4(15672).await.unwrap();
+    let amqp = c.get_host_port_ipv4(5672).await.unwrap();
+    (c, http, amqp)
+}
+
+/// Every new cluster-workspace command against a real broker: rates appear while
+/// messages flow, nodes report memory/disk against their limits, a connection opened
+/// by a client is listed with its application name and can be closed, a consumer
+/// shows on its queue with its prefetch, and a user without the monitoring tag is
+/// told which tag is missing (not "Authentication failed").
+#[tokio::test]
+async fn rabbitmq_cluster_workspace_rates_nodes_connections_consumers() {
+    let (_c, port, amqp_port) = start_with_amqp().await;
+    let drv = connect(port).await;
+    drv.declare_queue("/", "ws.q", "classic", true, false, json!({})).await.unwrap();
+
+    // ---- rates: publish continuously until the broker reports a rate > 0 ---------------
+    let deadline = Instant::now() + Duration::from_secs(90);
+    loop {
+        for i in 0..20 {
+            drv.publish("/", "", "ws.q", &format!("m{i}"), "string", json!({})).await.unwrap();
+        }
+        let ov = drv.overview().await.unwrap();
+        let q = drv.queue("/", "ws.q").await.unwrap();
+        if ov.publish_rate.unwrap_or(0.0) > 0.0 && q.publish_rate.unwrap_or(0.0) > 0.0 {
+            break;
+        }
+        assert!(Instant::now() < deadline, "no publish rate reported (overview {:?}, queue {:?})", ov.publish_rate, q.publish_rate);
+        tokio::time::sleep(Duration::from_millis(800)).await;
+    }
+    drv.purge_queue("/", "ws.q").await.unwrap();
+
+    // ---- nodes ---------------------------------------------------------------------------
+    let nodes = drv.nodes().await.unwrap();
+    assert!(!nodes.is_empty(), "a broker has at least one node");
+    let n = &nodes[0];
+    assert!(n.running, "{n:?}");
+    assert!(n.mem_used.unwrap_or(0) > 0 && n.mem_limit.unwrap_or(0) > 0, "memory against its limit: {n:?}");
+    assert!(n.disk_free.unwrap_or(0) > 0 && n.disk_free_limit.unwrap_or(0) > 0, "disk against its margin: {n:?}");
+    assert!(!n.mem_alarm && !n.disk_free_alarm, "a fresh broker raises no alarm: {n:?}");
+    assert!(n.uptime_ms.unwrap_or(0) > 0);
+
+    // ---- a client connection + a consumer ----------------------------------------------
+    let mut sock = amqp::consume(amqp_port, USER, PASS, "dbstudio-it-app", "ws.q", 7).await;
+    let deadline = Instant::now() + Duration::from_secs(45);
+    let conn = loop {
+        let list = drv.connections().await.unwrap();
+        if let Some(c) = list.into_iter().find(|c| c.client_name == "dbstudio-it-app") {
+            break c;
+        }
+        assert!(Instant::now() < deadline, "the client connection never appeared");
+        tokio::time::sleep(Duration::from_millis(700)).await;
+    };
+    assert_eq!(conn.user, USER);
+    assert_eq!(conn.vhost, "/");
+    assert_eq!(conn.client_product, "dbstudio-it");
+    assert!(!conn.ssl);
+    assert!(!conn.peer_host.is_empty());
+
+    let deadline = Instant::now() + Duration::from_secs(45);
+    let consumer = loop {
+        let list = drv.consumers("/").await.unwrap();
+        if let Some(k) = list.into_iter().find(|k| k.queue == "ws.q") {
+            break k;
+        }
+        assert!(Instant::now() < deadline, "the consumer never appeared");
+        tokio::time::sleep(Duration::from_millis(700)).await;
+    };
+    assert_eq!(consumer.consumer_tag, "it-consumer");
+    assert_eq!(consumer.prefetch_count, Some(7));
+    assert!(consumer.ack_required);
+    assert_eq!(consumer.connection_name, conn.name, "the consumer joins its connection by name");
+    // and the queue counts it
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while drv.queue("/", "ws.q").await.unwrap().consumers != Some(1) {
+        assert!(Instant::now() < deadline, "queue never reported its consumer");
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+
+    // ---- close it: the client is told, and the broker forgets it -----------------------
+    drv.close_connection(&conn.name, "closed by the integration test").await.unwrap();
+    let closed = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            match amqp::read_frame(&mut sock).await {
+                None => return "eof".to_string(),
+                Some((1, _, p)) if u16::from_be_bytes([p[0], p[1]]) == 10 && u16::from_be_bytes([p[2], p[3]]) == 50 => {
+                    let len = p[6] as usize;
+                    return String::from_utf8_lossy(&p[7..7 + len]).to_string();
+                }
+                Some(_) => continue, // deliveries / heartbeats
+            }
+        }
+    })
+    .await
+    .expect("the client was not disconnected");
+    assert!(closed == "eof" || closed.contains("closed by the integration test"), "{closed}");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while drv.connections().await.unwrap().iter().any(|c| c.name == conn.name) {
+        assert!(Instant::now() < deadline, "the closed connection is still listed");
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    assert!(drv.consumers("/").await.unwrap().iter().all(|k| k.queue != "ws.q"), "its consumer went with it");
+    // closing a connection that no longer exists is reported, not silent
+    assert!(drv.close_connection(&conn.name, "").await.is_err());
+
+    // ---- a user without the monitoring tag: the missing tag is named ------------------
+    drv.create_user("mg2", "pw", &["management".into()]).await.unwrap();
+    drv.set_permission("/", "mg2", ".*", ".*", ".*").await.unwrap();
+    let mut p = params(port, "pw");
+    p.user = "mg2".into();
+    let mg = RabbitDriver::connect(&p).await.expect("mg2 logs in");
+    let m = mg.nodes().await.err().expect("nodes need the monitoring tag").message;
+    assert!(m.contains("'monitoring' tag"), "{m}");
+    assert!(!m.contains("Authentication failed"), "{m}");
+    // what a management user may read still works (its own connections, consumers)
+    assert!(mg.connections().await.is_ok());
+    assert!(mg.consumers("/").await.is_ok());
+}

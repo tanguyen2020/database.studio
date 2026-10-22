@@ -44,7 +44,7 @@ test('explorer bottom toolbar: enabled only when a relational schema is selected
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
 
-test('explorer bottom toolbar: disabled for a non-relational (Kafka) connection', async ({ page }) => {
+test('explorer bottom toolbar: a Kafka connection has no Explorer at all (its workspace tab is the view)', async ({ page }) => {
   const errors: string[] = []
   page.on('pageerror', (e) => errors.push(String(e)))
   await blockRemoteFonts(page)
@@ -55,8 +55,11 @@ test('explorer bottom toolbar: disabled for a non-relational (Kafka) connection'
   await page.getByRole('button', { name: /Events Kafka/ }).first().click()
   await page.waitForTimeout(500)
 
-  // no relational schema node exists for Kafka → all 5 toolbar buttons stay disabled
-  await expect(page.locator('.xbtn.off')).toHaveCount(5)
+  // Kafka has no object tree: the Explorer panel — and its toolbar — step aside,
+  // and the cluster workspace opens instead
+  await expect(page.locator('[data-sidebar-panel="explorer"]')).toHaveCount(0)
+  await expect(page.locator('.xbtn')).toHaveCount(0)
+  await expect(page.locator('[data-stream-shell="kafka"]')).toBeVisible()
 
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })

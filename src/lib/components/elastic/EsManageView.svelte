@@ -354,7 +354,7 @@
                     <button class="eg-btn primary" onclick={save} disabled={busy || !parsed.ok || (!isNew && !dirty)} aria-busy={busy}>{isNew ? `Create ${kind.singular}` : 'Save'}</button>
                   {/if}
                   {#if kind.deletePath && !isNew}
-                    <button class="eg-btn danger" onclick={askDelete} aria-label="Delete {kind.singular}"><EsIcon name="trash" size={13} /></button>
+                    <button class="eg-btn ds-danger-outline" onclick={askDelete} aria-label="Delete {kind.singular}"><EsIcon name="trash" size={13} /></button>
                   {/if}
                 </span>
               </div>
@@ -432,7 +432,7 @@
                           <td class="num">{s.duration_in_millis != null ? `${(s.duration_in_millis / 1000).toFixed(1)} s` : '—'}</td>
                           <td style="text-align:right;white-space:nowrap">
                             <button class="eg-btn" onclick={() => (restoreForm = { snap: s.snapshot, indices: '', renamePattern: '', renameReplacement: '' })}>Restore…</button>
-                            <button class="eg-btn danger" aria-label="Delete snapshot {s.snapshot}" onclick={() => deleteSnapshot(s.snapshot)}><EsIcon name="trash" size={13} /></button>
+                            <button class="eg-btn ds-danger-outline" aria-label="Delete snapshot {s.snapshot}" onclick={() => deleteSnapshot(s.snapshot)}><EsIcon name="trash" size={13} /></button>
                           </td>
                         </tr>
                       {/each}

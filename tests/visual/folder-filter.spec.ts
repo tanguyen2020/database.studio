@@ -27,13 +27,13 @@ test('folder filter: reveal via context menu, narrow, then Clear restores list',
   await expect(page.getByText('current_load').first()).toBeVisible()
 
   // no box until the context-menu action
-  await expect(page.getByPlaceholder('Filter…')).toHaveCount(0)
+  await expect(page.getByPlaceholder('Filter by name')).toHaveCount(0)
   await page.getByText('Functions', { exact: true }).first().click({ button: 'right' })
   await page.waitForTimeout(150)
   await page.getByText('Filter…', { exact: true }).first().click()
   await page.waitForTimeout(150)
 
-  const box = page.getByPlaceholder('Filter…').first()
+  const box = page.getByPlaceholder('Filter by name').first()
   await expect(box).toBeVisible()
   await box.fill('add')
   await page.waitForTimeout(150)
@@ -43,7 +43,7 @@ test('folder filter: reveal via context menu, narrow, then Clear restores list',
   // MANDATORY clear: the "Clear" control removes the filter and restores the list
   await page.locator('[title="Clear filter"]').first().click()
   await page.waitForTimeout(150)
-  await expect(page.getByPlaceholder('Filter…')).toHaveCount(0)
+  await expect(page.getByPlaceholder('Filter by name')).toHaveCount(0)
   await expect(page.getByText('add_one').first()).toBeVisible()
   await expect(page.getByText('current_load').first()).toBeVisible()
 
@@ -60,12 +60,12 @@ test('folder filter: funnel icon on the folder header reveals the box, then clea
   await expect(page.getByText('current_load').first()).toBeVisible()
 
   // no box until the funnel icon is clicked (no right-click needed)
-  await expect(page.getByPlaceholder('Filter…')).toHaveCount(0)
+  await expect(page.getByPlaceholder('Filter by name')).toHaveCount(0)
   const fnRow = page.getByRole('treeitem').filter({ hasText: 'Functions' }).first()
   await fnRow.getByLabel('Filter items').click()
   await page.waitForTimeout(150)
 
-  const box = page.getByPlaceholder('Filter…').first()
+  const box = page.getByPlaceholder('Filter by name').first()
   await expect(box).toBeVisible()
   await box.fill('add')
   await page.waitForTimeout(150)
@@ -75,7 +75,7 @@ test('folder filter: funnel icon on the folder header reveals the box, then clea
   // clicking the icon again (now titled "Clear filter") clears + hides the box
   await fnRow.getByLabel('Filter items').click()
   await page.waitForTimeout(150)
-  await expect(page.getByPlaceholder('Filter…')).toHaveCount(0)
+  await expect(page.getByPlaceholder('Filter by name')).toHaveCount(0)
   await expect(page.getByText('add_one').first()).toBeVisible()
   await expect(page.getByText('current_load').first()).toBeVisible()
 
@@ -107,7 +107,7 @@ for (const f of FOLDERS) {
     await page.waitForTimeout(150)
     await page.getByText('Filter…', { exact: true }).first().click()
     await page.waitForTimeout(150)
-    await page.getByPlaceholder('Filter…').first().fill(f.query)
+    await page.getByPlaceholder('Filter by name').first().fill(f.query)
     await page.waitForTimeout(150)
     await expect(page.getByText(f.kept).first()).toBeVisible()
     await expect(page.getByText(f.hidden)).toHaveCount(0)

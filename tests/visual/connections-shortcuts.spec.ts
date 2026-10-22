@@ -41,7 +41,7 @@ test('connections: keyboard navigation + shortcuts', async ({ page }) => {
   // Ctrl+Shift+K opens the filter box and focuses it.
   await page.keyboard.press('Control+Shift+K')
   await page.waitForTimeout(200)
-  const filter = page.getByPlaceholder('Filter by name, host, database…')
+  const filter = page.getByRole('textbox', { name: 'Search connections by name, host or database' })
   await expect(filter).toBeVisible()
   await expect(filter).toBeFocused()
   await page.keyboard.press('Escape')

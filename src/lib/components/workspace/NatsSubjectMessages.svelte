@@ -16,8 +16,12 @@
 
   interface Props {
     tab: TabState
+    /** inside the NATS workspace's stream details: the panel already names the subject
+     *  (chips), so the title block goes; its Consumers screen is called "Subject
+     *  consumers" there, next to the stream's own Consumers tab */
+    embedded?: boolean
   }
-  let { tab }: Props = $props()
+  let { tab, embedded = false }: Props = $props()
   const stream = $derived((tab.state as { stream?: string }).stream ?? '')
   const subject = $derived((tab.state as { subject?: string }).subject ?? '')
   const accent = $derived(systemMeta('nats').accent)
@@ -235,8 +239,16 @@
     if (!loaded && tab.connectionId) void reload()
   })
   // reload when the sidebar purges this subject's messages (Explorer → Clear messages)
+  // Only a real purge (the tick moving) reloads: the host hands in a fresh `tab`
+  // object whenever its own state changes, which must not reset the page shown.
+  let purgeSeen: number | undefined
   $effect(() => {
-    void explorer.natsMsgTick[`${tab.connectionId}:${stream}:${subject}`]
+    const tick = explorer.natsMsgTick[`${tab.connectionId}:${stream}:${subject}`] ?? 0
+    if (purgeSeen === undefined || tick === purgeSeen) {
+      purgeSeen = tick
+      return
+    }
+    purgeSeen = tick
     if (loaded && tab.connectionId) void reload()
   })
 
@@ -366,6 +378,7 @@
 
 <div class="ds-ws">
   <div class="ds-ws-head">
+    {#if !embedded}
     <span class="ds-ws-icon" style="background:color-mix(in srgb, {accent} 13%, transparent)" aria-hidden="true">
       <img src="/assets/db-nats.svg" width="20" height="20" alt="" style="display:block" />
     </span>
@@ -373,6 +386,7 @@
       <span class="ds-ws-title" title={subject}>{subject}</span>
       <span class="ds-ws-sub">Subject in stream <span style="color:var(--sacc-green);font-weight:600">{stream}</span></span>
     </div>
+    {/if}
     <div class="ds-ws-actions">
       {#if mode === 'messages'}
       <!-- Subject search. Typing filters the fetched rows; a query that is a NATS
@@ -434,8 +448,8 @@
     <span role="tab" tabindex="0" aria-selected={mode === 'messages'} onclick={() => openMode('messages')} onkeydown={(e) => e.key === 'Enter' && openMode('messages')}>
       Messages
     </span>
-    <span role="tab" tabindex="0" aria-selected={mode === 'consumers'} data-testid="consumers-tab" onclick={() => openMode('consumers')} onkeydown={(e) => e.key === 'Enter' && openMode('consumers')}>
-      Consumers
+    <span role="tab" tabindex="0" aria-selected={mode === 'consumers'} data-testid="consumers-tab" onclick={() => openMode('consumers')} onkeydown={(e) => e.key === 'Enter' && openMode('consumers')} title="Consumers that read this subject, and what each has processed">
+      {embedded ? 'Subject consumers' : 'Consumers'}
       {#if streamConsumers !== null}<span class="ds-count">{subjectConsumers.length}</span>{/if}
     </span>
   </div>
@@ -538,7 +552,7 @@
               style="background:{rowBg(m.seq)};cursor:default"
             >
               <td class="ds-num" style="padding:var(--px-7) var(--px-12);color:{cellColor(m.seq, 'var(--muted)')}">{m.seq}</td>
-              <td class="ds-time" style="padding:var(--px-7) var(--px-12);color:{cellColor(m.seq, 'var(--text2)')}">{fmtTime(m.time)}</td>
+              <td class="ds-time" style="padding:var(--px-7) var(--px-12);color:{cellColor(m.seq, 'var(--tbl-cell)')}">{fmtTime(m.time)}</td>
               {#if selCons}
                 {@const st = stateOf(m) ?? 'unknown'}
                 <td style="padding:var(--px-5) var(--px-12)"><span class="ds-state {stateClass(st)}" data-state={st}>{STATE_LABEL[st]}</span></td>

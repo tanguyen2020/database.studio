@@ -22,6 +22,7 @@
     withTrailingEmpty,
     type ArgRow,
   } from '$lib/rabbitmq/arguments'
+  import { createPreview } from '$lib/stream/rabbitmq-arguments'
 
   interface Props {
     connId: string
@@ -60,6 +61,23 @@
   // the default exchange's name is '' — an empty field is "not filled in", not "taken"
   const taken = $derived(!!name.trim() && existing.includes(name.trim()))
   const canAdd = $derived(!!name.trim() && !taken && parsed.ok && !busy)
+  // stream-workspace:rabbitmq — what Add will make, in sentences (rule U9)
+  const preview = $derived(
+    parsed.ok
+      ? createPreview({
+          kind,
+          vhost,
+          name,
+          queueType,
+          exchangeType,
+          durable: durable === 'true',
+          autoDelete: autoDelete === 'true',
+          internal: internal === 'true',
+          args: parsed.args,
+          binds: bindPlan,
+        })
+      : [],
+  )
 
   // Names already in the chosen vhost — declaring an existing one is silently a
   // no-op on the broker (or an "inequivalent arg" error), so say it up front.
@@ -275,6 +293,15 @@
       {/if}
     </div>
 
+    {#if preview.length}
+      <div class="rc-preview" data-testid="create-preview" aria-label="What will be created">
+        <div class="rc-preview-title">What will be created</div>
+        <ul>
+          {#each preview as line, i (i)}<li>{line}</li>{/each}
+        </ul>
+      </div>
+    {/if}
+
     {#if serverError}<div class="rc-err" role="alert" style="margin-top:var(--px-10)">{serverError}</div>{/if}
 
     <div style="display:flex;gap:var(--px-8);justify-content:flex-end;margin-top:var(--px-16)">
@@ -285,6 +312,29 @@
 </div>
 
 <style>
+  .rc-preview {
+    margin-top: var(--px-14);
+    padding: var(--px-10) var(--px-14);
+    border: var(--px-1) solid var(--border2);
+    border-radius: var(--px-10);
+    background: var(--panel);
+  }
+  .rc-preview-title {
+    font-size: var(--px-12);
+    font-weight: 600;
+    color: var(--text2);
+    margin-bottom: var(--px-4);
+  }
+  .rc-preview ul {
+    margin: 0;
+    padding-left: var(--px-18);
+    display: flex;
+    flex-direction: column;
+    gap: var(--px-3);
+    font-size: var(--px-12_5);
+    color: var(--text);
+    line-height: 1.45;
+  }
   .rc-form {
     display: grid;
     grid-template-columns: max-content minmax(0, 1fr);

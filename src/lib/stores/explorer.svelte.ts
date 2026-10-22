@@ -70,7 +70,7 @@ class ExplorerStore {
   }
 
   // RabbitMQ: queue/exchange tabs bump this after publish/purge/delete/declare so
-  // the sidebar's RabbitExplorer re-reads its lists (message counts change).
+  // the RabbitMQ workspace re-reads its lists (message counts change).
   rabbitTick = $state<Record<string, number>>({})
   bumpRabbit(connId: string) {
     this.rabbitTick[connId] = (this.rabbitTick[connId] ?? 0) + 1

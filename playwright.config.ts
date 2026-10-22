@@ -95,6 +95,19 @@ export default defineConfig({
     viewport: { width: 1440, height: 900 },
     deviceScaleFactor: 1,
     colorScheme: 'dark',
+    // Specs written against the full-height Explorer panel (its header, Refresh
+    // and footer) run in the two-panel layout, which keeps that Explorer exactly.
+    // The one sidebar (the app's default) has its own specs that clear this:
+    // `test.use({ storageState: ONE_SIDEBAR })` in tests/visual/helpers.ts.
+    storageState: {
+      cookies: [],
+      origins: [
+        {
+          origin: new URL(process.env.DS_APP_URL ?? 'http://localhost:5173/').origin,
+          localStorage: [{ name: 'sidebar_layout', value: 'left' }],
+        },
+      ],
+    },
   },
   webServer: [
     {

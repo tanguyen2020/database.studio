@@ -184,9 +184,9 @@
     <span
       class="mono"
       title={`Database: ${dbName || '(none)'} · ${schema}.${table}`}
-      style="display:inline-flex;align-items:center;gap:var(--px-5);font-size:var(--px-11_5);font-weight:600;color:{accent};background:color-mix(in srgb, {accent} 14%, transparent);border:var(--px-1) solid color-mix(in srgb, {accent} 45%, transparent);border-radius:var(--px-6);padding:var(--px-2) var(--px-8)"
+      style="display:inline-flex;align-items:center;gap:var(--px-5);font-size:var(--px-11_5);font-weight:600;color:var(--text);background:var(--panel);border:var(--px-1) solid var(--border2);border-radius:var(--px-6);padding:var(--px-2) var(--px-8)"
     >
-      <span style="font-size:var(--px-11)">▤</span>{dbName || 'database'}
+      <span style="font-size:var(--px-11);color:var(--muted)">▤</span>{dbName || 'database'}
     </span>
     <span class="mono" style="color:var(--text2)" title={`${schema}.${table}`}>{schema}.{table}</span>
     <span class="ds-tbtn" aria-expanded={filtersOpen} onclick={() => (filtersOpen = !filtersOpen)} onkeydown={(e) => e.key === 'Enter' && (filtersOpen = !filtersOpen)} role="button" tabindex="0" title="Filter the rows of this table"><Icon name="filter" size={13} />Filters{#if filters.length}<span class="ds-tbtn-badge">{filters.length}</span>{/if}<Icon name="chevron-down" size={12} /></span>

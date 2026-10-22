@@ -35,7 +35,9 @@ test('connections toolbar: ER + DDL enable only when a schema is selected', asyn
   // Generate Scripts → opens the existing scripts popup for that schema
   await page.getByTitle('Generate scripts for public').click()
   await page.waitForTimeout(400)
-  await expect(page.getByRole('dialog').getByText(/Generate Scripts ·/)).toBeVisible()
+  const scripts = page.getByRole('dialog', { name: 'Generate Scripts' })
+  await expect(scripts).toBeVisible()
+  await expect(scripts.locator('.gs-sub')).toContainText('public')
 
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })

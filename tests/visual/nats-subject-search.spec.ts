@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { APP_URL, blockRemoteFonts } from './helpers'
+import { APP_URL, blockRemoteFonts, natsSubjectView } from './helpers'
 
 // Searching a subject means "find the subject I half-remember": matched against
 // subject NAMES, as a PREFIX, ignoring case. NATS filters cannot do that (they are
@@ -25,9 +25,9 @@ test('a partial token, lower-case, finds the subjects that start with it', async
   page.on('pageerror', (e) => errors.push(String(e)))
   await openInbox(page)
 
-  const search = page.getByLabel('Search subject')
+  const search = natsSubjectView(page).getByLabel('Search subject')
   const subjects = async () =>
-    new Set(await page.locator('tbody tr td:nth-child(3)').allInnerTexts())
+    new Set(await natsSubjectView(page).locator('tbody tr td:nth-child(3)').allInnerTexts())
 
   // the browse view holds several subjects
   expect((await subjects()).size).toBeGreaterThan(0)
@@ -38,36 +38,36 @@ test('a partial token, lower-case, finds the subjects that start with it', async
   await page.waitForTimeout(800)
 
   // two subjects start with it → they are listed, the message grid is NOT left up
-  await expect(page.getByText(/2 subjects start with/)).toBeVisible()
-  await expect(page.getByText('_INBOX.opJXokMoF2', { exact: true })).toBeVisible()
-  await expect(page.getByText('_INBOX.opJXokMoF2.1', { exact: true })).toBeVisible()
+  await expect(natsSubjectView(page).getByText(/2 subjects start with/)).toBeVisible()
+  await expect(natsSubjectView(page).getByText('_INBOX.opJXokMoF2', { exact: true })).toBeVisible()
+  await expect(natsSubjectView(page).getByText('_INBOX.opJXokMoF2.1', { exact: true })).toBeVisible()
   // unrelated subjects are gone (this was the bug: they stayed on screen)
-  await expect(page.getByText('_INBOX.SIhRBL845v', { exact: true })).toHaveCount(0)
-  await expect(page.getByText('_INBOX.4iJnssqTsA', { exact: true })).toHaveCount(0)
+  await expect(natsSubjectView(page).getByText('_INBOX.SIhRBL845v', { exact: true })).toHaveCount(0)
+  await expect(natsSubjectView(page).getByText('_INBOX.4iJnssqTsA', { exact: true })).toHaveCount(0)
 
   // picking one browses its messages, filtered by the server
-  await page.getByText('_INBOX.opJXokMoF2.1', { exact: true }).click()
+  await natsSubjectView(page).getByText('_INBOX.opJXokMoF2.1', { exact: true }).click()
   await page.waitForTimeout(800)
-  await expect(page.getByText('filter _INBOX.opJXokMoF2.1')).toBeVisible()
+  await expect(natsSubjectView(page).getByText('filter _INBOX.opJXokMoF2.1')).toBeVisible()
   expect(await subjects()).toEqual(new Set(['_INBOX.opJXokMoF2.1']))
   // and the match count leads back to the list
-  await page.getByRole('button', { name: /2 subjects match/ }).click()
+  await natsSubjectView(page).getByRole('button', { name: /2 subjects match/ }).click()
   await page.waitForTimeout(400)
-  await expect(page.getByText(/2 subjects start with/)).toBeVisible()
+  await expect(natsSubjectView(page).getByText(/2 subjects start with/)).toBeVisible()
 
   expect(errors, 'page errors: ' + errors.join(String.fromCharCode(10))).toEqual([])
 })
 
 test('a single match browses it straight away; no match says so', async ({ page }) => {
   await openInbox(page)
-  const search = page.getByLabel('Search subject')
+  const search = natsSubjectView(page).getByLabel('Search subject')
 
   // unique prefix → straight to that subject's messages
   await search.fill('_inbox.sih')
   await search.press('Enter')
   await page.waitForTimeout(900)
-  await expect(page.getByText('filter _INBOX.SIhRBL845v')).toBeVisible()
-  expect(new Set(await page.locator('tbody tr td:nth-child(3)').allInnerTexts())).toEqual(
+  await expect(natsSubjectView(page).getByText('filter _INBOX.SIhRBL845v')).toBeVisible()
+  expect(new Set(await natsSubjectView(page).locator('tbody tr td:nth-child(3)').allInnerTexts())).toEqual(
     new Set(['_INBOX.SIhRBL845v']),
   )
 
@@ -75,14 +75,14 @@ test('a single match browses it straight away; no match says so', async ({ page 
   await search.fill('_inbox.zzz')
   await search.press('Enter')
   await page.waitForTimeout(900)
-  await expect(page.getByText(/No subject in this stream starts with/)).toBeVisible()
-  await expect(page.locator('tbody tr')).toHaveCount(0)
-  await expect(page.getByText(/subject.* checked/)).toBeVisible() // says how much it covered
+  await expect(natsSubjectView(page).getByText(/No subject in this stream starts with/)).toBeVisible()
+  await expect(natsSubjectView(page).locator('tbody tr')).toHaveCount(0)
+  await expect(natsSubjectView(page).getByText(/subject.* checked/)).toBeVisible() // says how much it covered
 
   // clearing goes back to browsing the stream's own subject
-  await page.getByTitle('Clear search').click()
+  await natsSubjectView(page).getByTitle('Clear search').click()
   await page.waitForTimeout(700)
-  expect(await page.locator('tbody tr').count()).toBeGreaterThan(0)
+  expect(await natsSubjectView(page).locator('tbody tr').count()).toBeGreaterThan(0)
 })
 
 // Clearing a search has to hand back a working search box AND a working browse
@@ -93,38 +93,38 @@ test('clearing a search lets the next one run, including the same query again', 
   page.on('pageerror', (e) => errors.push(String(e)))
   await openInbox(page)
 
-  const search = page.getByLabel('Search subject')
-  const rows = () => page.locator('tbody tr')
-  const clear = () => page.getByTitle('Clear search')
+  const search = natsSubjectView(page).getByLabel('Search subject')
+  const rows = () => natsSubjectView(page).locator('tbody tr')
+  const clear = () => natsSubjectView(page).getByTitle('Clear search')
 
   // search → clear → browse view is back (not an empty grid)
   await search.fill('_inbox.opjxo')
   await search.press('Enter')
   await page.waitForTimeout(800)
-  await expect(page.getByText(/2 subjects start with/)).toBeVisible()
+  await expect(natsSubjectView(page).getByText(/2 subjects start with/)).toBeVisible()
   await clear().click()
   await page.waitForTimeout(800)
   expect(await rows().count()).toBeGreaterThan(0)
-  await expect(page.getByText(/subjects start with/)).toHaveCount(0)
+  await expect(natsSubjectView(page).getByText(/subjects start with/)).toHaveCount(0)
 
   // the SAME query again must run again
   await search.fill('_inbox.opjxo')
   await search.press('Enter')
   await page.waitForTimeout(800)
-  await expect(page.getByText(/2 subjects start with/)).toBeVisible()
+  await expect(natsSubjectView(page).getByText(/2 subjects start with/)).toBeVisible()
 
   // and once more, without clearing in between
   await search.press('Enter')
   await page.waitForTimeout(800)
-  await expect(page.getByText(/2 subjects start with/)).toBeVisible()
+  await expect(natsSubjectView(page).getByText(/2 subjects start with/)).toBeVisible()
 
   // pick one, clear, then browse again — no leftover filter
-  await page.getByText('_INBOX.opJXokMoF2.1', { exact: true }).click()
+  await natsSubjectView(page).getByText('_INBOX.opJXokMoF2.1', { exact: true }).click()
   await page.waitForTimeout(800)
-  await expect(page.getByText('filter _INBOX.opJXokMoF2.1')).toBeVisible()
+  await expect(natsSubjectView(page).getByText('filter _INBOX.opJXokMoF2.1')).toBeVisible()
   await clear().click()
   await page.waitForTimeout(800)
-  await expect(page.getByText(/^filter /)).toHaveCount(0)
+  await expect(natsSubjectView(page).getByText(/^filter /)).toHaveCount(0)
   expect(await rows().count()).toBeGreaterThan(0)
 
   // the path that actually broke: pick a subject → go back to the match list →
@@ -133,11 +133,11 @@ test('clearing a search lets the next one run, including the same query again', 
   await search.fill('_inbox.opjxo')
   await search.press('Enter')
   await page.waitForTimeout(800)
-  await page.getByText('_INBOX.opJXokMoF2.1', { exact: true }).click()
+  await natsSubjectView(page).getByText('_INBOX.opJXokMoF2.1', { exact: true }).click()
   await page.waitForTimeout(800)
-  await page.getByRole('button', { name: /2 subjects match/ }).click()
+  await natsSubjectView(page).getByRole('button', { name: /2 subjects match/ }).click()
   await page.waitForTimeout(400)
-  await expect(page.getByText(/2 subjects start with/)).toBeVisible()
+  await expect(natsSubjectView(page).getByText(/2 subjects start with/)).toBeVisible()
   const pagesBefore = await page.evaluate(
     () => (window as unknown as { __ipcCalls?: Record<string, number> }).__ipcCalls?.nats_js_subject_page ?? 0,
   )
@@ -152,13 +152,13 @@ test('clearing a search lets the next one run, including the same query again', 
     'clearing re-reads the tab subject',
   ).toBeGreaterThan(pagesBefore)
   expect(await rows().count(), 'browsing is back after clearing from the match list').toBeGreaterThan(0)
-  await expect(page.getByRole('button', { name: /subjects match/ })).toHaveCount(0)
+  await expect(natsSubjectView(page).getByRole('button', { name: /subjects match/ })).toHaveCount(0)
 
   // a no-match search followed by a clear also recovers
   await search.fill('_inbox.zzz')
   await search.press('Enter')
   await page.waitForTimeout(800)
-  await expect(page.getByText(/No subject in this stream starts with/)).toBeVisible()
+  await expect(natsSubjectView(page).getByText(/No subject in this stream starts with/)).toBeVisible()
   await clear().click()
   await page.waitForTimeout(800)
   expect(await rows().count()).toBeGreaterThan(0)

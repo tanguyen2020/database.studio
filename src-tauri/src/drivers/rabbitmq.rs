@@ -74,6 +74,16 @@ pub struct RabbitOverview {
     /// x-delayed-message), as the management UI's "Type" dropdown lists them.
     #[serde(default)]
     pub exchange_types: Vec<String>,
+    /// Messages per second published into the broker (`message_stats.publish_details.rate`);
+    /// `None` when the broker reports no rate (stats off, or nothing measured yet).
+    #[serde(default)]
+    pub publish_rate: Option<f64>,
+    /// Messages per second delivered to consumers or fetched (`deliver_get_details.rate`).
+    #[serde(default)]
+    pub deliver_rate: Option<f64>,
+    /// Messages per second acknowledged by consumers (`ack_details.rate`).
+    #[serde(default)]
+    pub ack_rate: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
@@ -95,6 +105,15 @@ pub struct RabbitQueue {
     pub node: String,
     pub policy: String,
     pub arguments: Value,
+    /// Messages per second published into this queue; `None` when not reported.
+    #[serde(default)]
+    pub publish_rate: Option<f64>,
+    /// Messages per second delivered from this queue (deliver + get).
+    #[serde(default)]
+    pub deliver_rate: Option<f64>,
+    /// Messages per second acknowledged on this queue.
+    #[serde(default)]
+    pub ack_rate: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
@@ -274,6 +293,21 @@ fn obj_at(v: &Value, key: &str) -> Value {
     }
 }
 
+/// `message_stats.<stat>_details.rate` — `None` when the broker did not measure it
+/// (no `message_stats` at all, or the stat never happened).
+pub fn stat_rate(v: &Value, stat: &str) -> Option<f64> {
+    v.get("message_stats")?
+        .get(format!("{stat}_details"))?
+        .get("rate")?
+        .as_f64()
+        .filter(|r| r.is_finite())
+}
+
+/// `<field>_details.rate` on the object itself (connection send/recv rates).
+fn own_rate(v: &Value, field: &str) -> Option<f64> {
+    v.get(format!("{field}_details"))?.get("rate")?.as_f64().filter(|r| r.is_finite())
+}
+
 pub fn parse_overview(v: &Value, vhost: &str) -> RabbitOverview {
     let qt = v.get("queue_totals").cloned().unwrap_or(Value::Null);
     let ot = v.get("object_totals").cloned().unwrap_or(Value::Null);
@@ -309,6 +343,9 @@ pub fn parse_overview(v: &Value, vhost: &str) -> RabbitOverview {
             }
             t
         },
+        publish_rate: stat_rate(v, "publish"),
+        deliver_rate: stat_rate(v, "deliver_get"),
+        ack_rate: stat_rate(v, "ack"),
     }
 }
 
@@ -332,6 +369,9 @@ pub fn parse_queue(v: &Value) -> RabbitQueue {
         node: str_at(v, "node"),
         policy: str_at(v, "policy"),
         arguments: obj_at(v, "arguments"),
+        publish_rate: stat_rate(v, "publish"),
+        deliver_rate: stat_rate(v, "deliver_get"),
+        ack_rate: stat_rate(v, "ack"),
     }
 }
 
@@ -495,8 +535,23 @@ impl RabbitDriver {
     }
 
     async fn call(&self, method: Method, segments: &[&str], query: &[(&str, String)], body: Option<Value>) -> Result<(StatusCode, String), QueryError> {
+        self.call_with_headers(method, segments, query, body, &[]).await
+    }
+
+    /// `call` with extra request headers (e.g. `X-Reason` when closing a connection).
+    async fn call_with_headers(
+        &self,
+        method: Method,
+        segments: &[&str],
+        query: &[(&str, String)],
+        body: Option<Value>,
+        headers: &[(&str, String)],
+    ) -> Result<(StatusCode, String), QueryError> {
         let url = api_url(&self.base, segments);
         let mut req = self.client.request(method, url).basic_auth(&self.user, Some(&self.password));
+        for (k, v) in headers {
+            req = req.header(*k, v.as_str());
+        }
         if !query.is_empty() {
             req = req.query(query);
         }
@@ -1142,6 +1197,196 @@ impl RabbitDriver {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Cluster workspace (SPEC-RABBITMQ-WORKSPACE.md §2): nodes, client connections,
+// consumers. Every number is optional — `None` = the broker did not report it,
+// never a made-up 0.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct RabbitNode {
+    pub name: String,
+    /// disc | ram
+    pub node_type: String,
+    pub running: bool,
+    pub mem_used: Option<u64>,
+    /// memory high watermark in bytes ("Memory limit": above it publishers are paused)
+    pub mem_limit: Option<u64>,
+    pub mem_alarm: bool,
+    pub disk_free: Option<u64>,
+    /// disk free limit in bytes ("Disk safety margin": below it publishers are paused)
+    pub disk_free_limit: Option<u64>,
+    pub disk_free_alarm: bool,
+    pub fd_used: Option<u64>,
+    pub fd_total: Option<u64>,
+    pub proc_used: Option<u64>,
+    pub proc_total: Option<u64>,
+    pub sockets_used: Option<u64>,
+    pub sockets_total: Option<u64>,
+    /// milliseconds since the node started
+    pub uptime_ms: Option<u64>,
+    /// nodes this node cannot see (network partition) — empty when healthy
+    pub partitions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct RabbitConnection {
+    /// The broker's id for the connection ("172.17.0.1:51234 -> 172.17.0.2:5672").
+    pub name: String,
+    pub user: String,
+    pub vhost: String,
+    pub node: String,
+    /// client machine (peer host) + port
+    pub peer_host: String,
+    pub peer_port: Option<u64>,
+    /// `client_properties.connection_name` — the application's own label, when set.
+    pub client_name: String,
+    /// `client_properties.product` / `version` / `platform` (e.g. "RabbitMQ" / "5.20.0" / "Java")
+    pub client_product: String,
+    pub client_version: String,
+    pub client_platform: String,
+    pub protocol: String,
+    /// running | blocked | blocking | flow | closing …
+    pub state: String,
+    pub channels: Option<u64>,
+    pub ssl: bool,
+    pub recv_bytes: Option<u64>,
+    pub send_bytes: Option<u64>,
+    /// bytes per second received from / sent to the client
+    pub recv_rate: Option<f64>,
+    pub send_rate: Option<f64>,
+    /// ms since epoch
+    pub connected_at: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct RabbitConsumer {
+    pub queue: String,
+    pub vhost: String,
+    pub consumer_tag: String,
+    /// "Messages held at once" — 0 = no limit
+    pub prefetch_count: Option<u64>,
+    pub ack_required: bool,
+    pub exclusive: bool,
+    /// false = waiting behind a single active consumer
+    pub active: bool,
+    /// up | waiting | single_active (3.8+), empty on older brokers
+    pub activity_status: String,
+    pub channel_name: String,
+    pub channel_number: Option<u64>,
+    /// the connection the channel belongs to (matches `RabbitConnection.name`)
+    pub connection_name: String,
+    pub peer_host: String,
+    pub user: String,
+}
+
+pub fn parse_node(v: &Value) -> RabbitNode {
+    RabbitNode {
+        name: str_at(v, "name"),
+        node_type: str_at(v, "type"),
+        running: bool_at(v, "running"),
+        mem_used: u64_at(v, "mem_used"),
+        mem_limit: u64_at(v, "mem_limit"),
+        mem_alarm: bool_at(v, "mem_alarm"),
+        disk_free: u64_at(v, "disk_free"),
+        disk_free_limit: u64_at(v, "disk_free_limit"),
+        disk_free_alarm: bool_at(v, "disk_free_alarm"),
+        fd_used: u64_at(v, "fd_used"),
+        fd_total: u64_at(v, "fd_total"),
+        proc_used: u64_at(v, "proc_used"),
+        proc_total: u64_at(v, "proc_total"),
+        sockets_used: u64_at(v, "sockets_used"),
+        sockets_total: u64_at(v, "sockets_total"),
+        uptime_ms: u64_at(v, "uptime"),
+        partitions: v
+            .get("partitions")
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
+            .unwrap_or_default(),
+    }
+}
+
+pub fn parse_connection(v: &Value) -> RabbitConnection {
+    let cp = v.get("client_properties").cloned().unwrap_or(Value::Null);
+    RabbitConnection {
+        name: str_at(v, "name"),
+        user: str_at(v, "user"),
+        vhost: str_at(v, "vhost"),
+        node: str_at(v, "node"),
+        peer_host: str_at(v, "peer_host"),
+        peer_port: u64_at(v, "peer_port"),
+        client_name: str_at(&cp, "connection_name"),
+        client_product: str_at(&cp, "product"),
+        client_version: str_at(&cp, "version"),
+        client_platform: str_at(&cp, "platform"),
+        protocol: str_at(v, "protocol"),
+        state: str_at(v, "state"),
+        channels: u64_at(v, "channels"),
+        ssl: bool_at(v, "ssl"),
+        recv_bytes: u64_at(v, "recv_oct"),
+        send_bytes: u64_at(v, "send_oct"),
+        recv_rate: own_rate(v, "recv_oct"),
+        send_rate: own_rate(v, "send_oct"),
+        connected_at: u64_at(v, "connected_at"),
+    }
+}
+
+pub fn parse_consumer(v: &Value) -> RabbitConsumer {
+    let q = v.get("queue").cloned().unwrap_or(Value::Null);
+    let ch = v.get("channel_details").cloned().unwrap_or(Value::Null);
+    let activity = str_at(v, "activity_status");
+    RabbitConsumer {
+        queue: str_at(&q, "name"),
+        vhost: str_at(&q, "vhost"),
+        consumer_tag: str_at(v, "consumer_tag"),
+        prefetch_count: u64_at(v, "prefetch_count"),
+        ack_required: bool_at(v, "ack_required"),
+        exclusive: bool_at(v, "exclusive"),
+        // brokers before 3.8 have no `active` flag: every consumer is active there
+        active: v.get("active").and_then(Value::as_bool).unwrap_or(activity != "waiting"),
+        activity_status: activity,
+        channel_name: str_at(&ch, "name"),
+        channel_number: u64_at(&ch, "number"),
+        connection_name: str_at(&ch, "connection_name"),
+        peer_host: str_at(&ch, "peer_host"),
+        user: str_at(&ch, "user"),
+    }
+}
+
+impl RabbitDriver {
+    /// Every node of the cluster (needs the `monitoring` tag).
+    pub async fn nodes(&self) -> Result<Vec<RabbitNode>, QueryError> {
+        let v = self.get_json(&["nodes"]).await?;
+        let items = v.as_array().map(|a| a.iter().map(parse_node).collect()).unwrap_or_default();
+        Ok(sorted_by_name(items, |n: &RabbitNode| n.name.as_str()))
+    }
+
+    /// Client connections. A `management`-only user sees its own connections only;
+    /// `monitoring` / `administrator` see all of them.
+    pub async fn connections(&self) -> Result<Vec<RabbitConnection>, QueryError> {
+        let v = self.get_json(&["connections"]).await?;
+        let items = v.as_array().map(|a| a.iter().map(parse_connection).collect()).unwrap_or_default();
+        Ok(sorted_by_name(items, |c: &RabbitConnection| c.name.as_str()))
+    }
+
+    /// Force-close a client connection. The application sees the connection drop with
+    /// `reason` (it usually reconnects on its own).
+    pub async fn close_connection(&self, name: &str, reason: &str) -> Result<(), QueryError> {
+        let reason = if reason.trim().is_empty() { "Closed from Database Studio" } else { reason.trim() };
+        self.call_with_headers(Method::DELETE, &["connections", name], &[], None, &[("X-Reason", reason.to_string())])
+            .await
+            .map(|_| ())
+    }
+
+    /// Consumers registered in a vhost (every queue).
+    pub async fn consumers(&self, vhost: &str) -> Result<Vec<RabbitConsumer>, QueryError> {
+        let v = self.get_json(&["consumers", vhost]).await.map_err(|e| vhost_not_found(vhost, e))?;
+        let mut items: Vec<RabbitConsumer> = v.as_array().map(|a| a.iter().map(parse_consumer).collect()).unwrap_or_default();
+        items.sort_by(|a, b| a.queue.cmp(&b.queue).then_with(|| a.consumer_tag.cmp(&b.consumer_tag)));
+        Ok(items)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1299,5 +1544,81 @@ mod tests {
         assert_eq!(o.queues, 2);
         assert_eq!(o.exchanges, 9);
         assert_eq!(o.consumers, 0);
+        // no message_stats → no rate (not a fake 0)
+        assert_eq!(o.publish_rate, None);
+        assert_eq!(q.publish_rate, None);
+    }
+
+    #[test]
+    fn rates_come_from_message_stats_details() {
+        let o = parse_overview(
+            &json!({"message_stats": {
+                "publish": 120, "publish_details": {"rate": 12.4},
+                "deliver_get": 100, "deliver_get_details": {"rate": 9.0},
+                "ack": 90, "ack_details": {"rate": 0.0}
+            }}),
+            "/",
+        );
+        assert_eq!(o.publish_rate, Some(12.4));
+        assert_eq!(o.deliver_rate, Some(9.0));
+        assert_eq!(o.ack_rate, Some(0.0), "a measured 0 stays 0");
+        let q = parse_queue(&json!({"name": "q", "message_stats": {"publish_details": {"rate": 3.5}}}));
+        assert_eq!(q.publish_rate, Some(3.5));
+        assert_eq!(q.deliver_rate, None, "a stat that never happened is unknown");
+        assert_eq!(stat_rate(&json!({"message_stats": {"ack_details": {"rate": "x"}}}), "ack"), None);
+    }
+
+    #[test]
+    fn parses_nodes_connections_and_consumers() {
+        let n = parse_node(&json!({
+            "name": "rabbit@a", "type": "disc", "running": true,
+            "mem_used": 104_857_600u64, "mem_limit": 1_073_741_824u64, "mem_alarm": false,
+            "disk_free": 50_000_000_000u64, "disk_free_limit": 50_000_000u64, "disk_free_alarm": true,
+            "fd_used": 40, "fd_total": 1024, "proc_used": 500, "proc_total": 1_048_576u64,
+            "uptime": 3_600_000u64, "partitions": ["rabbit@b"]
+        }));
+        assert_eq!(n.node_type, "disc");
+        assert!(n.running && n.disk_free_alarm && !n.mem_alarm);
+        assert_eq!(n.mem_limit, Some(1_073_741_824));
+        assert_eq!(n.uptime_ms, Some(3_600_000));
+        assert_eq!(n.partitions, vec!["rabbit@b"]);
+        let stopped = parse_node(&json!({"name": "rabbit@c", "running": false}));
+        assert_eq!(stopped.mem_used, None, "a stopped node reports nothing — keep it unknown");
+
+        let c = parse_connection(&json!({
+            "name": "10.0.0.5:51234 -> 10.0.0.9:5672", "user": "app", "vhost": "/", "node": "rabbit@a",
+            "peer_host": "10.0.0.5", "peer_port": 51234, "protocol": "AMQP 0-9-1", "state": "running",
+            "channels": 2, "ssl": true, "recv_oct": 2048, "send_oct": 4096,
+            "recv_oct_details": {"rate": 1.5}, "connected_at": 1_700_000_000_000u64,
+            "client_properties": {"connection_name": "orders-api", "product": "RabbitMQ", "version": "5.20.0", "platform": "Java"}
+        }));
+        assert_eq!(c.client_name, "orders-api");
+        assert_eq!(c.client_platform, "Java");
+        assert_eq!(c.channels, Some(2));
+        assert!(c.ssl);
+        assert_eq!(c.recv_rate, Some(1.5));
+        assert_eq!(c.send_rate, None);
+        assert_eq!(c.connected_at, Some(1_700_000_000_000));
+
+        let k = parse_consumer(&json!({
+            "consumer_tag": "amq.ctag-1", "prefetch_count": 10, "ack_required": true, "exclusive": false,
+            "active": true, "activity_status": "up",
+            "queue": {"name": "orders", "vhost": "/"},
+            "channel_details": {"name": "10.0.0.5:51234 -> 10.0.0.9:5672 (1)", "number": 1,
+                "connection_name": "10.0.0.5:51234 -> 10.0.0.9:5672", "peer_host": "10.0.0.5", "user": "app"}
+        }));
+        assert_eq!(k.queue, "orders");
+        assert_eq!(k.prefetch_count, Some(10));
+        assert_eq!(k.connection_name, c.name, "a consumer joins its connection by name");
+        assert!(k.active && k.ack_required);
+        // pre-3.8 brokers: no `active` flag → treated as active unless reported waiting
+        assert!(parse_consumer(&json!({"queue": {"name": "q"}})).active);
+        assert!(!parse_consumer(&json!({"queue": {"name": "q"}, "activity_status": "waiting"})).active);
+    }
+
+    #[test]
+    fn a_missing_monitoring_tag_is_named() {
+        let m = describe_error(401, r#"{"error":"not_authorised","reason":"Not monitor user"}"#);
+        assert!(m.contains("'monitoring' tag") && !m.contains("Authentication failed"), "{m}");
     }
 }

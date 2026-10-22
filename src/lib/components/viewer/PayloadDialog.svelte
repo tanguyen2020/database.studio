@@ -11,6 +11,7 @@
   import SystemIcon from '$lib/components/SystemIcon.svelte'
   import { DS_JSON } from '$lib/editor/monarch'
   import { analyzePayload, payloadCount, payloadSize } from '$lib/viewer/payload'
+  import { hexDump } from '$lib/viewer/hex'
   import type { MessageConsumer } from '$lib/stream/consumers'
 
   export interface PayloadFact {
@@ -46,6 +47,12 @@
     ariaLabel?: string
     /** extra sections under the payload (e.g. AMQP properties) */
     children?: Snippet
+    /** the payload's bytes: adds a Hex view (Kafka) */
+    bytes?: Uint8Array
+    /** open on the Hex view (the grid was showing hex, or the payload is binary) */
+    startHex?: boolean
+    /** extra buttons in the footer, before Copy (e.g. "Copy to Produce") */
+    actions?: Snippet
   }
   let {
     title,
@@ -61,6 +68,9 @@
     consumersEmpty = 'Nothing reads this message.',
     ariaLabel,
     children,
+    bytes,
+    startHex = false,
+    actions,
   }: Props = $props()
   const STATE_LABEL = { processed: 'Processed', 'in-flight': 'In flight', pending: 'Pending', unknown: 'Unknown' } as const
 
@@ -68,13 +78,15 @@
   // a JSON object / array opens as a Tree; Formatted and Raw stay one click away
   const canTree = $derived(info.shape === 'object' || info.shape === 'array')
   const firstView = (): 'tree' | 'pretty' => (canTree ? 'tree' : 'pretty')
-  let view = $state<'tree' | 'pretty' | 'raw'>(firstView())
+  // svelte-ignore state_referenced_locally
+  let view = $state<'tree' | 'pretty' | 'raw' | 'hex'>(bytes && startHex ? 'hex' : firstView())
+  const hexText = $derived(bytes && view === 'hex' ? hexDump(bytes) : '')
   const parsed = $derived(canTree ? (JSON.parse(text) as unknown) : null)
   let tree = $state<ReturnType<typeof JsonTree> | null>(null)
   let wrap = $state(true)
   let copied = $state(false)
   let copyTimer: ReturnType<typeof setTimeout> | undefined
-  const shown = $derived(info.isJson && view === 'raw' ? info.raw : info.pretty)
+  const shown = $derived(view === 'hex' ? hexText : info.isJson && view === 'raw' ? info.raw : info.pretty)
   // Tree copies the formatted document (same as Formatted)
 
   async function copyText(t: string) {
@@ -169,25 +181,30 @@
 
     <!-- toolbar -->
     <div class="pd-bar">
-      {#if info.isJson}
+      {#if info.isJson || bytes}
         <div class="ds-seg" role="group" aria-label="Payload view">
+          {#if info.isJson}
           {#if canTree}<span role="button" tabindex="0" aria-pressed={view === 'tree'} onclick={() => (view = 'tree')} onkeydown={(e) => e.key === 'Enter' && (view = 'tree')}>Tree</span>{/if}
           <span role="button" tabindex="0" aria-pressed={view === 'pretty'} onclick={() => (view = 'pretty')} onkeydown={(e) => e.key === 'Enter' && (view = 'pretty')}>Formatted</span>
           <span role="button" tabindex="0" aria-pressed={view === 'raw'} onclick={() => (view = 'raw')} onkeydown={(e) => e.key === 'Enter' && (view = 'raw')}>Raw</span>
+          {:else}
+          <span role="button" tabindex="0" aria-pressed={view !== 'hex'} onclick={() => (view = 'pretty')} onkeydown={(e) => e.key === 'Enter' && (view = 'pretty')}>Text</span>
+          {/if}
+          <span role="button" tabindex="0" aria-pressed={view === 'hex'} title="The bytes as stored, 16 per row" onclick={() => (view = 'hex')} onkeydown={(e) => e.key === 'Enter' && (view = 'hex')}>Hex</span>
         </div>
       {/if}
       {#if view === 'tree'}
         <span role="button" tabindex="0" class="pd-toggle" title="Open every level" onclick={() => tree?.expandAll()} onkeydown={(e) => e.key === 'Enter' && tree?.expandAll()}>Expand all</span>
         <span role="button" tabindex="0" class="pd-toggle" title="Close everything below the top level" onclick={() => tree?.collapseAll()} onkeydown={(e) => e.key === 'Enter' && tree?.collapseAll()}>Collapse all</span>
-      {:else}
+      {:else if view !== 'hex'}
       <span role="button" tabindex="0" class="pd-toggle" aria-pressed={wrap} title="Wrap long lines" onclick={() => (wrap = !wrap)} onkeydown={(e) => e.key === 'Enter' && (wrap = !wrap)}>Wrap</span>
       {/if}
       <span class="pd-chip" class:ok={info.isJson} data-testid="payload-format">{info.isJson ? 'Valid JSON' : info.shape === 'empty' ? 'Empty' : 'Plain text'}</span>
       {#if note}<span class="pd-note">{note}</span>{/if}
       <span class="pd-stats">
         {#if payloadCount(info)}<span>{payloadCount(info)}</span>{/if}
-        <span>{info.lines.toLocaleString('en-US')} line{info.lines === 1 ? '' : 's'}</span>
-        <span>{payloadSize(info.bytes)}</span>
+        {#if view !== 'hex'}<span>{info.lines.toLocaleString('en-US')} line{info.lines === 1 ? '' : 's'}</span>{/if}
+        <span>{payloadSize(bytes ? bytes.length : info.bytes)}</span>
       </span>
     </div>
 
@@ -200,13 +217,13 @@
     <div class="pd-code">
       <CodeView
         value={shown}
-        language={info.isJson ? DS_JSON : 'plaintext'}
+        language={info.isJson && view !== 'hex' ? DS_JSON : 'plaintext'}
         readOnly
         height="auto"
         maxHeight={460}
         minHeight={180}
-        {wrap}
-        lineNumbers
+        wrap={view === 'hex' ? false : wrap}
+        lineNumbers={view !== 'hex'}
         ariaLabel="Payload"
       />
     </div>
@@ -217,6 +234,7 @@
     <!-- footer -->
     <div class="pd-foot">
       <span class="pd-hint">Esc to close</span>
+      {#if actions}{@render actions()}{/if}
       <span onclick={copy} onkeydown={(e) => e.key === 'Enter' && copy()} role="button" tabindex="0" class="pv-btn primary pd-btn" aria-live="polite">{copied ? 'Copied ✓' : 'Copy'}</span>
       <span onclick={onClose} onkeydown={(e) => e.key === 'Enter' && onClose()} role="button" tabindex="0" class="pv-btn pd-btn">Close</span>
     </div>

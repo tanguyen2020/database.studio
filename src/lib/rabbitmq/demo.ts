@@ -7,7 +7,10 @@
 
 import type {
   RabbitBinding,
+  RabbitConnection,
+  RabbitConsumer,
   RabbitExchange,
+  RabbitNode,
   RabbitLiveBatch,
   RabbitLiveStatus,
   RabbitMessage,
@@ -100,8 +103,28 @@ function seed() {
   return {
     vhosts: ['/', 'staging'],
     queues: [
-      queue('/', 'orders.created', 'classic', created, { consumers: 1 }),
-      queue('/', 'orders.dlq', 'quorum', []),
+      queue('/', 'orders.created', 'classic', created, {
+        consumers: 1,
+        // stream-workspace:rabbitmq — readable arguments (TTL, dead-letter, length cap)
+        arguments: { 'x-message-ttl': 86_400_000, 'x-dead-letter-exchange': 'orders.dlx', 'x-max-length': 10_000, 'x-overflow': 'reject-publish' },
+        publish_rate: 4.2,
+        deliver_rate: 3.9,
+        ack_rate: 3.8,
+      }),
+      // stream-workspace:rabbitmq — dead-lettered messages waiting (an "attention" case)
+      queue('/', 'orders.dlq', 'quorum', [
+        msg('{"order_id":990,"error":"payment declined"}', 'order.created.eu', 'orders.dlx', { content_type: 'application/json' }),
+        msg('{"order_id":991,"error":"timeout"}', 'order.created.us', 'orders.dlx', { content_type: 'application/json' }),
+      ], { arguments: { 'x-queue-type': 'quorum', 'x-delivery-limit': 5 } }),
+      // stream-workspace:rabbitmq — many messages in progress for one consumer (stuck worker)
+      queue('/', 'payments.process', 'quorum', [], {
+        consumers: 1,
+        messages_unacknowledged: 1_240,
+        arguments: { 'x-queue-type': 'quorum', 'x-dead-letter-exchange': 'payments.dlx', 'x-delivery-limit': 5 },
+        publish_rate: 2.1,
+        deliver_rate: 0,
+        ack_rate: 0,
+      }),
       queue('/', 'events.audit', 'stream', [msg(enc('{"event":"login"}'), 'events.audit', 'events', {}, 'base64')]),
       queue('/', 'billing.invoices', 'classic', [], { messages: null, messages_ready: null, messages_unacknowledged: null, consumers: null }),
       queue('staging', 'orders.created', 'classic', []),
@@ -148,6 +171,90 @@ function seedAccess() {
   }
 }
 let access = seedAccess()
+
+// ---- stream-workspace:rabbitmq — nodes / client connections / consumers --------------
+// Stateful: closing a connection removes it AND its consumers (the queue's consumer
+// count follows), like on the broker.
+
+/** e2e seam: `?rabbitNoMonitor=1` = the user lacks the 'monitoring' tag, so the
+ *  broker refuses the node list (401 "Not monitor user"). */
+function noMonitor(): boolean {
+  return typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('rabbitNoMonitor') === '1'
+}
+const NOT_MONITOR = "Not allowed — this needs a user with the 'monitoring' tag (the connection's user is logged in, but does not have it)"
+
+function seedWorkspace() {
+  const now = Date.now()
+  const conn = (name: string, app: string, user: string, host: string, platform: string, channels: number, ssl: boolean, agoMin: number): RabbitConnection => ({
+    name,
+    user,
+    vhost: '/',
+    node: 'rabbit@demo',
+    peer_host: host,
+    peer_port: Number(name.split(':')[1]?.split(' ')[0] ?? 0),
+    client_name: app,
+    client_product: platform === 'Java' ? 'RabbitMQ' : 'pika',
+    client_version: platform === 'Java' ? '5.20.0' : '1.3.2',
+    client_platform: platform,
+    protocol: 'AMQP 0-9-1',
+    state: 'running',
+    channels,
+    ssl,
+    recv_bytes: 1_843_200,
+    send_bytes: 4_210_688,
+    recv_rate: 1_250,
+    send_rate: 3_480,
+    connected_at: now - agoMin * 60_000,
+  })
+  const connections: RabbitConnection[] = [
+    conn('10.0.4.21:51234 -> 10.0.9.4:5672', 'orders-api', 'app', '10.0.4.21', 'Java', 2, true, 182),
+    conn('10.0.4.37:40112 -> 10.0.9.4:5672', 'billing-worker', 'app', '10.0.4.37', 'Python', 1, false, 47),
+    conn('10.0.7.5:39001 -> 10.0.9.4:5672', '', 'monitor', '10.0.7.5', 'Python', 1, false, 6),
+  ]
+  const consumers: RabbitConsumer[] = [
+    {
+      queue: 'orders.created',
+      vhost: '/',
+      consumer_tag: 'amq.ctag-Xb3k9Q1',
+      prefetch_count: 10,
+      ack_required: true,
+      exclusive: false,
+      active: true,
+      activity_status: 'up',
+      channel_name: '10.0.4.21:51234 -> 10.0.9.4:5672 (1)',
+      channel_number: 1,
+      connection_name: connections[0].name,
+      peer_host: '10.0.4.21',
+      user: 'app',
+    },
+    {
+      queue: 'payments.process',
+      vhost: '/',
+      consumer_tag: 'billing-worker-1',
+      prefetch_count: 0,
+      ack_required: true,
+      exclusive: false,
+      active: true,
+      activity_status: 'up',
+      channel_name: '10.0.4.37:40112 -> 10.0.9.4:5672 (1)',
+      channel_number: 1,
+      connection_name: connections[1].name,
+      peer_host: '10.0.4.37',
+      user: 'app',
+    },
+  ]
+  return { connections, consumers, publishes: [] as number[] }
+}
+let ws = seedWorkspace()
+
+/** Demo rates: a steady background flow plus whatever was published in the last 10 s. */
+function demoRates() {
+  const now = Date.now()
+  ws.publishes = ws.publishes.filter((t) => now - t < 10_000)
+  const extra = ws.publishes.length / 10
+  const wave = Math.round((Math.sin(now / 20_000) + 1) * 15) / 10
+  return { publish_rate: 8.5 + wave + extra, deliver_rate: 7.9 + wave, ack_rate: 7.6 + wave }
+}
 
 // ---- live sessions (watch = copy · consume = take) --------------------------------------
 
@@ -206,6 +313,7 @@ function bindingMatches(type: string | undefined, bindingKey: string, routingKey
 export function resetRabbitDemo() {
   state = seed()
   access = seedAccess()
+  ws = seedWorkspace() // stream-workspace:rabbitmq
   live.clear()
   subs.clear()
 }
@@ -232,7 +340,11 @@ function view(q: DemoQueue): RabbitQueue {
   // null: that queue models a broker that has not reported stats yet)
   const { msgs, ...rest } = q
   if (rest.messages === null) return rest
-  return { ...rest, messages: msgs.length, messages_ready: msgs.length }
+  // stream-workspace:rabbitmq — total = waiting + in progress; consumers follow the
+  // demo consumer list (closing a connection drops its consumers)
+  const consumers = ws.consumers.filter((c) => c.vhost === q.vhost && c.queue === q.name).length
+  const unacked = consumers ? (rest.messages_unacknowledged ?? 0) : 0
+  return { ...rest, consumers, messages_unacknowledged: unacked, messages: msgs.length + unacked, messages_ready: msgs.length }
 }
 
 function bindingsOf(vhost: string): RabbitBinding[] {
@@ -269,20 +381,23 @@ export function rabbitDemo(cmd: string, args: Record<string, unknown> = {}): unk
   switch (cmd) {
     case 'rabbit_overview': {
       const all = state.queues.reduce((n, q) => n + q.msgs.length, 0)
+      // stream-workspace:rabbitmq — totals follow the stateful connections / consumers
+      const unacked = state.queues.map(view).reduce((n, q) => n + (q.messages_unacknowledged ?? 0), 0)
       return {
         rabbitmq_version: '3.13.7',
         erlang_version: '26.2.5',
         cluster_name: 'rabbit@demo',
         node: 'rabbit@demo',
         management_version: '3.13.7',
-        messages: all,
+        messages: all + unacked,
         messages_ready: all,
-        messages_unacknowledged: 0,
+        messages_unacknowledged: unacked,
         queues: state.queues.length,
         exchanges: state.exchanges.length,
-        connections: 3,
-        channels: 5,
-        consumers: 1,
+        connections: ws.connections.length,
+        channels: ws.connections.reduce((n, c) => n + (c.channels ?? 0), 0),
+        consumers: ws.consumers.length,
+        ...demoRates(),
         // the backend reports the vhost it actually opened on (see resolve_vhost)
         vhost: noRootVhost() ? 'staging' : '/',
         exchange_types: ['direct', 'fanout', 'headers', 'topic', 'x-delayed-message'],
@@ -322,6 +437,7 @@ export function rabbitDemo(cmd: string, args: Record<string, unknown> = {}): unk
       const ex = S(args.exchange)
       const key = S(args.routingKey)
       const targets = route(vhost, ex, key)
+      ws.publishes.push(Date.now()) // stream-workspace:rabbitmq — feeds the demo rate
       const make = () => msg(S(args.payload), key, ex, (args.properties as Record<string, unknown>) ?? {}, S(args.payloadEncoding) || 'string')
       for (const q of targets) {
         // a running consume session takes the message the moment it lands
@@ -525,6 +641,42 @@ export function rabbitDemo(cmd: string, args: Record<string, unknown> = {}): unk
     case 'rabbit_delete_policy':
       access.policies = access.policies.filter((x) => !(x.name === S(args.name) && x.vhost === vhost))
       return null
+    // ---- stream-workspace:rabbitmq — nodes / connections / consumers -------------------
+    case 'rabbit_nodes': {
+      if (noMonitor()) throw new Error(NOT_MONITOR)
+      const node: RabbitNode = {
+        name: 'rabbit@demo',
+        node_type: 'disc',
+        running: true,
+        mem_used: 191_889_408,
+        mem_limit: 1_717_986_918,
+        mem_alarm: false,
+        disk_free: 44_023_414_784,
+        disk_free_limit: 50_000_000,
+        disk_free_alarm: false,
+        fd_used: 64,
+        fd_total: 1_048_576,
+        proc_used: 512,
+        proc_total: 1_048_576,
+        sockets_used: ws.connections.length,
+        sockets_total: 943_629,
+        uptime_ms: 4 * 86_400_000 + 3 * 3_600_000,
+        partitions: [],
+      }
+      return [node]
+    }
+    case 'rabbit_connections':
+      return ws.connections.map((c) => ({ ...c }))
+    case 'rabbit_close_connection': {
+      const name = S(args.name)
+      if (!ws.connections.some((c) => c.name === name)) throw new Error(`Not found — the connection '${name}' is already closed`)
+      ws.connections = ws.connections.filter((c) => c.name !== name)
+      ws.consumers = ws.consumers.filter((c) => c.connection_name !== name)
+      return null
+    }
+    case 'rabbit_consumers':
+      if (noRootVhost() && vhost === '/') throw new Error("Virtual host '/' was not found on this broker (or this user has no access to it).")
+      return ws.consumers.filter((c) => c.vhost === vhost).map((c) => ({ ...c }))
     default:
       throw new Error(`demo: unknown RabbitMQ command ${cmd}`)
   }

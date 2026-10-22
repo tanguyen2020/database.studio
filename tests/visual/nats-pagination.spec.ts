@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { APP_URL, blockRemoteFonts } from './helpers'
+import { APP_URL, blockRemoteFonts, natsSubjectView } from './helpers'
 
 // NATS subject messages are server-paginated newest-first BY CURSOR. The demo
 // subject retains 250 messages spread SPARSELY over the stream (one every 4th
@@ -24,31 +24,31 @@ test('nats subject messages: cursor pagination fills every page on a sparse subj
   await page.getByText('orders.eu', { exact: true }).first().click()
   await page.waitForTimeout(400)
 
-  const firstSeq = () => page.locator('tbody tr').first().locator('td').first()
-  const rows = () => page.locator('[title="Copy full payload"]')
-  const seqs = async () => page.locator('tbody tr td:first-child').allInnerTexts()
+  const firstSeq = () => natsSubjectView(page).locator('tbody tr').first().locator('td').first()
+  const rows = () => natsSubjectView(page).locator('[title="Copy full payload"]')
+  const seqs = async () => natsSubjectView(page).locator('tbody tr td:first-child').allInnerTexts()
 
   // page 1 / 3 of 250 records; newest first → top row is the subject's last seq
-  await expect(page.getByText('Page 1 / 3')).toBeVisible()
-  await expect(page.getByText('250 records').first()).toBeVisible()
+  await expect(natsSubjectView(page).getByText('Page 1 / 3')).toBeVisible()
+  await expect(natsSubjectView(page).getByText('250 records').first()).toBeVisible()
   await expect(firstSeq()).toHaveText('1000')
   await expect(rows()).toHaveCount(100)
   const p1 = await seqs()
 
   // Next → the next 100 OLDER messages of the subject. A full page again (the old
   // sequence-window paging showed only ~25 here), and no overlap with page 1.
-  await page.getByText('Next ▶').click()
+  await natsSubjectView(page).getByText('Next ▶').click()
   await page.waitForTimeout(400)
-  await expect(page.getByText('Page 2 / 3')).toBeVisible()
+  await expect(natsSubjectView(page).getByText('Page 2 / 3')).toBeVisible()
   await expect(rows()).toHaveCount(100)
   await expect(firstSeq()).toHaveText('600')
   const p2 = await seqs()
   expect(p1.filter((s) => p2.includes(s)), 'pages must not overlap').toEqual([])
 
   // Next → last page: the remaining 50
-  await page.getByText('Next ▶').click()
+  await natsSubjectView(page).getByText('Next ▶').click()
   await page.waitForTimeout(400)
-  await expect(page.getByText('Page 3 / 3')).toBeVisible()
+  await expect(natsSubjectView(page).getByText('Page 3 / 3')).toBeVisible()
   await expect(rows()).toHaveCount(50)
   await expect(firstSeq()).toHaveText('200')
   const p3 = await seqs()
@@ -59,15 +59,15 @@ test('nats subject messages: cursor pagination fills every page on a sparse subj
   expect(new Set(all).size, 'no duplicates across pages').toBe(250)
 
   // Prev → back to page 2 (cursor kept, same rows)
-  await page.getByText('◀ Prev').click()
+  await natsSubjectView(page).getByText('◀ Prev').click()
   await page.waitForTimeout(400)
-  await expect(page.getByText('Page 2 / 3')).toBeVisible()
+  await expect(natsSubjectView(page).getByText('Page 2 / 3')).toBeVisible()
   expect(await seqs()).toEqual(p2)
 
   // change page size → back to the newest page with a new page count
-  await page.getByRole('combobox').first().selectOption('50')
+  await natsSubjectView(page).getByRole('combobox').first().selectOption('50')
   await page.waitForTimeout(400)
-  await expect(page.getByText('Page 1 / 5')).toBeVisible()
+  await expect(natsSubjectView(page).getByText('Page 1 / 5')).toBeVisible()
   await expect(firstSeq()).toHaveText('1000')
   await expect(rows()).toHaveCount(50)
 

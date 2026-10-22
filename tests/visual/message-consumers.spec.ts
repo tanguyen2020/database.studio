@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
-import { APP_URL, blockRemoteFonts } from './helpers'
+import { APP_URL, blockRemoteFonts, kafkaTopicView, natsSubjectView, openKafkaTopic } from './helpers'
 
 // A topic / subject tab has two screens — Messages and Consumer groups (Kafka) /
 // Consumers (NATS) — and each loads ITS OWN data only when opened. "View
@@ -20,64 +20,70 @@ async function openNatsSubject(page: Page) {
   await page.getByRole('button', { name: /Messaging NATS/ }).dblclick()
   await page.getByText('ORDERS', { exact: true }).first().dblclick()
   await page.getByText('orders.eu', { exact: true }).first().click()
-  const rows = pane(page).locator('tbody tr')
+  const rows = natsSubjectView(page).locator('tbody tr')
   await expect(rows.first()).toBeVisible({ timeout: 8000 })
   return rows
 }
 
 test('kafka: Messages and Consumer groups are separate screens, each loading its own data', async ({ page }) => {
   await boot(page)
-  await page.getByRole('button', { name: /Events Kafka/ }).dblclick()
-  await page.getByText('payments', { exact: true }).first().click()
-  const rows = pane(page).locator('tbody tr')
+  await openKafkaTopic(page, 'payments')
+  const view = kafkaTopicView(page)
+  const viewStates = () => view.locator('tbody [data-state]').evaluateAll((els) => els.map((e) => e.getAttribute('data-state')))
+  const rows = view.locator('tbody tr')
   await expect(rows.first()).toBeVisible({ timeout: 8000 })
+  // the workspace around the topic reads the group list once for its own
+  // Consumers tab; the Messages screen must not add a single call to it
+  await page.waitForTimeout(300)
+  const groupsBase = await calls(page, 'kafka_consumer_groups')
+  const lagBase = await calls(page, 'kafka_group_lag')
 
   // the Messages screen reads messages only — not a single consumer-group call
-  expect(await calls(page, 'kafka_consumer_groups')).toBe(0)
-  expect(await calls(page, 'kafka_group_lag')).toBe(0)
-  await expect(page.getByRole('columnheader', { name: 'Status' })).toHaveCount(0)
-  await expect(page.getByTestId('consumer-groups')).toHaveCount(0)
+  expect(await calls(page, 'kafka_consumer_groups')).toBe(groupsBase)
+  expect(await calls(page, 'kafka_group_lag')).toBe(lagBase)
+  await expect(view.getByRole('columnheader', { name: 'Status' })).toHaveCount(0)
+  await expect(view.getByTestId('consumer-groups')).toHaveCount(0)
 
   // Consumer groups screen: ONE list call, names + what it already carries
-  await pane(page).getByRole('tab', { name: /Consumer groups/ }).click()
-  await expect(pane(page).getByRole('tab', { name: /Consumer groups/ })).toHaveAttribute('aria-selected', 'true')
-  const list = pane(page).locator('tbody')
+  await view.getByRole('tab', { name: /Consumer groups/ }).click()
+  await expect(view.getByRole('tab', { name: /Consumer groups/ })).toHaveAttribute('aria-selected', 'true')
+  const list = view.locator('tbody')
   await expect(list.locator('[data-group="payment-processor"]')).toBeVisible()
-  expect(await calls(page, 'kafka_consumer_groups')).toBe(1)
-  expect(await calls(page, 'kafka_group_lag')).toBe(0)
+  expect(await calls(page, 'kafka_consumer_groups')).toBe(groupsBase + 1)
+  expect(await calls(page, 'kafka_group_lag')).toBe(lagBase)
   expect(await calls(page, 'kafka_group_topic_lag')).toBe(0)
   // "Reading this topic" = the group whose running members are assigned payments
   await expect(list.locator('[data-group]')).toHaveCount(1)
   await expect(list.locator('[data-group="payment-processor"]')).toContainText('payments')
   // All groups: the idle one and the one on another topic too
-  await pane(page).getByRole('button', { name: /^All groups/ }).click()
+  await view.getByRole('button', { name: /^All groups/ }).click()
   await expect(list.locator('[data-group]')).toHaveCount(3)
   await expect(list.locator('[data-group="audit-log"]')).toContainText('idle')
   // the message grid is not on this screen
-  await expect(pane(page).getByRole('columnheader', { name: 'Offset' })).toHaveCount(0)
+  await expect(view.getByRole('columnheader', { name: 'Offset' })).toHaveCount(0)
   // switching back and forth does not reload the list
-  await pane(page).getByRole('tab', { name: 'Messages' }).click()
-  await pane(page).getByRole('tab', { name: /Consumer groups/ }).click()
-  expect(await calls(page, 'kafka_consumer_groups')).toBe(1)
+  await view.getByRole('tab', { name: 'Messages' }).click()
+  await view.getByRole('tab', { name: /Consumer groups/ }).click()
+  expect(await calls(page, 'kafka_consumer_groups')).toBe(groupsBase + 1)
 
   // View messages on payment-processor → Messages through its eyes; reads its
   // offsets on THIS topic only
   await list.locator('[data-group="payment-processor"]').getByRole('button', { name: 'View messages ›' }).click()
-  await expect(pane(page).getByRole('tab', { name: 'Messages' })).toHaveAttribute('aria-selected', 'true')
-  const bar = page.getByTestId('consumer-groups')
+  await expect(view.getByRole('tab', { name: 'Messages' })).toHaveAttribute('aria-selected', 'true')
+  const bar = view.getByTestId('consumer-groups')
   await expect(bar).toContainText('payment-processor')
   await expect(bar).toContainText('behind')
   expect(await calls(page, 'kafka_group_topic_lag')).toBe(1)
-  expect(await calls(page, 'kafka_group_lag')).toBe(0)
-  await expect(page.getByRole('columnheader', { name: 'Status' })).toBeVisible()
+  expect(await calls(page, 'kafka_group_lag')).toBe(lagBase)
+  await expect(view.getByRole('columnheader', { name: 'Status' })).toBeVisible()
   // committed 15100 on p0 → the newest messages are not processed yet
   await expect(rows.first().locator('[data-state]')).toHaveAttribute('data-state', 'pending')
   const all = await rows.count()
   await bar.getByRole('button', { name: 'Processed', exact: true }).click()
-  await expect(page.getByText('Nothing here for payment-processor')).toBeVisible()
+  await expect(view.getByText('Nothing here for payment-processor')).toBeVisible()
   await bar.getByRole('button', { name: 'Not processed', exact: true }).click()
   await expect(rows).toHaveCount(all)
-  expect((await states(page)).every((s) => s === 'pending')).toBe(true)
+  expect((await viewStates()).every((s) => s === 'pending')).toBe(true)
 
   // the value viewer states the group's verdict
   await rows.first().getByTitle('View value as JSON').click()
@@ -87,30 +93,33 @@ test('kafka: Messages and Consumer groups are separate screens, each loading its
   await dialog.getByRole('button', { name: 'Close', exact: true }).click()
 
   // audit-log (idle, committed 15400) — opened from All groups, it has read everything
-  await pane(page).getByRole('tab', { name: /Consumer groups/ }).click()
+  await view.getByRole('tab', { name: /Consumer groups/ }).click()
   await list.locator('[data-group="audit-log"]').getByRole('button', { name: 'View messages ›' }).click()
   await expect(bar).toContainText('audit-log')
-  await expect.poll(async () => (await states(page)).every((s) => s === 'processed')).toBe(true)
+  await expect.poll(async () => (await viewStates()).every((s) => s === 'processed')).toBe(true)
 
   // × stops viewing as the group
   await bar.getByRole('button', { name: 'Stop viewing as this group' }).click()
-  await expect(page.getByTestId('consumer-groups')).toHaveCount(0)
-  await expect(page.getByRole('columnheader', { name: 'Status' })).toHaveCount(0)
+  await expect(view.getByTestId('consumer-groups')).toHaveCount(0)
+  await expect(view.getByRole('columnheader', { name: 'Status' })).toHaveCount(0)
 })
 
 test('nats: Consumers screen lists the subject’s consumers; View messages shows acked / in flight / pending', async ({ page }) => {
   await boot(page)
   const rows = await openNatsSubject(page)
-  expect(await calls(page, 'nats_js_consumers')).toBe(0)
+  // the stream details next to it count the stream's consumers once; the subject's
+  // Messages screen itself asks for none
+  const consumerCalls = await calls(page, 'nats_js_consumers')
 
-  await pane(page).getByRole('tab', { name: /Consumers/ }).click()
-  const list = pane(page).locator('tbody')
+  await natsSubjectView(page).getByRole('tab', { name: /Subject consumers/ }).click()
+  const list = natsSubjectView(page).locator('tbody')
   await expect(list.locator('[data-consumer="eu-fulfilment"]')).toContainText('orders.eu')
   await expect(list.locator('[data-consumer="audit"]')).toContainText('whole stream')
   // order-processor filters orders.new → not a consumer of orders.eu
   await expect(list.locator('[data-consumer="order-processor"]')).toHaveCount(0)
   await expect(pane(page)).toContainText('1 other consumer(s) of ORDERS')
-  expect(await calls(page, 'nats_js_consumers')).toBe(1)
+  // opening the Subject consumers screen is what loads them (once)
+  expect(await calls(page, 'nats_js_consumers')).toBe(consumerCalls + 1)
 
   // double-click a row = View messages
   await list.locator('[data-consumer="eu-fulfilment"]').dblclick()
@@ -133,11 +142,11 @@ test('nats: dozens of consumers live on their own screen, searchable', async ({ 
   await boot(page, '?manyConsumers=60')
   await openNatsSubject(page)
   // the Messages screen carries no consumer list at all
-  await expect(pane(page).locator('[data-consumer]')).toHaveCount(0)
-  await pane(page).getByRole('tab', { name: /Consumers/ }).click()
-  const list = pane(page).locator('tbody')
+  await expect(natsSubjectView(page).locator('[data-consumer]')).toHaveCount(0)
+  await natsSubjectView(page).getByRole('tab', { name: /Subject consumers/ }).click()
+  const list = natsSubjectView(page).locator('tbody')
   await expect(list.locator('[data-consumer]')).toHaveCount(62) // 60 + eu-fulfilment + audit
-  await expect(pane(page).getByRole('tab', { name: /Consumers/ })).toContainText('62')
+  await expect(natsSubjectView(page).getByRole('tab', { name: /Subject consumers/ })).toContainText('62')
   await pane(page).getByRole('textbox', { name: 'Search consumers' }).fill('service-42')
   await expect(list.locator('[data-consumer]')).toHaveCount(1)
   await expect(pane(page)).toContainText('1 of 62 consumers')

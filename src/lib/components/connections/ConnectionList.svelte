@@ -25,6 +25,83 @@
   import { toasts } from '$lib/stores/toast.svelte'
   import { ui } from '$lib/stores/ui.svelte'
   import type { ProfilePublic } from '$lib/types'
+  import ObjectExplorer from '$lib/components/explorer/ObjectExplorer.svelte'
+  import { opensWorkspace } from '$lib/stream/workspace-systems'
+
+  interface Props {
+    /** One sidebar mode: each connection opens in place into its own object tree
+     *  (database → schema → tables…), several at a time. */
+    unified?: boolean
+  }
+  let { unified = false }: Props = $props()
+  /** The list fills its panel (two-panel layout, or the one sidebar). */
+  const fill = $derived(ui.sidebarSplit || unified)
+
+  /** Connections whose tree is open under their row (one sidebar). Not persisted:
+   *  the app always starts with every tree closed. */
+  let openTrees = $state<Set<string>>(new Set())
+  function setTreeOpen(id: string, open: boolean) {
+    if (openTrees.has(id) === open) return
+    const next = new Set(openTrees)
+    if (open) next.add(id)
+    else {
+      armCollapse()
+      next.delete(id)
+    }
+    openTrees = next
+  }
+  /** Redis · Kafka · NATS · RabbitMQ open as a tab instead of a tree. */
+  const hasTree = (p: ProfilePublic) => !opensWorkspace(p.system)
+  async function toggleTree(p: ProfilePublic) {
+    // the chevron is the user's explicit choice: selecting the row must not let the
+    // auto-open below re-open a tree that was just closed
+    lastAutoOpen = `${p.id}:${!!p.connected}`
+    connections.selectedId = p.id
+    if (!hasTree(p)) {
+      void openOrToggle(p)
+      return
+    }
+    if (openTrees.has(p.id)) {
+      setTreeOpen(p.id, false)
+      return
+    }
+    setTreeOpen(p.id, true)
+    if (!p.connected && !connections.connecting.has(p.id)) await connections.connect(p.id)
+  }
+  // Picking a connection (click, start screen, Command Palette) or connecting it
+  // opens its tree — the one sidebar's equivalent of the Explorer following the
+  // selection. Arrow keys only move the highlight; they never open trees.
+  let skipAutoOpen = false
+  let lastAutoOpen = ''
+  let autoOpenedAt: { id: string; at: number } | null = null
+
+  // One sidebar: double-clicking a connection opens or closes its tree (the chevron is
+  // a small target). A tree that the first click of this double-click just opened stays
+  // open; a connection that is not open yet is connected and opened.
+  function rowDoubleClick(p: ProfilePublic) {
+    if (!unified || !hasTree(p)) return void openOrToggle(p)
+    if (autoOpenedAt && autoOpenedAt.id === p.id && Date.now() - autoOpenedAt.at < 600) {
+      autoOpenedAt = null
+      return
+    }
+    void toggleTree(p)
+  }
+  $effect(() => {
+    if (!unified) return
+    const id = connections.selectedId
+    const live = !!(id && connections.profiles.find((x) => x.id === id)?.connected)
+    untrack(() => {
+      const key = `${id}:${live}`
+      if (key === lastAutoOpen) return
+      lastAutoOpen = key
+      const prof = id ? connections.profiles.find((x) => x.id === id) : undefined
+      if (id && live && !skipAutoOpen && prof && hasTree(prof) && !openTrees.has(id)) {
+        setTreeOpen(id, true)
+        autoOpenedAt = { id, at: Date.now() }
+      }
+      skipAutoOpen = false
+    })
+  })
 
   // Environment badge colors are theme-aware CSS vars (--env-*-bg/fg in app.css):
   // the generated ENV_GEN hex is dark-only, so map the env key → the var suffix and
@@ -136,6 +213,8 @@
 
   function select(p: ProfilePublic) {
     connections.selectedId = p.id
+    // Redis · Kafka · NATS · RabbitMQ: the workspace tab IS the view
+    if (p.connected && opensWorkspace(p.system)) tabs.openStreamWorkspace(p.id)
   }
 
   async function openOrToggle(p: ProfilePublic) {
@@ -143,20 +222,14 @@
     if (!p.connected) await connections.connect(p.id)
     // Redis/NATS: mở workspace chuyên biệt (không phải SQL editor)
     if (connections.byId(p.id)?.connected) {
-      // Redis: key browser lives in the ObjectExplorer sidebar — do NOT open a tab.
-      if (p.system === 'redis') { /* explorer shows keys; open a tab per key on click */ }
-      else if (p.system === 'nats') tabs.openNatsTab(p.id)
-      // Kafka: topics live in the ObjectExplorer sidebar — do NOT open a cluster tab
-      // (click a topic to open its consumer).
-      else if (p.system === 'kafka') { /* explorer shows topics; consumer opens per topic */ }
+      // Redis · Kafka · NATS · RabbitMQ: no object tree — open the cluster workspace
+      if (opensWorkspace(p.system)) tabs.openStreamWorkspace(p.id)
       // Cassandra: CQL editor (tái dùng SQL editor + result grid, title Untitled CQL)
       else if (p.system === 'cassandra') tabs.openSqlTab({ connectionId: p.id, title: 'Untitled CQL' })
       // MongoDB: collections live in the ObjectExplorer sidebar — do NOT open a tab
       // on connect (double-click a collection to open its documents; a mongosh query
       // console is still available via the context menu / New Query).
       else if (p.system === 'mongodb') { /* explorer shows collections; open per collection */ }
-      // RabbitMQ: queues/exchanges live in the ObjectExplorer sidebar — no tab on connect.
-      else if (p.system === 'rabbitmq') { /* explorer shows queues & exchanges */ }
       // Elasticsearch: indices / Stack Management live in the explorer — no tab on connect.
       else if (p.system === 'elasticsearch') { /* explorer shows indices & tools */ }
     }
@@ -344,6 +417,7 @@
     if (list.length === 0) return
     const cur = list.findIndex((p) => p.id === connections.selectedId)
     const next = cur < 0 ? (delta > 0 ? 0 : list.length - 1) : Math.min(list.length - 1, Math.max(0, cur + delta))
+    skipAutoOpen = true
     connections.selectedId = list[next].id
     revealSelected()
   }
@@ -351,6 +425,7 @@
   function selectEdge(last: boolean) {
     const list = visibleProfiles
     if (list.length === 0) return
+    skipAutoOpen = true
     connections.selectedId = list[last ? list.length - 1 : 0].id
     revealSelected()
   }
@@ -369,6 +444,8 @@
   function onListKeydown(e: KeyboardEvent) {
     // A row's own Enter handler runs first and marks the event handled.
     if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return
+    // keys typed inside an open tree belong to that tree
+    if ((e.target as Element | null)?.closest?.('[data-conn-tree]')) return
     const p = selConn
     switch (e.key) {
       case 'ArrowDown':
@@ -406,12 +483,15 @@
       case 'ArrowLeft':
         if (!p) return
         e.preventDefault()
-        setGroupCollapsed(groupKeyOf(p), true)
+        // one sidebar: the first ← closes the connection's tree, the next its group
+        if (unified && openTrees.has(p.id)) setTreeOpen(p.id, false)
+        else setGroupCollapsed(groupKeyOf(p), true)
         break
       case 'ArrowRight':
         if (!p) return
         e.preventDefault()
-        setGroupCollapsed(groupKeyOf(p), false)
+        if (unified && !collapsed.has(groupKeyOf(p)) && !openTrees.has(p.id)) void toggleTree(p)
+        else setGroupCollapsed(groupKeyOf(p), false)
         break
     }
   }
@@ -469,8 +549,9 @@
         class="conn-row"
         class:selected={connections.selectedId === p.id}
         data-conn-id={p.id}
+        aria-expanded={unified && hasTree(p) ? openTrees.has(p.id) : undefined}
         onclick={() => select(p)}
-        ondblclick={() => openOrToggle(p)}
+        ondblclick={() => rowDoubleClick(p)}
         onkeydown={(e) => {
           // Mark handled so the list-level handler doesn't open it twice.
           if (e.key === 'Enter') {
@@ -482,6 +563,18 @@
         tabindex="0"
         style="display:flex;align-items:center;gap:var(--px-9);padding:var(--px-6) var(--px-6) var(--px-6) 0;border-radius:var(--px-7);cursor:pointer;position:relative;margin-bottom:var(--px-1)"
       >
+        {#if unified && hasTree(p)}
+          <span
+            class="conn-chev"
+            onclick={(e) => {
+              e.stopPropagation()
+              void toggleTree(p)
+            }}
+            ondblclick={(e) => e.stopPropagation()}
+            aria-hidden="true"
+            title="{openTrees.has(p.id) ? 'Collapse' : 'Expand'} — or double-click the connection, or press {openTrees.has(p.id) ? '←' : '→'}"
+          ><Chevron open={openTrees.has(p.id)} size={12} /></span>
+        {/if}
         <ConnectionIndicator system={p.system} />
         {#if refreshingId === p.id}
           <span class="conn-refresh-glyph spinning" style="display:inline-flex;flex:none;color:var(--primary);font-size:var(--px-11)" title="Refreshing — reconnecting and reloading the tree"><Icon name="refresh" size={12} /></span>
@@ -492,12 +585,56 @@
         {:else}
           <span style="width:var(--px-7);height:var(--px-7);border-radius:50%;flex:none;background:{p.connected ? systemMeta(p.system).accent : 'var(--sys-orphan-accent)'}" title={p.connected ? `Connected · ${p.latency_ms ?? '–'} ms` : 'Disconnected'}></span>
         {/if}
-        <div style="flex:1;min-width:0" aria-busy={refreshingId === p.id}>
+        <div class="conn-text" style="flex:1;min-width:0" aria-busy={refreshingId === p.id}>
           <div class="conn-name" style="font-weight:500;font-size:var(--px-13);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{p.name}</div>
-          <div class="mono" style="font-size:var(--px-10_5);margin-top:var(--px-1);color:{refreshingId === p.id ? 'var(--primary)' : 'var(--muted)'};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{refreshingId === p.id ? 'Refreshing…' : p.system === 'sqlite' || p.system === 'duckdb' ? p.sqlite_path || ':memory:' : `${p.host}:${p.port}`}</div>
+          <div class="mono conn-sub" style="font-size:var(--px-10_5);margin-top:var(--px-1);color:{refreshingId === p.id ? 'var(--primary)' : 'var(--muted)'};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{refreshingId === p.id ? 'Refreshing…' : p.system === 'sqlite' || p.system === 'duckdb' ? p.sqlite_path || ':memory:' : `${p.host}:${p.port}`}</div>
         </div>
         {#if p.ephemeral}
           <span style="flex:none;margin-right:var(--px-6);font-size:var(--px-8_5);font-weight:700;letter-spacing:.04em;padding:var(--px-1) var(--px-5);border-radius:var(--px-4);background:var(--panel);color:var(--muted);border:var(--px-1) solid var(--border)" title="One-off · not saved">1×</span>
+        {/if}
+        {#if unified && p.connected && hasTree(p)}
+          <span class="conn-acts" aria-hidden="true">
+            {#if p.system !== 'rabbitmq'}
+              <span
+                class="conn-act"
+                onclick={(e) => {
+                  e.stopPropagation()
+                  newQueryConsole(p)
+                }}
+                ondblclick={(e) => e.stopPropagation()}
+                onkeydown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.stopPropagation()
+                    newQueryConsole(p)
+                  }
+                }}
+                role="button"
+                tabindex="-1"
+                aria-label="New query"
+                title="New query"
+              ><Icon name="query" size={12} /></span>
+            {/if}
+            <span
+              class="conn-act"
+              onclick={(e) => {
+                e.stopPropagation()
+                connections.selectedId = p.id
+                setTreeOpen(p.id, true)
+                explorer.bumpReload(p.id)
+              }}
+              ondblclick={(e) => e.stopPropagation()}
+              onkeydown={(e) => {
+                if (e.key === 'Enter') {
+                  e.stopPropagation()
+                  explorer.bumpReload(p.id)
+                }
+              }}
+              role="button"
+              tabindex="-1"
+              aria-label="Refresh tree"
+              title="Refresh — read the tree again"
+            ><Icon name="refresh" size={12} /></span>
+          </span>
         {/if}
         <span style="flex:none;margin-right:var(--px-7);font-size:var(--px-8_5);font-weight:700;letter-spacing:.04em;padding:var(--px-1) var(--px-5);border-radius:var(--px-4);background:var(--env-{envKey(p.env)}-bg);color:var(--env-{envKey(p.env)}-fg)">{envMeta(p.env).label}</span>
       </div>
@@ -559,16 +696,21 @@
       {/if}
     </ContextMenu.Content>
   </ContextMenu.Root>
+  {#if unified && hasTree(p) && openTrees.has(p.id)}
+    <div class="conn-tree" data-conn-tree={p.id}>
+      <ObjectExplorer connId={p.id} embedded />
+    </div>
+  {/if}
 {/snippet}
 
 <div
-  style={ui.sidebarSplit
+  style={fill
     ? 'flex:1;min-height:0;display:flex;flex-direction:column'
     : 'flex:none;border-bottom:var(--px-1) solid var(--border)'}
 >
   <!-- header — dòng 74-76 -->
   <div
-    style={ui.sidebarSplit
+    style={fill
       ? 'flex:none;display:flex;align-items:center;gap:var(--px-8);padding:var(--px-9) var(--px-12) var(--px-5)'
       : 'padding:var(--px-9) var(--px-12) var(--px-5)'}
   >
@@ -621,17 +763,21 @@
 
   <!-- filter box — dòng 88-96 -->
   {#if filterOpen}
-    <div style="flex:none;padding:0 var(--px-10) var(--px-7)">
-      <div style="display:flex;align-items:center;gap:var(--px-6);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-7);padding:var(--px-5) var(--px-8)">
-        <span style="color:var(--muted);font-size:var(--px-12)">⌕</span>
+    <div class="cl-search-row">
+      <label class="ds-search cl-search">
+        <Icon name="search" size={13} />
         <input
           bind:this={filterInput}
           bind:value={connections.filter}
-          placeholder="Filter by name, host, database…"
-          style="border:none;background:transparent;color:var(--text);font-size:var(--px-12);outline:none;width:100%;font-family:inherit"
+          placeholder="Search connections"
+          aria-label="Search connections by name, host or database"
+          spellcheck="false"
+          onkeydown={(e) => e.key === 'Escape' && toggleFilter()}
         />
-        <span onclick={() => (connections.filter = '')} onkeydown={(e) => e.key === 'Enter' && (connections.filter = '')} role="button" tabindex="0" style="cursor:pointer;color:var(--muted);font-size:var(--px-13)">×</span>
-      </div>
+        {#if connections.filter}
+          <button type="button" class="ds-search-clear" onclick={() => { connections.filter = ''; filterInput?.focus() }} aria-label="Clear the search" title="Clear the search"><Icon name="close" size={11} /></button>
+        {/if}
+      </label>
     </div>
   {/if}
 
@@ -643,7 +789,8 @@
     role="tree"
     aria-label="Connections"
     onkeydown={onListKeydown}
-    style="padding:0 var(--px-6) var(--px-8);{ui.sidebarSplit
+    class:cl-wide={unified}
+    style="padding:0 var(--px-6) var(--px-8);{fill
       ? 'flex:1;min-height:0'
       : `height:${ui.connListHeight}px`};overflow:auto;outline:none"
   >
@@ -761,18 +908,87 @@
      clearly over the softened sidebar in BOTH themes (--hover alone was lighter
      than the light-mode sidebar → nearly invisible). Selected is a stronger tint
      + a left accent bar + a bolder name, so it's unmistakable vs. a mere hover. */
+  .conn-chev {
+    width: var(--px-22);
+    flex: none;
+    align-self: stretch;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin: calc(var(--px-6) * -1) calc(var(--px-5) * -1) calc(var(--px-6) * -1) 0;
+    cursor: pointer;
+    color: var(--text2);
+    border-radius: var(--px-4);
+  }
+  .conn-chev:hover {
+    color: var(--text);
+    background: color-mix(in srgb, var(--primary) 14%, transparent);
+  }
+  .conn-acts {
+    flex: none;
+    display: inline-flex;
+    gap: var(--px-2);
+    opacity: 0;
+    transition: opacity 0.12s;
+  }
+  .conn-row:hover .conn-acts,
+  .conn-row.selected .conn-acts,
+  .conn-row:focus-within .conn-acts {
+    opacity: 1;
+  }
+  .conn-act {
+    width: var(--px-20);
+    height: var(--px-20);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--px-5);
+    color: var(--muted);
+  }
+  .conn-act:hover {
+    color: var(--text);
+    background: color-mix(in srgb, var(--primary) 16%, transparent);
+  }
+  .conn-tree {
+    margin: 0 0 var(--px-4) var(--px-10);
+  }
   .conn-row:hover {
     background: color-mix(in srgb, var(--text) 5%, transparent);
   }
   .conn-row.selected {
-    background: color-mix(in srgb, var(--primary) 14%, transparent);
+    background: color-mix(in srgb, var(--text) 8%, transparent);
   }
   .conn-row.selected:hover {
-    background: color-mix(in srgb, var(--primary) 18%, transparent);
+    background: color-mix(in srgb, var(--text) 11%, transparent);
   }
   .conn-row.selected .conn-name {
-    color: var(--primary);
+    color: var(--text);
     font-weight: 600;
+  }
+  .cl-search-row {
+    flex: none;
+    padding: 0 var(--px-10) var(--px-8);
+  }
+  .cl-search {
+    display: flex;
+    width: 100%;
+  }
+  /* one sidebar: every row is as wide as the widest name, so nothing is cut;
+     the list scrolls sideways instead of ending a name with "…" */
+  .cl-wide :global(.conn-row),
+  .cl-wide :global([data-embedded-tree] [role='treeitem']) {
+    width: max-content;
+    min-width: 100%;
+    box-sizing: border-box;
+  }
+  .cl-wide :global(.conn-text) {
+    flex: 1 0 auto !important;
+  }
+  .cl-wide :global(.conn-name),
+  .cl-wide :global(.conn-sub),
+  .cl-wide :global([data-embedded-tree] [role='treeitem'] span) {
+    overflow: visible !important;
+    text-overflow: clip !important;
   }
   /* Category caption (RELATIONAL / DOCUMENT / …) — the quiet outer level. */
   .cat-head {

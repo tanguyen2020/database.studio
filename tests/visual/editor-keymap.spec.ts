@@ -72,5 +72,5 @@ test('Ctrl+Shift+K reaches the app (filter connections) instead of deleting a li
   // the line survives (Monaco's deleteLines would have removed it)…
   await expect(content).toContainText('SELECT 1')
   // …and the app's shortcut ran: the connections filter box is focused
-  await expect(page.getByPlaceholder('Filter by name, host, database…')).toBeFocused()
+  await expect(page.getByRole('textbox', { name: 'Search connections by name, host or database' })).toBeFocused()
 })

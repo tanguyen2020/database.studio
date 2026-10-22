@@ -529,3 +529,45 @@ pub async fn rabbit_delete_policy(state: State<'_, AppState>, conn_id: String, v
     let d = state.registry.rabbit_driver(&conn_id).await?;
     d.delete_policy(&vhost, &name).await.map_err(map)
 }
+
+// ---- cluster workspace (SPEC-RABBITMQ-WORKSPACE.md §2) -------------------------------
+
+/// Cluster nodes: memory / disk against their limits, alarms, uptime.
+#[tauri::command]
+pub async fn rabbit_nodes(state: State<'_, AppState>, conn_id: String) -> Result<Vec<crate::drivers::rabbitmq::RabbitNode>, AppError> {
+    let d = state.registry.rabbit_driver(&conn_id).await?;
+    d.nodes().await.map_err(map)
+}
+
+/// Client connections (applications) open on the broker.
+#[tauri::command]
+pub async fn rabbit_connections(
+    state: State<'_, AppState>,
+    conn_id: String,
+) -> Result<Vec<crate::drivers::rabbitmq::RabbitConnection>, AppError> {
+    let d = state.registry.rabbit_driver(&conn_id).await?;
+    d.connections().await.map_err(map)
+}
+
+/// Force-close one client connection (`name` = the broker's connection name).
+#[tauri::command]
+pub async fn rabbit_close_connection(
+    state: State<'_, AppState>,
+    conn_id: String,
+    name: String,
+    reason: Option<String>,
+) -> Result<(), AppError> {
+    let d = state.registry.rabbit_driver(&conn_id).await?;
+    d.close_connection(&name, reason.as_deref().unwrap_or("")).await.map_err(map)
+}
+
+/// Consumers registered in a vhost (all queues).
+#[tauri::command]
+pub async fn rabbit_consumers(
+    state: State<'_, AppState>,
+    conn_id: String,
+    vhost: String,
+) -> Result<Vec<crate::drivers::rabbitmq::RabbitConsumer>, AppError> {
+    let d = state.registry.rabbit_driver(&conn_id).await?;
+    d.consumers(&vhost).await.map_err(map)
+}

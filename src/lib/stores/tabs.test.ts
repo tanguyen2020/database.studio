@@ -326,6 +326,137 @@ describe('Objects tab — pinned, non-closable singleton', () => {
     await tabs.restore()
     expect(tabs.tabs[0].contentType).toBe('objects')
   })
+
+  it('restore reopens tabs of the removed Redis screens in the Redis workspace', async () => {
+    const legacy = (id: string, contentType: string, state: Record<string, unknown>) =>
+      ({ id, connectionId: null, connectionName: 'Cache Redis', systemType: 'redis', contentType, title: 'old', isPinned: false, isDirty: false, state }) as unknown as TabState
+    vi.mocked(ipc.loadTabs).mockResolvedValueOnce([
+      legacy('k', 'redis-key', { key: 'user:1' }),
+      legacy('p', 'redis-pubsub', {}),
+      legacy('b', 'redis', {}),
+    ] as never)
+    tabs.restored = false
+    await tabs.restore()
+    expect(tabs.tabs.map((t) => t.contentType)).toEqual(['stream-workspace', 'stream-workspace', 'stream-workspace'])
+    expect(tabs.tabs[0].state).toEqual({ section: 'browser', focus: 'user:1' })
+    expect(tabs.tabs[1].state).toEqual({ section: 'pubsub' })
+    expect(tabs.tabs[2].state).toEqual({ section: 'browser' })
+    expect(tabs.tabs[0].title).toBe('Cache Redis')
+  })
+
+  it('a NATS subject opens the stream details of the workspace; old subject tabs follow', async () => {
+    // opening a subject = the workspace on that stream + subject, never a tab per subject
+    const ws = tabs.openNatsSubject('c6', 'ORDERS', 'orders.eu')
+    expect(ws.contentType).toBe('stream-workspace')
+    expect(ws.state).toMatchObject({ section: 'streams', focus: 'ORDERS', sub: 'subjects', subject: 'orders.eu' })
+    const again = tabs.openNatsSubject('c6', 'ORDERS', 'orders.us')
+    expect(again.id).toBe(ws.id)
+    expect(tabs.tabs.filter((t) => t.contentType === 'stream-workspace')).toHaveLength(1)
+    expect(again.state).toMatchObject({ focus: 'ORDERS', subject: 'orders.us' })
+
+    // a subject tab saved by an older version reopens in the workspace
+    vi.mocked(ipc.loadTabs).mockResolvedValueOnce([
+      { id: 's', connectionId: null, connectionName: 'Messaging NATS', systemType: 'nats', contentType: 'nats-subject', title: 'orders.eu · messages', isPinned: false, isDirty: false, state: { stream: 'ORDERS', subject: 'orders.eu' } },
+    ] as never)
+    tabs.restored = false
+    await tabs.restore()
+    expect(tabs.tabs[0].contentType).toBe('stream-workspace')
+    expect(tabs.tabs[0].state).toEqual({ section: 'streams', focus: 'ORDERS', sub: 'subjects', subject: 'orders.eu' })
+    expect(tabs.tabs[0].title).toBe('Messaging NATS')
+
+    // the classic Kafka tab and the separate Schema Registry tab reopen on the workspace
+    vi.mocked(ipc.loadTabs).mockResolvedValueOnce([
+      { id: 'k', connectionId: null, connectionName: 'Events Kafka', systemType: 'kafka', contentType: 'kafka', title: 'Events Kafka · cluster', isPinned: false, isDirty: false, state: {} },
+    ] as never)
+    tabs.restored = false
+    await tabs.restore()
+    expect(tabs.tabs[0].contentType).toBe('stream-workspace')
+    expect(tabs.tabs[0].state).toEqual({ section: 'overview' })
+    vi.mocked(ipc.loadTabs).mockResolvedValueOnce([
+      { id: 'r', connectionId: null, connectionName: 'Events Kafka', systemType: 'kafka', contentType: 'kafka-schema-registry', title: 'Schema Registry', isPinned: false, isDirty: false, state: {} },
+    ] as never)
+    tabs.restored = false
+    await tabs.restore()
+    expect(tabs.tabs[0].contentType).toBe('stream-workspace')
+    expect(tabs.tabs[0].state).toEqual({ section: 'registry' })
+    expect(tabs.tabs[0].title).toBe('Events Kafka')
+
+    // RabbitMQ queue / exchange tabs of an older version reopen in the workspace
+    vi.mocked(ipc.loadTabs).mockResolvedValueOnce([
+      { id: 'q', connectionId: null, connectionName: 'RabbitMQ', systemType: 'rabbitmq', contentType: 'rabbit-queue', title: 'orders · queue', isPinned: false, isDirty: false, state: { vhost: '/', name: 'orders' } },
+    ] as never)
+    tabs.restored = false
+    await tabs.restore()
+    expect(tabs.tabs[0].contentType).toBe('stream-workspace')
+    expect(tabs.tabs[0].state).toEqual({ section: 'queues', focus: 'orders', vhost: '/' })
+    vi.mocked(ipc.loadTabs).mockResolvedValueOnce([
+      { id: 'x', connectionId: null, connectionName: 'RabbitMQ', systemType: 'rabbitmq', contentType: 'rabbit-exchange', title: '(AMQP default) · exchange', isPinned: false, isDirty: false, state: { vhost: '/', name: '' } },
+    ] as never)
+    tabs.restored = false
+    await tabs.restore()
+    expect(tabs.tabs[0].state).toEqual({ section: 'exchanges', focus: '(AMQP default)', vhost: '/' })
+
+    // the classic NATS tab (subscribe / publish / request / object store) reopens on the
+    // workspace's Publish & subscribe section
+    vi.mocked(ipc.loadTabs).mockResolvedValueOnce([
+      { id: 'c', connectionId: null, connectionName: 'Messaging NATS', systemType: 'nats', contentType: 'nats', title: 'Messaging NATS · subjects', isPinned: false, isDirty: false, state: {} },
+    ] as never)
+    tabs.restored = false
+    await tabs.restore()
+    expect(tabs.tabs[0].contentType).toBe('stream-workspace')
+    expect(tabs.tabs[0].state).toEqual({ section: 'messaging' })
+    expect(tabs.tabs[0].title).toBe('Messaging NATS')
+  })
+
+  it('a workspace opened from its connection lands on the messages list and auto-picks; a target does not', async () => {
+    const { connections } = await import('./connections.svelte')
+    const saved = connections.profiles
+    connections.profiles = [
+      { id: 'k1', name: 'K', system: 'kafka' },
+      { id: 'n1', name: 'N', system: 'nats' },
+      { id: 'r1', name: 'R', system: 'rabbitmq' },
+      { id: 'd1', name: 'D', system: 'redis' },
+    ] as never
+    try {
+      expect(tabs.openStreamWorkspace('k1').state).toEqual({ section: 'topics', focus: undefined, autoPick: true })
+      expect(tabs.openStreamWorkspace('n1').state).toEqual({ section: 'streams', focus: undefined, autoPick: true })
+      expect(tabs.openStreamWorkspace('r1').state).toEqual({ section: 'queues', focus: undefined, autoPick: true })
+      expect(tabs.openStreamWorkspace('d1').state).toMatchObject({ section: 'browser' })
+      // reopening an existing tab without a target keeps where the user was
+      const k = tabs.tabs.find((t) => t.connectionId === 'k1')!
+      tabs.patchState(k.id, { section: 'brokers', autoPick: undefined })
+      expect(tabs.openStreamWorkspace('k1').state).toMatchObject({ section: 'brokers' })
+      // an explicit destination (a topic, a section) never auto-picks
+      reset()
+      expect(tabs.openStreamWorkspace('k1', 'groups').state).toEqual({ section: 'groups', focus: undefined })
+    } finally {
+      connections.profiles = saved
+    }
+  })
+
+  it('a Kafka topic opens its Messages / Produce inside the workspace; old topic tabs follow', async () => {
+    // View messages / Produce = the workspace on that topic, never a tab per topic
+    const ws = tabs.openKafkaTool('c5', 'kafka-consumer', 'payments')
+    expect(ws.contentType).toBe('stream-workspace')
+    expect(ws.state).toMatchObject({ section: 'topics', focus: 'payments', sub: 'messages' })
+    const again = tabs.openKafkaTool('c5', 'kafka-producer', 'payments')
+    expect(again.id).toBe(ws.id)
+    expect(again.state).toMatchObject({ focus: 'payments', sub: 'produce' })
+    expect(tabs.tabs.filter((t) => t.contentType === 'stream-workspace')).toHaveLength(1)
+    expect(tabs.tabs.some((t) => (t.contentType as string) === 'kafka-consumer' || (t.contentType as string) === 'kafka-producer')).toBe(false)
+
+    // consumer / producer tabs saved by an older version reopen in the workspace
+    vi.mocked(ipc.loadTabs).mockResolvedValueOnce([
+      { id: 'k', connectionId: null, connectionName: 'Events Kafka', systemType: 'kafka', contentType: 'kafka-consumer', title: 'payments · consume', isPinned: false, isDirty: false, state: { topic: 'payments' } },
+      { id: 'p', connectionId: null, connectionName: 'Events Kafka', systemType: 'kafka', contentType: 'kafka-producer', title: 'Produce', isPinned: false, isDirty: false, state: {} },
+    ] as never)
+    tabs.restored = false
+    await tabs.restore()
+    expect(tabs.tabs.map((t) => t.contentType)).toEqual(['stream-workspace', 'stream-workspace'])
+    expect(tabs.tabs[0].state).toEqual({ section: 'topics', focus: 'payments', sub: 'messages' })
+    expect(tabs.tabs[1].state).toEqual({ section: 'topics' })
+    expect(tabs.tabs[0].title).toBe('Events Kafka')
+  })
 })
 
 // A new Query Editor console must open bound to whatever the Explorer tree points

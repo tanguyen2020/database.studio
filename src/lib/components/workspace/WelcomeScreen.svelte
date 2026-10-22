@@ -12,6 +12,7 @@
   import { palette } from '$lib/stores/palette.svelte'
   import { SYSTEM_ORDER, envMeta, systemMeta } from '$lib/systems'
   import type { ProfilePublic } from '$lib/types'
+  import { opensWorkspace } from '$lib/stream/workspace-systems'
 
   let { pane = 0 }: { pane?: 0 | 1 } = $props()
 
@@ -34,7 +35,9 @@
 
   async function openConnection(p: ProfilePublic) {
     connections.select(p.id)
-    if (!p.connected) await connections.connect(p.id)
+    if (!p.connected && !(await connections.connect(p.id))) return
+    // Redis · Kafka · NATS · RabbitMQ have no object tree — their workspace is the view
+    if (opensWorkspace(p.system)) tabs.openStreamWorkspace(p.id)
   }
   async function queryOn(p: ProfilePublic) {
     connections.select(p.id)

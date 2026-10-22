@@ -312,6 +312,26 @@ impl RedisDriver {
             RedisEditOp::XDel { id } => {
                 let _: i64 = redis::cmd("XDEL").arg(key).arg(id).query_async(c).await.map_err(|e| err("XDEL error", e))?;
             }
+            RedisEditOp::LSetAt { index, expected, value } => {
+                let n: i64 = redis::cmd("EVAL").arg(LSET_AT).arg(1).arg(key).arg(index).arg(expected).arg(value).query_async(c).await.map_err(|e| err("LSET error", e))?;
+                item_result(n)?;
+            }
+            RedisEditOp::LDelAt { index, expected } => {
+                let n: i64 = redis::cmd("EVAL").arg(LDEL_AT).arg(1).arg(key).arg(index).arg(expected).arg(LIST_TOMBSTONE).query_async(c).await.map_err(|e| err("LREM error", e))?;
+                item_result(n)?;
+            }
+            RedisEditOp::HReplace { from, to, value } => {
+                let n: i64 = redis::cmd("EVAL").arg(H_REPLACE).arg(1).arg(key).arg(from).arg(to).arg(value).query_async(c).await.map_err(|e| err("HSET error", e))?;
+                item_result(n)?;
+            }
+            RedisEditOp::SReplace { from, to } => {
+                let n: i64 = redis::cmd("EVAL").arg(S_REPLACE).arg(1).arg(key).arg(from).arg(to).query_async(c).await.map_err(|e| err("SADD error", e))?;
+                item_result(n)?;
+            }
+            RedisEditOp::ZReplace { from, to, score } => {
+                let n: i64 = redis::cmd("EVAL").arg(Z_REPLACE).arg(1).arg(key).arg(from).arg(to).arg(score).query_async(c).await.map_err(|e| err("ZADD error", e))?;
+                item_result(n)?;
+            }
         }
         Ok(())
     }
@@ -382,6 +402,140 @@ impl RedisDriver {
         }
         Ok(())
     }
+
+    // ---- stream-workspace:redis (SPEC-REDIS-BROWSER.md §3) --------------------
+
+    /// `SLOWLOG GET count` plus the server's current threshold / history length
+    /// (`CONFIG GET` — managed Redis may hide it, then those stay `None`).
+    pub async fn slowlog(&mut self, count: usize) -> Result<RedisSlowlog, QueryError> {
+        let raw: redis::Value = redis::cmd("SLOWLOG")
+            .arg("GET")
+            .arg(count.max(1))
+            .query_async(&mut self.conn)
+            .await
+            .map_err(|e| err("SLOWLOG GET error", e))?;
+        let threshold_us = self.config_int("slowlog-log-slower-than").await;
+        let max_len = self.config_int("slowlog-max-len").await;
+        Ok(RedisSlowlog { entries: parse_slowlog(&raw), threshold_us, max_len })
+    }
+
+    /// One integer setting from `CONFIG GET name` (None when hidden / not a number).
+    async fn config_int(&mut self, name: &str) -> Option<i64> {
+        let pairs: Vec<String> = redis::cmd("CONFIG").arg("GET").arg(name).query_async(&mut self.conn).await.ok()?;
+        pairs.get(1)?.trim().parse().ok()
+    }
+
+    /// `INFO` text (the default sections: server, clients, memory, persistence,
+    /// stats, replication, cpu, keyspace…). The command layer groups it.
+    pub async fn info(&mut self) -> Result<String, QueryError> {
+        redis::cmd("INFO").query_async(&mut self.conn).await.map_err(|e| err("INFO error", e))
+    }
+
+    /// Size + encoding of the keys currently on screen: ONE pipeline of
+    /// `MEMORY USAGE k` + `OBJECT ENCODING k` per key. A missing key → both None.
+    /// Some servers forbid one of the two commands (managed Redis); then each is
+    /// retried on its own so the other still comes back.
+    pub async fn key_meta(&mut self, keys: &[String]) -> Result<Vec<RedisKeyMeta>, QueryError> {
+        if keys.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut pipe = redis::pipe();
+        for k in keys {
+            pipe.cmd("MEMORY").arg("USAGE").arg(k);
+            pipe.cmd("OBJECT").arg("ENCODING").arg(k);
+        }
+        let both: Result<Vec<redis::Value>, _> = pipe.query_async(&mut self.conn).await;
+        if let Ok(replies) = both {
+            return Ok(zip_key_meta(keys, &replies));
+        }
+        // Fallback: one command kind per pipeline, each tolerated on its own.
+        let mut mem = redis::pipe();
+        let mut enc = redis::pipe();
+        for k in keys {
+            mem.cmd("MEMORY").arg("USAGE").arg(k);
+            enc.cmd("OBJECT").arg("ENCODING").arg(k);
+        }
+        let mem: Vec<redis::Value> = mem.query_async(&mut self.conn).await.unwrap_or_default();
+        let enc: Vec<redis::Value> = enc.query_async(&mut self.conn).await.unwrap_or_default();
+        let mut interleaved = Vec::with_capacity(keys.len() * 2);
+        for i in 0..keys.len() {
+            interleaved.push(mem.get(i).cloned().unwrap_or(redis::Value::Nil));
+            interleaved.push(enc.get(i).cloned().unwrap_or(redis::Value::Nil));
+        }
+        Ok(zip_key_meta(keys, &interleaved))
+    }
+}
+
+/// One `SLOWLOG GET` entry.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct SlowlogEntry {
+    pub id: i64,
+    /// Unix time (seconds) the command was logged.
+    pub timestamp: i64,
+    /// Execution time in microseconds.
+    pub duration_us: i64,
+    pub args: Vec<String>,
+    /// "ip:port" of the client (Redis 4.0+; empty before).
+    pub client: String,
+    /// CLIENT SETNAME of the client (Redis 4.0+; often empty).
+    pub client_name: String,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct RedisSlowlog {
+    pub entries: Vec<SlowlogEntry>,
+    /// `slowlog-log-slower-than` in µs (-1 = disabled, 0 = log everything).
+    pub threshold_us: Option<i64>,
+    /// `slowlog-max-len` — how many entries the server keeps.
+    pub max_len: Option<i64>,
+}
+
+/// Size and internal encoding of one key (None = key gone / command refused).
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct RedisKeyMeta {
+    pub key: String,
+    pub bytes: Option<u64>,
+    pub encoding: Option<String>,
+}
+
+/// Parse the `SLOWLOG GET` reply: an array of
+/// `[id, timestamp, duration_us, [args…], client_addr?, client_name?]`.
+/// Malformed entries are skipped rather than reported with invented values.
+fn parse_slowlog(raw: &redis::Value) -> Vec<SlowlogEntry> {
+    let redis::Value::Array(entries) = raw else { return Vec::new() };
+    entries
+        .iter()
+        .filter_map(|e| {
+            let redis::Value::Array(f) = e else { return None };
+            let id = as_i64(f.first()?)?;
+            let timestamp = as_i64(f.get(1)?)?;
+            let duration_us = as_i64(f.get(2)?)?;
+            let args = match f.get(3) {
+                Some(redis::Value::Array(a)) => a.iter().map(val_to_string).collect(),
+                _ => Vec::new(),
+            };
+            let client = f.get(4).map(val_to_string).unwrap_or_default();
+            let client_name = f.get(5).map(val_to_string).unwrap_or_default();
+            Some(SlowlogEntry { id, timestamp, duration_us, args, client, client_name })
+        })
+        .collect()
+}
+
+/// Pair each key with `(MEMORY USAGE, OBJECT ENCODING)` at replies (2i, 2i+1).
+/// Nil / missing / non-numeric → None (never a made-up 0).
+fn zip_key_meta(keys: &[String], replies: &[redis::Value]) -> Vec<RedisKeyMeta> {
+    keys.iter()
+        .enumerate()
+        .map(|(i, key)| {
+            let bytes = replies.get(i * 2).and_then(as_i64).filter(|n| *n >= 0).map(|n| n as u64);
+            let encoding = match replies.get(i * 2 + 1) {
+                None | Some(redis::Value::Nil) => None,
+                Some(redis::Value::ServerError(_)) => None,
+                Some(v) => Some(val_to_string(v)).filter(|s| !s.is_empty()),
+            };
+            RedisKeyMeta { key: key.clone(), bytes, encoding }
+        })
+        .collect()
 }
 
 /// Đọc số nguyên từ reply (TTL/DBSIZE trả Int; một số proxy trả bulk string).
@@ -477,6 +631,27 @@ pub struct RedisKeyValue {
     pub value: RedisValue,
 }
 
+// ---- single-item edit scripts (one EVAL each, so a rename never leaves both the old and
+// the new item, nor neither). Reply: 1 = done, -1 = the new name already exists,
+// -2 = the item is no longer where/what it was when read (someone else changed it).
+const LSET_AT: &str = "if redis.call('LINDEX', KEYS[1], ARGV[1]) ~= ARGV[2] then return -2 end redis.call('LSET', KEYS[1], ARGV[1], ARGV[3]) return 1";
+const LDEL_AT: &str = "if redis.call('LINDEX', KEYS[1], ARGV[1]) ~= ARGV[2] then return -2 end redis.call('LSET', KEYS[1], ARGV[1], ARGV[3]) redis.call('LREM', KEYS[1], 1, ARGV[3]) return 1";
+/// Placeholder written into the slot being removed, then removed (count 1) — never a
+/// value an application would store.
+const LIST_TOMBSTONE: &str = "__database_studio_removed_item__";
+const H_REPLACE: &str = "if ARGV[1] ~= ARGV[2] and redis.call('HEXISTS', KEYS[1], ARGV[2]) == 1 then return -1 end if ARGV[1] ~= ARGV[2] and redis.call('HEXISTS', KEYS[1], ARGV[1]) == 0 then return -2 end redis.call('HSET', KEYS[1], ARGV[2], ARGV[3]) if ARGV[1] ~= ARGV[2] then redis.call('HDEL', KEYS[1], ARGV[1]) end return 1";
+const S_REPLACE: &str = "if ARGV[1] == ARGV[2] then return 1 end if redis.call('SISMEMBER', KEYS[1], ARGV[2]) == 1 then return -1 end if redis.call('SISMEMBER', KEYS[1], ARGV[1]) == 0 then return -2 end redis.call('SADD', KEYS[1], ARGV[2]) redis.call('SREM', KEYS[1], ARGV[1]) return 1";
+const Z_REPLACE: &str = "if ARGV[1] ~= ARGV[2] and redis.call('ZSCORE', KEYS[1], ARGV[2]) then return -1 end if not redis.call('ZSCORE', KEYS[1], ARGV[1]) then return -2 end redis.call('ZADD', KEYS[1], ARGV[3], ARGV[2]) if ARGV[1] ~= ARGV[2] then redis.call('ZREM', KEYS[1], ARGV[1]) end return 1";
+
+/// Turn an item-script reply into a plain-language error.
+fn item_result(n: i64) -> Result<(), QueryError> {
+    match n {
+        1 => Ok(()),
+        -1 => Err(QueryError::new("redis", "That name is already used in this key. Pick another one.", "item exists")),
+        _ => Err(QueryError::new("redis", "This item changed on the server since it was read. Refresh the key and try again.", "item changed")),
+    }
+}
+
 /// Thao tác sửa giá trị per-type (từ frontend). tag "op".
 #[derive(Debug, serde::Deserialize)]
 #[serde(tag = "op", rename_all = "camelCase")]
@@ -493,6 +668,18 @@ pub enum RedisEditOp {
     ZRem { member: String },
     XAdd { fields: Vec<(String, String)> },
     XDel { id: String },
+    // ---- single-item edits from the Browser panel (atomic Lua, see ITEM_SCRIPTS) ----
+    /// Change one list item, but only if it still holds `expected` (the list may have
+    /// shifted since it was read — then nothing changes and the user is told).
+    LSetAt { index: i64, expected: String, value: String },
+    /// Remove ONE list item by position (LREM by value would remove every duplicate).
+    LDelAt { index: i64, expected: String },
+    /// Set a hash field, renaming it from `from` (refused if `to` already exists).
+    HReplace { from: String, to: String, value: String },
+    /// Replace a set member (refused if `to` is already a member).
+    SReplace { from: String, to: String },
+    /// Replace a sorted-set member and/or its score (refused if `to` already exists).
+    ZReplace { from: String, to: String, score: f64 },
 }
 
 /// Format redis::Value kiểu RESP cho CLI console (giống redis-cli gọn).
@@ -583,6 +770,54 @@ mod tests {
     #[test]
     fn zip_type_ttl_on_empty_batch_is_empty() {
         assert!(zip_type_ttl(Vec::new(), &[]).is_empty());
+    }
+
+    fn bulk(s: &str) -> Value {
+        Value::BulkString(s.as_bytes().to_vec())
+    }
+
+    #[test]
+    fn slowlog_entries_are_read_field_by_field() {
+        let raw = Value::Array(vec![
+            Value::Array(vec![
+                Value::Int(14),
+                Value::Int(1_700_000_000),
+                Value::Int(15_234),
+                Value::Array(vec![bulk("KEYS"), bulk("*")]),
+                bulk("127.0.0.1:58217"),
+                bulk("worker-1"),
+            ]),
+            // Redis < 4.0: no client fields
+            Value::Array(vec![Value::Int(13), Value::Int(1_699_999_999), Value::Int(12), Value::Array(vec![bulk("GET"), bulk("a")])]),
+            // malformed → skipped, never reported with invented numbers
+            Value::Array(vec![bulk("oops")]),
+        ]);
+        let e = parse_slowlog(&raw);
+        assert_eq!(e.len(), 2);
+        assert_eq!(e[0].id, 14);
+        assert_eq!(e[0].timestamp, 1_700_000_000);
+        assert_eq!(e[0].duration_us, 15_234);
+        assert_eq!(e[0].args, vec!["KEYS".to_string(), "*".to_string()]);
+        assert_eq!(e[0].client, "127.0.0.1:58217");
+        assert_eq!(e[0].client_name, "worker-1");
+        assert_eq!((e[1].client.as_str(), e[1].client_name.as_str()), ("", ""));
+        assert!(parse_slowlog(&Value::Nil).is_empty());
+    }
+
+    #[test]
+    fn key_meta_pairs_size_and_encoding_and_keeps_missing_keys_unknown() {
+        let keys = vec!["a".to_string(), "gone".to_string(), "c".to_string()];
+        let replies = vec![Value::Int(72), bulk("embstr"), Value::Nil, Value::Nil, Value::Int(1024), Value::SimpleString("listpack".into())];
+        let m = zip_key_meta(&keys, &replies);
+        assert_eq!(m[0], RedisKeyMeta { key: "a".into(), bytes: Some(72), encoding: Some("embstr".into()) });
+        assert_eq!(m[1], RedisKeyMeta { key: "gone".into(), bytes: None, encoding: None });
+        assert_eq!(m[2].bytes, Some(1024));
+        assert_eq!(m[2].encoding.as_deref(), Some("listpack"));
+        // short reply (pipeline cut) still yields one row per key, unknown values
+        let short = zip_key_meta(&keys, &[Value::Int(5)]);
+        assert_eq!(short.len(), 3);
+        assert_eq!((short[0].bytes, short[0].encoding.as_deref()), (Some(5), None));
+        assert_eq!(short[2].bytes, None);
     }
 
     #[test]

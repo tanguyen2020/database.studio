@@ -4,6 +4,10 @@
 // so được với prototype. KHÔNG bao giờ chạy trong app Tauri thật.
 
 import type { ProfilePublic, SystemType } from './types'
+import { redisDemo } from './redis/demo' // stream-workspace:redis
+// stream-workspace:nats
+import { natsKvDemo, natsDemoAccount, natsDemoStreamLimits } from './stream/nats-kv-demo'
+import { subjectMatches } from './stream/nats-match'
 import { rabbitDemo, rabbitDemoEnabled } from './rabbitmq/demo'
 import { DUCK_DEMO_ID, duckDemo, duckDemoEnabled, isDuckConn } from './duckdb/demo'
 import { ES_DEMO_ID, esDemo, esDemoEnabled } from './elastic/demo'
@@ -260,6 +264,30 @@ function demoIdent(raw: string): string {
   return [...raw.trim()].filter((c) => !IDENT_PUNCT.has(c)).join('')
 }
 
+// NATS core messaging (demo): one live subscription per connection, like the backend;
+// a publish that matches it is delivered to the listeners, so Publish & subscribe works
+// end to end in the browser demo.
+export interface DemoNatsMsg {
+  conn_id: string
+  subject: string
+  reply: string
+  payload: string
+}
+const natsDemoSubs = new Map<string, string>()
+const natsDemoListeners = new Set<(m: DemoNatsMsg) => void>()
+export function natsDemoListen(cb: (m: DemoNatsMsg) => void): () => void {
+  natsDemoListeners.add(cb)
+  return () => natsDemoListeners.delete(cb)
+}
+// NATS object stores (demo): stateful, so creating and deleting shows in the list
+const natsDemoObjects = new Map<string, { name: string; size: number; chunks: number }[]>([
+  ['uploads', [
+    { name: 'report-2026.pdf', size: 284512, chunks: 3 },
+    { name: 'avatar.png', size: 10240, chunks: 1 },
+  ]],
+  ['backups', []],
+])
+
 let demoNatsStreams: DemoNatsStream[] = [
   { name: 'ORDERS', subjects: ['orders.eu', 'orders.us'], retention: 'Limits', storage: 'File', messages: 1240, bytes: 98304, consumers: 2 },
   { name: 'EVENTS', subjects: ['events.>'], retention: 'WorkQueue', storage: 'Memory', messages: 57, bytes: 8192, consumers: 1 },
@@ -280,6 +308,15 @@ interface DemoKafkaTopic {
   internal: boolean
   partitions: DemoKafkaPartition[]
 }
+/** demo Kafka state changed by the workspace: deleted groups, moved read positions,
+ *  topic settings set on a topic (everything else reads as broker/default). */
+const demoKafkaDeletedGroups = new Set<string>()
+const demoKafkaCommits: Record<string, Record<string, number>> = {}
+const demoKafkaTopicConfig: Record<string, Record<string, string>> = {
+  payments: { 'retention.ms': '604800000', 'cleanup.policy': 'delete' },
+}
+const DEMO_KAFKA_T0 = 1_760_000_000_000
+
 let demoKafkaTopics: DemoKafkaTopic[] = [
   {
     name: 'payments',
@@ -525,6 +562,16 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
   if (duckDemoEnabled() && isDuckConn(args?.connId)) {
     const r = duckDemo(cmd, args ?? {})
     if (r !== undefined) return ok(r)
+  }
+  // stream-workspace:redis — Redis commands come from a stateful mock (redis/demo.ts)
+  // so the Browser's edit / TTL / delete / flush change what the next read returns.
+  if (cmd.startsWith('redis_')) {
+    try {
+      const r = redisDemo(cmd, args ?? {})
+      if (r !== undefined) return ok(r)
+    } catch (e) {
+      return Promise.reject(String((e as Error).message ?? e))
+    }
   }
   switch (cmd) {
     case 'list_connections':
@@ -1340,75 +1387,57 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
         duration_ms: 12,
       })
     }
-    case 'redis_scan': {
-      // A keyspace too large to finish in one capped walk: SCAN keeps handing back a
-      // non-zero cursor (MATCH is applied after the buckets are read), so the explorer
-      // stops at its round cap and must show the partial-scan badge + "Scan more".
-      const pat = (args?.pattern as string) ?? ''
-      if (pat.startsWith('big:')) {
-        const cur = (args?.cursor as number) ?? 0
-        return ok({
-          cursor: cur + 500,
-          dbsize: 200_040,
-          keys: [{ name: `big:${String(cur).padStart(6, '0')}`, key_type: 'string', ttl: -1 }],
-        })
-      }
-      // port key store demo của prototype (user:*, session:*, cache:*)
-      return ok({
-        cursor: 0,
-        dbsize: 6,
-        keys: [
-          { name: 'session:abc123', key_type: 'string', ttl: 42 },
-          { name: 'session:def456', key_type: 'string', ttl: 120 },
-          { name: 'user:1001', key_type: 'hash', ttl: -1 },
-          { name: 'user:1002', key_type: 'hash', ttl: -1 },
-          { name: 'cache:home', key_type: 'string', ttl: 8 },
-          { name: 'leaderboard', key_type: 'zset', ttl: -1 },
-        ],
-      })
-    }
-    case 'redis_get': {
-      const key = (args?.key as string) ?? ''
-      if (key.startsWith('user:'))
-        return ok({ key_type: 'hash', ttl: -1, value: { kind: 'hash', fields: [['name', 'An'], ['email', 'an@acme.io'], ['role', 'admin']] } })
-      if (key === 'leaderboard')
-        return ok({ key_type: 'zset', ttl: -1, value: { kind: 'zset', members: [['an', 980], ['binh', 870], ['chi', 640]] } })
-      return ok({ key_type: 'string', ttl: 42, value: { kind: 'string', value: 'demo-value' } })
-    }
-    case 'redis_del':
-      return ok(1)
-    case 'redis_set_ttl':
-    case 'redis_edit':
-    case 'redis_flushdb':
-    case 'redis_select_db':
-    case 'redis_subscribe':
-    case 'redis_unsubscribe':
-      return ok(null)
-    case 'redis_database_count':
-      return ok(16)
-    case 'redis_publish':
-      return ok(1)
-    case 'redis_command': {
-      const a = (args?.args as string[]) ?? []
-      const cmd = (a[0] ?? '').toUpperCase()
-      if (cmd === 'PING') return ok('PONG')
-      if (cmd === 'GET') return ok('"demo-value"')
-      if (cmd === 'DBSIZE') return ok('(integer) 6')
-      return ok('OK')
-    }
-    case 'redis_memory_usage':
-      return ok(128)
+    // stream-workspace:redis — every redis_* command is answered by redis/demo.ts above.
     case 'nats_info':
       return ok({ version: '2.10.14', server_name: 'nats-demo', host: '10.0.1.9', port: 4222, max_payload: 1048576, client_id: 42, go: 'go1.22' })
     case 'nats_subscribe':
-    case 'nats_unsubscribe':
-    case 'nats_publish':
+      natsDemoSubs.set(String(args?.connId), String(args?.subject ?? ''))
       return ok(null)
+    case 'nats_unsubscribe':
+      natsDemoSubs.delete(String(args?.connId))
+      return ok(null)
+    case 'nats_publish': {
+      const conn = String(args?.connId)
+      const subject = String(args?.subject ?? '')
+      const filter = natsDemoSubs.get(conn)
+      if (filter && subjectMatches(filter, subject)) {
+        const msg: DemoNatsMsg = { conn_id: conn, subject, reply: String(args?.reply ?? ''), payload: String(args?.payload ?? '') }
+        setTimeout(() => natsDemoListeners.forEach((l) => l(msg)), 0)
+      }
+      return ok(null)
+    }
     case 'nats_request':
       return ok('{"ok":true,"demo":"reply"}')
     case 'nats_js_streams':
-      return ok(demoNatsStreams.map((s) => ({ ...s, subjects: [...s.subjects] })))
+      // stream-workspace:nats — plus the retention limits the Streams detail reads in words
+      return ok(demoNatsStreams.map((s) => ({ ...s, ...natsDemoStreamLimits(s.name, s.messages), subjects: [...s.subjects], subjects_count: s.subjects.length })))
+    // stream-workspace:nats — account usage + the stateful key-value store (stream/nats-kv-demo.ts)
+    case 'nats_account_info':
+      return ok(natsDemoAccount(demoNatsStreams, demoNatsStreams.reduce((a, s) => a + s.consumers, 0)))
+    case 'nats_kv_buckets':
+    case 'nats_kv_create':
+    case 'nats_kv_delete_bucket':
+    case 'nats_kv_keys':
+    case 'nats_kv_get':
+    case 'nats_kv_put':
+    case 'nats_kv_delete':
+    case 'nats_kv_status':
+    case 'nats_kv_bucket_list':
+    case 'nats_kv_entries':
+    case 'nats_kv_entry':
+    case 'nats_kv_history':
+    case 'nats_kv_put_version':
+    case 'nats_kv_purge':
+    case 'nats_kv_create_bucket':
+    case 'nats_kv_watch':
+    case 'nats_kv_unwatch':
+      try {
+        return ok(natsKvDemo(cmd, args ?? {}))
+      } catch (e) {
+        return Promise.reject(String((e as Error).message ?? e))
+      }
     case 'nats_js_subject_messages':
+    case 'nats_js_subject_stats':
     case 'nats_js_subject_page': {
       // Demo subject: 250 retained messages, SPARSE inside the stream (one every
       // 4th sequence — a subject is normally just a slice of a busy stream). Time
@@ -1448,6 +1477,12 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
         time: new Date(base + seq * 1000).toISOString(),
         key: `msg-${1000 + seq / SPACING - 1}`,
       })
+      // the subject's total, as the subject index reports it (same numbers the grid pages through)
+      if (cmd === 'nats_js_subject_stats') {
+        // ?subjectStatsFail=1: the server refuses to count (e.g. a permissions error)
+        if (hasParam('subjectStatsFail')) return Promise.reject('permissions violation for subscription to "$JS.API.STREAM.INFO"')
+        return ok({ total: totalFor, last_seq: LAST_SEQ })
+      }
       if (cmd === 'nats_js_subject_page') {
         // Newest-first cursor paging: the newest pageSize messages at or before endSeq.
         const pageSize = Math.max(1, Number(args?.pageSize ?? 100))
@@ -1504,10 +1539,19 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
         scanned: scoped.length,
       })
     }
-    case 'nats_js_subject_stats':
-      return ok({ total: 250, last_seq: 1000 })
     case 'nats_js_purge_subject':
-    case 'nats_js_remove_subject':
+      // clears the subject's messages only — the subject stays in the stream
+      return ok(null)
+    case 'nats_js_remove_subject': {
+      // stateful like the real server: the subject leaves the stream's config, the
+      // last subject can't go
+      const stream = String(args?.stream ?? '')
+      const subject = String(args?.subject ?? '')
+      const st = demoNatsStreams.find((s) => s.name === stream)
+      if (st && st.subjects.length <= 1) throw new Error('A stream needs at least one subject — delete the stream instead')
+      demoNatsStreams = demoNatsStreams.map((s) => (s.name === stream ? { ...s, subjects: s.subjects.filter((x) => x !== subject) } : s))
+      return ok(null)
+    }
     case 'nats_js_add_subject':
       return ok(null)
     case 'nats_js_consumers':
@@ -1527,8 +1571,12 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
         { name: 'eu-fulfilment', deliver_policy: 'All', ack_policy: 'Explicit', filter_subject: 'orders.eu', num_pending: 10, num_ack_pending: 4, ack_floor_stream_seq: 980, delivered_stream_seq: 996 },
         { name: 'audit', deliver_policy: 'New', ack_policy: 'None', filter_subject: '', num_pending: 0, num_ack_pending: 0, ack_floor_stream_seq: 1000, delivered_stream_seq: 1000 },
       ])
-    case 'nats_js_peek':
-      return ok({ seq: (args?.seq as number) ?? 1, subject: 'orders.new', payload: '{"id":1001,"total":42.5}', time: '2026-06-30T10:23:14Z', key: 'msg-1001' })
+    case 'nats_js_peek': {
+      // like the server: a sequence past the stream's end (or 0) is "no message found"
+      const seq = Number(args?.seq ?? 0)
+      if (!(seq >= 1 && seq <= 1000) || seq === 13) return Promise.reject(`Failed to peek seq ${seq}: no message found`)
+      return ok({ seq, subject: seq % 2 ? 'orders.eu' : 'orders.us', payload: `{"id":${seq},"total":42.5,"currency":"EUR"}`, time: '2026-06-30T10:23:14Z', key: `msg-${seq}` })
+    }
     case 'nats_js_create_stream': {
       const name = String(args?.name ?? '')
       const subjects = (args?.subjects as string[]) ?? []
@@ -1546,29 +1594,31 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
     case 'nats_js_create_consumer':
     case 'nats_js_delete_consumer':
     case 'nats_js_delete_message':
-    case 'nats_kv_create':
-    case 'nats_kv_delete_bucket':
-    case 'nats_kv_put':
-    case 'nats_kv_delete':
-    case 'nats_obj_create':
-    case 'nats_obj_delete_bucket':
-    case 'nats_obj_put_file':
-    case 'nats_obj_get_file':
-    case 'nats_obj_delete':
+    case 'nats_obj_create': {
+      const b = String(args?.bucket)
+      if (natsDemoObjects.has(b)) return Promise.reject(`bucket "${b}" already exists`)
+      natsDemoObjects.set(b, [])
       return ok(null)
-    case 'nats_kv_buckets':
-      return ok(['config', 'sessions'])
-    case 'nats_kv_keys':
-      return ok(['feature.flags', 'rate.limit', 'maintenance'])
-    case 'nats_kv_get':
-      return ok('{"enabled":true}')
+    }
+    case 'nats_obj_delete_bucket':
+      natsDemoObjects.delete(String(args?.bucket))
+      return ok(null)
+    case 'nats_obj_put_file': {
+      const list = natsDemoObjects.get(String(args?.bucket))
+      if (list) list.push({ name: String(args?.name), size: 4096, chunks: 1 })
+      return ok(null)
+    }
+    case 'nats_obj_get_file':
+      return ok(null)
+    case 'nats_obj_delete': {
+      const b = String(args?.bucket)
+      natsDemoObjects.set(b, (natsDemoObjects.get(b) ?? []).filter((o) => o.name !== String(args?.name)))
+      return ok(null)
+    }
     case 'nats_obj_buckets':
-      return ok(['uploads', 'backups'])
+      return ok([...natsDemoObjects.keys()])
     case 'nats_obj_list':
-      return ok([
-        { name: 'report-2026.pdf', size: 284512, chunks: 3 },
-        { name: 'avatar.png', size: 10240, chunks: 1 },
-      ])
+      return ok([...(natsDemoObjects.get(String(args?.bucket)) ?? [])])
     case 'kafka_cluster':
       return ok({
         brokers: [
@@ -1580,8 +1630,22 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
         topic_count: 2,
         partition_count: 18,
       })
-    case 'kafka_topics':
-      return ok(demoKafkaTopics.map((t) => ({ ...t, partitions: t.partitions.map((p) => ({ ...p })) })))
+    case 'kafka_topics': {
+      const copy = demoKafkaTopics.map((t) => ({ ...t, partitions: t.partitions.map((p) => ({ ...p })) }))
+      // e2e seam: one partition of `payments` has a copy that fell behind (broker 3)
+      // e2e seam: `?kafkaTopics=5000` adds that many one-partition topics, to exercise the
+      // workspace table's virtual scrolling and keyboard on a large cluster
+      const extra = bigParam('kafkaTopics')
+      for (let i = 0; i < extra; i++) {
+        const n = (i * 7919) % 50000
+        copy.push({ name: `topic-${String(i).padStart(5, '0')}`, internal: false, partitions: [{ id: 0, leader: 1, replicas: [1, 2, 3], isr: [1, 2, 3], low: 0, high: n, lag: n }] })
+      }
+      if (hasParam('kafkaMissingCopies')) {
+        const p1 = copy.find((t) => t.name === 'payments')?.partitions[1]
+        if (p1) p1.isr = p1.replicas.filter((r) => r !== 3)
+      }
+      return ok(copy)
+    }
     case 'kafka_create_topic': {
       const name = String(args?.name ?? '')
       const parts = Math.max(1, Number(args?.partitions ?? 1))
@@ -1617,18 +1681,28 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
       const until = Number(args?.until ?? -1)
       const low = t ? Math.min(...t.partitions.map((p) => p.low)) : 0
       const high = t ? Math.max(...t.partitions.map((p) => p.high)) : 0
-      const end = until < 0 ? high : Math.min(until, high)
-      const start = Math.max(low, end - limit)
+      // fake log: offset o was written at T0 - (high - o) seconds
+      const fromTime = args?.fromTime == null ? null : Number(args.fromTime)
+      let end = until < 0 ? high : Math.min(until, high)
+      let start = Math.max(low, end - limit)
+      if (fromTime != null) {
+        start = Math.min(high, Math.max(low, high - Math.ceil((DEMO_KAFKA_T0 - fromTime) / 1000)))
+        end = Math.min(high, start + limit)
+      }
       const msgs = []
+      // ?kafkaBinary=1: every 5th record is binary (not valid UTF-8) and carries a header
+      const binaryDemo = hasParam('kafkaBinary')
       for (let o = end - 1; o >= start; o--) {
+        const binary = binaryDemo && o % 5 === 0
         msgs.push({
           conn_id: String(args?.connId ?? ''),
           partition: 0,
           offset: o,
-          timestamp: 1_760_000_000_000 - (high - o) * 1000,
+          timestamp: DEMO_KAFKA_T0 - (high - o) * 1000,
           key: `019fd5ea-6d1a-729c-8bf2-${String(o).padStart(12, '0')}`,
-          value: JSON.stringify({ messageId: `019fd5ea-${o}`, seq: o }),
-          headers: [],
+          value: binary ? '\uFFFD\u0000\u0001\uFFFD' : JSON.stringify({ messageId: `019fd5ea-${o}`, seq: o }),
+          ...(binary ? { value_b64: btoa(String.fromCharCode(0xff, 0x00, 0x01, 0xfe)) } : {}),
+          headers: binary ? [['content-type', 'application/octet-stream']] : [],
         })
       }
       return ok({
@@ -1646,6 +1720,58 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
       return ok(null)
     case 'kafka_produce':
       return ok({ partition: 0, offset: 15201 })
+    case 'kafka_topic_configs': {
+      const own = demoKafkaTopicConfig[String(args?.topic ?? '')] ?? {}
+      const defaults: Record<string, string> = {
+        'cleanup.policy': 'delete',
+        'retention.ms': '604800000',
+        'retention.bytes': '-1',
+        'max.message.bytes': '1048588',
+        'min.insync.replicas': '1',
+        'segment.bytes': '1073741824',
+      }
+      return ok(
+        Object.keys({ ...defaults, ...own })
+          .sort()
+          .map((name) => ({
+            name,
+            value: own[name] ?? defaults[name] ?? null,
+            source: name in own ? 'topic' : name === 'max.message.bytes' ? 'broker' : 'default',
+            is_default: !(name in own),
+            is_read_only: false,
+            is_sensitive: false,
+          })),
+      )
+    }
+    case 'kafka_alter_topic_configs': {
+      const topic = String(args?.topic ?? '')
+      const changes = (args?.changes ?? {}) as Record<string, string | null>
+      const own = { ...(demoKafkaTopicConfig[topic] ?? {}) }
+      for (const [k, v] of Object.entries(changes)) {
+        if (k === 'retention.ms' && v != null && !/^-?\d+$/.test(v)) return Promise.reject(`Invalid value ${v} for configuration retention.ms`)
+        if (v == null) delete own[k]
+        else own[k] = v
+      }
+      demoKafkaTopicConfig[topic] = own
+      return ok(null)
+    }
+    case 'kafka_delete_group': {
+      const group = String(args?.group ?? '')
+      if (group === 'payment-processor' || group === 'search-indexer')
+        return Promise.reject('The group still has running consumers. Stop them, then delete the group.')
+      demoKafkaDeletedGroups.add(group)
+      return ok(null)
+    }
+    case 'kafka_offsets_for_time': {
+      const t = demoKafkaTopics.find((x) => x.name === String(args?.topic ?? ''))
+      const ts = Number(args?.ts ?? 0)
+      return ok(
+        (t?.partitions ?? []).map((p) => {
+          const off = p.high - Math.ceil((DEMO_KAFKA_T0 - ts) / 1000)
+          return [p.id, off >= p.high ? null : Math.max(p.low, off)]
+        }),
+      )
+    }
     case 'kafka_consumer_groups':
       return ok([
         { name: 'payment-processor', state: 'Stable', protocol: 'range', topics: ['payments'], members: [
@@ -1656,22 +1782,39 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
         { name: 'search-indexer', state: 'Stable', protocol: 'range', topics: ['orders'], members: [
           { member_id: 'consumer-9-xyz', client_id: 'svc-search', host: '/10.0.1.30' },
         ] },
-      ])
+      ].filter((g) => !demoKafkaDeletedGroups.has(g.name)))
     case 'kafka_group_topic_lag':
     case 'kafka_group_lag':
-      // each group sits somewhere else on the log (audit-log has caught up on p0)
-      if (args?.group === 'audit-log')
-        return ok([
-          { topic: 'payments', partition: 0, committed: 15400, high: 15400, lag: 0 },
-          { topic: 'payments', partition: 1, committed: 15301, high: 15301, lag: 0 },
-        ])
-      return ok([
-        { topic: 'payments', partition: 0, committed: 15100, high: 15200, lag: 100 },
-        { topic: 'payments', partition: 1, committed: 15290, high: 15301, lag: 11 },
-        { topic: 'payments', partition: 2, committed: 15400, high: 15400, lag: 0 },
-      ])
-    case 'kafka_reset_offset':
+    {
+      // each group sits somewhere else on the log (audit-log has caught up on p0);
+      // a position moved by the workspace (kafka_reset_offset) overrides the fixture
+      const group = String(args?.group ?? '')
+      const rows =
+        group === 'audit-log'
+          ? [
+              { topic: 'payments', partition: 0, committed: 15400, high: 15400, lag: 0 },
+              { topic: 'payments', partition: 1, committed: 15301, high: 15301, lag: 0 },
+            ]
+          : [
+              { topic: 'payments', partition: 0, committed: 15100, high: 15200, lag: 100 },
+              { topic: 'payments', partition: 1, committed: 15290, high: 15301, lag: 11 },
+              { topic: 'payments', partition: 2, committed: 15400, high: 15400, lag: 0 },
+            ]
+      const moved = demoKafkaCommits[group] ?? {}
+      return ok(
+        rows.map((r) => {
+          const c = moved[`${r.topic}:${r.partition}`]
+          return c == null ? r : { ...r, committed: c, lag: Math.max(0, r.high - c) }
+        }),
+      )
+    }
+    case 'kafka_reset_offset': {
+      const group = String(args?.group ?? '')
+      if (group === 'payment-processor' || group === 'search-indexer')
+        return Promise.reject('reset offset error (group active?): the group has running consumers')
+      demoKafkaCommits[group] = { ...(demoKafkaCommits[group] ?? {}), [`${args?.topic}:${args?.partition}`]: Number(args?.offset ?? 0) }
       return ok(null)
+    }
     case 'kafka_sr_subjects':
       return ok([
         { name: 'enrollment.events-value', fmt: 'AVRO', latest: 3, compat: 'BACKWARD' },

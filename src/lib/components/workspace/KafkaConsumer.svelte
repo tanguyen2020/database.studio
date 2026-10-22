@@ -20,18 +20,26 @@
   import PayloadPreview from '$lib/components/viewer/PayloadPreview.svelte'
   import { consumerEmptyText } from '$lib/stream/explorer'
   import { autofocus } from '$lib/actions/autofocus'
+  import { hexDump, hexPreview, payloadBytes } from '$lib/viewer/hex'
   import type { TabState } from '$lib/types'
 
   interface Props {
     tab: TabState
+    /** inside the Kafka workspace's topic details: the panel already names the topic,
+     *  so the title block goes (the state chip and the actions stay) */
+    embedded?: boolean
+    /** "Copy to Produce": the workspace opens its Produce screen filled with this message */
+    onCopyToProduce?: (m: ipc.KafkaMsg) => void
   }
-  let { tab }: Props = $props()
+  let { tab, embedded = false, onCopyToProduce }: Props = $props()
   const topic = $derived((tab.state as { topic?: string }).topic ?? '')
 
   let partition = $state<string>('') // '' = all
   let consuming = $state(false)
   let paused = $state(false)
-  let decode = $state<'utf8' | 'json' | 'raw'>('utf8')
+  let decode = $state<'utf8' | 'json' | 'raw' | 'hex'>('utf8')
+  // the value's bytes as stored (exact even for binary payloads — see hex.ts)
+  const bytesOf = (m: ipc.KafkaMsg) => payloadBytes(m.value, m.value_b64)
   let keyFilter = $state('')
   let valFilter = $state('')
   const MAX = 500
@@ -188,7 +196,7 @@
   }
 
   async function copyMsg(m: ipc.KafkaMsg) {
-    await navigator.clipboard.writeText(decodeVal(m.value))
+    await navigator.clipboard.writeText(decode === 'hex' ? hexDump(bytesOf(m)) : decodeVal(m.value))
     toasts.success('Message copied')
   }
   // In-app confirm popup (window.confirm isn't reliable inside the Tauri webview).
@@ -254,14 +262,17 @@
 
   // When the sidebar purges this topic (Explorer → Clear messages), clear the view
   // here too so both stay in sync. Skip the initial run (tick starts undefined).
-  let kafkaTickSeen = false
+  // Compare against the last tick seen, not "first run or not": the effect also
+  // re-runs whenever the host hands in a fresh `tab` object (the workspace changing
+  // its own state), and that must never wipe a page that was just read.
+  let kafkaTickSeen: number | undefined
   $effect(() => {
     const tick = explorer.kafkaMsgTick[`${tab.connectionId}:${topic}`] ?? 0
-    if (!kafkaTickSeen) {
-      kafkaTickSeen = true
+    if (kafkaTickSeen === undefined || tick === kafkaTickSeen) {
+      kafkaTickSeen = tick
       return
     }
-    void tick
+    kafkaTickSeen = tick
     messages = []
     pending = []
     receivedAny = false // sidebar purged the topic — it is empty now
@@ -315,7 +326,20 @@
     if (consuming && tab.connectionId) void ipc.kafkaStopConsume(tab.connectionId)
   })
 
-  async function loadPage(nextUntil: number) {
+  // "Go to time": the page starts at the first message written at/after this moment
+  let goTime = $state('')
+  let fromTimeShown = $state<number | null>(null)
+  function goToTime() {
+    const ts = goTime ? new Date(goTime).getTime() : NaN
+    if (!Number.isFinite(ts)) {
+      statusLevel = 'warn'
+      statusMsg = 'Pick a date and time first.'
+      return
+    }
+    void loadPage(-1, ts)
+  }
+
+  async function loadPage(nextUntil: number, fromTime: number | null = null) {
     if (!tab.connectionId || loadingPage) return
     if (consuming) await toggle() // live tail and paging cannot both own the grid
     loadingPage = true
@@ -329,10 +353,13 @@
         Number.isNaN(part as number) ? null : part,
         nextUntil,
         pageSize,
+        fromTime,
       )
       messages = page.msgs
       pending = []
-      until = nextUntil
+      fromTimeShown = fromTime
+      // after a jump the window starts at the moment picked; "Previous" walks newer from there
+      until = fromTime == null ? nextUntil : page.window_start + pageSize
       windowStart = page.window_start
       hasOlder = page.has_older
       atNewest = page.at_newest
@@ -385,6 +412,7 @@
 <div class="ds-ws">
   <!-- header: which topic, what state, the live actions -->
   <div class="ds-ws-head">
+    {#if !embedded}
     <span class="ds-ws-icon" style="color:var(--sacc-purple);background:color-mix(in srgb, var(--sacc-purple) 13%, transparent)" aria-hidden="true">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="6" cy="12" r="2.2" /><circle cx="18" cy="5.5" r="2.2" /><circle cx="18" cy="18.5" r="2.2" /><path d="M8 11 L16 6.5" /><path d="M8 13 L16 17.5" /></svg>
     </span>
@@ -392,6 +420,7 @@
       <span class="ds-ws-title" title={topic}>{topic}</span>
       <span class="ds-ws-sub">Kafka topic{retained >= 0 ? ` · ${retained.toLocaleString()} messages` : ''}</span>
     </div>
+    {/if}
     <span class="ds-chip" class:live={consuming && !paused} class:warn={consuming && paused}>{consuming ? (paused ? 'Paused' : 'Live') : 'Browsing'}</span>
     <div class="ds-ws-actions">
       {#if mode === 'messages'}
@@ -458,6 +487,7 @@
         <option value="utf8">UTF-8</option>
         <option value="json">JSON</option>
         <option value="raw">Raw</option>
+        <option value="hex">Hex</option>
       </select>
     </label>
     <span class="ds-search" style="flex:1;min-width:var(--px-160)">
@@ -502,7 +532,14 @@
         title="Next page (on to older records)">Next ▶</span
       >
     </div>
+    <label class="ds-field" title="Show the messages written at or after this moment (your local time)">Go to
+      <input class="ds-control" type="datetime-local" step="1" bind:value={goTime} aria-label="Go to date and time" onkeydown={(e) => e.key === 'Enter' && goToTime()} />
+    </label>
+    <button type="button" class="cfm-btn" onclick={goToTime} disabled={loadingPage || !goTime}>Go</button>
     <span class="ds-meta">
+      {#if fromTimeShown != null && !loadingPage}
+        Messages from <b>{new Date(fromTimeShown).toLocaleString()}</b> on ·
+      {/if}
       {#if loadingPage}
         Reading…
       {:else if messages.length > 0}
@@ -555,7 +592,16 @@
         No message on this page is {groupView === 'processed' ? 'processed' : 'still waiting'} for this group. Use Previous / Next to look at other pages.
       </div>
     {:else}
-      <table class="ds-table flush" style="font-size:var(--px-12_5)">
+      <table class="ds-table flush km-grid" style="font-size:var(--px-12_5)">
+        <colgroup>
+          <col style="width:var(--px-80)" />
+          <col style="width:var(--px-90)" />
+          <col style="width:var(--px-160)" />
+          {#if selGroupLag}<col style="width:var(--px-120)" />{/if}
+          <col style="width:22%" />
+          <col />
+          <col style="width:var(--px-96)" />
+        </colgroup>
         <thead><tr>
           {#each ['Partition', 'Offset', 'Time', ...(selGroupLag ? ['Status'] : []), 'Key', 'Value', ''] as h (h)}
             <th>{h}</th>
@@ -573,25 +619,31 @@
               onmouseleave={() => (hoverKey === k ? (hoverKey = null) : null)}
               style="background:{rowBg(k)};cursor:default"
             >
-              <td class="ds-num" style="white-space:nowrap;width:1%;color:{cellColor(k, 'var(--muted)')}">{m.partition}</td>
-              <td class="ds-num" style="white-space:nowrap;width:1%;color:{cellColor(k, 'var(--syntax-number)')}">{m.offset}</td>
-              <td class="ds-time" style="white-space:nowrap;width:1%;color:{cellColor(k, 'var(--text2)')}">{fmtTs(m.timestamp)}</td>
+              <td class="ds-num" style="white-space:nowrap;color:{cellColor(k, 'var(--muted)')}">{m.partition}</td>
+              <td class="ds-num" style="white-space:nowrap;color:{cellColor(k, 'var(--syntax-number)')}">{m.offset}</td>
+              <td class="ds-time" style="white-space:nowrap;color:{cellColor(k, 'var(--tbl-cell)')}">{fmtTs(m.timestamp)}</td>
               {#if selGroupLag}
                 {@const st = stateOf(m) ?? 'unknown'}
                 <td style="white-space:nowrap;width:1%"><span class="ds-state {st}" data-state={st}>{STATE_LABEL[st]}</span></td>
               {/if}
-              <td style="max-width:var(--px-200)"><span class="ds-key" class:none={!m.key} style="color:{cellColor(k, m.key ? 'var(--text2)' : 'var(--muted)')}" title={m.key}>{m.key || 'no key'}</span></td>
-              <td style="max-width:var(--px-560)">
-                {#if decode === 'raw'}
+              <td class="km-clip"><span class="ds-key" class:none={!m.key} style="color:{cellColor(k, m.key ? 'var(--text2)' : 'var(--muted)')}" title={m.key}>{m.key || 'no key'}</span></td>
+              <td class="km-clip">
+                {#if decode === 'hex' || m.value_b64}
+                  <!-- hex: what the bytes are; binary values always read this way (their text is garbage) -->
+                  <span class="mono km-hex" style="color:{cellColor(k, 'var(--text2)')}" title={m.value_b64 && decode !== 'hex' ? 'Binary value — not valid UTF-8' : undefined}>{hexPreview(bytesOf(m))}</span>
+                {:else if decode === 'raw'}
                   <span class="mono" style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--px-12);color:{cellColor(k, 'var(--text2)')}" title={m.value}>{m.value}</span>
                 {:else}
                   <PayloadPreview text={decodeVal(m.value)} inverted={selKey === k} />
                 {/if}
               </td>
               <!-- action icons recolour to white when selected so the blue highlight never hides them -->
-              <td style="white-space:nowrap;width:1%;padding:var(--px-2) var(--px-8)">
+              <td class="km-acts" style="padding:var(--px-2) var(--px-8)">
                 <span onclick={(e) => { e.stopPropagation(); viewJson(m) }} onkeydown={(e) => e.key === 'Enter' && viewJson(m)} role="button" tabindex="0" title="View value as JSON" class="ds-act" style="color:{cellColor(k, 'var(--muted)')}"><Icon name="expand" size={13} /></span>
                 <span onclick={(e) => { e.stopPropagation(); copyMsg(m) }} onkeydown={(e) => e.key === 'Enter' && copyMsg(m)} role="button" tabindex="0" title="Copy message" class="ds-act" style="color:{cellColor(k, 'var(--muted)')}"><Icon name="copy" size={13} /></span>
+                {#if onCopyToProduce}
+                  <span onclick={(e) => { e.stopPropagation(); onCopyToProduce(m) }} onkeydown={(e) => e.key === 'Enter' && onCopyToProduce(m)} role="button" tabindex="0" title="Copy to Produce" aria-label="Copy to Produce" class="ds-act" style="color:{cellColor(k, 'var(--muted)')}"><Icon name="send" size={13} /></span>
+                {/if}
               </td>
             </tr>
           {/each}
@@ -641,8 +693,18 @@
         ...(selGroupLag ? [{ label: selGroup ?? 'Group', value: STATE_LABEL[stateOf(viewState) ?? 'unknown'] }] : []),
       ]}
       text={viewState.value}
+      bytes={bytesOf(viewState)}
+      startHex={decode === 'hex' || !!viewState.value_b64}
+      note={viewState.value_b64 ? 'Binary — not valid UTF-8' : ''}
       onClose={() => (viewState = null)}
-    />
+    >
+      {#snippet actions()}
+        {#if onCopyToProduce && viewState}
+          <!-- read the message BEFORE closing: the viewer state is what goes away -->
+          <button type="button" class="pv-btn pd-btn" onclick={() => { const m = viewState; viewState = null; if (m) onCopyToProduce(m) }}>Copy to Produce</button>
+        {/if}
+      {/snippet}
+    </PayloadDialog>
   {/if}
 </div>
 
@@ -661,5 +723,27 @@
     background: var(--error);
     border-color: var(--error);
     font-weight: 600;
+  }
+  .km-grid {
+    table-layout: fixed;
+    width: 100%;
+  }
+  .km-grid :global(th) {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .km-clip {
+    overflow: hidden;
+  }
+  .km-hex {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: var(--px-12);
+  }
+  .km-acts {
+    white-space: nowrap;
+    text-align: right;
   }
 </style>

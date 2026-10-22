@@ -14,12 +14,9 @@
   import SharedContextMenu from '$lib/components/ui/context-menu/SharedContextMenu.svelte'
   import * as ipc from '$lib/ipc'
   import SystemIcon from '$lib/components/SystemIcon.svelte'
-  import RedisExplorer from '$lib/components/explorer/RedisExplorer.svelte'
   import MongoExplorer from '$lib/components/explorer/MongoExplorer.svelte'
-  import RabbitExplorer from '$lib/components/explorer/RabbitExplorer.svelte'
   import EsExplorer from '$lib/components/explorer/EsExplorer.svelte'
   import DropDatabaseDialog from '$lib/components/explorer/DropDatabaseDialog.svelte'
-  import KafkaPartitionsDialog from '$lib/components/explorer/KafkaPartitionsDialog.svelte'
   import TableContextMenu from '$lib/components/explorer/TableContextMenu.svelte'
   import { connections } from '$lib/stores/connections.svelte'
   import { explorer } from '$lib/stores/explorer.svelte'
@@ -31,9 +28,6 @@
   import { testDataWizard } from '$lib/stores/testdata.svelte'
   import { execRoutineWizard } from '$lib/stores/execroutine.svelte'
   import { chCreateWizard } from '$lib/stores/chcreate.svelte'
-  import { natsAddWizard } from '$lib/stores/natsAdd.svelte'
-  import { natsCreateStream } from '$lib/stores/natsCreateStream.svelte'
-  import { kafkaTopicWizard } from '$lib/stores/kafkaTopic.svelte'
   import { pgRoleWizard } from '$lib/stores/pgrole.svelte'
   import { myUserWizard } from '$lib/stores/myuser.svelte'
   import { mssqlUserWizard } from '$lib/stores/mssqluser.svelte'
@@ -73,7 +67,6 @@
   import { addPartitionWizard } from '$lib/stores/addpartition.svelte'
   import { truncateWizard } from '$lib/stores/truncate.svelte'
   import { buildExportSelect } from '$lib/export/query'
-  import { kafkaTopicRows, natsStreamRows, filterStreamRows, filterTopicRows } from '$lib/stream/explorer'
   import { toAlterStatement, type AlterKind } from '$lib/sql/alter'
   import { splitStatements } from '$lib/sql/statements'
   import { objectFilterMatch } from '$lib/explorer/filter'
@@ -85,10 +78,31 @@
   import type { ColumnInfo, PartitionInfo, RoutineInfo, TableInfo } from '$lib/types'
   import type { TableDetail } from '$lib/stores/explorer.svelte'
   import { partitionedTableIcon, rowIcon } from '$lib/explorer/icons'
-  import { brandSvg } from '$lib/brand-icons'
   import { untrack, type Snippet } from 'svelte'
+  import { opensWorkspace } from '$lib/stream/workspace-systems'
 
-  const selected = $derived(connections.selected)
+  interface Props {
+    /** One sidebar mode: the connection this tree belongs to. Absent = the selected
+     *  connection (the two-panel layout's single Explorer). */
+    connId?: string
+    /** Rendered inline under its connection row: no header of its own, natural
+     *  height, and the Properties/toolbar footer only while this connection is the
+     *  selected one (it moves into the sidebar's footer host). */
+    embedded?: boolean
+  }
+  let { connId, embedded = false }: Props = $props()
+
+  const selected = $derived(connId ? (connections.profiles.find((p) => p.id === connId) ?? null) : connections.selected)
+  /** Only the tree of the selected connection drives the shared signals
+   *  (Properties, toolbar targets, New query binding) — with several trees open
+   *  side by side the others must not overwrite them. */
+  const focused = $derived(!embedded || (!!connId && connections.selectedId === connId))
+  /** Moves the footer into the one sidebar's footer host so it stays pinned at the
+   *  bottom instead of scrolling away with this connection's tree. */
+  function footerPortal(node: HTMLElement, on: boolean) {
+    if (on) document.querySelector('[data-explorer-footer-host]')?.appendChild(node)
+    return { destroy: () => { if (on) node.remove() } }
+  }
   const cache = $derived(selected ? explorer.cache[selected.id] : undefined)
   const isSqlite = $derived(selected?.system === 'sqlite')
   const isMssql = $derived(selected?.system === 'mssql')
@@ -188,7 +202,7 @@
     return null
   })
   $effect(() => {
-    explorer.selectedSchema = erTarget
+    if (focused) explorer.selectedSchema = erTarget
   })
   // Bottom toolbar (New table / Query / Import / Generate scripts / Backup /
   // Sessions / Users) is enabled ONLY when a relational schema/database node is
@@ -389,7 +403,7 @@
   $effect(() => {
     // MongoDB is browsed by MongoExplorer (a child component) which owns the
     // selected-database signal for the Mongo tree — don't clobber it here.
-    if (selected?.system !== 'mongodb') explorer.selectedDatabase = dbTarget
+    if (focused && selected?.system !== 'mongodb') explorer.selectedDatabase = dbTarget
   })
   // "New query console" only needs the database/schema NAME (no sub-connection), so
   // unlike the rest of the toolbar it enables for ANY node inside a relational
@@ -489,6 +503,19 @@
     const k = treeSel
     // Properties describe a LIVE object: a closed connection has none to show.
     if (!k || k.indexOf(':') < 0 || !selected?.connected) return null
+    // Kafka: workspace sections are navigation, not objects; a topic is a Topic.
+    if (k.startsWith('nats:sec:')) return null // stream-workspace:nats — navigation, not an object
+    // NATS: a stream is a Stream; a subject (nats:sub:<stream>:<subject>) belongs to its
+    // stream — subjects contain dots, so never split them like schema.table
+    if (k.startsWith('nats:s:')) return { type: 'Stream', schema: '', name: k.slice('nats:s:'.length) }
+    if (k.startsWith('nats:sub:')) {
+      const rest = k.slice('nats:sub:'.length)
+      const at = rest.indexOf(':')
+      return { type: 'Subject', schema: at < 0 ? '' : rest.slice(0, at), name: at < 0 ? rest : rest.slice(at + 1) }
+    }
+    if (k.startsWith('redis:sec:')) return null // stream-workspace:redis — navigation, not an object
+    if (k.startsWith('kafka:sec:')) return null
+    if (k.startsWith('kafka:t:')) return { type: 'Topic', schema: '', name: k.slice('kafka:t:'.length) }
     const prefix = k.slice(0, k.indexOf(':'))
     const rest = k.slice(k.indexOf(':') + 1)
     const dot = rest.indexOf('.')
@@ -555,7 +582,7 @@
   // Sync the parsed target into the shared store (no feedback loop: propTarget is
   // derived from treeSel/selected only, and we only write to `properties`).
   $effect(() => {
-    properties.set(propTarget)
+    if (focused) properties.set(propTarget)
   })
 
   // untrack: loadSchemas() đọc+ghi explorer.cache đồng bộ (conn()/track()) → nếu
@@ -787,17 +814,10 @@
       // (that is what the Connections Refresh is for): reopening would cancel a query
       // running on it, drop the per-tab Query Editor connections and lose an open
       // transaction, which is too much for a tree refresh.
-      if (s.system === 'kafka' || s.system === 'nats') {
-        await explorer.loadStreaming(s.id, s.system, true)
-      } else if (s.system === 'redis') {
-        // RedisExplorer reloads its key list on the tick; wait for it to report back
-        await withChildReload(() => explorer.bumpRedis(s.id))
-      } else if (s.system === 'cassandra') {
+      if (s.system === 'cassandra') {
         await reloadCassandra(s.id)
       } else if (s.system === 'mongodb') {
         await withChildReload(() => mongoRefresh++) // MongoExplorer watches the key
-      } else if (s.system === 'rabbitmq') {
-        await withChildReload(() => rabbitRefresh++) // RabbitExplorer watches the key
       } else if (s.system === 'elasticsearch') {
         await withChildReload(() => esRefresh++) // EsExplorer watches the key
       } else {
@@ -901,66 +921,16 @@
       if (cassKeyspaces.includes(ks)) await loadCassKeyspace(id, ks)
     }
   }
-  // NATS mark (blue tile + white "N" + chat-bubble tail) served from an asset
-  // file, used as the stream-node icon in the explorer instead of the ▤ glyph.
-  const NATS_LOGO = '<img src="/assets/db-nats.svg" width="14" height="14" style="display:block" alt="nats" />'
-  // Streaming (Kafka topics / NATS JetStream streams) — loaded via the explorer
-  // store so the messages tabs can trigger a refresh after purge/delete.
-  const isKafka = $derived(selected?.system === 'kafka')
-  // Kafka / NATS rows carry counts ("2 part · 1,930 msg"), not code: UI font with
-  // tabular figures. Relational meta (types, row counts) keeps the mono column look.
-  const streamMeta = $derived(selected?.system === 'kafka' || selected?.system === 'nats')
-  const isNats = $derived(selected?.system === 'nats')
-  const isRedis = $derived(selected?.system === 'redis')
   const isMongo = $derived(selected?.system === 'mongodb')
   // Bumped by the header Refresh button → MongoExplorer reloads its tree.
   let mongoRefresh = $state(0)
-  const isRabbit = $derived(selected?.system === 'rabbitmq')
-  // Bumped by the header Refresh button → RabbitExplorer reloads queues/exchanges.
-  let rabbitRefresh = $state(0)
   const isElastic = $derived(selected?.system === 'elasticsearch')
   // Bumped by the header Refresh button → EsExplorer reloads indices / streams / aliases.
   let esRefresh = $state(0)
-  const streamCache = $derived(selected ? explorer.streaming[selected.id] : undefined)
-  const topicRows = $derived(streamCache?.kafkaTopics ? kafkaTopicRows(streamCache.kafkaTopics) : [])
-  // Kafka explorer filter — matches topic names (case-insensitive substring).
-  let topicFilter = $state('')
-  const topicFiltering = $derived(!!topicFilter.trim())
-  const filteredTopicRows = $derived(filterTopicRows(topicFilter, topicRows))
-  const allStreamRows = $derived(streamCache?.natsStreams ? natsStreamRows(streamCache.natsStreams) : [])
-  // NATS explorer filter — matches stream names only (see filterStreamRows).
-  let streamFilter = $state('')
-  const streamFiltering = $derived(!!streamFilter.trim())
-  const streamRows = $derived(filterStreamRows(streamFilter, allStreamRows))
-  // Per-stream subject filter (SSMS-style "Filter…" on a stream): stream name → query,
-  // plus the set of streams whose filter box is currently shown.
-  let subjFilters = $state<Record<string, string>>({})
-  let subjFilterOpen = $state<Set<string>>(new Set())
-  function openSubjFilter(stream: string) {
-    if (!expanded.has(`nats:s:${stream}`)) toggle(`nats:s:${stream}`)
-    subjFilterOpen = new Set(subjFilterOpen).add(stream)
-    subjFilters = { ...subjFilters, [stream]: subjFilters[stream] ?? '' }
-  }
-  function clearSubjFilter(stream: string) {
-    const f = { ...subjFilters }
-    delete f[stream]
-    subjFilters = f
-    const o = new Set(subjFilterOpen)
-    o.delete(stream)
-    subjFilterOpen = o
-  }
-  $effect(() => {
-    const s = selected
-    if (s?.connected && (s.system === 'kafka' || s.system === 'nats')) {
-      untrack(() => void explorer.loadStreaming(s.id, s.system))
-    }
-  })
 
   // In-app confirm popup (window.confirm isn't reliable inside the Tauri webview);
   // clicking the backdrop does NOT confirm — only the Confirm button runs the action.
   let confirmState = $state<{ title: string; body: string; sql?: string; run: () => void } | null>(null)
-  // Kafka topic → "Edit partitions…" (Kafka can only add partitions)
-  let partitionsFor = $state<{ topic: string; current: number } | null>(null)
   /** `sql` (optional) is shown verbatim in the dialog so a destructive confirm can
    *  state exactly what will run without opening a script tab first. */
   function askConfirm(title: string, body: string, run: () => void, sql?: string) {
@@ -972,92 +942,6 @@
     c?.run()
   }
 
-  function deleteTopic(topic: string) {
-    if (!selected) return
-    askConfirm('Delete topic', `Delete topic "${topic}"? This drops the topic and all its data.`, async () => {
-      if (!selected) return
-      try {
-        await ipc.kafkaDeleteTopic(selected.id, topic)
-        toasts.success(`Deleted topic ${topic}`, 'kafka')
-        explorer.refreshStreaming(selected.id)
-      } catch (e) {
-        toasts.error(String(e), 'kafka')
-      }
-    })
-  }
-  function clearTopic(topic: string) {
-    if (!selected) return
-    askConfirm('Clear messages', `Clear all messages of topic "${topic}"? This cannot be undone.`, async () => {
-      if (!selected) return
-      try {
-        await ipc.kafkaPurgeTopic(selected.id, topic)
-        toasts.success(`Cleared messages of ${topic}`, 'kafka')
-        explorer.refreshStreaming(selected.id)
-        // clear the open consumer tab for this topic too, so both stay in sync
-        explorer.bumpKafkaTopic(selected.id, topic)
-      } catch (e) {
-        toasts.error(String(e), 'kafka')
-      }
-    })
-  }
-  // Delete the subject only — its messages are purged and it is dropped from the
-  // stream config. The stream itself is always kept (a stream must keep ≥1 subject;
-  // deleting the last one is refused by the backend — use "Delete stream" instead).
-  // This is a SEPARATE action from Delete stream and never touches it.
-  function deleteSubject(stream: string, subject: string) {
-    if (!selected) return
-    askConfirm(
-      'Delete subject',
-      `Delete subject "${subject}" from stream "${stream}"? This purges its messages and removes it from the stream. The stream itself is kept.`,
-      async () => {
-        if (!selected) return
-        try {
-          await ipc.natsJsRemoveSubject(selected.id, stream, subject)
-          toasts.success(`Deleted subject ${subject}`, 'nats')
-          explorer.refreshStreaming(selected.id)
-        } catch (e) {
-          toasts.error(String(e), 'nats')
-        }
-      },
-    )
-  }
-  function deleteStream(stream: string) {
-    if (!selected) return
-    askConfirm(
-      'Delete stream',
-      `Delete stream "${stream}"? This drops the stream and all its subjects and messages. This cannot be undone.`,
-      async () => {
-        if (!selected) return
-        try {
-          await ipc.natsJsDeleteStream(selected.id, stream) // throws if the server didn't delete
-          toasts.success(`Deleted stream ${stream}`, 'nats')
-          // await a FRESH server list so the tree reflects the real server state
-          await explorer.loadStreaming(selected.id, 'nats', true)
-        } catch (e) {
-          toasts.error(String(e), 'nats')
-        }
-      },
-    )
-  }
-  function clearSubject(stream: string, subject: string) {
-    if (!selected) return
-    askConfirm(
-      'Clear messages',
-      `Clear all messages of subject "${subject}"? This cannot be undone.`,
-      async () => {
-        if (!selected) return
-        try {
-          await ipc.natsJsPurgeSubject(selected.id, stream, subject)
-          toasts.success(`Cleared messages of ${subject}`, 'nats')
-          explorer.refreshStreaming(selected.id)
-          // also reload the focused subject-messages tab so it shows empty
-          explorer.bumpNatsSubject(selected.id, stream, subject)
-        } catch (e) {
-          toasts.error(String(e), 'nats')
-        }
-      },
-    )
-  }
 
   // ClickHouse Dictionaries (§3) — nạp lười khi mở folder. Cached per connection +
   // schema: two ClickHouse servers can hold a database of the same name, and a
@@ -1745,10 +1629,6 @@
     kafka: 'var(--hex-8b5cf6)',
   } as const
 
-  // Kafka topic icon — the official Apache Kafka mark (same path as the connection
-  // icon, brand-icons.ts), drawn in currentColor so it takes the row's Kafka accent.
-  const KAFKA_LOGO = brandSvg('kafka', 14, 'currentColor') ?? ''
-
   // A partitioned table: the shared table mark with a "P" badge (see explorer/icons).
   const PARTITIONED_TABLE_SVG = partitionedTableIcon()
 
@@ -1859,7 +1739,7 @@
       <!-- line-height is pinned to the mono metric the row was built around, so moving the name to the UI face keeps every row exactly the height it was -->
       <span style="font-family:var(--font-main);line-height:var(--px-17);font-size:var(--px-12_5);font-weight:{p.head ? 700 : 500};color:{p.nameColor ?? (sel || p.head ? 'var(--text)' : 'var(--text2)')};flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis">{p.name}</span>
       {#if p.locked}<span style="font-size:var(--px-9)" title="System table — read-only">🔒</span>{/if}
-      <span class={streamMeta ? 'ds-num' : 'mono'} title={p.metaTitle ?? ''} style="font-size:{streamMeta ? 'var(--px-11)' : 'var(--px-10)'};color:{p.metaTitle ? 'var(--sacc-amber)' : 'var(--muted)'};margin-left:auto;flex:0 100 auto;min-width:0;overflow:hidden;text-overflow:ellipsis">{p.meta ?? ''}</span>
+      <span class="mono" title={p.metaTitle ?? ''} style="font-size:var(--px-10);color:{p.metaTitle ? 'var(--sacc-amber)' : 'var(--muted)'};margin-left:auto;flex:0 100 auto;min-width:0;overflow:hidden;text-overflow:ellipsis">{p.meta ?? ''}</span>
       {#if p.filterable}
         {@const active = hasFolderFilter(p.key) || folderFilterOpen[p.key]}
         <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
@@ -2037,22 +1917,26 @@
      "Filter…" (SSMS-style); hidden otherwise. -->
 {#snippet folderFilter(key: string, depth: number)}
   {#if folderFilterOpen[key]}
-    <div style="display:flex;align-items:center;gap:var(--px-4);padding:var(--px-2) var(--px-6) var(--px-3);padding-left:calc(var(--px-6) + {depth} * var(--px-15))">
-      <input
-        class="mono"
-        use:focusFilter
-        value={folderFilterRaw[key] ?? ''}
-        oninput={(e) => setFolderFilter(key, e.currentTarget.value)}
-        onclick={(e) => e.stopPropagation()}
-        onkeydown={(e) => e.key === 'Escape' && clearFolderFilter(key)}
-        placeholder="Filter…"
-        aria-label="Filter items"
-        style="flex:1;background:var(--raised);border:var(--px-1) solid var(--border2);border-radius:var(--px-5);padding:var(--px-2) var(--px-7);color:var(--text);font-size:var(--px-11);outline:none"
-      />
-      <!-- × clears the query text (list restored) but keeps the box open -->
-      <span onclick={() => clearFolderFilterText(key)} onkeydown={(e) => e.key === 'Enter' && clearFolderFilterText(key)} role="button" tabindex="0" title="Clear filter text" aria-label="Clear filter text" style="cursor:pointer;color:var(--muted);font-size:var(--px-13);line-height:1">×</span>
-      <!-- Clear Filter removes the filter entirely (clears text + closes the box) -->
-      <span onclick={() => clearFolderFilter(key)} onkeydown={(e) => e.key === 'Enter' && clearFolderFilter(key)} role="button" tabindex="0" title="Clear filter" aria-label="Clear filter" style="cursor:pointer;color:var(--muted);font-size:var(--px-11);white-space:nowrap">Clear</span>
+    <div style="display:flex;align-items:center;gap:var(--px-6);padding:var(--px-2) var(--px-6) var(--px-4);padding-left:calc(var(--px-6) + {depth} * var(--px-15))">
+      <label class="ds-search sm" style="flex:1;display:flex">
+        <Icon name="search" size={12} />
+        <input
+          use:focusFilter
+          value={folderFilterRaw[key] ?? ''}
+          oninput={(e) => setFolderFilter(key, e.currentTarget.value)}
+          onclick={(e) => e.stopPropagation()}
+          onkeydown={(e) => e.key === 'Escape' && clearFolderFilter(key)}
+          placeholder="Filter by name"
+          aria-label="Filter items"
+          spellcheck="false"
+        />
+        <!-- × clears the query text (list restored) but keeps the box open -->
+        {#if folderFilterRaw[key]}
+          <button type="button" class="ds-search-clear" onclick={(e) => { e.stopPropagation(); clearFolderFilterText(key) }} title="Clear filter text" aria-label="Clear filter text"><Icon name="close" size={10} /></button>
+        {/if}
+      </label>
+      <!-- Done removes the filter entirely (clears text + closes the box) -->
+      <button type="button" class="eg-btn" onclick={() => clearFolderFilter(key)} title="Clear filter" aria-label="Clear filter">Done</button>
     </div>
   {/if}
 {/snippet}
@@ -2076,13 +1960,20 @@
 
 <!-- explorer — dòng 136 -->
 <div
-  style="flex:1;display:flex;flex-direction:column;min-height:0"
+  style={embedded ? 'display:flex;flex-direction:column' : 'flex:1;display:flex;flex-direction:column;min-height:0'}
   role="tree"
   tabindex="-1"
+  aria-label={embedded && selected ? `${selected.name} objects` : undefined}
+  data-embedded-tree={embedded ? connId : undefined}
   use:limitRowAnimations
+  onpointerdowncapture={() => {
+    // working inside a connection's tree makes it the selected connection
+    if (embedded && connId && connections.selectedId !== connId) connections.selectedId = connId
+  }}
 >
   <SharedContextMenu bind:this={rowMenu} />
   <!-- header — dòng 137-142 -->
+  {#if !embedded}
   <div style="flex:none;display:flex;align-items:center;gap:var(--px-8);padding:var(--px-9) var(--px-12) var(--px-7)">
     <span style="font-size:var(--px-10_5);font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)">Explorer</span>
     {#if selected}
@@ -2103,91 +1994,29 @@
       ><span class="tree-refresh-glyph" class:spinning={refreshingTree} style="display:inline-flex"><Icon name="refresh" size={13} /></span>{refreshingTree ? 'Refreshing…' : 'Refresh'}</span>
     </div>
   </div>
+  {/if}
 
   <!-- filter — finds databases and objects by name (schema-tree systems) -->
   {#if selected?.connected && ['postgres', 'mysql', 'mariadb', 'mssql', 'sqlite', 'clickhouse', 'oracle', 'duckdb'].includes(selected.system)}
-    <div style="flex:none;padding:0 var(--px-8) var(--px-6);position:relative">
-      <span style="position:absolute;left:var(--px-16);top:50%;transform:translateY(-50%);color:var(--muted);display:inline-flex;pointer-events:none"><Icon name="search" size={12} /></span>
-      <input
-        class="mono"
-        bind:value={dbFilter}
-        placeholder="Filter databases…"
-        aria-label="Filter databases"
-        spellcheck="false"
-        style="width:100%;background:var(--raised);border:var(--px-1) solid var(--border2);border-radius:var(--px-6);padding:var(--px-4) var(--px-22);color:var(--text);font-size:var(--px-11_5);outline:none"
-      />
-      {#if dbFiltering}
-        <span onclick={() => (dbFilter = '')} onkeydown={(e) => e.key === 'Enter' && (dbFilter = '')} role="button" tabindex="0" title="Clear" style="position:absolute;right:var(--px-14);top:50%;transform:translateY(-60%);color:var(--muted);font-size:var(--px-13);cursor:pointer">×</span>
-      {/if}
-    </div>
-  {/if}
-
-  <!-- filter — finds Kafka topics by name -->
-  {#if selected?.connected && isKafka}
-    <div style="flex:none;padding:var(--px-6) var(--px-8);position:relative">
-      <span style="position:absolute;left:var(--px-16);top:50%;transform:translateY(-50%);color:var(--muted);font-size:var(--px-11);pointer-events:none">⌕</span>
-      <input
-        class="mono"
-        bind:value={topicFilter}
-        placeholder="Filter topics…"
-        aria-label="Filter topics"
-        spellcheck="false"
-        style="width:100%;background:var(--raised);border:var(--px-1) solid var(--border2);border-radius:var(--px-6);padding:var(--px-4) var(--px-22);color:var(--text);font-size:var(--px-11_5);outline:none"
-      />
-      {#if topicFiltering}
-        <span onclick={() => (topicFilter = '')} onkeydown={(e) => e.key === 'Enter' && (topicFilter = '')} role="button" tabindex="0" title="Clear" style="position:absolute;right:var(--px-14);top:50%;transform:translateY(-50%);color:var(--muted);font-size:var(--px-13);cursor:pointer">×</span>
-      {/if}
-    </div>
-  {/if}
-
-  <!-- Kafka: Add topic button (below the filter) -->
-  {#if selected?.connected && isKafka}
-    <div style="flex:none;padding:var(--px-4) var(--px-8) var(--px-6);display:flex;justify-content:flex-end">
-      <span
-        onclick={() => selected && kafkaTopicWizard.show(selected.id)}
-        onkeydown={(e) => e.key === 'Enter' && selected && kafkaTopicWizard.show(selected.id)}
-        role="button"
-        tabindex="0"
-        title="Add topic"
-        style="font-size:var(--px-11);color:var(--text2);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer;font-weight:600"
-      >＋ Add topic</span>
-    </div>
-  {/if}
-
-  <!-- filter — finds NATS JetStream streams by name -->
-  {#if selected?.connected && isNats}
-    <div style="flex:none;padding:var(--px-6) var(--px-8) 0;position:relative">
-      <span style="position:absolute;left:var(--px-16);top:calc(50% + var(--px-3));transform:translateY(-50%);color:var(--muted);display:inline-flex;pointer-events:none"><Icon name="search" size={12} /></span>
-      <input
-        class="mono"
-        bind:value={streamFilter}
-        placeholder="Filter streams…"
-        aria-label="Filter streams"
-        spellcheck="false"
-        style="width:100%;background:var(--raised);border:var(--px-1) solid var(--border2);border-radius:var(--px-6);padding:var(--px-4) var(--px-22);color:var(--text);font-size:var(--px-11_5);outline:none"
-      />
-      {#if streamFiltering}
-        <span onclick={() => (streamFilter = '')} onkeydown={(e) => e.key === 'Enter' && (streamFilter = '')} role="button" tabindex="0" title="Clear" style="position:absolute;right:var(--px-14);top:calc(50% + var(--px-3));transform:translateY(-60%);color:var(--muted);font-size:var(--px-13);cursor:pointer">×</span>
-      {/if}
-    </div>
-  {/if}
-
-  <!-- NATS: Add stream button (below the filter) -->
-  {#if selected?.connected && isNats}
-    <div style="flex:none;padding:var(--px-8) var(--px-8) var(--px-6);display:flex;justify-content:flex-end">
-      <span
-        onclick={() => selected && natsCreateStream.show(selected.id)}
-        onkeydown={(e) => e.key === 'Enter' && selected && natsCreateStream.show(selected.id)}
-        role="button"
-        tabindex="0"
-        title="Add stream"
-        style="font-size:var(--px-11);color:var(--text2);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-4) var(--px-10);cursor:pointer;font-weight:600"
-      >＋ Add stream</span>
+    <div style="flex:none;padding:0 var(--px-8) var(--px-6)">
+      <label class="ds-search sm" style="display:flex;width:100%">
+        <Icon name="search" size={12} />
+        <input
+          bind:value={dbFilter}
+          placeholder="Search databases and objects"
+          aria-label="Filter databases"
+          spellcheck="false"
+          onkeydown={(e) => e.key === 'Escape' && (dbFilter = '')}
+        />
+        {#if dbFiltering}
+          <button type="button" class="ds-search-clear" onclick={() => (dbFilter = '')} title="Clear the search" aria-label="Clear the search"><Icon name="close" size={10} /></button>
+        {/if}
+      </label>
     </div>
   {/if}
 
   <!-- tree — dòng 143-152 -->
-  <div style="flex:1;overflow:auto;padding:0 var(--px-6) var(--px-10)">
+  <div style={embedded ? 'padding:0 0 var(--px-4)' : 'flex:1;overflow:auto;padding:0 var(--px-6) var(--px-10)'}>
     <!-- Security (Users & Privileges · §1.2b/§1.2c) — connection-level nodes
          at the TOP of the tree; native terminology per engine. -->
     {#if secFolders.length}
@@ -2401,118 +2230,20 @@
       {:else}
         <div style="padding:var(--px-16) var(--px-12);text-align:center;font-size:var(--px-12);color:var(--muted)">Loading keyspaces…</div>
       {/if}
-    {:else if isKafka}
-      <!-- Kafka: each topic (click → messages; ctx: view/clear/delete) -->
-      {#if streamCache?.error}
-        <div style="padding:var(--px-12);font-size:var(--px-11_5);color:var(--error)">{streamCache.error}</div>
-      {:else if streamCache?.loading && !streamCache?.kafkaTopics}
-        <div style="padding:var(--px-16) var(--px-12);text-align:center;font-size:var(--px-12);color:var(--muted)">Loading topics…</div>
-      {:else if filteredTopicRows.length === 0}
-        <div style="padding:var(--px-16) var(--px-12);text-align:center;font-size:var(--px-12);color:var(--muted)">{topicFiltering ? 'No topics match the filter' : 'No topics'}</div>
-      {:else}
-        {#each filteredTopicRows as t (t.name)}
-          {#snippet topicMenu()}
-            <ContextMenu.Content class="w-52">
-              <ContextMenu.Item onclick={() => selected && tabs.openKafkaTool(selected.id, 'kafka-consumer', t.name)}>View messages</ContextMenu.Item>
-              <ContextMenu.Item onclick={() => selected && tabs.openKafkaTool(selected.id, 'kafka-producer', t.name)}>Produce message…</ContextMenu.Item>
-              <ContextMenu.Separator />
-              <ContextMenu.Item onclick={() => (partitionsFor = { topic: t.name, current: t.partitions })}>Edit partitions…</ContextMenu.Item>
-              <ContextMenu.Separator />
-              <ContextMenu.Item onclick={() => clearTopic(t.name)}>Clear messages</ContextMenu.Item>
-              <ContextMenu.Item onclick={() => deleteTopic(t.name)}>Delete topic</ContextMenu.Item>
-              <ContextMenu.Separator />
-              <ContextMenu.Item onclick={() => selected && explorer.refreshStreaming(selected.id)}>Refresh</ContextMenu.Item>
-            </ContextMenu.Content>
-          {/snippet}
-          {@render row(
-            { key: `kafka:t:${t.name}`, depth: 0, glyph: '', svg: KAFKA_LOGO, color: C.kafka, nameColor: 'var(--sacc-cyan)', head: true, name: t.name, meta: t.meta, metaTitle: t.offsetsError && `Message count unknown — ${t.offsetsError}`, openOnSingleClick: true, onClick: () => selected && tabs.openKafkaTool(selected.id, 'kafka-consumer', t.name) },
-            topicMenu,
-          )}
-        {/each}
-      {/if}
-    {:else if isNats}
-      <!-- NATS JetStream: each stream → its subjects (click subject → messages) -->
-      {#if streamCache?.error}
-        <div style="padding:var(--px-12);font-size:var(--px-11_5);color:var(--error)">{streamCache.error}</div>
-      {:else if streamCache?.loading && !streamCache?.natsStreams}
-        <div style="padding:var(--px-16) var(--px-12);text-align:center;font-size:var(--px-12);color:var(--muted)">Loading streams…</div>
-      {:else if streamRows.length === 0}
-        <div style="padding:var(--px-16) var(--px-12);text-align:center;font-size:var(--px-12);color:var(--muted)">{streamFiltering ? 'No streams match the filter' : 'No JetStream streams'}</div>
-      {:else}
-        {#each streamRows as s (s.name)}
-          {@const sKey = `nats:s:${s.name}`}
-          {#snippet streamMenu()}
-            <ContextMenu.Content class="w-52">
-              <ContextMenu.Item onclick={() => toggle(sKey)}>Expand / Collapse</ContextMenu.Item>
-              <ContextMenu.Item onclick={() => selected && natsAddWizard.show(selected.id, s.name, '', true)}>Add subject…</ContextMenu.Item>
-              <ContextMenu.Separator />
-              <ContextMenu.Item onclick={() => openSubjFilter(s.name)}>Filter subjects…</ContextMenu.Item>
-              {#if subjFilterOpen.has(s.name)}
-                <ContextMenu.Item onclick={() => clearSubjFilter(s.name)}>Clear filter</ContextMenu.Item>
-              {/if}
-              <ContextMenu.Separator />
-              <ContextMenu.Item onclick={() => deleteStream(s.name)}>Delete stream</ContextMenu.Item>
-              <ContextMenu.Separator />
-              <ContextMenu.Item onclick={() => selected && explorer.refreshStreaming(selected.id)}>Refresh</ContextMenu.Item>
-            </ContextMenu.Content>
-          {/snippet}
-          {@render row({ key: sKey, depth: 0, glyph: '', svg: NATS_LOGO, color: C.folder, nameColor: 'var(--sacc-green)', name: s.name, meta: s.meta, head: true, expandable: true, onClick: () => toggle(sKey), onFilter: () => (subjFilterOpen.has(s.name) ? clearSubjFilter(s.name) : openSubjFilter(s.name)), filterActive: subjFilterOpen.has(s.name) }, streamMenu)}
-          {#if expanded.has(sKey)}
-            {#if subjFilterOpen.has(s.name)}
-              <!-- per-stream subject filter (SSMS-style), depth-1 indented -->
-              <div style="display:flex;align-items:center;gap:var(--px-6);padding:var(--px-3) var(--px-8) var(--px-5);padding-left:calc(var(--px-8) + 1 * var(--px-14));position:relative">
-                <span style="position:absolute;left:calc(var(--px-16) + 1 * var(--px-14));color:var(--muted);font-size:var(--px-11);pointer-events:none">⌕</span>
-                <!-- use:focusFilter focuses on mount (reliable when toggled from
-                     the funnel — autofocus doesn't fire on a dynamic re-insert). -->
-                <input
-                  class="mono"
-                  use:focusFilter
-                  bind:value={subjFilters[s.name]}
-                  placeholder="Filter subjects…"
-                  aria-label="Filter subjects"
-                  spellcheck="false"
-                  style="flex:1;background:var(--raised);border:var(--px-1) solid var(--border2);border-radius:var(--px-6);padding:var(--px-3) var(--px-22);color:var(--text);font-size:var(--px-11_5);outline:none"
-                />
-                <span onclick={() => clearSubjFilter(s.name)} onkeydown={(e) => e.key === 'Enter' && clearSubjFilter(s.name)} role="button" tabindex="0" title="Clear filter" style="position:absolute;right:var(--px-14);color:var(--muted);font-size:var(--px-13);cursor:pointer">×</span>
-              </div>
-            {/if}
-            {@const subs = s.subjects.filter((sub) => objectFilterMatch(subjFilters[s.name] ?? '', sub.subject))}
-            {#if subs.length === 0}
-              <div style="padding:var(--px-4) var(--px-12);padding-left:calc(var(--px-8) + 1 * var(--px-14));font-size:var(--px-11);color:var(--muted)">No subjects match the filter</div>
-            {/if}
-            {#each subs as sub (sub.subject)}
-              {#snippet subjectMenu()}
-                <ContextMenu.Content class="w-52">
-                  <ContextMenu.Item onclick={() => selected && tabs.openNatsSubject(selected.id, s.name, sub.subject)}>View messages</ContextMenu.Item>
-                  <ContextMenu.Item onclick={() => selected && natsAddWizard.show(selected.id, s.name, sub.subject, false)}>Add message…</ContextMenu.Item>
-                  <ContextMenu.Separator />
-                  <ContextMenu.Item onclick={() => clearSubject(s.name, sub.subject)}>Clear messages</ContextMenu.Item>
-                  <ContextMenu.Item onclick={() => deleteSubject(s.name, sub.subject)}>Delete subject</ContextMenu.Item>
-                  <ContextMenu.Separator />
-                  <ContextMenu.Item onclick={() => selected && explorer.refreshStreaming(selected.id)}>Refresh</ContextMenu.Item>
-                </ContextMenu.Content>
-              {/snippet}
-              {@render row(
-                { key: `nats:sub:${s.name}:${sub.subject}`, depth: 1, glyph: '✉', color: C.seq, nameColor: 'var(--sacc-amber)', name: sub.subject, openOnSingleClick: true, onClick: () => selected && tabs.openNatsSubject(selected.id, s.name, sub.subject) },
-                subjectMenu,
-              )}
-            {/each}
-          {/if}
-        {/each}
-      {/if}
-    {:else if isRedis}
-      <!-- Redis: key browser (DB selector + SCAN + pattern + tree + Add key). -->
-      <RedisExplorer connId={selected.id} onReloaded={() => childReloadDone?.()} />
+    {:else if opensWorkspace(selected.system)}
+      <!-- Redis · Kafka · NATS · RabbitMQ have no object tree: their workspace tab
+           is the view (normally this panel is hidden for them). -->
+      <div class="ws-pointer">
+        <span>{selected.name} opens in its own tab.</span>
+        <button type="button" class="cfm-btn" onclick={() => selected && tabs.openStreamWorkspace(selected.id)}>Open workspace</button>
+      </div>
     {:else if isMongo}
       <!-- MongoDB: database → collection → (fields, indexes) tree. -->
-      <MongoExplorer connId={selected.id} defaultDb={selected.database} refreshKey={mongoRefresh} onReloaded={() => childReloadDone?.()} />
+      <MongoExplorer connId={selected.id} defaultDb={selected.database} refreshKey={mongoRefresh} active={focused} onReloaded={() => childReloadDone?.()} />
     {:else if isElastic}
       <!-- Elasticsearch: Kibana-style navigation (indices, data streams, aliases,
            Stack Management, cluster, security, dev tools) over the REST API. -->
       <EsExplorer connId={selected.id} refreshKey={esRefresh} onReloaded={() => childReloadDone?.()} />
-    {:else if isRabbit}
-      <!-- RabbitMQ: vhost → Queues / Exchanges (Management HTTP API). -->
-      <RabbitExplorer connId={selected.id} defaultVhost={selected.database} refreshKey={rabbitRefresh} onReloaded={() => childReloadDone?.()} />
     {:else}
       {#if pgMssqlMultiDb}
         <!-- current database header (PG/MSSQL bind one DB per connection); its -->
@@ -3596,6 +3327,8 @@
     {/if}
   </div>
 
+  {#if focused}
+  <div use:footerPortal={embedded} data-explorer-footer={connId ?? 'selected'} style="flex:none;display:flex;flex-direction:column">
   <!-- Object Properties panel (T18) — thông tin object đang chọn -->
   {#if selProps}
     <div style="flex:none;border-top:var(--px-1) solid var(--border);background:var(--sidebar);padding:var(--px-7) var(--px-12)">
@@ -3605,7 +3338,7 @@
         <span class="mono" style="font-size:var(--px-12);font-weight:600;color:var(--text)">{selProps.name}</span>
       </div>
       {#if selProps.schema && selProps.schema !== selProps.name}
-        <div class="mono" style="font-size:var(--px-10_5);color:var(--muted);margin-top:var(--px-2)">schema: {selProps.schema}</div>
+        <div class="mono" style="font-size:var(--px-10_5);color:var(--muted);margin-top:var(--px-2)">{selProps.type === 'Subject' ? 'stream' : 'schema'}: {selProps.schema}</div>
       {/if}
     </div>
   {/if}
@@ -3631,6 +3364,8 @@
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3"></circle><path d="M3 20c0-3 3-5 6-5s6 2 6 5"></path><path d="M17 7a3 3 0 0 1 0 6M22 20c0-2.5-2-4-4-4.5"></path></svg>
     </span>
   </div>
+  </div>
+  {/if}
 </div>
 
 {#if renameState}
@@ -3862,19 +3597,6 @@
   />
 {/if}
 
-{#if partitionsFor && selected}
-  <KafkaPartitionsDialog
-    connId={selected.id}
-    topic={partitionsFor.topic}
-    current={partitionsFor.current}
-    onClose={() => (partitionsFor = null)}
-    onDone={() => {
-      partitionsFor = null
-      if (selected) explorer.loadStreaming(selected.id, 'kafka', true)
-    }}
-  />
-{/if}
-
 {#if confirmState}
   <!-- backdrop click does NOT confirm/close; use Cancel / Confirm / Escape -->
   <div
@@ -3906,6 +3628,15 @@
 {/if}
 
 <style>
+  .ws-pointer {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--px-8);
+    padding: var(--px-14) var(--px-12);
+    font-size: var(--px-12);
+    color: var(--text2);
+  }
   /* tree row hover + selected — primary (blue) tint so they read clearly over the
      softened sidebar in both themes. Background/accent-bar live here (not inline)
      so :hover isn't blocked by an inline background. Selected = stronger tint +

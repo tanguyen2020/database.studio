@@ -5,6 +5,7 @@
   import { palette, fuzzyScore } from '$lib/stores/palette.svelte'
   import { connections } from '$lib/stores/connections.svelte'
   import { tabs } from '$lib/stores/tabs.svelte'
+  import { opensWorkspace } from '$lib/stream/workspace-systems'
   import { explorer } from '$lib/stores/explorer.svelte'
   import { ui } from '$lib/stores/ui.svelte'
   import { settings } from '$lib/stores/settings.svelte'
@@ -29,16 +30,11 @@
   function openConn(id: string, system: string) {
     connections.selectedId = id
     void connections.connect(id).then(() => {
-      // Redis: key browser is in the ObjectExplorer sidebar — no tab on connect.
-      if (system === 'redis') { /* keys shown in explorer */ }
-      else if (system === 'nats') tabs.openNatsTab(id)
-      // Kafka: topics shown in explorer — no cluster tab on connect (topic → consumer).
-      else if (system === 'kafka') { /* topics shown in explorer */ }
+      // Redis · Kafka · NATS · RabbitMQ: no object tree — their workspace tab is the view
+      if (opensWorkspace(system)) tabs.openStreamWorkspace(id)
       else if (system === 'cassandra') tabs.openSqlTab({ connectionId: id, title: 'Untitled CQL' })
       // MongoDB: collections shown in explorer — no tab on connect (collection → documents).
       else if (system === 'mongodb') { /* collections shown in explorer */ }
-      // RabbitMQ: queues/exchanges shown in explorer — no SQL tab (it is not SQL).
-      else if (system === 'rabbitmq') { /* queues shown in explorer */ }
       // Elasticsearch: indices & tools shown in explorer — open the cluster overview.
       else if (system === 'elasticsearch') tabs.openEsCluster(id)
       else tabs.openSqlTab({ connectionId: id, title: 'Untitled query' })

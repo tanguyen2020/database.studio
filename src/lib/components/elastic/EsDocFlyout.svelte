@@ -99,7 +99,7 @@
         <button class="eg-btn" onclick={() => copy(hit._id, 'Copied id')} title="Copy document id"><EsIcon name="copy" size={13} /> Id</button>
         <button class="eg-btn" onclick={() => copy(JSON.stringify(hit._source ?? {}, null, 2), 'Copied JSON')}><EsIcon name="copy" size={13} /> JSON</button>
         <button class="eg-btn primary" onclick={() => (editing = true)}><EsIcon name="edit" size={13} /> Edit</button>
-        <button class="eg-btn danger" onclick={() => (confirmDelete = true)} aria-label="Delete document"><EsIcon name="trash" size={13} /></button>
+        <button class="eg-btn ds-danger-outline" onclick={() => (confirmDelete = true)} aria-label="Delete document"><EsIcon name="trash" size={13} /></button>
       {/if}
       <button class="eg-btn" onclick={onClose} aria-label="Close" title="Close"><EsIcon name="close" size={13} /></button>
     </div>

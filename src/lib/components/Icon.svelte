@@ -1,9 +1,9 @@
 <script module lang="ts">
-  export type IconName = 'refresh' | 'plus' | 'close' | 'chevron-down' | 'merge' | 'search' | 'panel-right' | 'query' | 'expand' | 'copy' | 'trash'
+  export type IconName = 'refresh' | 'plus' | 'close' | 'chevron-down' | 'fold' | 'unfold' | 'merge' | 'search' | 'panel-right' | 'query' | 'expand' | 'copy' | 'trash'
     | 'download' | 'filter' | 'sort' | 'chevron-left' | 'chevron-right' | 'first' | 'last' | 'paste' | 'edit' | 'table' | 'braces' | 'code' | 'file' | 'columns' | 'rows' | 'sliders' | 'check'
     | 'database' | 'puzzle' | 'upload' | 'link' | 'unlink' | 'chart' | 'cpu' | 'play' | 'folder' | 'zap' | 'info' | 'warning'
     | 'user' | 'users' | 'shield' | 'key' | 'lock' | 'eye' | 'eye-off' | 'sparkle'
-    | 'clock' | 'archive' | 'server'
+    | 'clock' | 'archive' | 'server' | 'send'
 </script>
 
 <script lang="ts">
@@ -38,6 +38,10 @@
     <path d="M4 4l8 8M12 4l-8 8" />
   {:else if name === 'chevron-down'}
     <path d="M4 6l4 4 4-4" />
+  {:else if name === 'fold'}
+    <path d="M5 3l3 3 3-3M5 13l3-3 3 3" />
+  {:else if name === 'unfold'}
+    <path d="M5 6l3-3 3 3M5 10l3 3 3-3" />
   {:else if name === 'merge'}
     <rect x="2.5" y="2.5" width="11" height="11" rx="2" />
     <path d="M5.5 8h5" />
@@ -103,6 +107,8 @@
     <path d="M3 4v8c0 1 2.2 1.8 5 1.8s5-.8 5-1.8V4M3 8c0 1 2.2 1.8 5 1.8s5-.8 5-1.8" />
   {:else if name === 'puzzle'}
     <path d="M6.5 2.8a1.4 1.4 0 0 1 2.8 0v1.2h3.2v3.2h-1.2a1.4 1.4 0 0 0 0 2.8h1.2v3.2H9.3v-1.2a1.4 1.4 0 0 0-2.8 0v1.2H3.3V10h1.2a1.4 1.4 0 0 0 0-2.8H3.3V4h3.2z" />
+  {:else if name === 'send'}
+    <path d="M14 2 7 9M14 2l-4.5 12-2.5-5-5-2.5L14 2Z" />
   {:else if name === 'upload'}
     <path d="M8 10.5V2.8M5 5.6 8 2.6l3 3M3 10.5v1.7c0 .7.5 1.3 1.2 1.3h7.6c.7 0 1.2-.6 1.2-1.3v-1.7" />
   {:else if name === 'link'}

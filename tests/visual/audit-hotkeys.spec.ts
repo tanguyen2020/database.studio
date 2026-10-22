@@ -285,7 +285,7 @@ test('explorer database filter narrows database nodes', async ({ page }) => {
   await openDatabaseNode(page)
 
   // demo databases: app (current), analytics, postgres
-  const filter = page.getByPlaceholder('Filter databases…')
+  const filter = page.getByPlaceholder('Search databases and objects')
   await expect(filter).toBeVisible()
   await filter.fill('analytics')
   await page.waitForTimeout(300)
@@ -323,7 +323,7 @@ test('per-folder filter narrows objects inside Tables', async ({ page }) => {
   await page.waitForTimeout(150)
   await page.getByText('Filter…', { exact: true }).first().click()
   await page.waitForTimeout(150)
-  await page.getByPlaceholder('Filter…').first().fill('students')
+  await page.getByPlaceholder('Filter by name').first().fill('students')
   await page.waitForTimeout(300)
   await expect(page.getByRole('treeitem', { name: /students/ }).first()).toBeVisible()
   await expect(page.getByRole('treeitem', { name: /courses/ })).toHaveCount(0)

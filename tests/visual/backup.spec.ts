@@ -62,7 +62,7 @@ const ENGINES: {
   { name: 'SQLite (file node)', conn: (p) => p.getByRole('button', { name: /Local SQLite/ }).first(), node: (p) => p.getByRole('treeitem', { name: /\bfile$/ }).first(), db: /Local SQLite|Backup/ },
   { name: 'Cassandra (keyspace)', conn: (p) => p.getByRole('button', { name: /Profiles Cassandra/ }).first(), node: (p) => p.getByRole('treeitem', { name: /library_ks/ }).first(), db: /library_ks/, noun: 'Keyspace' },
   { name: 'MongoDB', conn: (p) => p.getByRole('button', { name: /Events MongoDB/ }).first(), node: (p) => p.locator('[aria-label="Explorer"], aside').getByText('analytics', { exact: true }).first(), db: /analytics/ },
-  { name: 'Redis (logical database picker)', conn: (p) => p.getByRole('button', { name: /Cache Redis/ }).first(), node: (p) => p.getByLabel('Redis database'), db: /db0/ },
+  { name: 'Redis (connection row — Redis has no object tree)', conn: (p) => p.getByRole('button', { name: /Cache Redis/ }).first(), node: (p) => p.getByRole('button', { name: /Cache Redis/ }).first(), db: /db0/ },
   { name: 'DuckDB', query: '?duckdb=1', conn: (p) => p.getByRole('button', { name: /Warehouse DuckDB/ }).first(), node: (p) => p.getByRole('treeitem', { name: /\bcurrent$/ }).first(), db: /·/ },
 ]
 
@@ -201,9 +201,11 @@ test('a missing client tool explains what to install and can be located', async 
 
 test('a running backup shows progress in its own window and can be stopped', async ({ page }) => {
   await boot(page, '?slowBackup=6000')
+  // Redis opens its Browser workspace; Backup & Restore… is a button there
   await page.getByRole('button', { name: /Cache Redis/ }).first().click()
-  await page.waitForTimeout(500)
-  const dialog = await openFromMenu(page, page.getByLabel('Redis database'), /^Backup & Restore…$/)
+  await page.locator('[data-stream-shell="redis"]').getByRole('button', { name: 'Backup & Restore…' }).click()
+  const dialog = page.getByRole('dialog', { name: 'Backup & Restore' })
+  await expect(dialog).toBeVisible()
   await expect(dialog.getByLabel('Backup file')).toHaveValue(/redis_db0_.*\.redis\.jsonl$/)
   await dialog.getByRole('button', { name: /Back up/ }).click()
   await expect(dialog).toHaveCount(0)

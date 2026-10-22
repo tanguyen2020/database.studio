@@ -372,7 +372,7 @@
                     <button class="eg-btn" onclick={() => { userForm = { isNew: false, username: u.username, password: '', confirm: '', full_name: u.full_name ?? '', email: u.email ?? '', roles: [...u.roles] }; formError = null }} disabled={!!u.metadata?._reserved} title={u.metadata?._reserved ? 'Reserved users cannot be edited' : 'Edit'}>Edit</button>
                     <button class="eg-btn" onclick={() => { pwForm = { username: u.username, password: '', confirm: '' }; formError = null }}>Password</button>
                     {#if u.username !== me}<button class="eg-btn" onclick={() => setEnabled(u, !u.enabled)}>{u.enabled ? 'Disable' : 'Enable'}</button>{/if}
-                    {#if !u.metadata?._reserved && u.username !== me}<button class="eg-btn danger" onclick={() => deleteUser(u)} aria-label="Delete user {u.username}"><EsIcon name="trash" size={13} /></button>{/if}
+                    {#if !u.metadata?._reserved && u.username !== me}<button class="eg-btn ds-danger-outline" onclick={() => deleteUser(u)} aria-label="Delete user {u.username}"><EsIcon name="trash" size={13} /></button>{/if}
                   </td>
                 </tr>
               {:else}
@@ -393,7 +393,7 @@
                   <td style="font-size:var(--px-12)">{#each r.indices as i, k (k)}<div><span class="mono">{i.names.join(', ')}</span> → {i.privileges.join(', ')}</div>{:else}<span style="color:var(--muted)">—</span>{/each}</td>
                   <td style="text-align:right;white-space:nowrap">
                     <button class="eg-btn" onclick={() => editRole(name)} disabled={!!r.metadata?._reserved} title={r.metadata?._reserved ? 'Reserved roles cannot be edited' : 'Edit'}>Edit</button>
-                    {#if !r.metadata?._reserved}<button class="eg-btn danger" onclick={() => deleteRole(name)} aria-label="Delete role {name}"><EsIcon name="trash" size={13} /></button>{/if}
+                    {#if !r.metadata?._reserved}<button class="eg-btn ds-danger-outline" onclick={() => deleteRole(name)} aria-label="Delete role {name}"><EsIcon name="trash" size={13} /></button>{/if}
                   </td>
                 </tr>
               {/each}
@@ -426,7 +426,7 @@
                   <td>{fmtTimestamp(k.creation)}</td>
                   <td>{k.expiration ? fmtTimestamp(k.expiration) : 'Never'}</td>
                   <td><span class="es-badge {k.invalidated || expired ? 'red' : 'green'}">{k.invalidated ? 'Invalidated' : expired ? 'Expired' : 'Active'}</span></td>
-                  <td style="text-align:right">{#if !k.invalidated}<button class="eg-btn danger" onclick={() => invalidateKey(k)}>Invalidate</button>{/if}</td>
+                  <td style="text-align:right">{#if !k.invalidated}<button class="eg-btn ds-danger-outline" onclick={() => invalidateKey(k)}>Invalidate</button>{/if}</td>
                 </tr>
               {:else}
                 <tr><td colspan="6" style="color:var(--muted)">No API keys</td></tr>
@@ -447,7 +447,7 @@
                   <td><span class="es-badge {mm.enabled ? 'green' : ''}">{mm.enabled ? 'yes' : 'no'}</span></td>
                   <td style="text-align:right;white-space:nowrap">
                     <button class="eg-btn" onclick={() => { mapForm = { isNew: false, name, json: JSON.stringify(m, null, 2) }; formError = null }}>Edit</button>
-                    <button class="eg-btn danger" aria-label="Delete mapping {name}" onclick={() => (confirm = { title: `Delete role mapping ${name}?`, body: 'Users matched by this mapping lose the roles it grants.', action: 'Delete', run: async () => { await es(connId, 'DELETE', `/_security/role_mapping/${seg(name)}`); await load() } })}><EsIcon name="trash" size={13} /></button>
+                    <button class="eg-btn ds-danger-outline" aria-label="Delete mapping {name}" onclick={() => (confirm = { title: `Delete role mapping ${name}?`, body: 'Users matched by this mapping lose the roles it grants.', action: 'Delete', run: async () => { await es(connId, 'DELETE', `/_security/role_mapping/${seg(name)}`); await load() } })}><EsIcon name="trash" size={13} /></button>
                   </td>
                 </tr>
               {:else}

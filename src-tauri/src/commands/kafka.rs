@@ -4,7 +4,7 @@
 use tauri::{AppHandle, Emitter, State};
 
 use crate::drivers::kafka::{
-    borrowed_to_message, KafkaCluster, KafkaGroup, KafkaLag, KafkaMessage, KafkaPage, KafkaTopic,
+    borrowed_to_message, KafkaCluster, KafkaConfigEntry, KafkaGroup, KafkaLag, KafkaMessage, KafkaPage, KafkaTopic,
 };
 use crate::drivers::LiveConnection;
 use crate::error::{AppError, QueryError};
@@ -259,13 +259,92 @@ pub async fn kafka_fetch_page(
     partition: Option<i32>,
     until: i64,
     limit: i64,
+    from_time: Option<i64>,
 ) -> Result<KafkaPage, AppError> {
     let inner = state
         .registry
         .with_driver(&conn_id, move |driver| async move {
             let d = driver.lock().await;
             match &*d {
-                LiveConnection::Kafka(k) => k.fetch_page(&topic, partition, until, limit).await,
+                LiveConnection::Kafka(k) => k.fetch_page_from(&topic, partition, until, limit, from_time).await,
+                _ => Err(not_kafka()),
+            }
+        })
+        .await?;
+    inner.map_err(|e| AppError::Driver(e.message))
+}
+
+/// Every configuration entry of a topic.
+#[tauri::command]
+pub async fn kafka_topic_configs(
+    state: State<'_, AppState>,
+    conn_id: String,
+    topic: String,
+) -> Result<Vec<KafkaConfigEntry>, AppError> {
+    let inner = state
+        .registry
+        .with_driver(&conn_id, move |driver| async move {
+            let d = driver.lock().await;
+            match &*d {
+                LiveConnection::Kafka(k) => k.topic_configs(&topic).await,
+                _ => Err(not_kafka()),
+            }
+        })
+        .await?;
+    inner.map_err(|e| AppError::Driver(e.message))
+}
+
+/// Change topic settings; `changes` value `null` = back to the default.
+#[tauri::command]
+pub async fn kafka_alter_topic_configs(
+    state: State<'_, AppState>,
+    conn_id: String,
+    topic: String,
+    changes: std::collections::HashMap<String, Option<String>>,
+) -> Result<(), AppError> {
+    let inner = state
+        .registry
+        .with_driver(&conn_id, move |driver| async move {
+            let d = driver.lock().await;
+            match &*d {
+                LiveConnection::Kafka(k) => k.alter_topic_configs(&topic, changes).await,
+                _ => Err(not_kafka()),
+            }
+        })
+        .await?;
+    inner.map_err(|e| AppError::Driver(e.message))
+}
+
+/// Delete a consumer group.
+#[tauri::command]
+pub async fn kafka_delete_group(state: State<'_, AppState>, conn_id: String, group: String) -> Result<(), AppError> {
+    let inner = state
+        .registry
+        .with_driver(&conn_id, move |driver| async move {
+            let d = driver.lock().await;
+            match &*d {
+                LiveConnection::Kafka(k) => k.delete_group(&group).await,
+                _ => Err(not_kafka()),
+            }
+        })
+        .await?;
+    inner.map_err(|e| AppError::Driver(e.message))
+}
+
+/// Position of the first message at/after `ts` in every partition; `null` = none that recent.
+#[tauri::command]
+pub async fn kafka_offsets_for_time(
+    state: State<'_, AppState>,
+    conn_id: String,
+    topic: String,
+    ts: i64,
+) -> Result<Vec<(i32, Option<i64>)>, AppError> {
+    let inner = state
+        .registry
+        .with_driver(&conn_id, move |driver| async move {
+            let d = driver.lock().await;
+            match &*d {
+                LiveConnection::Kafka(k) => k.offsets_for_time(&topic, ts).await,
                 _ => Err(not_kafka()),
             }
         })

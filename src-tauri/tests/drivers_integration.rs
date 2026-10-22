@@ -9534,3 +9534,117 @@ async fn pg_session_init_is_sent_once_and_survives_a_reconnect() {
     assert!(registry.set_session_init("init-tab", bad.clone()).await.unwrap().is_some());
     assert!(registry.set_session_init("init-tab", bad).await.unwrap().is_some(), "a failed setup must be retried, not cached");
 }
+
+/// Kafka workspace W1 (SPEC-KAFKA-WORKSPACE.md §2) on a real broker:
+///   1. topic settings: changing ONE key keeps every other key set on the topic
+///      (Kafka's AlterConfigs resets what it is not given — the driver merges);
+///      "back to default" removes the topic's own value;
+///   2. a point in time maps to the first message written at/after it, and a page
+///      read from that time starts there; a future time has no position;
+///   3. deleting a stopped group removes its positions; a running group is refused
+///      with words a person can act on.
+#[tokio::test]
+async fn kafka_workspace_settings_time_seek_and_group_delete() {
+    use database_studio_lib::drivers::kafka::{KafkaConnParams, KafkaDriver};
+    use rdkafka::consumer::{BaseConsumer, Consumer};
+    use std::collections::HashMap;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    use testcontainers_modules::kafka::{Kafka, KAFKA_PORT};
+
+    let node = Kafka::default().start().await.expect("start kafka container");
+    let port = node.get_host_port_ipv4(KAFKA_PORT).await.unwrap();
+    let bootstrap = format!("127.0.0.1:{port}");
+    let params = KafkaConnParams { bootstrap: bootstrap.clone(), sasl_mechanism: String::new(), user: String::new(), password: String::new(), ssl: false };
+    let drv = retry("kafka", || KafkaDriver::connect(&params)).await;
+    const T: &str = "w1_topic";
+    drv.create_topic(T, 1, 1).await.unwrap();
+    for _ in 0..20 {
+        if drv.topics().await.unwrap().iter().any(|t| t.name == T) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+
+    // ---- 1. settings ----
+    let value = |cfg: &[database_studio_lib::drivers::kafka::KafkaConfigEntry], k: &str| {
+        cfg.iter().find(|e| e.name == k).map(|e| (e.value.clone(), e.source.clone()))
+    };
+    let mut first = HashMap::new();
+    first.insert("cleanup.policy".to_string(), Some("compact".to_string()));
+    drv.alter_topic_configs(T, first).await.unwrap();
+    let mut second = HashMap::new();
+    second.insert("retention.ms".to_string(), Some("86400000".to_string()));
+    drv.alter_topic_configs(T, second).await.unwrap();
+    let cfg = drv.topic_configs(T).await.unwrap();
+    assert_eq!(value(&cfg, "retention.ms"), Some((Some("86400000".into()), "topic".into())));
+    assert_eq!(
+        value(&cfg, "cleanup.policy"),
+        Some((Some("compact".into()), "topic".into())),
+        "changing retention.ms must keep cleanup.policy set on the topic"
+    );
+    let mut reset = HashMap::new();
+    reset.insert("retention.ms".to_string(), None);
+    drv.alter_topic_configs(T, reset).await.unwrap();
+    let cfg = drv.topic_configs(T).await.unwrap();
+    assert_ne!(value(&cfg, "retention.ms").unwrap().1, "topic", "back to default: no longer set on the topic");
+    assert_eq!(value(&cfg, "cleanup.policy").unwrap().0.as_deref(), Some("compact"));
+    eprintln!("CHK settings merge OK");
+
+    // ---- 2. time seek ----
+    for i in 0..5 {
+        drv.produce(T, &format!("old{i}"), "early", Some(0)).await.unwrap();
+    }
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    let mark = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    for i in 0..5 {
+        drv.produce(T, &format!("new{i}"), "late", Some(0)).await.unwrap();
+    }
+    let at = drv.offsets_for_time(T, mark).await.unwrap();
+    assert_eq!(at, vec![(0, Some(5))], "first message at/after the mark is offset 5");
+    let page = drv.fetch_page_from(T, None, -1, 100, Some(mark)).await.unwrap();
+    let mut keys: Vec<String> = page.msgs.iter().map(|m| m.key.clone()).collect();
+    keys.sort();
+    assert_eq!(keys, vec!["new0", "new1", "new2", "new3", "new4"], "a page read from the mark starts there");
+    assert_eq!(page.window_start, 5);
+    let future = drv.offsets_for_time(T, mark + 3_600_000).await.unwrap();
+    assert_eq!(future, vec![(0, None)], "nothing written that recent → no position");
+    eprintln!("CHK time seek OK");
+
+    // ---- 3. delete group ----
+    drv.reset_group_offset("w1_idle".into(), T.into(), 0, "offset".into(), 3).await.unwrap();
+    assert!(!drv.group_lag("w1_idle".into()).await.unwrap().is_empty());
+    drv.delete_group("w1_idle").await.unwrap();
+    let left = drv.consumer_groups().await.unwrap();
+    assert!(left.iter().all(|g| g.name != "w1_idle"), "deleted group is gone");
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop2 = stop.clone();
+    let bs = bootstrap.clone();
+    let live = std::thread::spawn(move || {
+        let c: BaseConsumer = rdkafka::ClientConfig::new()
+            .set("bootstrap.servers", &bs)
+            .set("group.id", "w1_live")
+            .set("session.timeout.ms", "6000")
+            .create()
+            .unwrap();
+        c.subscribe(&[T]).unwrap();
+        while !stop2.load(Ordering::Relaxed) {
+            let _ = c.poll(Duration::from_millis(200));
+        }
+        drop(c);
+    });
+    for _ in 0..60 {
+        let gs = drv.consumer_groups().await.unwrap();
+        if gs.iter().any(|g| g.name == "w1_live" && !g.members.is_empty()) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    let refused = drv.delete_group("w1_live").await.expect_err("a running group cannot be deleted");
+    assert!(refused.message.contains("running consumers"), "{}", refused.message);
+    stop.store(true, Ordering::Relaxed);
+    let _ = live.join();
+    eprintln!("CHK group delete OK");
+}

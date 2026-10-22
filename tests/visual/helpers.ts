@@ -1,4 +1,4 @@
-import type { Page } from '@playwright/test'
+import { expect, type Page } from '@playwright/test'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
@@ -6,6 +6,26 @@ export const PROTO_URL = process.env.DS_PROTO_URL ?? 'http://localhost:4174/Data
 // Port 5173 by default (vite.config.ts); DS_APP_URL lets a run point at another port
 // when 5173 is taken by a different project on the machine.
 export const APP_URL = process.env.DS_APP_URL ?? 'http://localhost:5173/'
+
+/** The workspace tab on screen (Redis · Kafka · NATS · RabbitMQ open into one). */
+export const activeWorkspace = (page: Page) => page.locator('[data-tab-pane][data-active="true"]')
+
+/** Click a connection row (Redis · Kafka · NATS · RabbitMQ open their workspace tab). */
+export async function openConnection(page: Page, name: RegExp) {
+  await page.getByRole('button', { name }).first().click()
+}
+
+/** Pick a section of the open workspace by its id (`overview`, `topics`, `queues`…). */
+export async function wsSection(page: Page, id: string) {
+  await activeWorkspace(page).locator(`nav[aria-label="Sections"] [data-section="${id}"]`).click()
+}
+
+/** The config runs specs in the two-panel layout; one-sidebar specs use this
+ *  instead (`test.use({ storageState: ONE_SIDEBAR })`) — the app's default layout. */
+export const ONE_SIDEBAR = {
+  cookies: [],
+  origins: [{ origin: new URL(APP_URL).origin, localStorage: [{ name: 'sidebar_layout', value: 'stacked' }] }],
+}
 
 /**
  * Chặn mọi request font bên ngoài (fonts.googleapis.com / fonts.gstatic.com).
@@ -111,6 +131,26 @@ export async function measure(
  * `ariaLabel` ("Generated DDL", "Migration script", "Pending SQL", …); with no
  * label the most recently mounted view is used.
  */
+/** A NATS subject's messages: shown in the stream details of the NATS workspace
+ *  (SPEC-NATS-WORKSPACE.md §3 — no tab per subject), next to the Streams table. */
+export const natsSubjectView = (page: Page) => page.locator('[data-nats-subject-view]')
+/** a Kafka topic's messages, shown inside the topic details of the Kafka workspace */
+export const kafkaTopicView = (page: Page) => page.locator('[data-kafka-topic-view]')
+
+/** Connect the demo Kafka (it opens its workspace — Kafka has no object tree),
+ *  go to Topics and pick `topic`: its messages show in the topic details. */
+export async function openKafkaTopic(page: Page, topic: string) {
+  await page.getByRole('button', { name: /Events Kafka/ }).first().dblclick()
+  const ws = page.locator('[data-stream-shell="kafka"]')
+  await expect(ws).toBeVisible({ timeout: 8000 })
+  await ws.locator('nav[aria-label="Sections"] [data-section="topics"]').click()
+  await ws.getByRole('grid', { name: 'Topics' }).locator('tbody tr').filter({ hasText: topic }).first().click()
+  const tablist = ws.getByRole('tablist', { name: 'Topic details' })
+  await tablist.getByRole('tab', { name: 'Messages' }).click()
+  await expect(ws.locator(`[data-kafka-topic-view="${topic}"]`)).toBeVisible()
+  return ws
+}
+
 export async function previewText(page: Page, label?: string): Promise<string> {
   return page.evaluate((want) => {
     type Ed = {

@@ -390,7 +390,7 @@
         </DropdownMenu.Content>
       </DropdownMenu.Root>
       {#if kind === 'index' || kind === 'data stream'}
-        <button class="eg-btn danger" onclick={askDelete}><EsIcon name="trash" size={13} /> Delete</button>
+        <button class="eg-btn ds-danger-outline" onclick={askDelete}><EsIcon name="trash" size={13} /> Delete</button>
       {/if}
     </div>
   </div>
@@ -540,7 +540,7 @@
                     <td class="mono">{a.index}</td>
                     <td>{a.is_write_index ? 'yes' : '—'}</td>
                     <td class="mono" style="font-size:var(--px-11_5);color:var(--text2)">{a.filter ? JSON.stringify(a.filter) : '—'}</td>
-                    <td style="text-align:right"><button class="eg-btn danger" onclick={() => dropAlias(a)} aria-label="Remove alias {a.alias}">Remove</button></td>
+                    <td style="text-align:right"><button class="eg-btn ds-danger-outline" onclick={() => dropAlias(a)} aria-label="Remove alias {a.alias}">Remove</button></td>
                   </tr>
                 {/each}
               </tbody>
