@@ -13,10 +13,10 @@
   import { backupWizard, type BackupTab } from '$lib/stores/backup.svelte'
   import { connections } from '$lib/stores/connections.svelte'
   import { explorer } from '$lib/stores/explorer.svelte'
-  import { systemMeta } from '$lib/systems'
   import Icon from '$lib/components/Icon.svelte'
   import SearchSelect from '$lib/components/SearchSelect.svelte'
   import SystemIcon from '$lib/components/SystemIcon.svelte'
+  import { brandKey, brandMeta } from '$lib/scylla/brand'
   import '$lib/components/workspace/users/um.css'
   import { backupJobs } from '$lib/stores/backupJobs.svelte'
   import {
@@ -59,7 +59,9 @@
 
   const base = $derived(baseConnectionId(connId))
   const profile = $derived(connections.byId(base))
-  const meta = $derived(systemMeta(system))
+  // ScyllaDB connections wear their own brand (same Cassandra engine/backup path)
+  const brand = $derived(system === 'cassandra' ? brandKey(profile ?? { system }) : system)
+  const meta = $derived(brandMeta(brand))
   const noun = $derived(targetNoun(system))
   const isOracle = $derived(system === 'oracle')
   const fileless = $derived(system === 'sqlite' || system === 'duckdb')
@@ -391,7 +393,7 @@
   <div class="um-backdrop" role="presentation" onkeydown={onKey}>
     <div class="um-dlg bk-dlg" role="dialog" aria-modal="true" aria-label="Backup & Restore" tabindex="-1" onkeydown={onKey}>
       <div class="um-dlg-head">
-        <span class="um-dlg-icon plain"><SystemIcon {system} size={20} /></span>
+        <span class="um-dlg-icon plain"><SystemIcon system={brand} size={20} /></span>
         <div class="um-dlg-title">
           <b>Backup &amp; Restore</b>
           <span title={`${profile?.name ?? ''} · ${dbShown}`}>{profile?.name ?? meta.label}{dbShown ? ` · ${dbShown}` : ''}</span>

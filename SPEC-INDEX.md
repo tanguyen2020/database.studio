@@ -93,6 +93,7 @@ Driver module `drivers/<system>.rs` + variant trong `LiveConnection` + **nhánh 
 | `SPEC-RABBITMQ-WORKSPACE.md` | RabbitMQ workspace: Overview + tốc độ, Queues, Connections, Nodes (W2) | **Đã code W2 (chưa commit)** |
 | `SPEC-REDIS-BROWSER.md` | Redis Browser, bỏ kiểu mỗi key một tab (W3) | **Đã code W3 (chưa commit)** |
 | `SPEC-NATS-WORKSPACE.md` | NATS workspace: Overview, Streams (cây), KV, Object stores, Publish & subscribe (W4) | **Đã code W4 (chưa commit)** — Peek theo sequence đã làm |
+| `SPEC-SCYLLADB.md` | ScyllaDB = biến thể của engine Cassandra (nhận diện, tablets, CDC, DESCRIBE, cluster_status, logo) | **Đã implement (chưa commit)** — bằng chứng đo trên Scylla 6.2 ở §1; integration `scylla_integration.rs` EXIT=0 |
 
 ### Addendum thiết kế theo hệ (phần lớn còn đúng — override spec gốc khi mâu thuẫn)
 `spec/Database Studio design/design_handoff_database_studio/`:

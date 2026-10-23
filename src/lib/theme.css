@@ -33,6 +33,8 @@
      a step quieter, zeros quieter still. — */
   --tbl-name: #1c2230;
   --tbl-name-weight: 500;
+  /* ScyllaDB mark: the brand cyan #6CD5E7 is unreadable on white — a deeper cyan here */
+  --brand-scylla: #138ba0;
   --tbl-cell: #4b5363;
   --tbl-zero: #8b92a0;
   --tbl-th: #5b6372;
@@ -41,6 +43,11 @@
   --tbl-group: #f2f3f6;
   --tbl-child: #8a5a1f;
   --tbl-guide: #d3d7de;
+  /* the row under the pointer in a data list (topics, streams, subjects, queues,
+     keys, messages): a light wash of the accent plus an accent bar on the left edge,
+     so the row lifts off its neighbours without competing with the selected row */
+  --row-hover: color-mix(in srgb, var(--primary) 10%, var(--surface));
+  --row-hover-shadow: inset 3px 0 0 color-mix(in srgb, var(--primary) 70%, transparent);
   --primary: #4f6bed;
   --grid-zebra: #fafbfc;
   --grid-select: #4f6bed;
@@ -88,12 +95,15 @@
      light grey at a lighter weight and the other cells sit lower again */
   --tbl-name: #cdd2db;
   --tbl-name-weight: 450;
+  --brand-scylla: #6cd5e7;
   --tbl-cell: #9aa1ad;
   --tbl-zero: #636a78;
   --tbl-th: #8d94a2;
   --tbl-group: #1d2028;
   --tbl-child: #d2b08a;
   --tbl-guide: #363b47;
+  --row-hover: color-mix(in srgb, var(--primary) 15%, var(--surface));
+  --row-hover-shadow: inset 3px 0 0 color-mix(in srgb, var(--primary) 80%, transparent);
   --primary: #6b84ff;
   --grid-zebra: #181a20;
   --grid-select: #5872f0;
@@ -581,6 +591,9 @@ tr:hover .ds-name,
 button.ds-name:hover {
   text-decoration-line: underline;
 }
+tr:hover .ds-name {
+  color: var(--text);
+}
 tr[aria-selected='true'] .ds-name {
   font-weight: 600;
 }
@@ -734,13 +747,14 @@ tr[aria-selected='true'] .ds-name {
   border-bottom: none !important;
 }
 .ds-table tbody tr {
-  transition: background-color 0.1s ease;
+  transition: background-color 0.12s ease, box-shadow 0.12s ease;
 }
 .ds-table tbody tr:nth-child(even) {
   background-color: var(--grid-zebra);
 }
-.ds-table tbody tr:hover {
-  background-color: color-mix(in srgb, var(--primary) 6%, var(--surface));
+.ds-table tbody tr:hover:not([aria-selected='true']):not(.sel) {
+  background-color: var(--row-hover);
+  box-shadow: var(--row-hover-shadow);
 }
 /* full-height table (a message log): no outer card margin, header band only */
 .ds-table.flush {

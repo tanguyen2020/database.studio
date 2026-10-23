@@ -6,6 +6,7 @@
   import SystemIcon from '$lib/components/SystemIcon.svelte'
   import Icon from '$lib/components/Icon.svelte'
   import { systemMeta } from '$lib/systems'
+  import { brandKey, brandMeta } from '$lib/scylla/brand'
   import { connections } from '$lib/stores/connections.svelte'
   import { tabs } from '$lib/stores/tabs.svelte'
   import { toasts } from '$lib/stores/toast.svelte'
@@ -16,10 +17,17 @@
   const profile = $derived(ui.formProfile)
   const isNew = $derived(!profile?.id)
   const isQuick = $derived(ui.formQuick)
-  const meta = $derived(systemMeta(profile?.system))
 
   // Local editable copy + secrets (không round-trip từ backend)
   let draft = $state<ProfilePublic | null>(null)
+  // Cassandra engine: which CQL server (Apache Cassandra or ScyllaDB — SPEC-SCYLLADB.md)
+  const FLAVORS = [
+    { v: 'cassandra', brand: 'cassandra', t: 'Apache Cassandra', d: 'The open-source Apache project' },
+    { v: 'scylla', brand: 'scylladb', t: 'ScyllaDB', d: 'Cassandra-compatible, built for speed' },
+  ] as const
+  // ScyllaDB wears its own brand on the Cassandra engine (SPEC-SCYLLADB.md §3.4);
+  // it follows the draft so choosing "ScyllaDB" in Server type switches the logo.
+  const meta = $derived(brandMeta(brandKey(draft ?? profile)))
   let password = $state('')
   let passwordTouched = $state(false)
   let sshPassword = $state('')
@@ -34,7 +42,10 @@
       // (Đọc `draft.port` bên trong effect ghi `draft` → tự-vòng-lặp
       //  effect_update_depth_exceeded → chết mọi tương tác của form.)
       const d = JSON.parse(JSON.stringify(profile)) as ProfilePublic
-      if (d.port === 0 && meta.defaultPort) d.port = meta.defaultPort
+      // systemMeta(profile) — NOT `meta`: meta reads `draft`, and reading it here
+      // would make this effect re-run on its own write (effect_update_depth_exceeded).
+      const defPort = systemMeta(profile.system).defaultPort
+      if (d.port === 0 && defPort) d.port = defPort
       draft = d
       password = ''
       passwordTouched = false
@@ -194,6 +205,11 @@
     testId = id
     try {
       testResult = await connections.test(buildDraftPayload(), id)
+      // The server told us which CQL engine it is — show the right brand right away.
+      if (draft && draft.system === 'cassandra' && testResult.ok && testResult.server_version) {
+        if (testResult.server_version.startsWith('ScyllaDB')) draft.cassandra_flavor = 'scylla'
+        else if (testResult.server_version.startsWith('Cassandra')) draft.cassandra_flavor = 'cassandra'
+      }
     } catch (e) {
       testResult = { ok: false, error: String(e) }
     } finally {
@@ -286,7 +302,7 @@
               title="Choose another type"
             >‹ Back</span>
           {/if}
-          <span class="cm-tile"><SystemIcon system={draft.system} size={22} /></span>
+          <span class="cm-tile"><SystemIcon system={brandKey(draft)} size={22} /></span>
           <div class="cm-titles">
             <div class="cm-title">
               <span>{isNew ? (isQuick ? 'Quick Connect' : 'New connection') : draft.name || 'Connection'}</span>
@@ -410,10 +426,49 @@
             {/if}
 
             {#if isCassandra}
+              <!-- Apache Cassandra or ScyllaDB: two logo cards (same chooser style as the
+                   SSH method). A starting hint only — Test / Connect detects it for real. -->
+              <div style="grid-column:1/3">
+                <div class="cm-label" id="cass-flavor-label">Database engine</div>
+                <div class="cm-ssh-auth cm-flavor" role="radiogroup" aria-labelledby="cass-flavor-label">
+                  {#each FLAVORS as opt (opt.v)}
+                    <!-- a profile not detected yet wears the Cassandra brand, so show that card picked -->
+                    {@const on = (draft.cassandra_flavor || 'cassandra') === opt.v}
+                    <div
+                      class="cm-ssh-opt {opt.v}"
+                      class:on
+                      role="radio"
+                      aria-checked={on}
+                      aria-label={opt.t}
+                      tabindex={on ? 0 : -1}
+                      onclick={() => draft && (draft.cassandra_flavor = opt.v)}
+                      onkeydown={(e) => {
+                        if (!draft) return
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault()
+                          draft.cassandra_flavor = opt.v
+                        } else if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) {
+                          e.preventDefault()
+                          draft.cassandra_flavor = draft.cassandra_flavor === 'scylla' ? 'cassandra' : 'scylla'
+                          const next = (e.currentTarget as HTMLElement).parentElement?.querySelector<HTMLElement>(`.cm-ssh-opt.${draft.cassandra_flavor}`)
+                          next?.focus()
+                        }
+                      }}
+                    >
+                      <span class="cm-ssh-ico" aria-hidden="true"><SystemIcon system={opt.brand} size={20} /></span>
+                      <span class="cm-ssh-txt"><b>{opt.t}</b><span>{opt.d}</span></span>
+                      <span class="cm-ssh-radio" aria-hidden="true"></span>
+                    </div>
+                  {/each}
+                </div>
+                <div class="cm-flavor-hint">
+                  Not sure? Test the connection — we recognise the engine for you.
+                </div>
+              </div>
               <!-- Cassandra: Local datacenter + Consistency level (prototype dòng 2188-2191) -->
               <div>
                 <div class="cm-label">Local datacenter</div>
-                <input class="cm-input mono" bind:value={draft.cassandra_dc} placeholder="dc1" />
+                <input class="cm-input mono" bind:value={draft.cassandra_dc} placeholder={draft.cassandra_flavor === 'scylla' ? 'datacenter1' : 'dc1'} />
               </div>
               <div>
                 <div class="cm-label">Consistency level</div>
@@ -1188,6 +1243,26 @@
     border-radius: 50%;
     border: var(--px-2) solid var(--border2);
     transition: border-color 0.12s, border-width 0.12s;
+  }
+  /* Server chooser (Cassandra engine): the card colour is the brand, the logo keeps its own colours */
+  .cm-flavor {
+    margin-bottom: var(--px-6);
+  }
+  .cm-flavor .cm-ssh-opt.cassandra {
+    --opt: var(--sys-cassandra-accent);
+  }
+  .cm-flavor .cm-ssh-opt.scylla {
+    --opt: var(--brand-scylla);
+  }
+  .cm-flavor .cm-ssh-ico,
+  .cm-flavor .cm-ssh-opt.on .cm-ssh-ico {
+    background: var(--panel);
+    border: var(--px-1) solid var(--border);
+  }
+  .cm-flavor-hint {
+    font-size: var(--px-11_5);
+    color: var(--muted);
+    margin-bottom: var(--px-8);
   }
   .cm-ssh-opt.on .cm-ssh-radio {
     border: var(--px-5) solid var(--opt);

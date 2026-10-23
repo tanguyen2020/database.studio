@@ -361,7 +361,8 @@
     color: var(--tbl-cell);
   }
   .nm-table tbody tr:hover {
-    background: var(--tbl-hover);
+    background: var(--row-hover);
+    box-shadow: var(--row-hover-shadow);
   }
   .nm-table td.nm-acts {
     overflow: visible;

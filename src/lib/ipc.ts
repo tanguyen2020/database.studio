@@ -630,6 +630,8 @@ export interface CassColumn {
 export interface CassTable {
   name: string
   columns: CassColumn[]
+  /** ScyllaDB: this table is the CDC log of the named base table. */
+  cdc_of?: string
 }
 export interface CassView {
   name: string
@@ -658,6 +660,8 @@ export interface CassKeyspaceTree {
   types: CassType[]
   functions: CassFunction[]
   indexes: CassIndex[]
+  /** ScyllaDB: "tablets" / "tablets · initial 8" / "vnodes". */
+  tablets?: string
 }
 export interface RingNode {
   host: string
@@ -688,6 +692,16 @@ export const cassandraObjectDdl = (connId: string, keyspace: string, kind: strin
   invoke<string>('cassandra_object_ddl', { connId, keyspace, kind, name })
 export const cassandraColumns = (connId: string, keyspace: string, table: string) =>
   invoke<CassColumn[]>('cassandra_columns', { connId, keyspace, table })
+
+/** Which CQL server a connection talks to (SPEC-SCYLLADB.md §3.1). The backend
+ *  also writes the detected flavor back to the saved profile. */
+export interface CassServerInfo {
+  flavor: 'cassandra' | 'scylla'
+  version: string
+  tablets_enabled?: boolean
+}
+export const cassandraServerInfo = (connId: string) =>
+  invoke<CassServerInfo>('cassandra_server_info', { connId })
 
 // ---- MongoDB (document store) ----------------------------------------------
 

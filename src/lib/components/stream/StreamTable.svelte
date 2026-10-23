@@ -389,6 +389,7 @@
   }
   .st-table tbody tr {
     cursor: default;
+    transition: background-color 0.12s ease, box-shadow 0.12s ease;
   }
   .st-table tbody tr.zebra {
     background: var(--tbl-zebra);
@@ -404,8 +405,9 @@
   .st-table tbody tr.child td:first-child {
     background: linear-gradient(var(--tbl-guide), var(--tbl-guide)) var(--px-20) 0 / var(--px-1) 100% no-repeat;
   }
-  .st-table tbody tr:hover {
-    background: var(--tbl-hover);
+  .st-table tbody tr:hover:not(.sel) {
+    background: var(--row-hover);
+    box-shadow: var(--row-hover-shadow);
   }
   .st-table tbody tr.sel {
     background: color-mix(in srgb, var(--text) 13%, var(--surface));

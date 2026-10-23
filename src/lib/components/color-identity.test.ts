@@ -175,3 +175,23 @@ describe('ConnectionIndicator (port dòng 117 HTML)', () => {
     }
   })
 })
+
+describe('ScyllaDB brand (a flavor of the Cassandra engine — SPEC-SCYLLADB.md §3.4)', () => {
+  it('shows the official ScyllaDB mark (simple-icons scylladb, verbatim) in a theme-aware cyan', () => {
+    const { container } = render(SystemIcon, { system: 'scylladb', size: 16 })
+    const svg = container.querySelector('svg')!
+    expect(svg.getAttribute('data-logo')).toBe('scylladb')
+    // no tile: on a dark square the fine mark is unreadable at 16px
+    expect(container.querySelector('rect')).toBeNull()
+    const path = svg.querySelector('path')!
+    expect(path.getAttribute('d')).toBe(BRAND_MARKS.scylladb.d)
+    expect(path.getAttribute('fill')).toBe('var(--brand-scylla)')
+    expect(BRAND_MARKS.scylladb.slug).toBe('scylladb')
+  })
+
+  it('is not a SystemKey — the Cassandra engine metadata is unchanged', () => {
+    expect(SYS_GEN.scylladb).toMatchObject({ badge: 'SC', accent: '#6CD5E7', label: 'ScyllaDB' })
+    expect(SYSTEM_ORDER).not.toContain('scylladb')
+    expect(systemMeta('cassandra').label).toBe('Cassandra')
+  })
+})

@@ -8,6 +8,7 @@
   import ResultPanel from '$lib/components/results/ResultPanel.svelte'
   import SystemBadge from '$lib/components/SystemBadge.svelte'
   import SystemIcon from '$lib/components/SystemIcon.svelte'
+  import { brandKey, brandMeta, isScylla } from '$lib/scylla/brand'
   import SearchSelect from '$lib/components/SearchSelect.svelte'
   import { systemMeta } from '$lib/systems'
   import { connections } from '$lib/stores/connections.svelte'
@@ -54,6 +55,9 @@
   // it afterwards. `exec`/`explain` are per-tab, so switching tabs is independent.
   const profile = $derived(connections.byId(tab.connectionId))
   const isOrphan = $derived(tab.systemType === 'orphan' || (!!tab.connectionId && !profile))
+  // Editor dialect/highlighting only: a ScyllaDB server gets CQL + ScyllaDB's own
+  // words (BYPASS CACHE, USING TIMEOUT…). Everything else keeps tab.systemType.
+  const editorSystem = $derived(tab.systemType === 'cassandra' && isScylla(profile) ? 'scylladb' : tab.systemType)
   const disconnected = $derived(!!profile && !profile.connected)
   // Why it is closed. Set when a run failed on a dead socket (results.noteConnectionLost)
   // or when an Open Connection failed — so the banner explains itself instead of
@@ -949,7 +953,7 @@
         tabindex="0"
         style="display:flex;align-items:center;gap:var(--px-7);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-7);padding:var(--px-4) var(--px-9);cursor:pointer"
       >
-        <span style="display:flex;align-items:center;flex:none"><SystemIcon system={tab.systemType} size={15} /></span>
+        <span style="display:flex;align-items:center;flex:none"><SystemIcon system={brandKey(profile ?? { system: tab.systemType })} size={15} /></span>
         <span style="font-size:var(--px-12);font-weight:600">{profile?.name ?? (isOrphan ? '(deleted)' : '— no connection —')}</span>
         <span style="color:var(--muted);font-size:var(--px-9)">▾</span>
       </div>
@@ -969,8 +973,8 @@
               class="wk-drop-row"
               style="display:flex;align-items:center;gap:var(--px-9);padding:var(--px-6) var(--px-9);border-radius:var(--px-7);cursor:pointer;background:{p.id === tab.connectionId ? 'var(--hover)' : 'transparent'}"
             >
-              <span style="width:var(--px-7);height:var(--px-7);border-radius:50%;flex:none;background:{p.connected ? systemMeta(p.system).accent : 'var(--sys-orphan-accent)'}"></span>
-              <span style="flex:none;display:flex;align-items:center"><SystemIcon system={p.system} size={16} /></span>
+              <span style="width:var(--px-7);height:var(--px-7);border-radius:50%;flex:none;background:{p.connected ? brandMeta(brandKey(p)).accent : 'var(--sys-orphan-accent)'}"></span>
+              <span style="flex:none;display:flex;align-items:center"><SystemIcon system={brandKey(p)} size={16} /></span>
               <div style="min-width:0">
                 <div style="font-size:var(--px-12_5);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{p.name}</div>
                 <div class="mono" style="font-size:var(--px-10);color:var(--muted)">{p.system === 'sqlite' || p.system === 'duckdb' ? p.sqlite_path || ':memory:' : `${p.host}:${p.port}`}</div>
@@ -1112,7 +1116,7 @@
     <SqlEditor
       bind:this={editor}
       value={initialQuery}
-      system={tab.systemType}
+      system={editorSystem}
       schema={completionSchema}
       {defaultSchema}
       columnSource={tab.systemType === 'mongodb' ? mongoCompletionSource : columnSource}

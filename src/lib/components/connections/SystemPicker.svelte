@@ -8,8 +8,20 @@
   import { connections } from '$lib/stores/connections.svelte'
   import { ui } from '$lib/stores/ui.svelte'
   import type { SystemType } from '$lib/types'
+  import { brandMeta } from '$lib/scylla/brand'
 
-  function pick(system: SystemType) {
+  // ScyllaDB is a flavor of the Cassandra engine (SPEC-SCYLLADB.md) with its own
+  // card here: it creates a Cassandra profile that starts with the ScyllaDB brand.
+  const PICKER_ORDER: string[] = SYSTEM_ORDER.flatMap((k) => (k === 'cassandra' ? ['cassandra', 'scylladb'] : [k]))
+
+  function pick(key: string) {
+    if (key === 'scylladb') {
+      ui.pickerOpen = false
+      ui.formQuick = ui.pickerQuick
+      ui.formProfile = connections.makeBlankProfile('cassandra', 'scylla')
+      return
+    }
+    const system = key as SystemType
     if (!systemMeta(system).available) return
     ui.pickerOpen = false
     ui.formQuick = ui.pickerQuick
@@ -44,6 +56,7 @@
     oracle: 'Oracle Database — service name or SID',
     clickhouse: 'Columnar OLAP for fast analytics',
     cassandra: 'Distributed wide-column store (CQL)',
+    scylladb: 'High-performance, Cassandra-compatible',
     mongodb: 'JSON document database',
     elasticsearch: 'Full-text search and analytics',
     redis: 'In-memory keys, hashes, streams',
@@ -56,9 +69,9 @@
   let query = $state('')
   const q = $derived(query.trim().toLowerCase())
   const visible = $derived(
-    SYSTEM_ORDER.filter((k) => {
+    PICKER_ORDER.filter((k) => {
       if (!q) return true
-      const m = systemMeta(k)
+      const m = brandMeta(k)
       return [m.label, k, DESC[k] ?? '', GROUP_OF[m.category ?? ''] ?? ''].some((t) => t.toLowerCase().includes(q))
     }),
   )
@@ -66,7 +79,7 @@
     GROUPS.map((group) => ({
       group,
       // keep the sidebar order of categories inside a group
-      keys: CATEGORY_ORDER.flatMap((cat) => (GROUP_OF[cat] === group ? visible.filter((k) => systemMeta(k).category === cat) : [])),
+      keys: CATEGORY_ORDER.flatMap((cat) => (GROUP_OF[cat] === group ? visible.filter((k) => brandMeta(k).category === cat) : [])),
     })).filter((sec) => sec.keys.length),
   )
   const focusOnMount = (node: HTMLInputElement) => node.focus()
@@ -100,7 +113,7 @@
             spellcheck="false"
             use:focusOnMount
             onkeydown={(e) => {
-              if (e.key === 'Enter' && visible.length === 1) pick(visible[0] as SystemType)
+              if (e.key === 'Enter' && visible.length === 1) pick(visible[0])
             }}
           />
         </div>
@@ -112,10 +125,10 @@
             <div class="pk-section-title">{sec.group}</div>
             <div class="pk-grid">
               {#each sec.keys as key (key)}
-                {@const meta = systemMeta(key)}
+                {@const meta = brandMeta(key)}
                 <div
-                  onclick={() => pick(key as SystemType)}
-                  onkeydown={(e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), pick(key as SystemType))}
+                  onclick={() => pick(key)}
+                  onkeydown={(e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), pick(key))}
                   role="button"
                   tabindex="0"
                   aria-disabled={!meta.available}

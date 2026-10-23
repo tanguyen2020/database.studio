@@ -8,8 +8,9 @@
   import * as ContextMenu from '$lib/components/ui/context-menu'
   import * as DropdownMenu from '$lib/components/ui/dropdown-menu'
   import SystemIcon from '$lib/components/SystemIcon.svelte'
-  import { systemMeta } from '$lib/systems'
   import { tabs } from '$lib/stores/tabs.svelte'
+  import { connections } from '$lib/stores/connections.svelte'
+  import { brandKey, brandMeta } from '$lib/scylla/brand'
 
   // pane = 0 (mặc định / khi không split) hoặc 1 (pane thứ hai của split view)
   let { pane = 0 }: { pane?: 0 | 1 } = $props()
@@ -62,6 +63,12 @@
     dropIdx = null
   }
 
+  /** A tab on a ScyllaDB connection wears the ScyllaDB brand (same Cassandra engine). */
+  function tabBrand(tab: { systemType: string; connectionId?: string | null }): string {
+    if (tab.systemType !== 'cassandra') return tab.systemType
+    return brandKey(connections.byId(tab.connectionId) ?? { system: 'cassandra' })
+  }
+
   function scrollActiveIntoView(node: HTMLElement, isActive: boolean) {
     if (isActive) node.scrollIntoView({ inline: 'nearest', block: 'nearest' })
     return {
@@ -89,7 +96,7 @@
   >
   {#each paneTabs as tab (tab.id)}
     {@const idx = tabs.tabs.indexOf(tab)}
-    {@const meta = systemMeta(tab.systemType)}
+    {@const meta = brandMeta(tabBrand(tab))}
     {@const isActive = tab.id === activeId}
     <!-- the pinned Objects tab is a system tab: no close, no drag, no rename -->
     {@const closable = tab.contentType !== 'objects'}
@@ -130,7 +137,7 @@
           class:active={isActive}
           style="--tab-accent:{meta.accent};{dropIdx === idx && dragIdx !== null && dragIdx !== idx ? 'outline:var(--px-1) solid var(--primary);' : ''}"
         >
-          <span style="flex:none;display:flex;align-items:center"><SystemIcon system={tab.systemType} size={15} /></span>
+          <span style="flex:none;display:flex;align-items:center"><SystemIcon system={tabBrand(tab)} size={15} /></span>
           {#if renamingId === tab.id}
             <!-- svelte-ignore a11y_autofocus -->
             <input
@@ -243,7 +250,7 @@
       <DropdownMenu.Content class="max-h-[50vh] w-64 overflow-y-auto" align="end">
         {#each paneTabs as tab (tab.id)}
           <DropdownMenu.Item onclick={() => tabs.activate(tab.id)}>
-            <SystemIcon system={tab.systemType} size={15} />
+            <SystemIcon system={tabBrand(tab)} size={15} />
             <span style="margin-left:var(--px-6);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{tab.title}</span>
             {#if tab.isDirty}<span style="margin-left:auto">●</span>{/if}
           </DropdownMenu.Item>

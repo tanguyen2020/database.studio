@@ -96,6 +96,10 @@ pub struct ConnectionProfile {
     /// Cassandra only: default consistency level (LOCAL_QUORUM if empty).
     #[serde(default)]
     pub cassandra_consistency: String,
+    /// Cassandra only: which CQL server this is — "" (not known yet) |
+    /// "cassandra" | "scylla". Detected on connect (SPEC-SCYLLADB.md §3.1).
+    #[serde(default)]
+    pub cassandra_flavor: String,
 }
 
 impl ConnectionProfile {

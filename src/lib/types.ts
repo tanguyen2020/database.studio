@@ -54,6 +54,9 @@ export interface ConnectionProfile {
   schema_registry_url: string
   cassandra_dc: string
   cassandra_consistency: string
+  /** Cassandra only: which CQL server — '' (not known yet) | 'cassandra' | 'scylla'.
+   *  Detected on connect; ScyllaDB is a flavor of this engine (SPEC-SCYLLADB.md). */
+  cassandra_flavor?: string
 }
 
 /** Profile as returned by the backend: never carries ciphertext. */

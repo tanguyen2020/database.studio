@@ -287,7 +287,8 @@
     padding: var(--px-8) var(--px-12);
   }
   .lv-row:hover {
-    background: var(--tbl-hover);
+    background: var(--row-hover);
+    box-shadow: var(--row-hover-shadow);
   }
   .lv-chip {
     display: inline-block;

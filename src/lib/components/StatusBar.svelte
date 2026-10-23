@@ -3,7 +3,7 @@
   // 27px nền --header, dot 7px màu accent (xám orphan khi disconnected) +
   // connName + icon hệ + object hiện tại (mono) | latency (mono) + rows (mono).
   import SystemIcon from '$lib/components/SystemIcon.svelte'
-  import { systemMeta } from '$lib/systems'
+  import { brandKey, brandMeta } from '$lib/scylla/brand'
   import { connections } from '$lib/stores/connections.svelte'
   import { explorer } from '$lib/stores/explorer.svelte'
   import { results } from '$lib/stores/results.svelte'
@@ -26,7 +26,7 @@
 
   // active.dot (dòng 4649): connected → accent, không thì màu orphan
   const dot = $derived(
-    profile?.connected ? systemMeta(profile.system).accent : 'var(--sys-orphan-accent)',
+    profile?.connected ? brandMeta(brandKey(profile)).accent : 'var(--sys-orphan-accent)',
   )
   // statusLatency (dòng 4819)
   const latency = $derived(
@@ -56,7 +56,7 @@
     {profile?.name ?? (tab?.systemType === 'orphan' ? '(deleted)' : 'No connection')}
   </span>
   {#if profile}
-    <span style="display:flex;align-items:center"><SystemIcon system={profile.system} size={14} /></span>
+    <span style="display:flex;align-items:center"><SystemIcon system={brandKey(profile)} size={14} /></span>
   {/if}
   <span>{statusObject}</span>
   <span style="margin-left:auto;font-variant-numeric:tabular-nums">

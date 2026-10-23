@@ -387,7 +387,8 @@
     padding: var(--px-8) var(--px-12);
   }
   .rx-row:hover {
-    background: var(--tbl-hover);
+    background: var(--row-hover);
+    box-shadow: var(--row-hover-shadow);
   }
   .rx-link {
     color: var(--tbl-link);

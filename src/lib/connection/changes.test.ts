@@ -50,3 +50,11 @@ describe('connectionChanged', () => {
     expect(connectionChanged(undefined, base)).toBe(false)
   })
 })
+
+describe('cassandra_flavor is a label, not a connection setting', () => {
+  it('learning that the server is ScyllaDB does not ask to reconnect', () => {
+    const before = { system: 'cassandra' as const, host: 'h', port: 9042, cassandra_flavor: '' }
+    expect(connectionChanged(before, { ...before, cassandra_flavor: 'scylla' })).toBe(false)
+    expect(connectionChanged(before, { ...before, port: 19042 })).toBe(true)
+  })
+})

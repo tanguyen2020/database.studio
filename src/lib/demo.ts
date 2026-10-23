@@ -10,6 +10,7 @@ import { natsKvDemo, natsDemoAccount, natsDemoStreamLimits } from './stream/nats
 import { subjectMatches } from './stream/nats-match'
 import { rabbitDemo, rabbitDemoEnabled } from './rabbitmq/demo'
 import { DUCK_DEMO_ID, duckDemo, duckDemoEnabled, isDuckConn } from './duckdb/demo'
+import { SCYLLA_DEMO_ID, isScyllaDemo, scyllaDemoEnabled, scyllaDemoTree } from './scylla/demo'
 import { ES_DEMO_ID, esDemo, esDemoEnabled } from './elastic/demo'
 import { backupDemo } from './backup/demo'
 
@@ -603,6 +604,16 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
                 connected: true,
                 latency_ms: 1,
                 has_password: false,
+              }),
+            ]
+          : []),
+        // ScyllaDB = a flavor of the Cassandra engine (SPEC-SCYLLADB.md), opt-in `?scylla=1`
+        ...(scyllaDemoEnabled()
+          ? [
+              conn(SCYLLA_DEMO_ID, 'Orders ScyllaDB', 'cassandra', '10.0.5.9', 9042, 'campus_ks', 'scylla', 'Wide Column', 'production', {
+                connected: true,
+                latency_ms: 3,
+                cassandra_flavor: 'scylla',
               }),
             ]
           : []),
@@ -1932,9 +1943,16 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
         warnings,
       })
     }
+    case 'cassandra_server_info':
+      return ok(
+        isScyllaDemo(args)
+          ? { flavor: 'scylla', version: '6.2.3-0.20250119.bff9ddde1283', tablets_enabled: true }
+          : { flavor: 'cassandra', version: '4.1.3' },
+      )
     case 'cassandra_keyspaces':
       return ok(['campus_ks', 'library_ks'])
     case 'cassandra_tree':
+      if (isScyllaDemo(args)) return ok(scyllaDemoTree(String((args?.keyspace as string) ?? 'campus_ks')))
       return ok({
         keyspace: String((args?.keyspace as string) ?? 'campus_ks'),
         replication: "{ 'class': 'NetworkTopologyStrategy', 'dc1': '3' }",

@@ -50,6 +50,88 @@ pub struct CassandraConnParams {
 pub struct CassandraDriver {
     session: Arc<Session>,
     keyspace: String,
+    /// Which server speaks CQL on the other end (detected once at connect).
+    info: CassServerInfo,
+}
+
+/// The CQL server behind a Cassandra connection. ScyllaDB is CQL-compatible and
+/// uses this same engine — see SPEC-SCYLLADB.md §0.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CassFlavor {
+    Cassandra,
+    Scylla,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CassServerInfo {
+    pub flavor: CassFlavor,
+    /// Real server version (Scylla: from `system.versions`, NOT the compat
+    /// `release_version = 3.0.8` of `system.local`).
+    pub version: String,
+    /// Scylla only: cluster-wide `enable_tablets` (None = unknown / Cassandra).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tablets_enabled: Option<bool>,
+}
+
+impl CassServerInfo {
+    /// "ScyllaDB 6.2.3" / "Cassandra 5.0.2" — what Test connection and the UI show.
+    pub fn label(&self) -> String {
+        match self.flavor {
+            CassFlavor::Scylla => format!("ScyllaDB {}", short_scylla_version(&self.version)),
+            CassFlavor::Cassandra => format!("Cassandra {}", self.version),
+        }
+    }
+}
+
+/// `6.2.3-0.20250119.bff9ddde1283` → `6.2.3` (the build suffix is noise in a label).
+pub fn short_scylla_version(v: &str) -> &str {
+    v.split('-').next().unwrap_or(v).trim()
+}
+
+/// `system.config` values are JSON-ish text (`true`, `"…"`).
+pub fn parse_config_bool(v: &str) -> Option<bool> {
+    match v.trim().trim_matches('"').to_ascii_lowercase().as_str() {
+        "true" => Some(true),
+        "false" => Some(false),
+        _ => None,
+    }
+}
+
+/// Probe the server once. `system.versions` exists only on ScyllaDB (probe in
+/// SPEC-SCYLLADB.md §1 P1); the driver's shard info is a second Scylla-only
+/// signal for users that cannot read `system.versions`.
+async fn detect_server(session: &Session) -> CassServerInfo {
+    let text = |cql: &'static str| async move {
+        session
+            .query_unpaged(cql, &[])
+            .await
+            .ok()
+            .and_then(|r| r.into_rows_result().ok())
+            .and_then(|rows| rows.first_row::<(Option<String>,)>().ok().and_then(|(v,)| v))
+    };
+    let scylla_version = text("SELECT version FROM system.versions WHERE key = 'local'").await;
+    let sharded = session
+        .get_cluster_state()
+        .get_nodes_info()
+        .iter()
+        .any(|n| n.sharder().is_some());
+    if scylla_version.is_some() || sharded {
+        let tablets_enabled = text("SELECT value FROM system.config WHERE name = 'enable_tablets'")
+            .await
+            .and_then(|v| parse_config_bool(&v));
+        return CassServerInfo {
+            flavor: CassFlavor::Scylla,
+            version: scylla_version.unwrap_or_else(|| "(version not readable)".into()),
+            tablets_enabled,
+        };
+    }
+    let release = text("SELECT release_version FROM system.local").await;
+    CassServerInfo {
+        flavor: CassFlavor::Cassandra,
+        version: release.unwrap_or_default(),
+        tablets_enabled: None,
+    }
 }
 
 /// Result of a single CQL execution — the locked outcome plus an opaque paging
@@ -180,9 +262,11 @@ impl CassandraDriver {
 
     pub async fn connect(params: &CassandraConnParams) -> Result<Self, QueryError> {
         let session = Self::build_session(params).await.map_err(new_session_err)?;
+        let info = detect_server(&session).await;
         Ok(Self {
             session: Arc::new(session),
             keyspace: params.keyspace.trim().to_string(),
+            info,
         })
     }
 
@@ -202,9 +286,11 @@ impl CassandraDriver {
         let session = Self::build_session_with(params, Some(translator))
             .await
             .map_err(new_session_err)?;
+        let info = detect_server(&session).await;
         Ok(Self {
             session: Arc::new(session),
             keyspace: params.keyspace.trim().to_string(),
+            info,
         })
     }
 
@@ -212,17 +298,17 @@ impl CassandraDriver {
         let started = std::time::Instant::now();
         match Self::build_session(params).await {
             Ok(session) => {
-                // Confirm we can reach the cluster + read release_version.
-                let version = session
-                    .query_unpaged("SELECT release_version FROM system.local", &[])
-                    .await
-                    .ok()
-                    .and_then(|r| r.into_rows_result().ok())
-                    .and_then(|rows| rows.first_row::<(String,)>().ok().map(|(v,)| v));
+                // Confirm we can reach the cluster + read the real server version
+                // (ScyllaDB reports a compat `release_version` of 3.0.8).
+                let info = detect_server(&session).await;
+                let version = match info.flavor {
+                    CassFlavor::Cassandra if info.version.is_empty() => None,
+                    _ => Some(info.label()),
+                };
                 TestResult {
                     ok: true,
                     latency_ms: Some(started.elapsed().as_millis() as u64),
-                    server_version: version.map(|v| format!("Cassandra {v}")),
+                    server_version: version,
                     error: None,
                 }
             }
@@ -248,6 +334,14 @@ impl CassandraDriver {
 
     pub fn keyspace(&self) -> &str {
         &self.keyspace
+    }
+
+    pub fn server_info(&self) -> &CassServerInfo {
+        &self.info
+    }
+
+    pub fn is_scylla(&self) -> bool {
+        self.info.flavor == CassFlavor::Scylla
     }
 
     /// Execute one CQL statement (editor). Uses single-page paging so the grid
@@ -471,6 +565,10 @@ pub struct CassColumn {
 pub struct CassTable {
     pub name: String,
     pub columns: Vec<CassColumn>,
+    /// ScyllaDB: this table is the CDC log of the named base table
+    /// (`<base>_scylla_cdc_log`). The Explorer shows it under its base table.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cdc_of: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -512,6 +610,9 @@ pub struct CassKeyspaceTree {
     pub types: Vec<CassType>,
     pub functions: Vec<CassFunction>,
     pub indexes: Vec<CassIndex>,
+    /// ScyllaDB: "tablets" / "tablets · initial 8" / "vnodes". None on Cassandra.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tablets: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -560,7 +661,7 @@ impl CassandraDriver {
             .await?
             .into_iter()
             .map(|(n,)| n)
-            .filter(|n| !is_system_keyspace(n))
+            .filter(|n| !is_system_keyspace(n, self.info.flavor))
             .collect();
         names.sort();
         Ok(names)
@@ -668,7 +769,7 @@ impl CassandraDriver {
         let mut tables = Vec::with_capacity(table_names.len());
         for name in table_names {
             let columns = self.columns_of(keyspace, &name).await?;
-            tables.push(CassTable { name, columns });
+            tables.push(CassTable { name, columns, cdc_of: None });
         }
         tables.sort_by(|a, b| a.name.cmp(&b.name));
 
@@ -747,6 +848,13 @@ impl CassandraDriver {
             .collect();
         indexes.sort_by(|a, b| a.name.cmp(&b.name));
 
+        let tablets = if self.is_scylla() {
+            scylla_tree_cleanup(&mut tables, &mut views, &indexes);
+            self.tablets_of(keyspace).await
+        } else {
+            None
+        };
+
         Ok(CassKeyspaceTree {
             keyspace: keyspace.to_string(),
             replication,
@@ -755,7 +863,43 @@ impl CassandraDriver {
             types,
             functions,
             indexes,
+            tablets,
         })
+    }
+
+    /// ScyllaDB: how a keyspace is replicated — `system_schema.scylla_keyspaces`
+    /// has a row (with `initial_tablets`) only for tablets keyspaces.
+    async fn tablets_of(&self, keyspace: &str) -> Option<String> {
+        let rows = self
+            .rows::<(Option<i32>,)>(
+                "SELECT initial_tablets FROM system_schema.scylla_keyspaces WHERE keyspace_name = ?",
+                (keyspace,),
+            )
+            .await
+            .ok()?;
+        Some(tablets_label(rows.into_iter().next().map(|(n,)| n)))
+    }
+
+    /// ScyllaDB server-side `DESCRIBE` — the exact DDL including every option
+    /// (cdc, tablets, compaction…), in the server's order. `what` is the full
+    /// object spec (`TABLE ks.t`, `KEYSPACE ks`…).
+    pub async fn describe(&self, what: &str) -> Result<Vec<String>, QueryError> {
+        let rows = self
+            .rows::<(Option<String>, Option<String>, Option<String>, Option<String>)>(
+                &format!("DESCRIBE {what}"),
+                (),
+            )
+            .await?;
+        let stmts: Vec<String> = rows
+            .into_iter()
+            .filter_map(|(_, _, _, stmt)| stmt)
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        if stmts.is_empty() {
+            return Err(QueryError::new("cassandra", format!("DESCRIBE {what} returned nothing"), "empty describe"));
+        }
+        Ok(stmts)
     }
 
     /// Index Scanner (T17): secondary indexes trong 1 keyspace từ
@@ -789,8 +933,75 @@ impl CassandraDriver {
             .collect())
     }
 
+    /// ScyllaDB ring from the real `system.cluster_status` (status, load in
+    /// bytes, ownership). None when the table cannot be read.
+    async fn scylla_ring(&self) -> Option<Vec<RingNode>> {
+        let rows = self
+            .rows::<(
+                std::net::IpAddr,
+                Option<String>,
+                Option<String>,
+                Option<f32>,
+                Option<String>,
+                Option<bool>,
+            )>("SELECT peer, dc, load, owns, status, up FROM system.cluster_status", ())
+            .await
+            .ok()?;
+        if rows.is_empty() {
+            return None;
+        }
+        // Racks are not in cluster_status; read them where the node is known.
+        let mut racks: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        if let Ok(local) = self
+            .rows::<(std::net::IpAddr, Option<String>)>("SELECT broadcast_address, rack FROM system.local", ())
+            .await
+        {
+            for (a, r) in local {
+                racks.insert(a.to_string(), r.unwrap_or_default());
+            }
+        }
+        if let Ok(peers) = self
+            .rows::<(std::net::IpAddr, Option<String>)>("SELECT peer, rack FROM system.peers", ())
+            .await
+        {
+            for (a, r) in peers {
+                racks.insert(a.to_string(), r.unwrap_or_default());
+            }
+        }
+        let local_addr = self
+            .rows::<(std::net::IpAddr,)>("SELECT broadcast_address FROM system.local", ())
+            .await
+            .ok()
+            .and_then(|v| v.into_iter().next())
+            .map(|(a,)| a.to_string());
+        let version = short_scylla_version(&self.info.version).to_string();
+        Some(
+            rows.into_iter()
+                .map(|(peer, dc, load, owns, status, up)| {
+                    let host = peer.to_string();
+                    let is_local = local_addr.as_deref() == Some(host.as_str());
+                    scylla_ring_node(ScyllaStatusRow {
+                        rack: racks.get(&host).cloned().unwrap_or_default(),
+                        host,
+                        dc: dc.unwrap_or_default(),
+                        load,
+                        owns,
+                        status: status.unwrap_or_default(),
+                        up: up.unwrap_or(false),
+                        version: if is_local { version.clone() } else { String::new() },
+                    })
+                })
+                .collect(),
+        )
+    }
+
     /// Ring topology from `system.local` + `system.peers` (never hardcoded).
     pub async fn ring(&self) -> Result<Vec<RingNode>, QueryError> {
+        if self.is_scylla() {
+            if let Some(nodes) = self.scylla_ring().await {
+                return Ok(nodes);
+            }
+        }
         let mut nodes = Vec::new();
         // Local node.
         if let Some((addr, dc, rack, ver, tokens)) = self
@@ -873,6 +1084,15 @@ impl CassandraDriver {
         kind: &str,
         name: &str,
     ) -> Result<String, QueryError> {
+        if self.is_scylla() {
+            if let Some(what) = describe_target(kind, keyspace, name) {
+                if let Ok(stmts) = self.describe(&what).await {
+                    return Ok(stmts.join("
+
+"));
+                }
+            }
+        }
         match kind {
             "table" => self.table_ddl(keyspace, name).await,
             "view" => {
@@ -1238,6 +1458,98 @@ mod tests {
         }
     }
 
+    fn table(name: &str) -> CassTable {
+        CassTable { name: name.into(), columns: Vec::new(), cdc_of: None }
+    }
+
+    #[test]
+    fn scylla_versions_and_labels() {
+        assert_eq!(short_scylla_version("6.2.3-0.20250119.bff9ddde1283"), "6.2.3");
+        assert_eq!(short_scylla_version("2025.1.0"), "2025.1.0");
+        let s = CassServerInfo { flavor: CassFlavor::Scylla, version: "6.2.3-0.2025".into(), tablets_enabled: Some(true) };
+        assert_eq!(s.label(), "ScyllaDB 6.2.3");
+        let c = CassServerInfo { flavor: CassFlavor::Cassandra, version: "5.0.2".into(), tablets_enabled: None };
+        assert_eq!(c.label(), "Cassandra 5.0.2");
+        assert_eq!(serde_json::to_value(CassFlavor::Scylla).unwrap(), "scylla");
+        assert_eq!(parse_config_bool("true"), Some(true));
+        assert_eq!(parse_config_bool("\"false\""), Some(false));
+        assert_eq!(parse_config_bool("12"), None);
+    }
+
+    #[test]
+    fn scylla_system_keyspaces_only_hidden_on_scylla() {
+        for ks in ["system", "system_schema", "system_auth", "system_traces"] {
+            assert!(is_system_keyspace(ks, CassFlavor::Cassandra), "{ks}");
+            assert!(is_system_keyspace(ks, CassFlavor::Scylla), "{ks}");
+        }
+        for ks in ["system_distributed_everywhere", "system_replicated_keys", "system_auth_v2", "system_audit"] {
+            assert!(is_system_keyspace(ks, CassFlavor::Scylla), "{ks}");
+            assert!(!is_system_keyspace(ks, CassFlavor::Cassandra), "{ks}: Cassandra behaviour must not change");
+        }
+        assert!(!is_system_keyspace("app", CassFlavor::Scylla));
+    }
+
+    #[test]
+    fn scylla_cleanup_hides_index_views_and_tags_cdc_logs() {
+        let mut tables = vec![table("orders"), table("orders_scylla_cdc_log"), table("lonely_scylla_cdc_log")];
+        let mut views = vec![
+            CassView { name: "orders_by_name".into(), base_table: "orders".into() },
+            CassView { name: "orders_name_index".into(), base_table: "orders".into() },
+            // an index view name on a DIFFERENT base table is not the index's view
+            CassView { name: "orders_total_index".into(), base_table: "other".into() },
+        ];
+        let indexes = vec![
+            CassIndex { name: "orders_name".into(), table: "orders".into(), kind: "COMPOSITES".into(), target: "name".into() },
+            CassIndex { name: "orders_total".into(), table: "orders".into(), kind: "COMPOSITES".into(), target: "total".into() },
+        ];
+        scylla_tree_cleanup(&mut tables, &mut views, &indexes);
+        let names: Vec<&str> = views.iter().map(|v| v.name.as_str()).collect();
+        assert_eq!(names, ["orders_by_name", "orders_total_index"]);
+        assert_eq!(tables[0].cdc_of, None);
+        assert_eq!(tables[1].cdc_of.as_deref(), Some("orders"));
+        // a "_scylla_cdc_log" table without its base table is left as a normal table
+        assert_eq!(tables[2].cdc_of, None);
+    }
+
+    #[test]
+    fn scylla_tablets_labels_and_describe_targets() {
+        assert_eq!(tablets_label(None), "vnodes");
+        assert_eq!(tablets_label(Some(None)), "tablets");
+        assert_eq!(tablets_label(Some(Some(0))), "tablets");
+        assert_eq!(tablets_label(Some(Some(8))), "tablets · initial 8");
+        assert_eq!(describe_target("table", "app", "orders").unwrap(), "TABLE \"app\".\"orders\"");
+        assert_eq!(describe_target("view", "app", "v").unwrap(), "MATERIALIZED VIEW \"app\".\"v\"");
+        assert_eq!(describe_target("keyspace", "My\"Ks", "").unwrap(), "KEYSPACE \"My\"\"Ks\"");
+        assert!(describe_target("nope", "a", "b").is_none());
+    }
+
+    #[test]
+    fn scylla_ring_rows_become_real_states() {
+        let row = |status: &str, up: bool| ScyllaStatusRow {
+            host: "10.0.0.1".into(),
+            dc: "dc1".into(),
+            rack: "r1".into(),
+            load: Some("253136".into()),
+            owns: Some(0.5),
+            status: status.into(),
+            up,
+            version: "6.2.3".into(),
+        };
+        let n = scylla_ring_node(row("NORMAL", true));
+        assert_eq!(n.state, "UN");
+        assert_eq!(n.load, "247.2 KB");
+        assert_eq!(n.owns, "50.0%");
+        assert_eq!(n.version, "6.2.3");
+        assert_eq!(scylla_ring_node(row("NORMAL", false)).state, "DN");
+        assert_eq!(scylla_ring_node(row("JOINING", true)).state, "UJ");
+        let mut r = row("LEAVING", true);
+        r.owns = None;
+        r.version = String::new();
+        r.load = None;
+        let n = scylla_ring_node(r);
+        assert_eq!((n.state.as_str(), n.owns.as_str(), n.version.as_str(), n.load.as_str()), ("UL", "—", "—", "—"));
+    }
+
     #[test]
     fn ddl_composite_partition_key_and_clustering_order() {
         let cols = vec![
@@ -1389,7 +1701,110 @@ mod tests {
     }
 }
 
-fn is_system_keyspace(name: &str) -> bool {
+/// ScyllaDB catalog clean-up (SPEC-SCYLLADB.md §1 P3/P4):
+/// - a secondary index is backed by a materialized view named `<index>_index`
+///   on the same base table — not something the user created, so it is hidden;
+/// - `<t>_scylla_cdc_log` is the CDC log of table `t` — kept, but tagged so the
+///   Explorer shows it under `t` instead of as an ordinary table.
+pub fn scylla_tree_cleanup(tables: &mut [CassTable], views: &mut Vec<CassView>, indexes: &[CassIndex]) {
+    views.retain(|v| {
+        !indexes
+            .iter()
+            .any(|i| i.table == v.base_table && v.name == format!("{}_index", i.name))
+    });
+    let names: std::collections::HashSet<String> = tables.iter().map(|t| t.name.clone()).collect();
+    for t in tables.iter_mut() {
+        if let Some(base) = t.name.strip_suffix("_scylla_cdc_log") {
+            if names.contains(base) {
+                t.cdc_of = Some(base.to_string());
+            }
+        }
+    }
+}
+
+/// `system_schema.scylla_keyspaces` lookup → label. No row = vnodes; a row is a
+/// tablets keyspace (`initial_tablets` 0/None = sized automatically).
+pub fn tablets_label(row: Option<Option<i32>>) -> String {
+    match row {
+        None => "vnodes".into(),
+        Some(Some(n)) if n > 0 => format!("tablets · initial {n}"),
+        Some(_) => "tablets".into(),
+    }
+}
+
+/// `DESCRIBE` object spec for a tree kind (identifiers always quoted — the
+/// catalog gives exact-case names).
+pub fn describe_target(kind: &str, keyspace: &str, name: &str) -> Option<String> {
+    let q = |s: &str| format!("\"{}\"", s.replace('"', "\"\""));
+    let what = match kind {
+        "table" => "TABLE",
+        "view" => "MATERIALIZED VIEW",
+        "type" => "TYPE",
+        "index" => "INDEX",
+        "function" => "FUNCTION",
+        "aggregate" => "AGGREGATE",
+        "keyspace" => return Some(format!("KEYSPACE {}", q(keyspace))),
+        _ => return None,
+    };
+    Some(format!("{what} {}.{}", q(keyspace), q(name)))
+}
+
+/// One row of ScyllaDB's `system.cluster_status` (+ rack/version joined in).
+#[derive(Debug, Clone)]
+pub struct ScyllaStatusRow {
+    pub host: String,
+    pub dc: String,
+    pub rack: String,
+    pub load: Option<String>,
+    pub owns: Option<f32>,
+    pub status: String,
+    pub up: bool,
+    pub version: String,
+}
+
+/// nodetool-style state code from Scylla's up flag + status.
+pub fn scylla_ring_node(r: ScyllaStatusRow) -> RingNode {
+    let up = if r.up { 'U' } else { 'D' };
+    let st = match r.status.to_ascii_uppercase().as_str() {
+        "JOINING" | "BOOTSTRAPPING" => 'J',
+        "LEAVING" | "DECOMMISSIONING" => 'L',
+        "MOVING" => 'M',
+        _ => 'N',
+    };
+    let load = r
+        .load
+        .as_deref()
+        .and_then(|l| l.trim().parse::<f64>().ok())
+        .map(format_bytes)
+        .or(r.load.clone())
+        .unwrap_or_else(|| "—".into());
+    RingNode {
+        host: r.host,
+        dc: r.dc,
+        rack: r.rack,
+        state: format!("{up}{st}"),
+        load,
+        owns: r.owns.map(|o| format!("{:.1}%", o as f64 * 100.0)).unwrap_or_else(|| "—".into()),
+        version: if r.version.is_empty() { "—".into() } else { r.version },
+    }
+}
+
+fn format_bytes(b: f64) -> String {
+    const U: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut v = b;
+    let mut i = 0;
+    while v >= 1024.0 && i < U.len() - 1 {
+        v /= 1024.0;
+        i += 1;
+    }
+    if i == 0 {
+        format!("{} B", b as u64)
+    } else {
+        format!("{v:.1} {}", U[i])
+    }
+}
+
+fn is_system_keyspace(name: &str, flavor: CassFlavor) -> bool {
     matches!(
         name,
         "system"
@@ -1399,7 +1814,12 @@ fn is_system_keyspace(name: &str) -> bool {
             | "system_traces"
             | "system_views"
             | "system_virtual_schema"
-    )
+    ) || (flavor == CassFlavor::Scylla
+        // ScyllaDB's own internal keyspaces (probe: SPEC-SCYLLADB.md §1 P2).
+        && matches!(
+            name,
+            "system_distributed_everywhere" | "system_replicated_keys" | "system_auth_v2" | "system_audit"
+        ))
 }
 
 /// Render a keyspace replication map as a CQL replication clause.

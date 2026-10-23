@@ -696,7 +696,8 @@
     padding: var(--px-8) var(--px-12);
   }
   .rq-row:hover:not(.sel) {
-    background: var(--tbl-hover);
+    background: var(--row-hover);
+    box-shadow: var(--row-hover-shadow);
     cursor: default;
   }
   .rq-row.sel {

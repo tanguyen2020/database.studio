@@ -2002,6 +2002,17 @@ async fn cassandra_parts(
                 return Ok((c.session(), None, Vec::new()));
             }
             let tree = c.keyspace_tree(&ks).await?;
+            // ScyllaDB: the server's own DESCRIBE keeps every option the
+            // reconstruction below loses — tablets on CREATE KEYSPACE, cdc on
+            // tables, the CDC-log ALTER — and never lists the views that back
+            // secondary indexes (SPEC-SCYLLADB.md §3.3).
+            if c.is_scylla() {
+                if let Some(what) = crate::drivers::cassandra::describe_target("keyspace", &ks, "") {
+                    if let Ok(stmts) = c.describe(&what).await {
+                        return Ok((c.session(), Some(tree), stmts));
+                    }
+                }
+            }
             let mut ddl: Vec<String> = Vec::new();
             let types: Vec<(String, Vec<(String, String)>)> =
                 tree.types.iter().map(|x| (x.name.clone(), x.fields.clone())).collect();
@@ -2055,10 +2066,19 @@ async fn cassandra_dump(state: &AppState, t: &Target, dest: &str, job: &Job) -> 
     } else {
         tree.replication.clone()
     };
+    // ScyllaDB's DESCRIBE already starts with the exact CREATE KEYSPACE
+    // (including `tablets = {…}`), so ours would only shadow it.
+    let ddl_has_keyspace = ddl
+        .first()
+        .is_some_and(|d| d.trim_start().to_ascii_uppercase().starts_with("CREATE KEYSPACE"));
+    let create_ks = if ddl_has_keyspace {
+        String::new()
+    } else {
+        format!("CREATE KEYSPACE IF NOT EXISTS {} WITH replication = {repl};\n\n", cql_ident(ks))
+    };
     let head = format!(
-        "{CQL_DUMP_HEADER}\n-- keyspace: {ks}\n-- created: {}\n\nCREATE KEYSPACE IF NOT EXISTS {} WITH replication = {repl};\n\n",
+        "{CQL_DUMP_HEADER}\n-- keyspace: {ks}\n-- created: {}\n\n{create_ks}",
         chrono::Utc::now().to_rfc3339(),
-        cql_ident(ks)
     );
     w.write_all(head.as_bytes()).await.map_err(werr)?;
     for d in &ddl {
@@ -2076,6 +2096,11 @@ async fn cassandra_dump(state: &AppState, t: &Target, dest: &str, job: &Job) -> 
             return Err(cancelled_err());
         }
         job.tick(Some(format!("{ks}.{}", tb.name)));
+        if let Some(base) = &tb.cdc_of {
+            // ScyllaDB writes the CDC log itself when the restored rows go into the base table.
+            notes.push(format!("Skipped the data of {} — ScyllaDB rebuilds the CDC log of {base} on restore.", tb.name));
+            continue;
+        }
         if tb.columns.iter().any(|c| c.data_type.eq_ignore_ascii_case("counter")) {
             notes.push(format!("Skipped the data of counter table {} (counters cannot be restored with INSERT).", tb.name));
             continue;

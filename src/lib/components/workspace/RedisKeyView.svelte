@@ -760,7 +760,8 @@
     background: var(--grid-zebra);
   }
   .rk-table tbody tr:hover {
-    background: color-mix(in srgb, var(--primary) 6%, transparent);
+    background: var(--row-hover);
+    box-shadow: var(--row-hover-shadow);
   }
   .rk-k {
     color: var(--text);

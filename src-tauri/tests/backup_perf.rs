@@ -89,6 +89,7 @@ fn profile(id: &str, system: SystemType, port: u16, database: &str, user: &str) 
         schema_registry_url: String::new(),
         cassandra_dc: "datacenter1".into(),
         cassandra_consistency: String::new(),
+        cassandra_flavor: String::new(),
     }
 }
 

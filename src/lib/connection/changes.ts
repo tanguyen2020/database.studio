@@ -5,7 +5,7 @@
 import type { ConnectionProfile } from '$lib/types'
 
 /** Fields that never affect the session itself. */
-export const COSMETIC_KEYS = new Set<string>(['id', 'name', 'group', 'env'])
+export const COSMETIC_KEYS = new Set<string>(['id', 'name', 'group', 'env', 'cassandra_flavor'])
 
 /** Keys present on a profile returned by the backend but not part of the saved
  *  configuration (live state / client-only flags). */

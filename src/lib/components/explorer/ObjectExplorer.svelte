@@ -14,6 +14,8 @@
   import SharedContextMenu from '$lib/components/ui/context-menu/SharedContextMenu.svelte'
   import * as ipc from '$lib/ipc'
   import SystemIcon from '$lib/components/SystemIcon.svelte'
+  import { brandKey, isScylla } from '$lib/scylla/brand'
+  import { cassandraProps } from '$lib/explorer/cass-props'
   import MongoExplorer from '$lib/components/explorer/MongoExplorer.svelte'
   import EsExplorer from '$lib/components/explorer/EsExplorer.svelte'
   import DropDatabaseDialog from '$lib/components/explorer/DropDatabaseDialog.svelte'
@@ -60,6 +62,9 @@
   import {
     createTemplate as cassCreateTemplate,
     dropStatement as cassDropStmt,
+    replicationSummary,
+    replicationShort,
+    distributionLabel,
     type CassCreateKind,
     type CassDropKind,
   } from '$lib/sql/cassandra'
@@ -516,6 +521,8 @@
     if (k.startsWith('redis:sec:')) return null // stream-workspace:redis — navigation, not an object
     if (k.startsWith('kafka:sec:')) return null
     if (k.startsWith('kafka:t:')) return { type: 'Topic', schema: '', name: k.slice('kafka:t:'.length) }
+    // Cassandra / ScyllaDB keyspace tree: name the object, never show the raw key
+    if (k.startsWith('cass:')) return cassandraProps(k)
     const prefix = k.slice(0, k.indexOf(':'))
     const rest = k.slice(k.indexOf(':') + 1)
     const dot = rest.indexOf('.')
@@ -1571,7 +1578,7 @@
     tabs.openSqlTab({
       connectionId: selected.id,
       title: `New ${kind}`,
-      query: cassCreateTemplate(kind, keyspace, table),
+      query: cassCreateTemplate(kind, keyspace, table, { scylla: isScylla(selected) }),
     })
   }
 
@@ -1669,6 +1676,8 @@
     meta?: string
     /** tooltip on the meta text — e.g. WHY a Kafka message count is unknown */
     metaTitle?: string
+    /** hover text for the row (defaults to its name) */
+    tooltip?: string
     head?: boolean
     expandable?: boolean
     locked?: boolean
@@ -1724,7 +1733,7 @@
         e.dataTransfer.setData('application/x-ds-er-table', p.dragData)
         e.dataTransfer.setData('text/plain', p.dragData) // fallback mime for strict engines
       }}
-      title={p.name}
+      title={p.tooltip ?? p.name}
       style="display:flex;align-items:center;gap:var(--px-5);padding:var(--px-3) var(--px-6);border-radius:var(--px-5);cursor:pointer;white-space:nowrap;user-select:none;padding-left:calc(var(--px-6) + {p.depth} * var(--px-15))"
     >
       <!-- chevron: single-click toggles expansion (row single-click only selects) -->
@@ -1977,7 +1986,7 @@
   <div style="flex:none;display:flex;align-items:center;gap:var(--px-8);padding:var(--px-9) var(--px-12) var(--px-7)">
     <span style="font-size:var(--px-10_5);font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)">Explorer</span>
     {#if selected}
-      <span style="display:flex;align-items:center;flex:none"><SystemIcon system={selected.system} size={16} /></span>
+      <span style="display:flex;align-items:center;flex:none"><SystemIcon system={brandKey(selected)} size={16} /></span>
       <span style="font-size:var(--px-12_5);font-weight:500;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{selected.name}</span>
     {/if}
     <div style="margin-left:auto;display:inline-flex;align-items:center;gap:var(--px-8);flex:none">
@@ -2123,10 +2132,13 @@
                   <ContextMenu.Item onclick={() => selected && refreshCassKeyspace(ks)}>Refresh</ContextMenu.Item>
                 </ContextMenu.Content>
               {/snippet}
-              {@render row({ key: tKey, depth: 1, glyph: '▤', icon: 'table', color: C.folder, name: 'Tables', meta: String(tree.tables.length), head: true, expandable: true, onClick: () => toggle(tKey) }, tablesFolderMenu)}
+              <!-- ScyllaDB CDC logs (`cdc_of`) are listed under their base table, not here -->
+              {@const baseTables = tree.tables.filter((x) => !x.cdc_of)}
+              {@render row({ key: tKey, depth: 1, glyph: '▤', icon: 'table', color: C.folder, name: 'Tables', meta: String(baseTables.length), head: true, expandable: true, onClick: () => toggle(tKey) }, tablesFolderMenu)}
               {#if expanded.has(tKey)}
-                {#each tree.tables as t (t.name)}
+                {#each baseTables as t (t.name)}
                   {@const tbKey = `cass:t:${ks}:${t.name}`}
+                  {@const cdcLog = tree.tables.find((x) => x.cdc_of === t.name)}
                   {#snippet cassMenu()}
                     <ContextMenu.Content>
                       <ContextMenu.Item onclick={() => tabs.openCassandraTable(selected!.id, ks, t.name)}>Open Data (editable)</ContextMenu.Item>
@@ -2140,11 +2152,22 @@
                       <ContextMenu.Item onclick={() => cassDrop('table', ks, t.name)}>Drop</ContextMenu.Item>
                     </ContextMenu.Content>
                   {/snippet}
-                  {@render row({ key: tbKey, depth: 2, glyph: '▦', color: C.table, name: t.name, expandable: true, onClick: () => toggle(tbKey), onDblClick: () => tabs.openCassandraTable(selected!.id, ks, t.name) }, cassMenu)}
+                  {@render row({ key: tbKey, depth: 2, glyph: '▦', color: C.table, name: t.name, meta: cdcLog ? 'change log' : undefined, expandable: true, onClick: () => toggle(tbKey), onDblClick: () => tabs.openCassandraTable(selected!.id, ks, t.name) }, cassMenu)}
                   {#if expanded.has(tbKey)}
                     {#each t.columns as c (c.name)}
                       {@render row({ key: `cass:c:${ks}:${t.name}.${c.name}`, depth: 3, glyph: '▸', color: C.col, name: c.name, meta: colMeta(c) })}
                     {/each}
+                    {#if cdcLog}
+                      {#snippet cdcMenu()}
+                        <ContextMenu.Content>
+                          <ContextMenu.Item onclick={() => tabs.openCassandraTable(selected!.id, ks, cdcLog.name)}>Open Data</ContextMenu.Item>
+                          <ContextMenu.Item onclick={() => cassSelectTab(ks, cdcLog.name)}>SELECT * (LIMIT 100)</ContextMenu.Item>
+                          <ContextMenu.Item onclick={() => cassObjectDdlTab(ks, 'table', cdcLog.name)}>View DDL (CQL)</ContextMenu.Item>
+                          <ContextMenu.Item onclick={() => cassCopyName(cdcLog.name)}>Copy Name</ContextMenu.Item>
+                        </ContextMenu.Content>
+                      {/snippet}
+                      {@render row({ key: `cass:cdc:${ks}:${t.name}`, depth: 3, glyph: '▦', icon: 'table', color: C.table, name: 'Change log (CDC)', tooltip: `Every change to ${t.name}, recorded by ScyllaDB in ${cdcLog.name}`, onDblClick: () => tabs.openCassandraTable(selected!.id, ks, cdcLog.name) }, cdcMenu)}
+                    {/if}
                   {/if}
                 {/each}
               {/if}
@@ -2222,7 +2245,12 @@
               {/if}
               <!-- replication (properties) -->
               {#if tree.replication}
-                {@render row({ key: `cass:repl:${ks}`, depth: 1, glyph: '⚙', icon: 'settings', color: C.col, name: 'replication', meta: tree.replication })}
+                {@render row({ key: `cass:repl:${ks}`, depth: 1, glyph: '⚙', icon: 'settings', color: C.col, name: 'Replication', meta: replicationShort(tree.replication), tooltip: `${replicationSummary(tree.replication)}
+${tree.replication}` })}
+                {#if tree.tablets}
+                  <!-- ScyllaDB: how data is spread over the nodes -->
+                  {@render row({ key: `cass:dist:${ks}`, depth: 1, glyph: '⚙', icon: 'settings', color: C.col, name: 'Distribution', meta: distributionLabel(tree.tablets).replace(' (vnodes)', ''), tooltip: tree.tablets === 'vnodes' ? 'Token ring: change data capture, lightweight transactions and counters are available' : 'Tablets: change data capture, lightweight transactions (IF …) and counters are not available in this keyspace' })}
+                {/if}
               {/if}
             {/if}
           {/if}
@@ -3338,7 +3366,7 @@
         <span class="mono" style="font-size:var(--px-12);font-weight:600;color:var(--text)">{selProps.name}</span>
       </div>
       {#if selProps.schema && selProps.schema !== selProps.name}
-        <div class="mono" style="font-size:var(--px-10_5);color:var(--muted);margin-top:var(--px-2)">{selProps.type === 'Subject' ? 'stream' : 'schema'}: {selProps.schema}</div>
+        <div class="mono" style="font-size:var(--px-10_5);color:var(--muted);margin-top:var(--px-2)">{'scopeLabel' in selProps ? selProps.scopeLabel : selProps.type === 'Subject' ? 'stream' : 'schema'}: {selProps.schema}</div>
       {/if}
     </div>
   {/if}

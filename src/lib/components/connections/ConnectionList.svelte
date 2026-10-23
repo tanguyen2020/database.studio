@@ -12,7 +12,7 @@
   import * as ContextMenu from '$lib/components/ui/context-menu'
   import ConnectionIndicator from '$lib/components/ConnectionIndicator.svelte'
   import SystemIcon from '$lib/components/SystemIcon.svelte'
-  import { CATEGORY_ORDER, SYSTEM_ORDER, envMeta, systemMeta } from '$lib/systems'
+  import { CATEGORY_ORDER, SYSTEM_ORDER, envMeta } from '$lib/systems'
   import { groupByFolder } from '$lib/connections/grouping'
   import { newDatabaseWizard } from '$lib/stores/newdatabase.svelte'
   import { scriptsWizard } from '$lib/stores/scripts.svelte'
@@ -27,6 +27,7 @@
   import type { ProfilePublic } from '$lib/types'
   import ObjectExplorer from '$lib/components/explorer/ObjectExplorer.svelte'
   import { opensWorkspace } from '$lib/stream/workspace-systems'
+  import { brandKey, brandMeta } from '$lib/scylla/brand'
 
   interface Props {
     /** One sidebar mode: each connection opens in place into its own object tree
@@ -132,10 +133,12 @@
     const out: Group[] = []
     let lastCategory = ''
     for (const category of CATEGORY_ORDER) {
-      for (const system of SYSTEM_ORDER) {
-        const meta = systemMeta(system)
+      // ScyllaDB connections get their own band right after Cassandra (same engine,
+      // own brand — SPEC-SCYLLADB.md §3.4); `system` holds the brand key.
+      for (const system of SYSTEM_ORDER.flatMap((k) => (k === 'cassandra' ? ['cassandra', 'scylladb'] : [k]))) {
+        const meta = brandMeta(system)
         if (meta.category !== category) continue
-        const items = filtered.filter((p) => p.system === system)
+        const items = filtered.filter((p) => brandKey(p) === system)
         if (items.length === 0) continue
         out.push({ category, showCategory: category !== lastCategory, system, items })
         lastCategory = category
@@ -191,7 +194,7 @@
     untrack(() => {
       startCollapseDone = true
       collapsed = new Set([
-        ...connections.profiles.map((p) => p.system),
+        ...connections.profiles.map((p) => brandKey(p)),
         ...folders.map((f) => `folder:${f.name}`),
       ])
     })
@@ -402,7 +405,7 @@
       const f = folders.find((x) => x.items.some((i) => i.id === p.id))
       return f ? `folder:${f.name}` : ''
     }
-    return p.system
+    return brandKey(p)
   }
 
   function revealSelected() {
@@ -583,7 +586,7 @@
         {:else if connections.connectErrors[p.id] && !p.connected}
           <span style="width:var(--px-7);height:var(--px-7);border-radius:50%;flex:none;background:var(--error)" title="Not connected — {connections.connectErrors[p.id]}"></span>
         {:else}
-          <span style="width:var(--px-7);height:var(--px-7);border-radius:50%;flex:none;background:{p.connected ? systemMeta(p.system).accent : 'var(--sys-orphan-accent)'}" title={p.connected ? `Connected · ${p.latency_ms ?? '–'} ms` : 'Disconnected'}></span>
+          <span style="width:var(--px-7);height:var(--px-7);border-radius:50%;flex:none;background:{p.connected ? brandMeta(brandKey(p)).accent : 'var(--sys-orphan-accent)'}" title={p.connected ? `Connected · ${p.latency_ms ?? '–'} ms` : 'Disconnected'}></span>
         {/if}
         <div class="conn-text" style="flex:1;min-width:0" aria-busy={refreshingId === p.id}>
           <div class="conn-name" style="font-weight:500;font-size:var(--px-13);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{p.name}</div>
@@ -854,11 +857,11 @@
               role="button"
               tabindex="0"
               aria-expanded={!collapsed.has(group.system)}
-              style="box-shadow:inset var(--px-3) 0 0 {systemMeta(group.system).accent}"
+              style="box-shadow:inset var(--px-3) 0 0 {brandMeta(group.system).accent}"
             >
               <span class="mono grp-chev"><Chevron open={!(collapsed.has(group.system))} size={12} /></span>
               <span style="display:flex;align-items:center;flex:none"><SystemIcon system={group.system} size={16} /></span>
-              <span class="grp-label">{systemMeta(group.system).label}</span>
+              <span class="grp-label">{brandMeta(group.system).label}</span>
               <span class="mono grp-count">{group.items.length}</span>
             </div>
             {#if !collapsed.has(group.system)}

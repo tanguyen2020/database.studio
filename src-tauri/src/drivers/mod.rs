@@ -899,6 +899,7 @@ mod tests {
             schema_registry_url: String::new(),
             cassandra_dc: String::new(),
             cassandra_consistency: String::new(),
+            cassandra_flavor: String::new(),
         }
     }
 

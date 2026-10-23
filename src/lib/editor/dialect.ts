@@ -17,6 +17,7 @@ import {
 } from '@codemirror/lang-sql'
 import { clickHouseDialect } from '$lib/sql/ch-editor-dialect'
 import { duckDbDialect } from '$lib/sql/duckdb-editor-dialect'
+import { scyllaDialect } from '$lib/sql/scylla-editor-dialect'
 
 export function sqlDialectFor(system: string): SQLDialect {
   switch (system) {
@@ -36,6 +37,9 @@ export function sqlDialectFor(system: string): SQLDialect {
       return PLSQL
     case 'cassandra':
       return Cassandra
+    // a Cassandra-engine tab on a ScyllaDB server (lib/scylla/brand.ts)
+    case 'scylladb':
+      return scyllaDialect
     case 'clickhouse':
       return clickHouseDialect // lang-sql has no ClickHouse dialect → our own
     case 'duckdb':
@@ -63,6 +67,7 @@ export const SQL_SYSTEMS = [
   'sqlite',
   'oracle',
   'cassandra',
+  'scylladb',
   'clickhouse',
   'duckdb',
 ]

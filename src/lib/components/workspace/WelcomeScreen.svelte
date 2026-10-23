@@ -6,6 +6,7 @@
   import AppLogo from '$lib/components/AppLogo.svelte'
   import Icon from '$lib/components/Icon.svelte'
   import SystemIcon from '$lib/components/SystemIcon.svelte'
+  import { brandKey, brandMeta } from '$lib/scylla/brand'
   import { connections } from '$lib/stores/connections.svelte'
   import { tabs } from '$lib/stores/tabs.svelte'
   import { ui } from '$lib/stores/ui.svelte'
@@ -107,10 +108,10 @@
           </div>
           <div class="wl-cards">
             {#each recent as p (p.id)}
-              {@const m = systemMeta(p.system)}
+              {@const m = brandMeta(brandKey(p))}
               <div class="wl-conn" style="--acc:{m.accent}">
                 <button class="wl-conn-open" onclick={() => openConnection(p)} title={p.connected ? `Show ${p.name}` : `Connect to ${p.name}`}>
-                  <span class="wl-conn-ic"><SystemIcon system={p.system} size={22} /></span>
+                  <span class="wl-conn-ic"><SystemIcon system={brandKey(p)} size={22} /></span>
                   <span class="wl-conn-text">
                     <span class="wl-conn-name">{p.name}</span>
                     <!-- engine name, not the host/IP: the start screen is often on a shared or projected display -->

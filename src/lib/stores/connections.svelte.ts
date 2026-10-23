@@ -38,9 +38,25 @@ class ConnectionsStore {
    *  cached, forget that tree and have the Explorer re-read it — including the
    *  schemas / folders / tables the user had open — from the new session. */
   private onOpened(id: string) {
+    this.learnFlavor(id)
     if (!this.staleConfig.delete(id)) return
     explorer.invalidate(id)
     explorer.bumpReload(id)
+  }
+
+  /** Cassandra only: ask the server whether it is Apache Cassandra or ScyllaDB
+   *  (SPEC-SCYLLADB.md §3.1). The backend persists it; mirror it here so the
+   *  logo / sidebar group switch without a reload. Best-effort, never blocks. */
+  private learnFlavor(id: string) {
+    const p = this.byId(id)
+    if (!p || p.system !== 'cassandra') return
+    void ipc
+      .cassandraServerInfo(id)
+      .then((info) => {
+        const cur = this.byId(id)
+        if (cur && cur.cassandra_flavor !== info.flavor) cur.cassandra_flavor = info.flavor
+      })
+      .catch(() => {})
   }
 
   get selected(): ProfilePublic | null {
@@ -285,7 +301,10 @@ class ConnectionsStore {
     return ipc.cancelTest(testId)
   }
 
-  makeBlankProfile(system: SystemType): ProfilePublic {
+  /** `flavor` = 'scylla' when the picker's ScyllaDB card was chosen (a Cassandra
+   *  profile that starts with the ScyllaDB brand; detection on connect wins). */
+  makeBlankProfile(system: SystemType, flavor?: 'scylla'): ProfilePublic {
+    const scylla = system === 'cassandra' && flavor === 'scylla'
     return {
       id: '',
       name: '',
@@ -306,8 +325,10 @@ class ConnectionsStore {
       // mssql_auth tái dùng làm "auth mode": mssql='sql', kafka=SASL mechanism ('' none)
       mssql_auth: system === 'mssql' ? 'sql' : system === 'elasticsearch' ? 'basic' : '',
       schema_registry_url: '',
-      cassandra_dc: system === 'cassandra' ? 'dc1' : '',
+      // ScyllaDB names its default datacenter "datacenter1"
+      cassandra_dc: scylla ? 'datacenter1' : system === 'cassandra' ? 'dc1' : '',
       cassandra_consistency: system === 'cassandra' ? 'LOCAL_QUORUM' : '',
+      cassandra_flavor: scylla ? 'scylla' : system === 'cassandra' ? 'cassandra' : '',
       has_password: false,
       connected: false,
     }

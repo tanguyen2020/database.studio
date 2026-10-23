@@ -1,6 +1,6 @@
 //
 // GENERATED — do not edit by hand.
-// Sinh bởi scripts/extract-tokens.mjs từ "Database Studio.dc.html" (sha256 004c107dc893).
+// Sinh bởi scripts/extract-tokens.mjs từ "Database Studio.dc.html" (sha256 493c0130a76d).
 // Chạy lại: npm run tokens
 // 
 
@@ -85,6 +85,14 @@ export const SYS_GEN = {
     "fg": "#5cc4e8",
     "badge": "CS",
     "label": "Cassandra"
+  },
+  "scylladb": {
+    "accent": "#6CD5E7",
+    "bg": "#0b2a30",
+    "border": "#1c5560",
+    "fg": "#8ae3f0",
+    "badge": "SC",
+    "label": "ScyllaDB"
   },
   "sqlite": {
     "accent": "#0F80CC",

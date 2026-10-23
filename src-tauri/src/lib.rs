@@ -247,6 +247,7 @@ pub fn run() {
             commands::cassandra::cassandra_table_ddl,
             commands::cassandra::cassandra_object_ddl,
             commands::cassandra::cassandra_columns,
+            commands::cassandra::cassandra_server_info,
             // mongodb
             commands::mongo::mongo_exec,
             commands::mongo::mongo_users,

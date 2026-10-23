@@ -205,3 +205,40 @@ pub async fn cassandra_table_ddl(
         .await?;
     inner.map_err(|e| AppError::Driver(e.message))
 }
+
+/// Which CQL server a connection talks to (Apache Cassandra or ScyllaDB) and
+/// its real version — SPEC-SCYLLADB.md §3.1. The detected flavor is written
+/// back to the saved profile so the right logo/group shows before the next
+/// connect (quick-connect ids are not in storage and are skipped).
+#[tauri::command]
+pub async fn cassandra_server_info(
+    state: State<'_, AppState>,
+    conn_id: String,
+) -> Result<crate::drivers::cassandra::CassServerInfo, AppError> {
+    let info = state
+        .registry
+        .with_driver(&conn_id, move |driver| async move {
+            let d = driver.lock().await;
+            match &*d {
+                LiveConnection::Cassandra(c) => Ok(c.server_info().clone()),
+                _ => Err(not_cassandra()),
+            }
+        })
+        .await?
+        .map_err(|e| AppError::Driver(e.message))?;
+    let base = {
+        let no_tab = conn_id.split('#').next().unwrap_or(&conn_id);
+        no_tab.split("::").next().unwrap_or(no_tab).to_string()
+    };
+    let flavor = match info.flavor {
+        crate::drivers::cassandra::CassFlavor::Scylla => "scylla",
+        crate::drivers::cassandra::CassFlavor::Cassandra => "cassandra",
+    };
+    if let Ok(mut p) = state.storage.get_connection(&base) {
+        if p.cassandra_flavor != flavor {
+            p.cassandra_flavor = flavor.to_string();
+            state.storage.save_connection(&p)?;
+        }
+    }
+    Ok(info)
+}

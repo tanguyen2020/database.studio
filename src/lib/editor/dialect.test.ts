@@ -54,7 +54,8 @@ describe('monarch language ids', () => {
   it('ids are unique and all registered systems are covered', () => {
     const ids = SQL_SYSTEMS.map(editorLanguageId)
     expect(new Set(ids).size).toBe(ids.length)
-    expect(ids).toHaveLength(9)
+    // 9 engines + ScyllaDB (a Cassandra-engine flavor with its own CQL words)
+    expect(ids).toHaveLength(10)
   })
 })
 
@@ -80,5 +81,25 @@ describe('mergeMonarchKeywords', () => {
 
   it('every SQL system contributes a non-trivial vocabulary', () => {
     for (const sys of SQL_SYSTEMS) expect(dialectVocabulary(sys).length, sys).toBeGreaterThan(50)
+  })
+})
+
+describe('ScyllaDB editor dialect (SPEC-SCYLLADB.md §3.5)', () => {
+  it('a ScyllaDB tab gets Cassandra CQL plus ScyllaDB words; a Cassandra tab does not', () => {
+    const scylla = dialectVocabulary('scylladb')
+    const cass = dialectVocabulary('cassandra')
+    for (const w of ['bypass', 'timeout', 'tablets', 'cdc']) {
+      expect(scylla).toContain(w)
+      expect(cass).not.toContain(w)
+    }
+    // ScyllaDB keeps every Cassandra word
+    for (const w of cass) expect(scylla).toContain(w)
+    expect(sqlDialectFor('cassandra')).toBe(Cassandra)
+  })
+
+  it('ScyllaDB has its own monarch language id', () => {
+    expect(SQL_SYSTEMS).toContain('scylladb')
+    expect(editorLanguageId('scylladb')).toBe('ds-scylladb')
+    expect(editorLanguageId('cassandra')).toBe('ds-cassandra')
   })
 })

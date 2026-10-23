@@ -901,7 +901,8 @@
     outline: none;
   }
   .rb-trow:hover {
-    background: var(--tbl-hover);
+    background: var(--row-hover);
+    box-shadow: var(--row-hover-shadow);
   }
   .rb-trow:focus-visible {
     box-shadow: inset 0 0 0 var(--px-2) var(--ring-soft);

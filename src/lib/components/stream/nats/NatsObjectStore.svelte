@@ -385,7 +385,8 @@
     text-overflow: ellipsis;
   }
   .no-table tbody tr:hover {
-    background: var(--tbl-hover);
+    background: var(--row-hover);
+    box-shadow: var(--row-hover-shadow);
   }
   .no-table .r {
     text-align: right;

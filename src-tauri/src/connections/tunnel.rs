@@ -688,26 +688,6 @@ fn copy_str(payload: &[u8], i: &mut usize, out: &mut Vec<u8>, compact: bool) -> 
     Some(())
 }
 
-/// Skip the original (compact|classic) string in `payload`, writing `new` (non-null)
-/// into `out` in the same encoding. Advances `i` past the original.
-fn put_str(payload: &[u8], i: &mut usize, out: &mut Vec<u8>, compact: bool, new: &str) -> Option<()> {
-    if compact {
-        let l = read_uvarint(payload, i)?;
-        if l > 1 {
-            *i += (l - 1) as usize;
-        }
-        write_uvarint(out, new.len() as u64 + 1);
-    } else {
-        let l = read_i16(payload, i)?;
-        if l > 0 {
-            *i += l as usize;
-        }
-        out.extend_from_slice(&(new.len() as i16).to_be_bytes());
-    }
-    out.extend_from_slice(new.as_bytes());
-    Some(())
-}
-
 /// Copy `n` bytes verbatim from `payload` into `out`, advancing `i`.
 fn copy_n(payload: &[u8], i: &mut usize, out: &mut Vec<u8>, n: usize) -> Option<()> {
     out.extend_from_slice(payload.get(*i..*i + n)?);

@@ -494,7 +494,7 @@ pub async fn kafka_consume(
         let mut announced_eof = false;
         let mut buf: Vec<KafkaMessage> = Vec::with_capacity(EMIT_BATCH);
         let mut last_flush = std::time::Instant::now();
-        let mut flush = |buf: &mut Vec<KafkaMessage>, last_flush: &mut std::time::Instant| {
+        let flush = |buf: &mut Vec<KafkaMessage>, last_flush: &mut std::time::Instant| {
             if buf.is_empty() {
                 return;
             }

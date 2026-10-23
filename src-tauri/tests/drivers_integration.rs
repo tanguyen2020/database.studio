@@ -1090,6 +1090,7 @@ async fn quick_connect_ephemeral_id_is_queryable_via_registry() {
         schema_registry_url: String::new(),
         cassandra_dc: String::new(),
         cassandra_consistency: String::new(),
+        cassandra_flavor: String::new(),
     };
 
     let registry = Registry::default();
@@ -1160,6 +1161,7 @@ async fn tab_connections_are_isolated_hung_query_does_not_block() {
         schema_registry_url: String::new(),
         cassandra_dc: String::new(),
         cassandra_consistency: String::new(),
+        cassandra_flavor: String::new(),
     };
 
     let registry = Arc::new(Registry::default());
@@ -3133,6 +3135,7 @@ async fn pg_over_ssh_tunnel_recovers_after_the_ssh_session_dies() {
         schema_registry_url: String::new(),
         cassandra_dc: String::new(),
         cassandra_consistency: String::new(),
+        cassandra_flavor: String::new(),
     };
 
     let registry = Registry::default();
@@ -3761,6 +3764,17 @@ async fn cassandra_cql_semantics_paging_and_ddl_roundtrip() {
     };
     eprintln!("CHK connect + ping OK");
 
+    // SPEC-SCYLLADB.md: a real Apache Cassandra is NOT mistaken for ScyllaDB, and
+    // keeps its own version label.
+    {
+        use database_studio_lib::drivers::cassandra::CassFlavor;
+        let info = drv.server_info();
+        assert_eq!(info.flavor, CassFlavor::Cassandra, "{info:?}");
+        assert!(info.version.starts_with("5."), "{info:?}");
+        assert_eq!(info.label(), format!("Cassandra {}", info.version));
+        assert_eq!(info.tablets_enabled, None);
+    }
+
     // --- setup: keyspace + bảng composite PK + clustering order + dữ liệu ---
     drv.exec_cql(
         "CREATE KEYSPACE IF NOT EXISTS itest_ks WITH replication = \
@@ -4149,6 +4163,7 @@ async fn connection_test_bounded_and_cancellable() {
             schema_registry_url: String::new(),
             cassandra_dc: String::new(),
             cassandra_consistency: String::new(),
+            cassandra_flavor: String::new(),
         }
     }
 
@@ -4230,6 +4245,7 @@ async fn query_cancel_aborts_and_connection_recovers() {
         schema_registry_url: String::new(),
         cassandra_dc: String::new(),
         cassandra_consistency: String::new(),
+        cassandra_flavor: String::new(),
     };
 
     let reg = Arc::new(Registry::default());
@@ -4334,6 +4350,7 @@ async fn query_cancel_stops_a_large_result_and_the_server() {
         schema_registry_url: String::new(),
         cassandra_dc: String::new(),
         cassandra_consistency: String::new(),
+        cassandra_flavor: String::new(),
     };
 
     let reg = Arc::new(Registry::default());
@@ -4787,6 +4804,7 @@ async fn pg_registry_concurrent_and_rollback() {
         schema_registry_url: String::new(),
         cassandra_dc: String::new(),
         cassandra_consistency: String::new(),
+        cassandra_flavor: String::new(),
     };
 
     let reg = Arc::new(Registry::default());
@@ -7218,6 +7236,7 @@ async fn pg_idle_connection_is_healed_and_a_dead_server_is_reported() {
         schema_registry_url: String::new(),
         cassandra_dc: String::new(),
         cassandra_consistency: String::new(),
+        cassandra_flavor: String::new(),
     };
 
     let registry = Registry::default();
@@ -7346,6 +7365,7 @@ async fn mysql_idle_connection_past_wait_timeout_is_healed() {
         schema_registry_url: String::new(),
         cassandra_dc: String::new(),
         cassandra_consistency: String::new(),
+        cassandra_flavor: String::new(),
     };
     let registry = Registry::default();
     let deadline = Instant::now() + Duration::from_secs(240);
@@ -7451,6 +7471,7 @@ async fn mysql_keepalive_sweep_keeps_an_idle_connection_alive() {
         schema_registry_url: String::new(),
         cassandra_dc: String::new(),
         cassandra_consistency: String::new(),
+        cassandra_flavor: String::new(),
     };
 
     // Sweep every 2s, i.e. inside the server's 5s idle window.
@@ -9471,6 +9492,7 @@ async fn pg_session_init_is_sent_once_and_survives_a_reconnect() {
         schema_registry_url: String::new(),
         cassandra_dc: String::new(),
         cassandra_consistency: String::new(),
+        cassandra_flavor: String::new(),
     };
     let registry = Registry::default();
     let deadline = Instant::now() + Duration::from_secs(240);
