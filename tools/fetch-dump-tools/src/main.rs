@@ -579,6 +579,10 @@ fn fetch_oracle(client: &reqwest::blocking::Client, p: Platform, dest: &Path, fo
                 || low.contains("/sdk/")
                 || file.starts_with("oraocci")
                 || file.starts_with("ocijdbc")
+                // the Linux names of the same OCCI / JDBC libraries
+                || file.starts_with("libocci")
+                || file.starts_with("libocijdbc")
+                || file.starts_with("libtfojdbc")
                 || ["sqlldr", "exp", "imp", "adrci", "wrc", "uidrvci", "genezi"].contains(&file.strip_suffix(".exe").unwrap_or(file));
             if unused {
                 return None;
@@ -654,6 +658,16 @@ fn is_elf(p: &Path) -> bool {
 }
 
 fn patchelf(args: &[&str], file: &Path) -> Res<()> {
+    // some files in Oracle's zips are read-only, and the build agent is not root
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let meta = std::fs::metadata(file).map_err(|e| format!("{}: {e}", file.display()))?;
+        let mode = meta.permissions().mode();
+        if mode & 0o200 == 0 {
+            std::fs::set_permissions(file, std::fs::Permissions::from_mode(mode | 0o200)).map_err(|e| format!("{}: {e}", file.display()))?;
+        }
+    }
     let out = Command::new("patchelf")
         .args(args)
         .arg(file)
