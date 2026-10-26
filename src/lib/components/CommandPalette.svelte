@@ -29,6 +29,8 @@
 
   function openConn(id: string, system: string) {
     connections.selectedId = id
+    // workspace engines: the tab opens straight away and shows the connect attempt
+    if (opensWorkspace(system)) tabs.openStreamWorkspace(id)
     void connections.connect(id).then(() => {
       // Redis · Kafka · NATS · RabbitMQ: no object tree — their workspace tab is the view
       if (opensWorkspace(system)) tabs.openStreamWorkspace(id)

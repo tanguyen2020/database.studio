@@ -12,8 +12,10 @@
   import EsAppIcon from './EsAppIcon.svelte'
   import type { EuiApp } from '$lib/elastic/eui-icons'
   import EsConfirmDialog from './EsConfirmDialog.svelte'
-  import { es, seg } from '$lib/elastic/api'
-  import { resourceKind, type ResourceRow } from '$lib/elastic/resources'
+  import { es, seg, EsError } from '$lib/elastic/api'
+  import { RESOURCE_KINDS, resourceKind, withConcurrency, type ResourceRow } from '$lib/elastic/resources'
+  import { OS_RESOURCE_KINDS } from '$lib/elastic/os-resources'
+  import { searchProduct } from '$lib/elastic/flavor'
   import { fmtTimestamp } from '$lib/elastic/format'
   import { explorer } from '$lib/stores/explorer.svelte'
   import { tabs } from '$lib/stores/tabs.svelte'
@@ -23,7 +25,9 @@
   let { tab }: { tab: TabState } = $props()
   const connId = $derived(tab.connectionId ?? '')
   const st = $derived(tab.state as { kind: string; select?: string | null })
-  const kind = $derived(resourceKind(st.kind))
+  // OpenSearch has its own management APIs (ISM, Snapshot Management, Alerting… — SPEC-OPENSEARCH.md)
+  const product = $derived(searchProduct(connId))
+  const kind = $derived(resourceKind(st.kind, product.os ? OS_RESOURCE_KINDS : RESOURCE_KINDS))
 
   // Kibana app icon of the page that manages this kind
   const ICON: Record<string, EuiApp> = {
@@ -38,6 +42,15 @@
     enrich: 'management',
     transforms: 'indexRollup',
     watches: 'watches',
+    ism: 'indexManagement',
+    sm: 'management',
+    rollups: 'indexRollup',
+    monitors: 'watches',
+  }
+
+  /** the id used in REST paths — the generated id of an OpenSearch monitor, else the name */
+  function keyOf(name: string): string {
+    return rows.find((r) => r.name === name)?.id ?? name
   }
 
   let rows = $state<ResourceRow[]>([])
@@ -72,8 +85,15 @@
     loading = true
     listError = null
     try {
-      const j = await es(connId, 'GET', kind.listPath)
-      rows = kind.parseList(j).sort((a, b) => a.name.localeCompare(b.name))
+      let j: unknown
+      try {
+        j = await es(connId, kind.listMethod ?? 'GET', kind.listPath, kind.listBody)
+      } catch (e) {
+        // the plugin has not created its config index yet — nothing there (O15)
+        if (kind.emptyOn404 && e instanceof EsError && e.status === 404) j = null
+        else throw e
+      }
+      rows = j === null ? [] : kind.parseList(j).sort((a, b) => a.name.localeCompare(b.name))
       const want = keepSelection ? (selected ?? st.select ?? null) : null
       if (want && rows.some((r) => r.name === want)) await select(want)
       else if (!isNew) {
@@ -99,7 +119,7 @@
     let body: unknown = row?.body
     if (kind.getPath) {
       try {
-        const j = await es(connId, 'GET', kind.getPath(name))
+        const j = await es(connId, 'GET', kind.getPath(keyOf(name)))
         body = kind.pickBody ? kind.pickBody(j, name) : j
       } catch (e) {
         detailError = String((e as Error).message ?? e)
@@ -153,7 +173,15 @@
     busy = true
     detailError = null
     try {
-      await es(connId, kind.saveMethod ?? 'PUT', kind.savePath(selected), kind.saveNoBody ? undefined : parsed.value)
+      const body = kind.saveNoBody ? undefined : parsed.value
+      if (isNew) {
+        await es(connId, kind.createMethod ?? kind.saveMethod ?? 'PUT', kind.createPath ? kind.createPath(selected) : kind.savePath(selected), body)
+      } else {
+        const key = keyOf(selected)
+        // updates must name the version they replace — read it now, not when the page opened (O14)
+        const version = kind.concurrency && kind.getPath ? kind.concurrency(await es(connId, 'GET', kind.getPath(key))) : null
+        await es(connId, kind.saveMethod ?? 'PUT', withConcurrency(kind.savePath(key), version), body)
+      }
       toasts.success(`${isNew ? 'Created' : 'Saved'} ${kind.singular} ${selected}`, 'elasticsearch')
       isNew = false
       original = draft
@@ -175,7 +203,7 @@
       action: 'Delete',
       typeToConfirm: kind.key === 'data-streams' || kind.key === 'snapshot-repos' ? name : undefined,
       run: async () => {
-        await es(connId, 'DELETE', kind.deletePath!(name))
+        await es(connId, 'DELETE', kind.deletePath!(keyOf(name)))
         toasts.success(`Deleted ${kind.singular} ${name}`, 'elasticsearch')
         selected = null
         draft = original = ''
@@ -190,7 +218,7 @@
     busy = true
     try {
       const body = a.body ? a.body(selected, parsed.ok ? parsed.value : null) : undefined
-      const r = await es(connId, a.method, a.path(selected), body)
+      const r = await es(connId, a.method, a.path(keyOf(selected)), body)
       result = { label: a.label, text: JSON.stringify(r, null, 2), ok: true }
       if (a.key !== 'simulate' && a.key !== 'preview' && a.key !== 'stats') {
         toasts.success(`${a.label}: ${selected}`, 'elasticsearch')
@@ -363,7 +391,8 @@
                 {#if kind.saveNoBody && isNew}
                   <div class="es-callout">Creates the data stream from the matching index template (it must have <span class="mono">"data_stream": {'{}'}</span>). Press <b>Create {kind.singular}</b>.</div>
                 {:else}
-                  <span class="es-label">{kind.saveNoBody || !kind.savePath ? 'Definition (read-only)' : `${kind.saveMethod ?? 'PUT'} ${kind.savePath(selected)}`}</span>
+                  <span class="es-label">{kind.saveNoBody || !kind.savePath ? 'Definition (read-only)' : isNew ? `${kind.createMethod ?? kind.saveMethod ?? 'PUT'} ${kind.createPath ? kind.createPath(selected) : kind.savePath(selected)}` : `${kind.saveMethod ?? 'PUT'} ${kind.savePath(keyOf(selected))}`}</span>
+                  {#if kind.editorHelp}<div class="es-help" style="margin:0 0 var(--px-6)">{kind.editorHelp}</div>{/if}
                   <CodeView value={draft} language={DS_JSON} readOnly={!kind.savePath || !!kind.saveNoBody} height="auto" minHeight={220} maxHeight={620} onChange={(t) => (draft = t)} onSubmit={save} ariaLabel="{kind.singular} definition" />
                   {#if !parsed.ok}<div class="es-error-text">Invalid JSON — {parsed.error}</div>{/if}
                 {/if}

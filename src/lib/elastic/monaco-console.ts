@@ -4,7 +4,7 @@
 
 import type { MonacoApi } from '$lib/editor/monaco'
 import type * as monaco from 'monaco-editor'
-import { BODY_KEYS, ENDPOINTS, FIELD_TYPES, METHODS } from './console'
+import { BODY_KEYS, FIELD_TYPES, METHODS, endpointsFor } from './console'
 
 export const ES_CONSOLE_LANG = 'ds-es-console'
 
@@ -14,6 +14,8 @@ export interface ConsoleCompletionContext {
   indexNames: () => string[]
   /** mapping fields of an index named in the current request's path */
   fieldsOf: (index: string) => Promise<string[]>
+  /** Elasticsearch or OpenSearch — decides which endpoints are suggested */
+  flavor?: () => 'elasticsearch' | 'opensearch'
 }
 
 let ctxRef: ConsoleCompletionContext | null = null
@@ -114,7 +116,7 @@ export function registerConsoleLanguage(m: MonacoApi) {
             range,
           })
         }
-        for (const ep of ENDPOINTS) {
+        for (const ep of endpointsFor(ctxRef?.flavor?.() ?? 'elasticsearch')) {
           if (!ep.methods.includes(method)) continue
           if (ep.path.includes('{index}')) {
             const typedIndex = /^\/?([^/]+)\//.exec(typed)?.[1]

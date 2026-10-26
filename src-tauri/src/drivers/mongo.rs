@@ -57,6 +57,11 @@ pub struct MongoConnParams {
     pub ssl: bool,
     /// TLS CA path (empty = system roots). Applied via `tlsCAFile` when set.
     pub ssl_ca: String,
+    /// Server flavor (SPEC-FERRETDB-DOCUMENTDB.md): "" / "mongodb" / "ferretdb" / "documentdb".
+    /// Amazon DocumentDB needs `retryWrites=false`.
+    pub flavor: String,
+    /// Reached through an SSH tunnel (the host is 127.0.0.1, not the server's name).
+    pub tunneled: bool,
 }
 
 /// Outcome of one editor statement — mirrors Cassandra's `CqlOutcome`:
@@ -74,6 +79,8 @@ pub struct MongoDriver {
     /// Read by exec_mongo / introspection from M1 onward.
     #[allow(dead_code)]
     database: String,
+    /// "" / "mongodb" / "ferretdb" / "documentdb" — explains unsupported commands
+    flavor: String,
 }
 
 /// URL-encode the userinfo component of a connection string (RFC 3986 sub-set
@@ -100,6 +107,47 @@ pub fn connection_uri(p: &MongoConnParams) -> String {
 }
 
 fn build_uri(p: &MongoConnParams) -> String {
+    let uri = build_uri_base(p);
+    with_flavor_params(&uri, p)
+}
+
+/// Amazon DocumentDB does not support retryable writes (every write fails with
+/// "Retryable writes are not supported" unless the client turns them off), and its
+/// certificate names the cluster endpoint — through an SSH tunnel the client talks to
+/// 127.0.0.1, so the name check has to be relaxed there. Nothing is added when the
+/// user already chose a value in a full connection string.
+pub fn with_flavor_params(uri: &str, p: &MongoConnParams) -> String {
+    if p.flavor != "documentdb" {
+        return uri.to_string();
+    }
+    let mut extra: Vec<&str> = Vec::new();
+    if !uri.contains("retryWrites=") {
+        extra.push("retryWrites=false");
+    }
+    let tls = p.ssl || uri.contains("tls=true") || uri.contains("ssl=true");
+    if p.tunneled && tls && !uri.contains("tlsAllowInvalidHostnames=") {
+        extra.push("tlsAllowInvalidHostnames=true");
+    }
+    if extra.is_empty() {
+        return uri.to_string();
+    }
+    // mongodb://host:port/ → append after the path, with ? or &
+    let (head, query) = match uri.split_once('?') {
+        Some((h, q)) => (h.to_string(), Some(q.to_string())),
+        None => (uri.to_string(), None),
+    };
+    let mut head = head;
+    let after_scheme = head.find("://").map(|i| i + 3).unwrap_or(0);
+    if !head[after_scheme..].contains('/') {
+        head.push('/');
+    }
+    match query {
+        Some(q) if !q.is_empty() => format!("{head}?{q}&{}", extra.join("&")),
+        _ => format!("{head}?{}", extra.join("&")),
+    }
+}
+
+fn build_uri_base(p: &MongoConnParams) -> String {
     let h = p.host.trim();
     if h.starts_with("mongodb://") || h.starts_with("mongodb+srv://") {
         // Full connection string: use verbatim, but inject the profile's
@@ -154,6 +202,88 @@ fn build_uri(p: &MongoConnParams) -> String {
         uri.push_str(&params.join("&"));
     }
     uri
+}
+
+/// What the app learns about a MongoDB-compatible server on connect
+/// (SPEC-FERRETDB-DOCUMENTDB.md): MongoDB itself, FerretDB or Amazon DocumentDB.
+#[derive(Debug, Clone, serde::Serialize, PartialEq)]
+pub struct MongoServerInfo {
+    /// "mongodb" | "ferretdb" | "documentdb"
+    pub flavor: String,
+    /// the product's own version ("v2.7.0" for FerretDB, "7.0.14" for MongoDB)
+    pub version: String,
+    /// the MongoDB version the server says it is compatible with
+    pub compat: String,
+    /// "FerretDB v2.7.0" / "Amazon DocumentDB 5.0.0" / "MongoDB 7.0.14"
+    pub label: String,
+}
+
+/// Amazon DocumentDB endpoints (instance-based and elastic clusters, all regions).
+pub fn is_documentdb_host(host: &str) -> bool {
+    let h = host.to_ascii_lowercase();
+    h.contains(".docdb.amazonaws.com") || h.contains(".docdb-elastic.amazonaws.com")
+}
+
+/// Decide the flavor from `buildInfo` + the host. FerretDB says so in buildInfo
+/// (`ferretdb.version`, measured on v2.7.0 — its `version` is a compatibility number,
+/// "7.0.77"). Amazon DocumentDB is recognised by its endpoint name, or by the flavor the
+/// user chose (it cannot be told apart from MongoDB by buildInfo alone).
+pub fn server_identity(ferretdb_version: Option<&str>, version: Option<&str>, host: &str, chosen: &str) -> MongoServerInfo {
+    let compat = version.unwrap_or("").to_string();
+    if let Some(fv) = ferretdb_version.filter(|v| !v.is_empty()) {
+        let short = compat.split('.').take(2).collect::<Vec<_>>().join(".");
+        return MongoServerInfo {
+            flavor: "ferretdb".into(),
+            version: fv.to_string(),
+            label: if short.is_empty() { format!("FerretDB {fv}") } else { format!("FerretDB {fv} (MongoDB {short} compatible)") },
+            compat,
+        };
+    }
+    if chosen == "documentdb" || is_documentdb_host(host) {
+        return MongoServerInfo {
+            flavor: "documentdb".into(),
+            version: compat.clone(),
+            label: if compat.is_empty() { "Amazon DocumentDB".into() } else { format!("Amazon DocumentDB {compat}") },
+            compat,
+        };
+    }
+    MongoServerInfo {
+        flavor: "mongodb".into(),
+        version: compat.clone(),
+        label: if compat.is_empty() { "MongoDB".into() } else { format!("MongoDB {compat}") },
+        compat,
+    }
+}
+
+/// What to do when FerretDB / Amazon DocumentDB refuses something MongoDB does. The
+/// FerretDB texts are the ones measured on v2.7.0; DocumentDB says "Feature not supported".
+pub fn unsupported_hint(flavor: &str, message: &str) -> Option<String> {
+    let m = message;
+    match flavor {
+        "ferretdb" => {
+            if m.contains("$where") {
+                return Some("FerretDB does not support $where — write the condition with query operators or $expr.".into());
+            }
+            if m.contains("$changeStream") {
+                return Some("Change streams are not available on FerretDB.".into());
+            }
+            const NO_CMD: &str = "no such command: '";
+            if let Some(i) = m.find(NO_CMD) {
+                let cmd: String = m[i + NO_CMD.len()..].chars().take_while(|c| *c != '\'').collect();
+                return Some(match cmd.as_str() {
+                    "mapReduce" => "FerretDB does not support mapReduce — use an aggregation pipeline (aggregate) instead.".into(),
+                    "grantRolesToUser" | "revokeRolesFromUser" | "createRole" | "rolesInfo" => {
+                        "FerretDB does not enforce roles, so it has no role commands.".into()
+                    }
+                    _ => format!("FerretDB does not support the {cmd} command."),
+                });
+            }
+            None
+        }
+        "documentdb" => (m.contains("not supported") || m.contains("Feature not supported"))
+            .then(|| "Amazon DocumentDB does not support this MongoDB feature — see \"Functional differences\" in the DocumentDB guide.".into()),
+        _ => None,
+    }
 }
 
 fn conn_err(e: impl std::fmt::Display) -> QueryError {
@@ -510,7 +640,7 @@ impl MongoDriver {
         } else {
             p.database.trim().to_string()
         };
-        let drv = Self { client, database };
+        let mut drv = Self { client, database, flavor: p.flavor.clone() };
         // Real handshake: a `ping` against admin confirms the server is reachable.
         if !drv.ping_now().await {
             return Err(QueryError::new(
@@ -519,6 +649,11 @@ impl MongoDriver {
                 "ping failed after connect",
             ));
         }
+        // Know the server from the first statement on (a profile that was never connected
+        // has no flavor yet): explains what FerretDB / DocumentDB refuse.
+        if let Ok(info) = drv.server_info(&p.host, &p.flavor).await {
+            drv.flavor = info.flavor;
+        }
         Ok(drv)
     }
 
@@ -526,14 +661,7 @@ impl MongoDriver {
         let started = Instant::now();
         match Self::connect(p).await {
             Ok(drv) => {
-                let version = drv
-                    .client
-                    .database("admin")
-                    .run_command(doc! { "buildInfo": 1 })
-                    .await
-                    .ok()
-                    .and_then(|d| d.get_str("version").ok().map(|s| s.to_string()))
-                    .map(|v| format!("MongoDB {v}"));
+                let version = drv.server_info(&p.host, &p.flavor).await.ok().map(|i| i.label);
                 TestResult {
                     ok: true,
                     latency_ms: Some(started.elapsed().as_millis() as u64),
@@ -548,6 +676,14 @@ impl MongoDriver {
                 error: Some(e.message),
             },
         }
+    }
+
+    /// MongoDB, FerretDB or Amazon DocumentDB — from `buildInfo` and the host.
+    pub async fn server_info(&self, host: &str, chosen: &str) -> Result<MongoServerInfo, QueryError> {
+        let d = self.client.database("admin").run_command(doc! { "buildInfo": 1 }).await.map_err(exec_err)?;
+        let ferret = d.get_document("ferretdb").ok().and_then(|f| f.get_str("version").ok()).map(str::to_string);
+        let version = d.get_str("version").ok().map(str::to_string);
+        Ok(server_identity(ferret.as_deref(), version.as_deref(), host, chosen))
     }
 
     async fn ping_now(&self) -> bool {
@@ -580,6 +716,21 @@ impl MongoDriver {
     /// Like `exec_mongo` but against an explicit database (the collection viewer
     /// targets any database, not just the connection's default).
     pub async fn exec_mongo_in(
+        &self,
+        database: Option<&str>,
+        query: &str,
+        batch_size: Option<i32>,
+        cursor_token: Option<&str>,
+    ) -> Result<MongoOutcome, QueryError> {
+        self.exec_mongo_in_inner(database, query, batch_size, cursor_token).await.map_err(|mut e| {
+            if let Some(h) = unsupported_hint(&self.flavor, &e.message) {
+                e.hint = Some(h);
+            }
+            e
+        })
+    }
+
+    async fn exec_mongo_in_inner(
         &self,
         database: Option<&str>,
         query: &str,
@@ -1638,7 +1789,66 @@ mod tests {
             password: pw.into(),
             ssl,
             ssl_ca: String::new(),
+            flavor: String::new(),
+            tunneled: false,
         }
+    }
+
+    #[test]
+    fn flavors_are_recognised_from_build_info_and_host() {
+        // measured on ferretdb-eval:2 — buildInfo.version is a compatibility number
+        let f = server_identity(Some("v2.7.0"), Some("7.0.77"), "localhost", "");
+        assert_eq!(f.flavor, "ferretdb");
+        assert_eq!(f.version, "v2.7.0");
+        assert_eq!(f.label, "FerretDB v2.7.0 (MongoDB 7.0 compatible)");
+        // FerretDB wins over whatever was chosen
+        assert_eq!(server_identity(Some("v2.7.0"), None, "h", "documentdb").flavor, "ferretdb");
+        let d = server_identity(None, Some("5.0.0"), "prod.cluster-abc.us-east-1.docdb.amazonaws.com", "");
+        assert_eq!((d.flavor.as_str(), d.label.as_str()), ("documentdb", "Amazon DocumentDB 5.0.0"));
+        assert!(is_documentdb_host("x-123.us-east-1.docdb-elastic.amazonaws.com"));
+        assert!(!is_documentdb_host("mongo.internal"));
+        // through an SSH tunnel the host is 127.0.0.1 — the chosen flavor keeps it DocumentDB
+        assert_eq!(server_identity(None, Some("5.0.0"), "127.0.0.1", "documentdb").flavor, "documentdb");
+        assert_eq!(server_identity(None, Some("7.0.14"), "localhost", "").label, "MongoDB 7.0.14");
+    }
+
+    #[test]
+    fn unsupported_commands_are_explained_per_flavor() {
+        // the messages FerretDB v2.7.0 answers (measured)
+        assert!(unsupported_hint("ferretdb", "no such command: 'mapReduce'").unwrap().contains("aggregation pipeline"));
+        assert!(unsupported_hint("ferretdb", "no such command: 'grantRolesToUser'").unwrap().contains("does not enforce roles"));
+        assert_eq!(unsupported_hint("ferretdb", "no such command: 'top'").unwrap(), "FerretDB does not support the top command.");
+        assert!(unsupported_hint("ferretdb", "unknown top level operator: $where. If you have a field name").unwrap().contains("$expr"));
+        assert!(unsupported_hint("ferretdb", "Stage $changeStream is not supported yet in native pipeline").unwrap().contains("Change streams"));
+        assert!(unsupported_hint("documentdb", "Feature not supported: $where").unwrap().contains("DocumentDB"));
+        // MongoDB itself and ordinary errors get nothing extra
+        assert!(unsupported_hint("mongodb", "no such command: 'mapReduce'").is_none());
+        assert!(unsupported_hint("ferretdb", "E11000 duplicate key error").is_none());
+    }
+
+    #[test]
+    fn documentdb_connections_turn_off_retryable_writes() {
+        let mut p = params("prod.cluster-abc.us-east-1.docdb.amazonaws.com", "admin", "pw", "", true);
+        p.flavor = "documentdb".into();
+        let u = build_uri(&p);
+        assert!(u.contains("tls=true") && u.ends_with("&retryWrites=false"), "{u}");
+        assert!(!u.contains("tlsAllowInvalidHostnames"));
+        // through a tunnel the certificate names the cluster, not 127.0.0.1
+        p.host = "127.0.0.1".into();
+        p.tunneled = true;
+        assert!(build_uri(&p).ends_with("retryWrites=false&tlsAllowInvalidHostnames=true"));
+        // a full connection string keeps the user's own choice
+        p.host = "mongodb://u:p@h:27017/?tls=true&retryWrites=true".into();
+        p.tunneled = false;
+        assert_eq!(build_uri(&p), "mongodb://u:p@h:27017/?tls=true&retryWrites=true");
+        p.host = "mongodb://u:p@h:27017".into();
+        assert_eq!(build_uri(&p), "mongodb://u:p@h:27017/?retryWrites=false");
+        // MongoDB / FerretDB are untouched
+        let plain = params("localhost", "", "", "", false);
+        assert_eq!(build_uri(&plain), "mongodb://localhost:27017/");
+        let mut fdb = params("localhost", "", "", "", false);
+        fdb.flavor = "ferretdb".into();
+        assert_eq!(build_uri(&fdb), "mongodb://localhost:27017/");
     }
 
     #[test]

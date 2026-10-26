@@ -347,6 +347,7 @@ mod tests {
             cassandra_dc: String::new(),
             cassandra_consistency: String::new(),
             cassandra_flavor: String::new(),
+            admin_url: String::new(),
         }
     }
 

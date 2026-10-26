@@ -3,7 +3,7 @@
   // 27px nền --header, dot 7px màu accent (xám orphan khi disconnected) +
   // connName + icon hệ + object hiện tại (mono) | latency (mono) + rows (mono).
   import SystemIcon from '$lib/components/SystemIcon.svelte'
-  import { brandKey, brandMeta } from '$lib/scylla/brand'
+  import { brandKey, brandMeta } from '$lib/brand'
   import { connections } from '$lib/stores/connections.svelte'
   import { explorer } from '$lib/stores/explorer.svelte'
   import { results } from '$lib/stores/results.svelte'

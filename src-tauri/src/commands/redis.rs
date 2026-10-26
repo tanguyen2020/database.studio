@@ -334,6 +334,40 @@ pub fn info_sections(text: &str) -> Vec<RedisInfoSection> {
         .collect()
 }
 
+/// Which server a Redis-protocol connection talks to (Redis or Valkey) and its
+/// real version — SPEC-VALKEY.md §3. The detected flavor is written back to the
+/// saved profile (`cassandra_flavor` is the profile's generic "server flavor"
+/// field) so the right logo / sidebar group shows before the next connect.
+/// Quick-connect ids are not in storage and are skipped.
+#[tauri::command]
+pub async fn redis_server_info(
+    state: State<'_, AppState>,
+    conn_id: String,
+) -> Result<crate::drivers::redis::RedisServerInfo, AppError> {
+    let inner = state
+        .registry
+        .with_driver(&conn_id, move |driver| async move {
+            let mut d = driver.lock().await;
+            match &mut *d {
+                LiveConnection::Redis(r) => r.server_info().await,
+                _ => Err(not_redis()),
+            }
+        })
+        .await?;
+    let info = inner.map_err(|e| AppError::Driver(e.message))?;
+    let base = {
+        let no_tab = conn_id.split('#').next().unwrap_or(&conn_id);
+        no_tab.split("::").next().unwrap_or(no_tab).to_string()
+    };
+    if let Ok(mut p) = state.storage.get_connection(&base) {
+        if p.system == crate::drivers::types::SystemType::Redis && p.cassandra_flavor != info.flavor {
+            p.cassandra_flavor = info.flavor.clone();
+            state.storage.save_connection(&p)?;
+        }
+    }
+    Ok(info)
+}
+
 /// `INFO`, grouped by section (Server info view + header stats).
 #[tauri::command]
 pub async fn redis_info(state: State<'_, AppState>, conn_id: String) -> Result<RedisInfo, AppError> {

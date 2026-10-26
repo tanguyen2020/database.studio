@@ -11,6 +11,7 @@
   import { createIndex } from '$lib/elastic/api'
   import { FIELD_TYPES } from '$lib/elastic/console'
   import { indexNameError } from '$lib/elastic/format'
+  import { searchProduct } from '$lib/elastic/flavor'
 
   interface Props {
     connId: string
@@ -93,7 +94,7 @@
       <span class="es-header-icon" style="width:var(--px-34);height:var(--px-34)"><EsAppIcon name="indexManagement" size={20} /></span>
       <div>
         <div class="es-card-title" style="font-size:var(--px-16)">Create index</div>
-        <div class="es-sub" style="margin-top:0">Settings, field mappings and aliases — Elasticsearch adds new fields automatically (dynamic mapping) unless you define them here.</div>
+        <div class="es-sub" style="margin-top:0">Settings, field mappings and aliases — {searchProduct(connId).name} adds new fields automatically (dynamic mapping) unless you define them here.</div>
       </div>
     </div>
     <div class="es-modal-b" style="display:grid;grid-template-columns:1fr 1fr;gap:var(--px-16)">

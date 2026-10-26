@@ -11,6 +11,7 @@
   import EsConfirmDialog from './EsConfirmDialog.svelte'
   import { deleteDoc, saveDoc, type EsHit } from '$lib/elastic/api'
   import { displayValue, flattenSource } from '$lib/elastic/format'
+  import { searchProduct } from '$lib/elastic/flavor'
   import { toasts } from '$lib/stores/toast.svelte'
 
   interface Props {
@@ -107,7 +108,7 @@
     <div style="flex:1 1 auto;min-height:0;overflow:auto;padding:var(--px-14) var(--px-20)">
       {#if editing}
         {#if isNew}
-          <label class="es-label" for="es-new-doc-id">Document id <span style="font-weight:400;color:var(--muted)">(optional — Elasticsearch generates one)</span></label>
+          <label class="es-label" for="es-new-doc-id">Document id <span style="font-weight:400;color:var(--muted)">(optional — {searchProduct(connId).name} generates one)</span></label>
           <input id="es-new-doc-id" class="es-input mono" style="width:100%;margin-bottom:var(--px-12)" bind:value={newId} placeholder="auto" spellcheck="false" />
         {/if}
         <span class="es-label">Source</span>

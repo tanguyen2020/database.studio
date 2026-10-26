@@ -7,10 +7,14 @@
   import { explorer } from '$lib/stores/explorer.svelte'
   import { redisDb } from '$lib/stores/redisDb.svelte'
   import { autofocus } from '$lib/actions/autofocus'
+  import { connections } from '$lib/stores/connections.svelte'
+  import { brandLabel } from '$lib/brand'
   import { dangerOf, isReadOnlyCommand, selectedDb, tokenizeCommand, type DangerInfo } from '$lib/stream/redis-workbench'
   import '$lib/components/workspace/users/um.css'
 
   let { connId }: { connId: string } = $props()
+  // Redis or Valkey (SPEC-VALKEY.md) — the name every sentence uses
+  const product = $derived(brandLabel(connections.byId(connId) ?? { system: 'redis' }))
 
   interface Run {
     cmd: string
@@ -98,8 +102,8 @@
   <div class="rw-out" bind:this={output} aria-live="polite">
     {#if log.length === 0}
       <div class="rw-empty">
-        <b>Run Redis commands</b>
-        <span>Type a command below and press Enter — the same commands you would use in <span class="mono">redis-cli</span>. Commands that delete data ask first.</span>
+        <b>Run {product} commands</b>
+        <span>Type a command below and press Enter — the same commands you would use in <span class="mono">{product === 'Valkey' ? 'valkey-cli' : 'redis-cli'}</span>. Commands that delete data ask first.</span>
         <div class="rw-examples">
           {#each EXAMPLES as ex (ex)}
             <button type="button" class="rw-chip mono" onclick={() => { input = ex; inputEl?.focus() }}>{ex}</button>

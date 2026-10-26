@@ -8,7 +8,7 @@
   import ResultPanel from '$lib/components/results/ResultPanel.svelte'
   import SystemBadge from '$lib/components/SystemBadge.svelte'
   import SystemIcon from '$lib/components/SystemIcon.svelte'
-  import { brandKey, brandMeta, isScylla } from '$lib/scylla/brand'
+  import { brandKey, brandMeta, isScylla } from '$lib/brand'
   import SearchSelect from '$lib/components/SearchSelect.svelte'
   import { systemMeta } from '$lib/systems'
   import { connections } from '$lib/stores/connections.svelte'

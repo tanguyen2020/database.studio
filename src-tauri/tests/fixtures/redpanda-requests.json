@@ -1,0 +1,321 @@
+{
+  "steps": [
+    {
+      "title": "detect: brokers",
+      "method": "GET",
+      "path": "/v1/brokers",
+      "expect": [
+        200
+      ],
+      "contains": "version"
+    },
+    {
+      "title": "overview: health",
+      "method": "GET",
+      "path": "/v1/cluster/health_overview",
+      "expect": [
+        200
+      ],
+      "contains": "is_healthy"
+    },
+    {
+      "title": "overview: partition balancer",
+      "method": "GET",
+      "path": "/v1/cluster/partition_balancer/status",
+      "expect": [
+        200
+      ],
+      "contains": "status"
+    },
+    {
+      "title": "overview: license",
+      "method": "GET",
+      "path": "/v1/features/license",
+      "expect": [
+        200
+      ],
+      "contains": "loaded"
+    },
+    {
+      "title": "configuration: schema",
+      "method": "GET",
+      "path": "/v1/cluster_config/schema",
+      "expect": [
+        200
+      ],
+      "contains": "log_retention_ms"
+    },
+    {
+      "title": "configuration: values with defaults",
+      "method": "GET",
+      "path": "/v1/cluster_config?include_defaults=true",
+      "expect": [
+        200
+      ],
+      "contains": "log_retention_ms"
+    },
+    {
+      "title": "configuration: values set on the cluster",
+      "method": "GET",
+      "path": "/v1/cluster_config?include_defaults=false",
+      "expect": [
+        200
+      ],
+      "contains": "cluster_id"
+    },
+    {
+      "title": "configuration: status",
+      "method": "GET",
+      "path": "/v1/cluster_config/status",
+      "expect": [
+        200
+      ],
+      "contains": "config_version"
+    },
+    {
+      "title": "configuration: dry run refuses a wrong type",
+      "method": "PUT",
+      "path": "/v1/cluster_config?dry_run=true",
+      "body": "{\"upsert\":{\"log_retention_ms\":\"two days\"},\"remove\":[]}",
+      "expect": [
+        400
+      ],
+      "contains": "expected type integer"
+    },
+    {
+      "title": "configuration: dry run accepts",
+      "method": "PUT",
+      "path": "/v1/cluster_config?dry_run=true",
+      "body": "{\"upsert\":{\"log_retention_ms\":172800000},\"remove\":[]}",
+      "expect": [
+        200
+      ]
+    },
+    {
+      "title": "configuration: save",
+      "method": "PUT",
+      "path": "/v1/cluster_config",
+      "body": "{\"upsert\":{\"log_retention_ms\":172800000},\"remove\":[]}",
+      "expect": [
+        200
+      ],
+      "contains": "config_version"
+    },
+    {
+      "title": "configuration: reads back the saved value",
+      "method": "GET",
+      "path": "/v1/cluster_config?include_defaults=false",
+      "expect": [
+        200
+      ],
+      "contains": "172800000"
+    },
+    {
+      "title": "configuration: back to the default",
+      "method": "PUT",
+      "path": "/v1/cluster_config",
+      "body": "{\"upsert\":{},\"remove\":[\"log_retention_ms\"]}",
+      "expect": [
+        200
+      ],
+      "contains": "config_version"
+    },
+    {
+      "title": "users: create",
+      "method": "POST",
+      "path": "/v1/security/users",
+      "body": "{\"username\":\"it_alice\",\"password\":\"Alice-Pass-123\",\"algorithm\":\"SCRAM-SHA-256\"}",
+      "expect": [
+        200
+      ]
+    },
+    {
+      "title": "users: list",
+      "method": "GET",
+      "path": "/v1/security/users",
+      "expect": [
+        200
+      ],
+      "contains": "it_alice"
+    },
+    {
+      "title": "users: create again with the same password is accepted",
+      "method": "POST",
+      "path": "/v1/security/users",
+      "body": "{\"username\":\"it_alice\",\"password\":\"Alice-Pass-123\",\"algorithm\":\"SCRAM-SHA-256\"}",
+      "expect": [
+        200
+      ]
+    },
+    {
+      "title": "users: create again with another password is refused",
+      "method": "POST",
+      "path": "/v1/security/users",
+      "body": "{\"username\":\"it_alice\",\"password\":\"Other-Pass-999\",\"algorithm\":\"SCRAM-SHA-256\"}",
+      "expect": [
+        409,
+        500
+      ],
+      "contains": "already exists"
+    },
+    {
+      "title": "users: change password",
+      "method": "PUT",
+      "path": "/v1/security/users/it_alice",
+      "body": "{\"username\":\"it_alice\",\"password\":\"Alice-Pass-456\",\"algorithm\":\"SCRAM-SHA-512\"}",
+      "expect": [
+        200
+      ]
+    },
+    {
+      "title": "roles: create",
+      "method": "POST",
+      "path": "/v1/security/roles",
+      "body": "{\"role\":\"it_readers\"}",
+      "expect": [
+        200,
+        201
+      ]
+    },
+    {
+      "title": "roles: create again while empty is accepted",
+      "method": "POST",
+      "path": "/v1/security/roles",
+      "body": "{\"role\":\"it_readers\"}",
+      "expect": [
+        200,
+        201
+      ]
+    },
+    {
+      "title": "roles: add a member",
+      "method": "POST",
+      "path": "/v1/security/roles/it_readers/members",
+      "body": "{\"add\":[{\"name\":\"it_alice\",\"principal_type\":\"User\"}],\"remove\":[]}",
+      "expect": [
+        200
+      ]
+    },
+    {
+      "title": "roles: create again with members is refused",
+      "method": "POST",
+      "path": "/v1/security/roles",
+      "body": "{\"role\":\"it_readers\"}",
+      "expect": [
+        409
+      ],
+      "contains": "already exists"
+    },
+    {
+      "title": "roles: role with its members",
+      "method": "GET",
+      "path": "/v1/security/roles/it_readers",
+      "expect": [
+        200
+      ],
+      "contains": "it_alice"
+    },
+    {
+      "title": "roles: list",
+      "method": "GET",
+      "path": "/v1/security/roles",
+      "expect": [
+        200
+      ],
+      "contains": "it_readers"
+    },
+    {
+      "title": "roles: remove the member",
+      "method": "POST",
+      "path": "/v1/security/roles/it_readers/members",
+      "body": "{\"add\":[],\"remove\":[{\"name\":\"it_alice\",\"principal_type\":\"User\"}]}",
+      "expect": [
+        200
+      ]
+    },
+    {
+      "title": "roles: delete with its ACLs",
+      "method": "DELETE",
+      "path": "/v1/security/roles/it_readers?delete_acls=true",
+      "expect": [
+        200,
+        204
+      ]
+    },
+    {
+      "title": "users: delete",
+      "method": "DELETE",
+      "path": "/v1/security/users/it_alice",
+      "expect": [
+        200,
+        204
+      ]
+    },
+    {
+      "title": "brokers: maintenance on a single node is refused",
+      "method": "PUT",
+      "path": "/v1/brokers/0/maintenance",
+      "expect": [
+        400
+      ],
+      "contains": "single node"
+    },
+    {
+      "title": "transforms: list (or switched off)",
+      "method": "GET",
+      "path": "/v1/transform",
+      "expect": [
+        200,
+        400
+      ]
+    },
+    {
+      "title": "transforms: delete an unknown one",
+      "method": "DELETE",
+      "path": "/v1/transform/it-none",
+      "expect": [
+        200,
+        400,
+        404
+      ]
+    }
+  ],
+  "acls": [
+    {
+      "resource_type": "TOPIC",
+      "resource_name": "it-orders-",
+      "pattern_type": "PREFIXED",
+      "operation": "READ",
+      "principal": "User:it_bob",
+      "host": "*",
+      "permission": "ALLOW"
+    },
+    {
+      "resource_type": "TOPIC",
+      "resource_name": "it-orders-",
+      "pattern_type": "PREFIXED",
+      "operation": "DESCRIBE",
+      "principal": "User:it_bob",
+      "host": "*",
+      "permission": "ALLOW"
+    },
+    {
+      "resource_type": "GROUP",
+      "resource_name": "it-billing",
+      "pattern_type": "LITERAL",
+      "operation": "READ",
+      "principal": "User:it_bob",
+      "host": "*",
+      "permission": "ALLOW"
+    },
+    {
+      "resource_type": "CLUSTER",
+      "resource_name": "kafka-cluster",
+      "pattern_type": "LITERAL",
+      "operation": "ALTER_CONFIGS",
+      "principal": "RedpandaRole:it_ops",
+      "host": "*",
+      "permission": "DENY"
+    }
+  ]
+}

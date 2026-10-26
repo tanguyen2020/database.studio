@@ -3,6 +3,8 @@
 // what the next SCAN / GET returns, so the Browser can be tested end to end without a
 // server. Same reply shapes as src-tauri/src/commands/redis.rs. Never used in Tauri.
 
+import { VALKEY_DEMO_VERSION, isValkeyDemo } from '$lib/valkey/demo'
+
 type Val =
   | { kind: 'string'; value: string }
   | { kind: 'hash'; fields: [string, string][] }
@@ -116,11 +118,18 @@ function keyspaceLines(): string {
     .join('\n')
 }
 
-function infoText(): string {
+function infoText(valkey = false): string {
   const now = Math.floor(Date.now() / 1000)
+  // Valkey keeps redis_version for old clients and reports server_mode (measured on 8.1)
+  const server = valkey
+    ? `redis_version:7.2.4
+server_name:valkey
+valkey_version:${VALKEY_DEMO_VERSION}
+server_mode:standalone`
+    : `redis_version:7.2.4
+redis_mode:standalone`
   return `# Server
-redis_version:7.2.4
-redis_mode:standalone
+${server}
 os:Linux 6.1.0 x86_64
 tcp_port:6379
 uptime_in_seconds:${3 * 86400 + 4 * 3600}
@@ -409,7 +418,11 @@ export function redisDemo(cmd: string, args: Record<string, unknown>): unknown {
     case 'redis_command':
       return command(((args.args as string[]) ?? []).map(String))
     case 'redis_info':
-      return { sections: sections(infoText()) }
+      return { sections: sections(infoText(isValkeyDemo(args))) }
+    case 'redis_server_info':
+      return isValkeyDemo(args)
+        ? { flavor: 'valkey', version: VALKEY_DEMO_VERSION, label: `Valkey ${VALKEY_DEMO_VERSION}` }
+        : { flavor: 'redis', version: '7.2.4', label: 'Redis 7.2.4' }
     case 'redis_slowlog': {
       const now = Math.floor(Date.now() / 1000)
       const n = Number(args.count) || 50

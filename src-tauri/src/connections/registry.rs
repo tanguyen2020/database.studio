@@ -1002,7 +1002,11 @@ impl Registry {
         let e = map
             .get(id)
             .ok_or_else(|| AppError::Driver("Connection does not exist / not connected".into()))?;
-        let base_url = e.profile.schema_registry_url.trim().to_string();
+        let mut base_url = e.profile.schema_registry_url.trim().to_string();
+        // Redpanda ships a Schema Registry on 8081 — used when the URL is left empty (SPEC-REDPANDA.md R12)
+        if base_url.is_empty() && e.profile.cassandra_flavor == "redpanda" {
+            base_url = crate::drivers::redpanda::service_url("", &e.profile.host, e.profile.ssl, crate::drivers::redpanda::SCHEMA_REGISTRY_PORT);
+        }
         if base_url.is_empty() {
             return Err(AppError::Driver(
                 "Connection has no Schema Registry URL configured".into(),
@@ -1013,6 +1017,18 @@ impl Registry {
             user: e.profile.user.clone(),
             password: e.password.clone(),
         })
+    }
+
+    /// Redpanda Admin API endpoint + credentials of a Kafka-engine connection (SPEC-REDPANDA.md).
+    pub fn redpanda_admin_params(&self, id: &str) -> AppResult<crate::drivers::redpanda::RpAdminParams> {
+        let map = self.entries.lock().unwrap();
+        let e = map
+            .get(id)
+            .ok_or_else(|| AppError::Driver("Connection does not exist / not connected".into()))?;
+        if e.profile.system != crate::drivers::types::SystemType::Kafka {
+            return Err(AppError::Driver("Connection is not Kafka / Redpanda".into()));
+        }
+        Ok(crate::drivers::redpanda_admin_params(&e.profile, &e.password))
     }
 
     /// Clone NATS client của live connection (client multiplexed, dùng cho

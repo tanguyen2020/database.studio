@@ -1,0 +1,1606 @@
+{
+  "steps": [
+    {
+      "title": "create the books index",
+      "method": "PUT",
+      "path": "/books",
+      "expect": [
+        200
+      ],
+      "body": {
+        "settings": {
+          "number_of_replicas": 0
+        },
+        "mappings": {
+          "properties": {
+            "title": {
+              "type": "text",
+              "fields": {
+                "keyword": {
+                  "type": "keyword"
+                }
+              }
+            },
+            "genre": {
+              "type": "keyword"
+            },
+            "pages": {
+              "type": "integer"
+            },
+            "published": {
+              "type": "date"
+            }
+          }
+        }
+      }
+    },
+    {
+      "title": "bulk 40 books",
+      "method": "POST",
+      "path": "/books/_bulk?refresh=true",
+      "ndjson": "{\"index\":{}}\n{\"title\":\"Book 0\",\"genre\":\"scifi\",\"pages\":100,\"published\":\"2024-01-01\"}\n{\"index\":{}}\n{\"title\":\"Book 1\",\"genre\":\"drama\",\"pages\":101,\"published\":\"2024-01-02\"}\n{\"index\":{}}\n{\"title\":\"Book 2\",\"genre\":\"poetry\",\"pages\":102,\"published\":\"2024-01-03\"}\n{\"index\":{}}\n{\"title\":\"Book 3\",\"genre\":\"scifi\",\"pages\":103,\"published\":\"2024-01-04\"}\n{\"index\":{}}\n{\"title\":\"Book 4\",\"genre\":\"drama\",\"pages\":104,\"published\":\"2024-01-05\"}\n{\"index\":{}}\n{\"title\":\"Book 5\",\"genre\":\"poetry\",\"pages\":105,\"published\":\"2024-01-06\"}\n{\"index\":{}}\n{\"title\":\"Book 6\",\"genre\":\"scifi\",\"pages\":106,\"published\":\"2024-01-07\"}\n{\"index\":{}}\n{\"title\":\"Book 7\",\"genre\":\"drama\",\"pages\":107,\"published\":\"2024-01-08\"}\n{\"index\":{}}\n{\"title\":\"Book 8\",\"genre\":\"poetry\",\"pages\":108,\"published\":\"2024-01-09\"}\n{\"index\":{}}\n{\"title\":\"Book 9\",\"genre\":\"scifi\",\"pages\":109,\"published\":\"2024-01-10\"}\n{\"index\":{}}\n{\"title\":\"Book 10\",\"genre\":\"drama\",\"pages\":110,\"published\":\"2024-01-11\"}\n{\"index\":{}}\n{\"title\":\"Book 11\",\"genre\":\"poetry\",\"pages\":111,\"published\":\"2024-01-12\"}\n{\"index\":{}}\n{\"title\":\"Book 12\",\"genre\":\"scifi\",\"pages\":112,\"published\":\"2024-01-13\"}\n{\"index\":{}}\n{\"title\":\"Book 13\",\"genre\":\"drama\",\"pages\":113,\"published\":\"2024-01-14\"}\n{\"index\":{}}\n{\"title\":\"Book 14\",\"genre\":\"poetry\",\"pages\":114,\"published\":\"2024-01-15\"}\n{\"index\":{}}\n{\"title\":\"Book 15\",\"genre\":\"scifi\",\"pages\":115,\"published\":\"2024-01-16\"}\n{\"index\":{}}\n{\"title\":\"Book 16\",\"genre\":\"drama\",\"pages\":116,\"published\":\"2024-01-17\"}\n{\"index\":{}}\n{\"title\":\"Book 17\",\"genre\":\"poetry\",\"pages\":117,\"published\":\"2024-01-18\"}\n{\"index\":{}}\n{\"title\":\"Book 18\",\"genre\":\"scifi\",\"pages\":118,\"published\":\"2024-01-19\"}\n{\"index\":{}}\n{\"title\":\"Book 19\",\"genre\":\"drama\",\"pages\":119,\"published\":\"2024-01-20\"}\n{\"index\":{}}\n{\"title\":\"Book 20\",\"genre\":\"poetry\",\"pages\":120,\"published\":\"2024-01-21\"}\n{\"index\":{}}\n{\"title\":\"Book 21\",\"genre\":\"scifi\",\"pages\":121,\"published\":\"2024-01-22\"}\n{\"index\":{}}\n{\"title\":\"Book 22\",\"genre\":\"drama\",\"pages\":122,\"published\":\"2024-01-23\"}\n{\"index\":{}}\n{\"title\":\"Book 23\",\"genre\":\"poetry\",\"pages\":123,\"published\":\"2024-01-24\"}\n{\"index\":{}}\n{\"title\":\"Book 24\",\"genre\":\"scifi\",\"pages\":124,\"published\":\"2024-01-25\"}\n{\"index\":{}}\n{\"title\":\"Book 25\",\"genre\":\"drama\",\"pages\":125,\"published\":\"2024-01-26\"}\n{\"index\":{}}\n{\"title\":\"Book 26\",\"genre\":\"poetry\",\"pages\":126,\"published\":\"2024-01-27\"}\n{\"index\":{}}\n{\"title\":\"Book 27\",\"genre\":\"scifi\",\"pages\":127,\"published\":\"2024-01-28\"}\n{\"index\":{}}\n{\"title\":\"Book 28\",\"genre\":\"drama\",\"pages\":128,\"published\":\"2024-01-01\"}\n{\"index\":{}}\n{\"title\":\"Book 29\",\"genre\":\"poetry\",\"pages\":129,\"published\":\"2024-01-02\"}\n{\"index\":{}}\n{\"title\":\"Book 30\",\"genre\":\"scifi\",\"pages\":130,\"published\":\"2024-01-03\"}\n{\"index\":{}}\n{\"title\":\"Book 31\",\"genre\":\"drama\",\"pages\":131,\"published\":\"2024-01-04\"}\n{\"index\":{}}\n{\"title\":\"Book 32\",\"genre\":\"poetry\",\"pages\":132,\"published\":\"2024-01-05\"}\n{\"index\":{}}\n{\"title\":\"Book 33\",\"genre\":\"scifi\",\"pages\":133,\"published\":\"2024-01-06\"}\n{\"index\":{}}\n{\"title\":\"Book 34\",\"genre\":\"drama\",\"pages\":134,\"published\":\"2024-01-07\"}\n{\"index\":{}}\n{\"title\":\"Book 35\",\"genre\":\"poetry\",\"pages\":135,\"published\":\"2024-01-08\"}\n{\"index\":{}}\n{\"title\":\"Book 36\",\"genre\":\"scifi\",\"pages\":136,\"published\":\"2024-01-09\"}\n{\"index\":{}}\n{\"title\":\"Book 37\",\"genre\":\"drama\",\"pages\":137,\"published\":\"2024-01-10\"}\n{\"index\":{}}\n{\"title\":\"Book 38\",\"genre\":\"poetry\",\"pages\":138,\"published\":\"2024-01-11\"}\n{\"index\":{}}\n{\"title\":\"Book 39\",\"genre\":\"scifi\",\"pages\":139,\"published\":\"2024-01-12\"}\n",
+      "expect": [
+        200
+      ],
+      "contains": "\"errors\":false"
+    },
+    {
+      "title": "SQL page 1 (jdbc + cursor)",
+      "method": "POST",
+      "path": "/_plugins/_sql?format=jdbc",
+      "body": {
+        "query": "SELECT title, pages FROM books ORDER BY pages",
+        "fetch_size": 15
+      },
+      "expect": [
+        200
+      ],
+      "contains": "\"cursor\""
+    },
+    {
+      "title": "SQL explain",
+      "method": "POST",
+      "path": "/_plugins/_sql/_explain",
+      "body": {
+        "query": "SELECT genre FROM books"
+      },
+      "expect": [
+        200
+      ]
+    },
+    {
+      "title": "SQL error carries details",
+      "method": "POST",
+      "path": "/_plugins/_sql?format=jdbc",
+      "body": {
+        "query": "SELEC x FROM books"
+      },
+      "expect": [
+        400
+      ],
+      "contains": "\"details\""
+    },
+    {
+      "title": "PPL stats",
+      "method": "POST",
+      "path": "/_plugins/_ppl",
+      "body": {
+        "query": "source = books | stats count() as n by genre | sort - n"
+      },
+      "expect": [
+        200
+      ],
+      "contains": "\"datarows\""
+    },
+    {
+      "title": "PPL explain",
+      "method": "POST",
+      "path": "/_plugins/_ppl/_explain",
+      "body": {
+        "query": "source = books | fields title"
+      },
+      "expect": [
+        200
+      ]
+    },
+    {
+      "title": "snapshot repository",
+      "method": "PUT",
+      "path": "/_snapshot/it_repo",
+      "body": {
+        "type": "fs",
+        "settings": {
+          "location": "/tmp/os-snapshots/it_repo",
+          "compress": true
+        }
+      },
+      "expect": [
+        200
+      ]
+    },
+    {
+      "title": "Index templates: list",
+      "method": "GET",
+      "path": "/_index_template",
+      "expect": [
+        200
+      ]
+    },
+    {
+      "title": "Index templates: create",
+      "method": "PUT",
+      "path": "/_index_template/it-index-templates",
+      "body": {
+        "index_patterns": [
+          "it-tpl-*"
+        ],
+        "priority": 100,
+        "template": {
+          "settings": {
+            "number_of_shards": 1,
+            "number_of_replicas": 1
+          },
+          "mappings": {
+            "properties": {
+              "@timestamp": {
+                "type": "date"
+              }
+            }
+          },
+          "aliases": {}
+        },
+        "composed_of": []
+      },
+      "expect": [
+        200,
+        201
+      ]
+    },
+    {
+      "title": "Index templates: update",
+      "method": "PUT",
+      "path": "/_index_template/it-index-templates",
+      "body": {
+        "index_patterns": [
+          "it-tpl-*"
+        ],
+        "priority": 100,
+        "template": {
+          "settings": {
+            "number_of_shards": 1,
+            "number_of_replicas": 1
+          },
+          "mappings": {
+            "properties": {
+              "@timestamp": {
+                "type": "date"
+              }
+            }
+          },
+          "aliases": {}
+        },
+        "composed_of": []
+      },
+      "expect": [
+        200,
+        201
+      ]
+    },
+    {
+      "title": "Index templates: Preview",
+      "method": "POST",
+      "path": "/_index_template/_simulate/it-index-templates",
+      "expect": [
+        200
+      ]
+    },
+    {
+      "title": "Index templates: delete",
+      "method": "DELETE",
+      "path": "/_index_template/it-index-templates",
+      "expect": [
+        200
+      ]
+    },
+    {
+      "title": "Component templates: list",
+      "method": "GET",
+      "path": "/_component_template",
+      "expect": [
+        200
+      ]
+    },
+    {
+      "title": "Component templates: create",
+      "method": "PUT",
+      "path": "/_component_template/it-component-templates",
+      "body": {
+        "template": {
+          "settings": {},
+          "mappings": {
+            "properties": {}
+          }
+        },
+        "_meta": {
+          "description": ""
+        }
+      },
+      "expect": [
+        200,
+        201
+      ]
+    },
+    {
+      "title": "Component templates: delete",
+      "method": "DELETE",
+      "path": "/_component_template/it-component-templates",
+      "expect": [
+        200
+      ]
+    },
+    {
+      "title": "Ingest pipelines: list",
+      "method": "GET",
+      "path": "/_ingest/pipeline",
+      "expect": [
+        200,
+        404
+      ]
+    },
+    {
+      "title": "Ingest pipelines: create",
+      "method": "PUT",
+      "path": "/_ingest/pipeline/it-pipelines",
+      "body": {
+        "description": "",
+        "processors": [
+          {
+            "set": {
+              "field": "ingested_at",
+              "value": "{{_ingest.timestamp}}"
+            }
+          }
+        ]
+      },
+      "expect": [
+        200,
+        201
+      ]
+    },
+    {
+      "title": "Ingest pipelines: delete",
+      "method": "DELETE",
+      "path": "/_ingest/pipeline/it-pipelines",
+      "expect": [
+        200
+      ]
+    },
+    {
+      "title": "Index State Management policies: list",
+      "method": "GET",
+      "path": "/_plugins/_ism/policies?size=1000",
+      "expect": [
+        200,
+        404
+      ]
+    },
+    {
+      "title": "Index State Management policies: create",
+      "method": "PUT",
+      "path": "/_plugins/_ism/policies/it-ism",
+      "body": {
+        "policy": {
+          "description": "Roll over hot indices daily, delete them after 30 days",
+          "default_state": "hot",
+          "states": [
+            {
+              "name": "hot",
+              "actions": [
+                {
+                  "rollover": {
+                    "min_index_age": "1d",
+                    "min_primary_shard_size": "30gb"
+                  }
+                }
+              ],
+              "transitions": [
+                {
+                  "state_name": "delete",
+                  "conditions": {
+                    "min_index_age": "30d"
+                  }
+                }
+              ]
+            },
+            {
+              "name": "delete",
+              "actions": [
+                {
+                  "delete": {}
+                }
+              ],
+              "transitions": []
+            }
+          ],
+          "ism_template": [
+            {
+              "index_patterns": [
+                "it-ism-*"
+              ],
+              "priority": 100
+            }
+          ]
+        }
+      },
+      "expect": [
+        200,
+        201
+      ]
+    },
+    {
+      "title": "Index State Management policies: read",
+      "method": "GET",
+      "path": "/_plugins/_ism/policies/it-ism",
+      "expect": [
+        200
+      ]
+    },
+    {
+      "title": "Index State Management policies: update WITHOUT version is refused",
+      "method": "PUT",
+      "path": "/_plugins/_ism/policies/it-ism",
+      "body": {
+        "policy": {
+          "description": "edited in the app",
+          "default_state": "hot",
+          "states": [
+            {
+              "name": "hot",
+              "actions": [
+                {
+                  "rollover": {
+                    "min_index_age": "1d",
+                    "min_primary_shard_size": "30gb"
+                  }
+                }
+              ],
+              "transitions": [
+                {
+                  "state_name": "delete",
+                  "conditions": {
+                    "min_index_age": "30d"
+                  }
+                }
+              ]
+            },
+            {
+              "name": "delete",
+              "actions": [
+                {
+                  "delete": {}
+                }
+              ],
+              "transitions": []
+            }
+          ],
+          "ism_template": [
+            {
+              "index_patterns": [
+                "it-ism-*"
+              ],
+              "priority": 100
+            }
+          ]
+        }
+      },
+      "expect": [
+        400,
+        409
+      ]
+    },
+    {
+      "title": "Index State Management policies: update",
+      "method": "PUT",
+      "path": "/_plugins/_ism/policies/it-ism",
+      "body": {
+        "policy": {
+          "description": "edited in the app",
+          "default_state": "hot",
+          "states": [
+            {
+              "name": "hot",
+              "actions": [
+                {
+                  "rollover": {
+                    "min_index_age": "1d",
+                    "min_primary_shard_size": "30gb"
+                  }
+                }
+              ],
+              "transitions": [
+                {
+                  "state_name": "delete",
+                  "conditions": {
+                    "min_index_age": "30d"
+                  }
+                }
+              ]
+            },
+            {
+              "name": "delete",
+              "actions": [
+                {
+                  "delete": {}
+                }
+              ],
+              "transitions": []
+            }
+          ],
+          "ism_template": [
+            {
+              "index_patterns": [
+                "it-ism-*"
+              ],
+              "priority": 100
+            }
+          ]
+        }
+      },
+      "expect": [
+        200,
+        201
+      ],
+      "concurrency": "/_plugins/_ism/policies/it-ism"
+    },
+    {
+      "title": "Index State Management policies: delete",
+      "method": "DELETE",
+      "path": "/_plugins/_ism/policies/it-ism",
+      "expect": [
+        200
+      ]
+    },
+    {
+      "title": "Data streams: list",
+      "method": "GET",
+      "path": "/_data_stream",
+      "expect": [
+        200
+      ]
+    },
+    {
+      "title": "Snapshot repositories: list",
+      "method": "GET",
+      "path": "/_snapshot",
+      "expect": [
+        200
+      ]
+    },
+    {
+      "title": "Snapshot repositories: create",
+      "method": "PUT",
+      "path": "/_snapshot/it-snapshot-repos",
+      "body": {
+        "type": "fs",
+        "settings": {
+          "location": "/tmp/os-snapshots/it_repo",
+          "compress": true
+        }
+      },
+      "expect": [
+        200,
+        201
+      ]
+    },
+    {
+      "title": "Snapshot repositories: delete",
+      "method": "DELETE",
+      "path": "/_snapshot/it-snapshot-repos",
+      "expect": [
+        200
+      ]
+    },
+    {
+      "title": "Snapshot policies: list",
+      "method": "GET",
+      "path": "/_plugins/_sm/policies?size=1000",
+      "expect": [
+        200,
+        404
+      ]
+    },
+    {
+      "title": "Snapshot policies: create",
+      "method": "POST",
+      "path": "/_plugins/_sm/policies/it-sm",
+      "body": {
+        "description": "Nightly snapshot of every index, keep the last 7",
+        "creation": {
+          "schedule": {
+            "cron": {
+              "expression": "0 1 * * *",
+              "timezone": "UTC"
+            }
+          }
+        },
+        "deletion": {
+          "schedule": {
+            "cron": {
+              "expression": "0 2 * * *",
+              "timezone": "UTC"
+            }
+          },
+          "condition": {
+            "max_count": 7,
+            "min_count": 1
+          }
+        },
+        "snapshot_config": {
+          "repository": "it_repo",
+          "indices": "*",
+          "include_global_state": false,
+          "date_format": "yyyy-MM-dd-HH:mm"
+        }
+      },
+      "expect": [
+        200,
+        201
+      ]
+    },
+    {
+      "title": "Snapshot policies: read",
+      "method": "GET",
+      "path": "/_plugins/_sm/policies/it-sm",
+      "expect": [
+        200
+      ]
+    },
+    {
+      "title": "Snapshot policies: update WITHOUT version is refused",
+      "method": "PUT",
+      "path": "/_plugins/_sm/policies/it-sm",
+      "body": {
+        "description": "edited in the app",
+        "creation": {
+          "schedule": {
+            "cron": {
+              "expression": "0 1 * * *",
+              "timezone": "UTC"
+            }
+          }
+        },
+        "deletion": {
+          "schedule": {
+            "cron": {
+              "expression": "0 2 * * *",
+              "timezone": "UTC"
+            }
+          },
+          "condition": {
+            "max_count": 7,
+            "min_count": 1
+          }
+        },
+        "snapshot_config": {
+          "repository": "it_repo",
+          "indices": "*",
+          "include_global_state": false,
+          "date_format": "yyyy-MM-dd-HH:mm"
+        }
+      },
+      "expect": [
+        400,
+        409
+      ]
+    },
+    {
+      "title": "Snapshot policies: update",
+      "method": "PUT",
+      "path": "/_plugins/_sm/policies/it-sm",
+      "body": {
+        "description": "edited in the app",
+        "creation": {
+          "schedule": {
+            "cron": {
+              "expression": "0 1 * * *",
+              "timezone": "UTC"
+            }
+          }
+        },
+        "deletion": {
+          "schedule": {
+            "cron": {
+              "expression": "0 2 * * *",
+              "timezone": "UTC"
+            }
+          },
+          "condition": {
+            "max_count": 7,
+            "min_count": 1
+          }
+        },
+        "snapshot_config": {
+          "repository": "it_repo",
+          "indices": "*",
+          "include_global_state": false,
+          "date_format": "yyyy-MM-dd-HH:mm"
+        }
+      },
+      "expect": [
+        200,
+        201
+      ],
+      "concurrency": "/_plugins/_sm/policies/it-sm"
+    },
+    {
+      "title": "Snapshot policies: Start",
+      "method": "POST",
+      "path": "/_plugins/_sm/policies/it-sm/_start",
+      "expect": [
+        200
+      ]
+    },
+    {
+      "title": "Snapshot policies: Stop",
+      "method": "POST",
+      "path": "/_plugins/_sm/policies/it-sm/_stop",
+      "expect": [
+        200
+      ]
+    },
+    {
+      "title": "Snapshot policies: Status",
+      "method": "GET",
+      "path": "/_plugins/_sm/policies/it-sm/_explain",
+      "expect": [
+        200
+      ]
+    },
+    {
+      "title": "Snapshot policies: delete",
+      "method": "DELETE",
+      "path": "/_plugins/_sm/policies/it-sm",
+      "expect": [
+        200
+      ]
+    },
+    {
+      "title": "Stored scripts & search templates: list",
+      "method": "GET",
+      "path": "/_cluster/state/metadata?filter_path=metadata.stored_scripts",
+      "expect": [
+        200
+      ]
+    },
+    {
+      "title": "Stored scripts & search templates: create",
+      "method": "PUT",
+      "path": "/_scripts/it-scripts",
+      "body": {
+        "script": {
+          "lang": "mustache",
+          "source": {
+            "query": {
+              "match": {
+                "{{field}}": "{{value}}"
+              }
+            }
+          }
+        }
+      },
+      "expect": [
+        200,
+        201
+      ]
+    },
+    {
+      "title": "Stored scripts & search templates: delete",
+      "method": "DELETE",
+      "path": "/_scripts/it-scripts",
+      "expect": [
+        200
+      ]
+    },
+    {
+      "title": "Transforms: list",
+      "method": "GET",
+      "path": "/_plugins/_transform?size=1000",
+      "expect": [
+        200,
+        404
+      ]
+    },
+    {
+      "title": "Transforms: create",
+      "method": "PUT",
+      "path": "/_plugins/_transform/it-transforms",
+      "body": {
+        "transform": {
+          "enabled": false,
+          "continuous": false,
+          "description": "",
+          "schedule": {
+            "interval": {
+              "period": 1,
+              "unit": "Hours",
+              "start_time": 1700000000
+            }
+          },
+          "source_index": "books",
+          "target_index": "it_books_by_genre",
+          "data_selection_query": {
+            "match_all": {}
+          },
+          "page_size": 1000,
+          "groups": [
+            {
+              "terms": {
+                "source_field": "genre",
+                "target_field": "genre"
+              }
+            }
+          ],
+          "aggregations": {
+            "count": {
+              "value_count": {
+                "field": "_id"
+              }
+            }
+          }
+        }
+      },
+      "expect": [
+        200,
+        201
+      ]
+    },
+    {
+      "title": "Transforms: read",
+      "method": "GET",
+      "path": "/_plugins/_transform/it-transforms",
+      "expect": [
+        200
+      ]
+    },
+    {
+      "title": "Transforms: update WITHOUT version is refused",
+      "method": "PUT",
+      "path": "/_plugins/_transform/it-transforms",
+      "body": {
+        "transform": {
+          "enabled": false,
+          "continuous": false,
+          "description": "edited in the app",
+          "schedule": {
+            "interval": {
+              "period": 1,
+              "unit": "Hours",
+              "start_time": 1700000000
+            }
+          },
+          "source_index": "books",
+          "target_index": "it_books_by_genre",
+          "data_selection_query": {
+            "match_all": {}
+          },
+          "page_size": 1000,
+          "groups": [
+            {
+              "terms": {
+                "source_field": "genre",
+                "target_field": "genre"
+              }
+            }
+          ],
+          "aggregations": {
+            "count": {
+              "value_count": {
+                "field": "_id"
+              }
+            }
+          }
+        }
+      },
+      "expect": [
+        400,
+        409
+      ]
+    },
+    {
+      "title": "Transforms: update",
+      "method": "PUT",
+      "path": "/_plugins/_transform/it-transforms",
+      "body": {
+        "transform": {
+          "enabled": false,
+          "continuous": false,
+          "description": "edited in the app",
+          "schedule": {
+            "interval": {
+              "period": 1,
+              "unit": "Hours",
+              "start_time": 1700000000
+            }
+          },
+          "source_index": "books",
+          "target_index": "it_books_by_genre",
+          "data_selection_query": {
+            "match_all": {}
+          },
+          "page_size": 1000,
+          "groups": [
+            {
+              "terms": {
+                "source_field": "genre",
+                "target_field": "genre"
+              }
+            }
+          ],
+          "aggregations": {
+            "count": {
+              "value_count": {
+                "field": "_id"
+              }
+            }
+          }
+        }
+      },
+      "expect": [
+        200,
+        201
+      ],
+      "concurrency": "/_plugins/_transform/it-transforms"
+    },
+    {
+      "title": "Transforms: Start",
+      "method": "POST",
+      "path": "/_plugins/_transform/it-transforms/_start",
+      "expect": [
+        200
+      ]
+    },
+    {
+      "title": "Transforms: Stop",
+      "method": "POST",
+      "path": "/_plugins/_transform/it-transforms/_stop",
+      "expect": [
+        200
+      ]
+    },
+    {
+      "title": "Transforms: Status",
+      "method": "GET",
+      "path": "/_plugins/_transform/it-transforms/_explain",
+      "expect": [
+        200
+      ]
+    },
+    {
+      "title": "Transforms: Preview",
+      "method": "POST",
+      "path": "/_plugins/_transform/_preview",
+      "body": {
+        "transform": {
+          "enabled": false,
+          "continuous": false,
+          "description": "",
+          "schedule": {
+            "interval": {
+              "period": 1,
+              "unit": "Hours",
+              "start_time": 1700000000
+            }
+          },
+          "source_index": "books",
+          "target_index": "it_books_by_genre",
+          "data_selection_query": {
+            "match_all": {}
+          },
+          "page_size": 1000,
+          "groups": [
+            {
+              "terms": {
+                "source_field": "genre",
+                "target_field": "genre"
+              }
+            }
+          ],
+          "aggregations": {
+            "count": {
+              "value_count": {
+                "field": "_id"
+              }
+            }
+          }
+        }
+      },
+      "expect": [
+        200
+      ]
+    },
+    {
+      "title": "Transforms: delete",
+      "method": "DELETE",
+      "path": "/_plugins/_transform/it-transforms",
+      "expect": [
+        200
+      ]
+    },
+    {
+      "title": "Rollups: list",
+      "method": "GET",
+      "path": "/_plugins/_rollup/jobs?size=1000",
+      "expect": [
+        200,
+        404
+      ]
+    },
+    {
+      "title": "Rollups: create",
+      "method": "PUT",
+      "path": "/_plugins/_rollup/jobs/it-rollups",
+      "body": {
+        "rollup": {
+          "enabled": false,
+          "continuous": false,
+          "description": "",
+          "schedule": {
+            "interval": {
+              "period": 1,
+              "unit": "Days",
+              "start_time": 1700000000
+            }
+          },
+          "source_index": "books",
+          "target_index": "it_books_rollup",
+          "page_size": 1000,
+          "delay": 0,
+          "dimensions": [
+            {
+              "date_histogram": {
+                "source_field": "published",
+                "fixed_interval": "1d"
+              }
+            }
+          ],
+          "metrics": [
+            {
+              "source_field": "pages",
+              "metrics": [
+                {
+                  "avg": {}
+                },
+                {
+                  "min": {}
+                },
+                {
+                  "max": {}
+                },
+                {
+                  "sum": {}
+                },
+                {
+                  "value_count": {}
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expect": [
+        200,
+        201
+      ]
+    },
+    {
+      "title": "Rollups: read",
+      "method": "GET",
+      "path": "/_plugins/_rollup/jobs/it-rollups",
+      "expect": [
+        200
+      ]
+    },
+    {
+      "title": "Rollups: update WITHOUT version is refused",
+      "method": "PUT",
+      "path": "/_plugins/_rollup/jobs/it-rollups",
+      "body": {
+        "rollup": {
+          "enabled": false,
+          "continuous": false,
+          "description": "edited in the app",
+          "schedule": {
+            "interval": {
+              "period": 1,
+              "unit": "Days",
+              "start_time": 1700000000
+            }
+          },
+          "source_index": "books",
+          "target_index": "it_books_rollup",
+          "page_size": 1000,
+          "delay": 0,
+          "dimensions": [
+            {
+              "date_histogram": {
+                "source_field": "published",
+                "fixed_interval": "1d"
+              }
+            }
+          ],
+          "metrics": [
+            {
+              "source_field": "pages",
+              "metrics": [
+                {
+                  "avg": {}
+                },
+                {
+                  "min": {}
+                },
+                {
+                  "max": {}
+                },
+                {
+                  "sum": {}
+                },
+                {
+                  "value_count": {}
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expect": [
+        400,
+        409
+      ]
+    },
+    {
+      "title": "Rollups: update",
+      "method": "PUT",
+      "path": "/_plugins/_rollup/jobs/it-rollups",
+      "body": {
+        "rollup": {
+          "enabled": false,
+          "continuous": false,
+          "description": "edited in the app",
+          "schedule": {
+            "interval": {
+              "period": 1,
+              "unit": "Days",
+              "start_time": 1700000000
+            }
+          },
+          "source_index": "books",
+          "target_index": "it_books_rollup",
+          "page_size": 1000,
+          "delay": 0,
+          "dimensions": [
+            {
+              "date_histogram": {
+                "source_field": "published",
+                "fixed_interval": "1d"
+              }
+            }
+          ],
+          "metrics": [
+            {
+              "source_field": "pages",
+              "metrics": [
+                {
+                  "avg": {}
+                },
+                {
+                  "min": {}
+                },
+                {
+                  "max": {}
+                },
+                {
+                  "sum": {}
+                },
+                {
+                  "value_count": {}
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expect": [
+        200,
+        201
+      ],
+      "concurrency": "/_plugins/_rollup/jobs/it-rollups"
+    },
+    {
+      "title": "Rollups: Start",
+      "method": "POST",
+      "path": "/_plugins/_rollup/jobs/it-rollups/_start",
+      "expect": [
+        200
+      ]
+    },
+    {
+      "title": "Rollups: Stop",
+      "method": "POST",
+      "path": "/_plugins/_rollup/jobs/it-rollups/_stop",
+      "expect": [
+        200
+      ]
+    },
+    {
+      "title": "Rollups: Status",
+      "method": "GET",
+      "path": "/_plugins/_rollup/jobs/it-rollups/_explain",
+      "expect": [
+        200
+      ]
+    },
+    {
+      "title": "Rollups: delete",
+      "method": "DELETE",
+      "path": "/_plugins/_rollup/jobs/it-rollups",
+      "expect": [
+        200
+      ]
+    },
+    {
+      "title": "Alerting monitors: list",
+      "method": "POST",
+      "path": "/_plugins/_alerting/monitors/_search",
+      "expect": [
+        200,
+        404
+      ],
+      "body": {
+        "size": 1000,
+        "query": {
+          "match_all": {}
+        }
+      }
+    },
+    {
+      "title": "Alerting monitors: create",
+      "method": "POST",
+      "path": "/_plugins/_alerting/monitors",
+      "body": {
+        "type": "monitor",
+        "name": "it-monitors",
+        "monitor_type": "query_level_monitor",
+        "enabled": false,
+        "schedule": {
+          "period": {
+            "interval": 5,
+            "unit": "MINUTES"
+          }
+        },
+        "inputs": [
+          {
+            "search": {
+              "indices": [
+                "books"
+              ],
+              "query": {
+                "size": 0,
+                "query": {
+                  "range": {
+                    "@timestamp": {
+                      "gte": "{{period_end}}||-5m",
+                      "lte": "{{period_end}}"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "triggers": [
+          {
+            "name": "Any hit",
+            "severity": "1",
+            "condition": {
+              "script": {
+                "source": "ctx.results[0].hits.total.value > 0",
+                "lang": "painless"
+              }
+            },
+            "actions": []
+          }
+        ]
+      },
+      "expect": [
+        200,
+        201
+      ],
+      "save": {
+        "name": "monitor",
+        "field": "_id"
+      }
+    },
+    {
+      "title": "Alerting monitors: read",
+      "method": "GET",
+      "path": "/_plugins/_alerting/monitors/__monitor__",
+      "expect": [
+        200
+      ]
+    },
+    {
+      "title": "Alerting monitors: update",
+      "method": "PUT",
+      "path": "/_plugins/_alerting/monitors/__monitor__",
+      "body": {
+        "type": "monitor",
+        "name": "it monitor (edited)",
+        "monitor_type": "query_level_monitor",
+        "enabled": false,
+        "schedule": {
+          "period": {
+            "interval": 5,
+            "unit": "MINUTES"
+          }
+        },
+        "inputs": [
+          {
+            "search": {
+              "indices": [
+                "books"
+              ],
+              "query": {
+                "size": 0,
+                "query": {
+                  "range": {
+                    "@timestamp": {
+                      "gte": "{{period_end}}||-5m",
+                      "lte": "{{period_end}}"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "triggers": [
+          {
+            "name": "Any hit",
+            "severity": "1",
+            "condition": {
+              "script": {
+                "source": "ctx.results[0].hits.total.value > 0",
+                "lang": "painless"
+              }
+            },
+            "actions": []
+          }
+        ]
+      },
+      "expect": [
+        200,
+        201
+      ]
+    },
+    {
+      "title": "Alerting monitors: Run now (dry run)",
+      "method": "POST",
+      "path": "/_plugins/_alerting/monitors/__monitor__/_execute?dryrun=true",
+      "expect": [
+        200
+      ]
+    },
+    {
+      "title": "Alerting monitors: Alerts",
+      "method": "GET",
+      "path": "/_plugins/_alerting/monitors/alerts?monitorId=__monitor__",
+      "expect": [
+        200
+      ]
+    },
+    {
+      "title": "Alerting monitors: delete",
+      "method": "DELETE",
+      "path": "/_plugins/_alerting/monitors/__monitor__",
+      "expect": [
+        200
+      ]
+    },
+    {
+      "title": "ISM: policy for the lifecycle tab",
+      "method": "PUT",
+      "path": "/_plugins/_ism/policies/it-lifecycle",
+      "body": {
+        "policy": {
+          "description": "Roll over hot indices daily, delete them after 30 days",
+          "default_state": "hot",
+          "states": [
+            {
+              "name": "hot",
+              "actions": [
+                {
+                  "rollover": {
+                    "min_index_age": "1d",
+                    "min_primary_shard_size": "30gb"
+                  }
+                }
+              ],
+              "transitions": [
+                {
+                  "state_name": "delete",
+                  "conditions": {
+                    "min_index_age": "30d"
+                  }
+                }
+              ]
+            },
+            {
+              "name": "delete",
+              "actions": [
+                {
+                  "delete": {}
+                }
+              ],
+              "transitions": []
+            }
+          ],
+          "ism_template": [
+            {
+              "index_patterns": [
+                "it-lifecycle-*"
+              ],
+              "priority": 100
+            }
+          ]
+        }
+      },
+      "expect": [
+        200,
+        201
+      ]
+    },
+    {
+      "title": "ISM: second policy",
+      "method": "PUT",
+      "path": "/_plugins/_ism/policies/it-archive",
+      "body": {
+        "policy": {
+          "description": "Roll over hot indices daily, delete them after 30 days",
+          "default_state": "hot",
+          "states": [
+            {
+              "name": "hot",
+              "actions": [
+                {
+                  "rollover": {
+                    "min_index_age": "1d",
+                    "min_primary_shard_size": "30gb"
+                  }
+                }
+              ],
+              "transitions": [
+                {
+                  "state_name": "delete",
+                  "conditions": {
+                    "min_index_age": "30d"
+                  }
+                }
+              ]
+            },
+            {
+              "name": "delete",
+              "actions": [
+                {
+                  "delete": {}
+                }
+              ],
+              "transitions": []
+            }
+          ],
+          "ism_template": [
+            {
+              "index_patterns": [
+                "it-archive-*"
+              ],
+              "priority": 100
+            }
+          ]
+        }
+      },
+      "expect": [
+        200,
+        201
+      ]
+    },
+    {
+      "title": "ISM: apply to books",
+      "method": "POST",
+      "path": "/_plugins/_ism/add/books",
+      "body": {
+        "policy_id": "it-lifecycle"
+      },
+      "expect": [
+        200
+      ],
+      "contains": "\"failures\":false"
+    },
+    {
+      "title": "ISM: explain books",
+      "method": "GET",
+      "path": "/_plugins/_ism/explain/books",
+      "expect": [
+        200
+      ]
+    },
+    {
+      "title": "ISM: change policy",
+      "method": "POST",
+      "path": "/_plugins/_ism/change_policy/books",
+      "body": {
+        "policy_id": "it-archive"
+      },
+      "expect": [
+        200
+      ],
+      "contains": "\"failures\":false"
+    },
+    {
+      "title": "ISM: remove",
+      "method": "POST",
+      "path": "/_plugins/_ism/remove/books",
+      "expect": [
+        200
+      ],
+      "contains": "\"failures\":false"
+    }
+  ],
+  "security": {
+    "password": "Zq7!mVt#pL2xWw",
+    "newPassword": "Hn4@rKd8%sQv1Z",
+    "createUser": {
+      "method": "PUT",
+      "path": "/_plugins/_security/api/internalusers/it_reader",
+      "body": {
+        "password": "Zq7!mVt#pL2xWw",
+        "backend_roles": [
+          "it_team"
+        ],
+        "attributes": {
+          "team": "books"
+        },
+        "description": "integration user"
+      }
+    },
+    "patchUser": {
+      "method": "PATCH",
+      "path": "/_plugins/_security/api/internalusers/it_reader",
+      "body": [
+        {
+          "op": "add",
+          "path": "/backend_roles",
+          "value": [
+            "it_team",
+            "readers"
+          ]
+        },
+        {
+          "op": "add",
+          "path": "/attributes",
+          "value": {
+            "team": "books"
+          }
+        },
+        {
+          "op": "add",
+          "path": "/description",
+          "value": ""
+        },
+        {
+          "op": "add",
+          "path": "/password",
+          "value": "Hn4@rKd8%sQv1Z"
+        }
+      ]
+    },
+    "weakPassword": {
+      "method": "PATCH",
+      "path": "/_plugins/_security/api/internalusers/it_reader",
+      "body": [
+        {
+          "op": "add",
+          "path": "/backend_roles",
+          "value": [
+            "it_team"
+          ]
+        },
+        {
+          "op": "add",
+          "path": "/attributes",
+          "value": {}
+        },
+        {
+          "op": "add",
+          "path": "/description",
+          "value": ""
+        },
+        {
+          "op": "add",
+          "path": "/password",
+          "value": "short"
+        }
+      ]
+    },
+    "role": {
+      "method": "PUT",
+      "path": "/_plugins/_security/api/roles/it_books_reader",
+      "body": {
+        "description": "reads scifi books, pages hidden",
+        "cluster_permissions": [
+          "cluster_composite_ops_ro"
+        ],
+        "index_permissions": [
+          {
+            "index_patterns": [
+              "books"
+            ],
+            "allowed_actions": [
+              "read"
+            ],
+            "dls": "{\"term\":{\"genre\":\"scifi\"}}",
+            "fls": [
+              "~pages"
+            ]
+          }
+        ],
+        "tenant_permissions": [
+          {
+            "tenant_patterns": [
+              "global_tenant"
+            ],
+            "allowed_actions": [
+              "kibana_all_read"
+            ]
+          }
+        ]
+      }
+    },
+    "mapping": {
+      "method": "PUT",
+      "path": "/_plugins/_security/api/rolesmapping/it_books_reader",
+      "body": {
+        "users": [
+          "it_reader"
+        ],
+        "backend_roles": [],
+        "hosts": []
+      }
+    },
+    "unmapping": {
+      "method": "PUT",
+      "path": "/_plugins/_security/api/rolesmapping/it_books_reader",
+      "body": {
+        "users": [],
+        "backend_roles": [],
+        "hosts": []
+      }
+    },
+    "actionGroup": {
+      "method": "PUT",
+      "path": "/_plugins/_security/api/actiongroups/it_read_only",
+      "body": {
+        "allowed_actions": [
+          "indices:data/read/*"
+        ],
+        "type": "index",
+        "description": "integration"
+      }
+    },
+    "tenant": {
+      "method": "PUT",
+      "path": "/_plugins/_security/api/tenants/it_team",
+      "body": {
+        "description": "Integration team"
+      }
+    }
+  }
+}

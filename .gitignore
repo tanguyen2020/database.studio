@@ -45,3 +45,6 @@ src-tauri/resources/tools/*
 
 # build output of the fetcher
 tools/fetch-dump-tools/target/
+
+# per-agent cargo target dirs (build output)
+src-tauri/target-agents/

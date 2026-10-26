@@ -11,6 +11,11 @@
   import { toasts } from '$lib/stores/toast.svelte'
   import * as ipc from '$lib/ipc'
   import { DB_BUILTIN_ROLES, type RoleRef } from '$lib/users/mongodb'
+  import { connections } from '$lib/stores/connections.svelte'
+  import { isFerretDB } from '$lib/brand'
+
+  // FerretDB does not enforce roles (SPEC-FERRETDB-DOCUMENTDB.md) — do not pretend to grant any
+  const ferret = $derived(isFerretDB(connections.byId(mongoUserWizard.connId)))
 
   let dlgOpen = $state(false)
   $effect(() => {
@@ -39,6 +44,7 @@
   })
 
   const roles = $derived.by<RoleRef[]>(() =>
+    ferret ? [] :
     DB_BUILTIN_ROLES.filter((r) => checkedRoles[r]).map((r) => ({ role: r, db: roleDb || mongoUserWizard.database })),
   )
   const canRun = $derived(!!user.trim() && !!password)
@@ -95,6 +101,9 @@
           <span class="eg-btn" onclick={() => (showPw = !showPw)} onkeydown={(e) => e.key === 'Enter' && (showPw = !showPw)} role="button" tabindex="0"><Icon name={showPw ? 'eye-off' : 'eye'} size={13} /></span>
           <span class="eg-btn" onclick={generate} onkeydown={(e) => e.key === 'Enter' && generate()} role="button" tabindex="0"><Icon name="sparkle" size={12} />Generate</span>
         </div>
+        {#if ferret}
+          <div class="um-callout warn" data-testid="ferret-create-note"><Icon name="warning" size={15} /><span><b>No roles to choose on FerretDB.</b> It does not enforce roles — this user will be able to read and write every database.</span></div>
+        {:else}
         <label class="um-field">Roles on database
           <input bind:value={roleDb} class="um-input mono" style="margin-left:var(--px-8);width:var(--px-180)" />
         </label>
@@ -103,6 +112,7 @@
             <label class="um-checkline"><input class="um-check" type="checkbox" checked={checkedRoles[r] ?? false} onchange={(e) => (checkedRoles = { ...checkedRoles, [r]: (e.currentTarget as HTMLInputElement).checked })} /> {r}</label>
           {/each}
         </div>
+        {/if}
         <div class="um-field-hint">Command preview</div>
         <pre class="um-sql selectable">{preview || '-- enter a user name'}</pre>
         {#if err}<div class="um-err" role="alert"><Icon name="warning" size={14} /><span>{err}</span></div>{/if}

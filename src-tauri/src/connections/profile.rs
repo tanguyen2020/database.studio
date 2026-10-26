@@ -96,10 +96,19 @@ pub struct ConnectionProfile {
     /// Cassandra only: default consistency level (LOCAL_QUORUM if empty).
     #[serde(default)]
     pub cassandra_consistency: String,
-    /// Cassandra only: which CQL server this is — "" (not known yet) |
-    /// "cassandra" | "scylla". Detected on connect (SPEC-SCYLLADB.md §3.1).
+    /// Which server speaks the engine's protocol — the profile's generic "server
+    /// flavor" field (kept under its first name so saved profiles stay valid).
+    /// Cassandra: "" (not known yet) | "cassandra" | "scylla" (SPEC-SCYLLADB.md §3.1).
+    /// Redis: "" | "redis" | "valkey" (SPEC-VALKEY.md §3).
+    /// Elasticsearch: "" | "elasticsearch" | "opensearch" (SPEC-OPENSEARCH.md §2).
+    /// Kafka: "" | "kafka" | "redpanda" (SPEC-REDPANDA.md §2). Detected on connect.
+    /// MongoDB: "" | "mongodb" | "ferretdb" | "documentdb" (SPEC-FERRETDB-DOCUMENTDB.md).
     #[serde(default)]
     pub cassandra_flavor: String,
+    /// Kafka / Redpanda only: Redpanda Admin API base URL (SPEC-REDPANDA.md §2). Empty = the
+    /// first bootstrap host on port 9644 (https when SSL is on).
+    #[serde(default)]
+    pub admin_url: String,
 }
 
 impl ConnectionProfile {

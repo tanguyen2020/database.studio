@@ -4,6 +4,7 @@
 // sends exactly these paths/bodies to a real cluster.
 
 import * as ipc from '$lib/ipc'
+import { searchProduct } from './flavor'
 
 /** An HTTP error from the cluster, with the readable message Kibana would show. */
 export class EsError extends Error {
@@ -17,26 +18,34 @@ export class EsError extends Error {
 }
 
 /** `type: reason` from an Elasticsearch error document (+ the common cases). */
-export function describeEsError(status: number, body: unknown): string {
+export function describeEsError(status: number, body: unknown, product = 'Elasticsearch'): string {
   const err = (body as { error?: unknown } | null)?.error
   let type = ''
   let reason = ''
   if (err && typeof err === 'object') {
-    const e = err as { type?: string; reason?: string; root_cause?: { reason?: string }[]; index?: string }
+    const e = err as { type?: string; reason?: string; details?: string; root_cause?: { reason?: string }[]; index?: string }
     type = e.type ?? ''
     reason = e.reason ?? e.root_cause?.[0]?.reason ?? ''
+    // OpenSearch SQL / PPL keep `reason` generic and put the cause in `details` (SPEC-OPENSEARCH.md O6)
+    const details = e.details?.trim()
+    if (details && details !== reason) reason = reason ? `${reason} — ${details}` : details
     if (status === 404 && type === 'index_not_found_exception') {
       return `Index${e.index ? ` '${e.index}'` : ''} not found`
     }
   } else if (typeof err === 'string') {
     reason = err
+  } else if (body && typeof body === 'object' && (typeof (body as { reason?: unknown }).reason === 'string' || typeof (body as { message?: unknown }).message === 'string')) {
+    // OpenSearch security REST API: {"status":"error","reason":"Weak password"} /
+    // {"status":"FORBIDDEN","message":"Resource 'admin' is reserved."} (SPEC-OPENSEARCH.md O16)
+    const b = body as { reason?: string; message?: string }
+    reason = b.reason ?? b.message ?? ''
   } else if (typeof body === 'string') {
     reason = body.slice(0, 300)
   }
   if (status === 401) return 'Authentication failed — check the user and password (or the API key)'
   if (status === 403) return `Not allowed — ${reason || 'the user lacks the privilege for this action'}`
-  if (!type && !reason) return `Elasticsearch ${status}`
-  return type ? `${type}: ${reason}` : `Elasticsearch ${status}: ${reason}`
+  if (!type && !reason) return `${product} ${status}`
+  return type ? `${type}: ${reason}` : `${product} ${status}: ${reason}`
 }
 
 /** Encode one path segment (index / template / user names). `*` and `,` stay
@@ -51,7 +60,7 @@ export async function es<T = unknown>(connId: string, method: string, path: stri
   const r = await ipc.esRequest(connId, method, path, text)
   if (!r.ok) {
     const b = r.json ?? r.text
-    throw new EsError(describeEsError(r.status, b), r.status, b)
+    throw new EsError(describeEsError(r.status, b, searchProduct(connId).name), r.status, b)
   }
   return (r.json ?? (r.text as unknown)) as T
 }
@@ -260,3 +269,29 @@ export const sqlTranslate = (connId: string, query: string) => es(connId, 'POST'
 export async function esqlQuery(connId: string, query: string): Promise<TabularResult> {
   return tabular(await es(connId, 'POST', '/_query?format=json', { query }))
 }
+
+// ---- OpenSearch SQL / PPL plugins (SPEC-OPENSEARCH.md O3–O5) --------------------
+
+/** `format=jdbc` answer: `{schema:[{name,type}], datarows:[[…]], cursor}`. */
+export function jdbcTabular(v: { schema?: { name: string; type: string }[]; datarows?: unknown[][]; cursor?: string }): TabularResult {
+  const cols = (v.schema ?? []).map((c) => [c.name, c.type] as [string, string])
+  const rows = (v.datarows ?? []).map((r) => Object.fromEntries(cols.map(([n], i) => [n, r[i] ?? null])))
+  return { cols, rows, cursor: v.cursor || undefined }
+}
+
+export async function osSqlQuery(connId: string, query: string, fetchSize = 500): Promise<TabularResult> {
+  return jdbcTabular(await es(connId, 'POST', '/_plugins/_sql?format=jdbc', { query, fetch_size: fetchSize }))
+}
+
+export async function osSqlNext(connId: string, cursor: string, cols: [string, string][]): Promise<TabularResult> {
+  const r = jdbcTabular(await es(connId, 'POST', '/_plugins/_sql?format=jdbc', { cursor }))
+  return { ...r, cols: r.cols.length ? r.cols : cols }
+}
+
+export const osSqlExplain = (connId: string, query: string) => es(connId, 'POST', '/_plugins/_sql/_explain', { query })
+
+export async function pplQuery(connId: string, query: string): Promise<TabularResult> {
+  return jdbcTabular(await es(connId, 'POST', '/_plugins/_ppl', { query }))
+}
+
+export const pplExplain = (connId: string, query: string) => es(connId, 'POST', '/_plugins/_ppl/_explain', { query })

@@ -197,6 +197,78 @@ export interface RedisInfo {
 }
 export const redisInfo = (connId: string) => invoke<RedisInfo>('redis_info', { connId })
 
+/** Which server speaks the Redis protocol here (SPEC-VALKEY.md §3). */
+export interface RedisServerInfo {
+  flavor: 'redis' | 'valkey'
+  /** valkey_version on Valkey, redis_version on Redis */
+  version?: string | null
+  /** "Valkey 8.1.10" / "Redis 7.2.4" */
+  label?: string | null
+}
+export const redisServerInfo = (connId: string) => invoke<RedisServerInfo>('redis_server_info', { connId })
+
+/** Elasticsearch or OpenSearch behind a REST connection (SPEC-OPENSEARCH.md §2). */
+export interface EsServerInfo {
+  flavor: 'elasticsearch' | 'opensearch'
+  /** empty when the login may not read GET / */
+  version: string
+  /** "OpenSearch 3.9.0" / "Elasticsearch 8.15.3" */
+  label: string
+}
+export const esServerInfo = (connId: string) => invoke<EsServerInfo>('es_server_info', { connId })
+
+// ---- Redpanda (flavor of the Kafka engine — SPEC-REDPANDA.md) + Kafka ACLs ----
+
+/** Apache Kafka or Redpanda behind a Kafka connection. */
+export interface RpServerInfo {
+  flavor: 'kafka' | 'redpanda'
+  /** "v26.2.6" (empty on Apache Kafka) */
+  version: string
+  /** "Redpanda v26.2.6" / "Apache Kafka" */
+  label: string
+  brokers: number
+}
+export const redpandaServerInfo = (connId: string) => invoke<RpServerInfo>('redpanda_server_info', { connId })
+
+/** MongoDB, FerretDB or Amazon DocumentDB behind a MongoDB connection (SPEC-FERRETDB-DOCUMENTDB.md). */
+export interface MongoServerInfo {
+  flavor: 'mongodb' | 'ferretdb' | 'documentdb'
+  /** the product's own version ("v2.7.0" on FerretDB) */
+  version: string
+  /** the MongoDB version it is compatible with */
+  compat: string
+  /** "FerretDB v2.7.0 (MongoDB 7.0 compatible)" */
+  label: string
+}
+export const mongoServerInfo = (connId: string) => invoke<MongoServerInfo>('mongo_server_info', { connId })
+
+/** One Redpanda Admin API answer — a non-2xx answer is returned, not thrown. */
+export interface RpResponse {
+  status: number
+  ok: boolean
+  json?: unknown | null
+  text?: string | null
+  took_ms: number
+}
+export const redpandaAdminRequest = (connId: string, method: string, path: string, body?: string | null) =>
+  invoke<RpResponse>('redpanda_admin_request', { connId, method, path, body: body ?? null })
+
+/** One ACL binding (Kafka protocol). */
+export interface KafkaAcl {
+  resource_type: 'TOPIC' | 'GROUP' | 'CLUSTER' | 'TRANSACTIONAL_ID' | string
+  resource_name: string
+  pattern_type: 'LITERAL' | 'PREFIXED' | string
+  /** User:alice · RedpandaRole:readers */
+  principal: string
+  host: string
+  operation: string
+  permission: 'ALLOW' | 'DENY' | string
+}
+export type KafkaAclFilter = Partial<KafkaAcl>
+export const kafkaAcls = (connId: string, filter?: KafkaAclFilter) => invoke<KafkaAcl[]>('kafka_acls', { connId, filter: filter ?? null })
+export const kafkaCreateAcls = (connId: string, acls: KafkaAcl[]) => invoke<number>('kafka_create_acls', { connId, acls })
+export const kafkaDeleteAcls = (connId: string, filters: KafkaAclFilter[]) => invoke<KafkaAcl[]>('kafka_delete_acls', { connId, filters })
+
 export interface RedisSlowlogEntry {
   id: number
   /** unix seconds */

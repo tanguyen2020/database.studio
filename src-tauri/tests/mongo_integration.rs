@@ -39,6 +39,8 @@ fn params(port: u16) -> MongoConnParams {
         password: String::new(),
         ssl: false,
         ssl_ca: String::new(),
+        flavor: String::new(),
+        tunneled: false,
     }
 }
 
@@ -452,6 +454,8 @@ async fn mongo_connects_over_tls() {
         password: String::new(),
         ssl: true,
         ssl_ca: cert.to_str().unwrap().to_string(),
+        flavor: String::new(),
+        tunneled: false,
     };
     let deadline = Instant::now() + Duration::from_secs(60);
     let drv = loop {
@@ -492,6 +496,8 @@ async fn mongo_auth_defaults_authsource_to_admin() {
         password: "secret".into(),
         ssl: false,
         ssl_ca: String::new(),
+        flavor: String::new(),
+        tunneled: false,
     };
     let deadline = Instant::now() + Duration::from_secs(180);
     let drv = loop {
@@ -750,6 +756,8 @@ async fn mongo_user_manager_end_to_end() {
         password: "test123".into(),
         ssl: false,
         ssl_ca: String::new(),
+        flavor: String::new(),
+        tunneled: false,
     };
     // wait for readiness
     let deadline = Instant::now() + Duration::from_secs(180);
@@ -785,6 +793,8 @@ async fn mongo_user_manager_end_to_end() {
         password: "pw".into(),
         ssl: false,
         ssl_ca: String::new(),
+        flavor: String::new(),
+        tunneled: false,
     };
     let app = MongoDriver::connect(&app_params).await.expect("login as app");
 

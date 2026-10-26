@@ -313,6 +313,51 @@ export const ENDPOINTS: EndpointHint[] = [
   { path: '_resolve/index/{name}', methods: ['GET'], doc: 'Resolve indices / aliases / data streams' },
 ]
 
+/** Elasticsearch-only endpoints (X-Pack) — OpenSearch answers them 400 / 405 (SPEC-OPENSEARCH.md O3–O13). */
+export function isElasticOnlyPath(path: string): boolean {
+  return /^(\{index\}\/)?_(ilm|slm|security|sql|query|transform|enrich|watcher|license|xpack)(\/|$)/.test(path)
+}
+
+/** OpenSearch plugin endpoints (all measured on OpenSearch 3.9). */
+export const OS_ENDPOINTS: EndpointHint[] = [
+  { path: '_plugins/_sql', methods: ['POST'], doc: 'SQL query (format=jdbc for rows)', body: '{\n  "query": "SELECT * FROM  LIMIT 10"\n}' },
+  { path: '_plugins/_sql/_explain', methods: ['POST'], doc: 'Explain a SQL query', body: '{\n  "query": ""\n}' },
+  { path: '_plugins/_ppl', methods: ['POST'], doc: 'PPL query', body: '{\n  "query": "source =  | head 10"\n}' },
+  { path: '_plugins/_ppl/_explain', methods: ['POST'], doc: 'Explain a PPL query' },
+  { path: '_plugins/_ism/policies', methods: ['GET'], doc: 'ISM policies' },
+  { path: '_plugins/_ism/policies/{name}', methods: ['GET', 'PUT', 'DELETE'], doc: 'ISM policy' },
+  { path: '_plugins/_ism/explain/{index}', methods: ['GET'], doc: 'ISM state of an index' },
+  { path: '_plugins/_ism/add/{index}', methods: ['POST'], doc: 'Attach an ISM policy', body: '{\n  "policy_id": ""\n}' },
+  { path: '_plugins/_ism/remove/{index}', methods: ['POST'], doc: 'Detach the ISM policy' },
+  { path: '_plugins/_ism/retry/{index}', methods: ['POST'], doc: 'Retry a failed ISM action' },
+  { path: '_plugins/_sm/policies', methods: ['GET'], doc: 'Snapshot policies' },
+  { path: '_plugins/_sm/policies/{name}', methods: ['GET', 'POST', 'PUT', 'DELETE'], doc: 'Snapshot policy' },
+  { path: '_plugins/_transform', methods: ['GET'], doc: 'Transforms' },
+  { path: '_plugins/_transform/{id}', methods: ['GET', 'PUT', 'DELETE'], doc: 'Transform' },
+  { path: '_plugins/_transform/{id}/_start', methods: ['POST'], doc: 'Start a transform' },
+  { path: '_plugins/_transform/_preview', methods: ['POST'], doc: 'Preview a transform' },
+  { path: '_plugins/_rollup/jobs', methods: ['GET'], doc: 'Rollup jobs' },
+  { path: '_plugins/_rollup/jobs/{id}', methods: ['GET', 'PUT', 'DELETE'], doc: 'Rollup job' },
+  { path: '_plugins/_alerting/monitors/_search', methods: ['POST'], doc: 'Search monitors', body: '{\n  "query": {\n    "match_all": {}\n  }\n}' },
+  { path: '_plugins/_alerting/monitors', methods: ['POST'], doc: 'Create a monitor' },
+  { path: '_plugins/_alerting/monitors/alerts', methods: ['GET'], doc: 'Alerts' },
+  { path: '_plugins/_security/authinfo', methods: ['GET'], doc: 'Who am I' },
+  { path: '_plugins/_security/api/internalusers', methods: ['GET'], doc: 'Internal users' },
+  { path: '_plugins/_security/api/internalusers/{name}', methods: ['GET', 'PUT', 'PATCH', 'DELETE'], doc: 'Internal user' },
+  { path: '_plugins/_security/api/roles', methods: ['GET'], doc: 'Roles' },
+  { path: '_plugins/_security/api/roles/{name}', methods: ['GET', 'PUT', 'PATCH', 'DELETE'], doc: 'Role' },
+  { path: '_plugins/_security/api/rolesmapping', methods: ['GET'], doc: 'Role mappings' },
+  { path: '_plugins/_security/api/actiongroups', methods: ['GET'], doc: 'Action groups' },
+  { path: '_plugins/_security/api/tenants', methods: ['GET'], doc: 'Tenants' },
+  { path: '_plugins/_security/api/account', methods: ['GET', 'PUT'], doc: 'Your account / change your password' },
+  { path: '_plugins/_knn/stats', methods: ['GET'], doc: 'k-NN statistics' },
+]
+
+/** Endpoint suggestions of the server: Elasticsearch, or OpenSearch (no X-Pack, plus its plugins). */
+export function endpointsFor(flavor: 'elasticsearch' | 'opensearch'): EndpointHint[] {
+  return flavor === 'opensearch' ? [...ENDPOINTS.filter((e) => !isElasticOnlyPath(e.path)), ...OS_ENDPOINTS] : ENDPOINTS
+}
+
 /** Query DSL / request-body keys offered inside a JSON body. */
 export const BODY_KEYS: { key: string; doc: string; snippet?: string }[] = [
   { key: 'query', doc: 'Query', snippet: '"query": {\n  $0\n}' },

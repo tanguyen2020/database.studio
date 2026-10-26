@@ -81,6 +81,7 @@ fn profile(id: &str, system: SystemType, port: u16, database: &str, user: &str) 
         cassandra_dc: "datacenter1".into(),
         cassandra_consistency: String::new(),
         cassandra_flavor: String::new(),
+        admin_url: String::new(),
     }
 }
 
@@ -205,12 +206,23 @@ fn duckdb_backup_and_restore_through_the_dialog_path() {
 
 #[test]
 fn redis_backup_restore_one_logical_database_with_ttls() {
-    on_big_stack(async move {
-        let c = GenericImage::new("redis", "7-alpine")
+    on_big_stack(redis_backup_suite("redis", "7-alpine"))
+}
+
+/// Valkey (a flavor of the Redis engine — SPEC-VALKEY.md): the same built-in
+/// DUMP/RESTORE backup must round-trip on a real Valkey server.
+#[test]
+fn valkey_backup_restore_one_logical_database_with_ttls() {
+    on_big_stack(redis_backup_suite("valkey/valkey", "8.1-alpine"))
+}
+
+async fn redis_backup_suite(image: &'static str, tag: &'static str) {
+    {
+        let c = GenericImage::new(image, tag)
             .with_exposed_port(6379.tcp())
             .start()
             .await
-            .expect("start redis (Docker must be running)");
+            .expect("start redis/valkey (Docker must be running)");
         let port = c.get_host_port_ipv4(6379).await.unwrap();
         let state = app_state();
         // the app's connection sits on db0 — the backup must use db2 WITHOUT moving it
@@ -292,7 +304,7 @@ fn redis_backup_restore_one_logical_database_with_ttls() {
         let bad = tmp("not-redis.jsonl");
         std::fs::write(&bad, "hello\n").unwrap();
         assert!(run_restore(&state, "r".into(), bad, None).await.is_err());
-    })
+    }
 }
 
 #[test]

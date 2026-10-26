@@ -90,6 +90,7 @@ fn profile(id: &str, system: SystemType, port: u16, database: &str, user: &str) 
         cassandra_dc: "datacenter1".into(),
         cassandra_consistency: String::new(),
         cassandra_flavor: String::new(),
+        admin_url: String::new(),
     }
 }
 

@@ -1,6 +1,6 @@
 /*
  * GENERATED — do not edit by hand.
- * Sinh bởi scripts/extract-tokens.mjs từ "Database Studio.dc.html" (sha256 493c0130a76d).
+ * Sinh bởi scripts/extract-tokens.mjs từ "Database Studio.dc.html" (sha256 0f7fa76d542c).
  * Chạy lại: npm run tokens
  */
 
@@ -57,10 +57,18 @@
   --sys-redis-bg: #3d0c08;
   --sys-redis-border: #6b1a14;
   --sys-redis-fg: #f07070;
+  --sys-valkey-accent: #6983FF;
+  --sys-valkey-bg: #141a3a;
+  --sys-valkey-border: #2b3670;
+  --sys-valkey-fg: #aab8ff;
   --sys-kafka-accent: #8B5CF6;
   --sys-kafka-bg: #1e1a2e;
   --sys-kafka-border: #3d2f6b;
   --sys-kafka-fg: #c4b5fd;
+  --sys-redpanda-accent: #E14226;
+  --sys-redpanda-bg: #3a120b;
+  --sys-redpanda-border: #6b2416;
+  --sys-redpanda-fg: #f28a76;
   --sys-nats-accent: #27AE60;
   --sys-nats-bg: #0d2e1a;
   --sys-nats-border: #1a5c35;
@@ -89,6 +97,14 @@
   --sys-mongodb-bg: #04231a;
   --sys-mongodb-border: #0a5c3c;
   --sys-mongodb-fg: #57e39a;
+  --sys-ferretdb-accent: #3C78B4;
+  --sys-ferretdb-bg: #0c1a2a;
+  --sys-ferretdb-border: #1d3a5c;
+  --sys-ferretdb-fg: #8fb6e0;
+  --sys-documentdb-accent: #527FFF;
+  --sys-documentdb-bg: #141c3a;
+  --sys-documentdb-border: #2a3a72;
+  --sys-documentdb-fg: #a9bcff;
   --sys-oracle-accent: #C74634;
   --sys-oracle-bg: #301410;
   --sys-oracle-border: #5e281f;
@@ -105,6 +121,10 @@
   --sys-elasticsearch-bg: #062a28;
   --sys-elasticsearch-border: #0e5a55;
   --sys-elasticsearch-fg: #5ee7df;
+  --sys-opensearch-accent: #005EB8;
+  --sys-opensearch-bg: #04223d;
+  --sys-opensearch-border: #0b3f6b;
+  --sys-opensearch-fg: #6fb1ea;
   --sys-orphan-accent: #5b6473;
   --sys-orphan-bg: #2a2f3a;
   --sys-orphan-border: #3a4150;
@@ -204,15 +224,19 @@
   --px-740: 740px;
   --px-840: 840px;
 
-/* Mọi màu hex literal trong prototype (123 màu) */
+/* Mọi màu hex literal trong prototype (143 màu) */
+  --hex-005eb8: #005eb8;
   --hex-00bfb3: #00bfb3;
   --hex-00ed64: #00ed64;
+  --hex-04223d: #04223d;
   --hex-04231a: #04231a;
   --hex-062a28: #062a28;
   --hex-0a1e35: #0a1e35;
   --hex-0a2030: #0a2030;
   --hex-0a5c3c: #0a5c3c;
   --hex-0b2a30: #0b2a30;
+  --hex-0b3f6b: #0b3f6b;
+  --hex-0c1a2a: #0c1a2a;
   --hex-0d2e1a: #0d2e1a;
   --hex-0e5a55: #0e5a55;
   --hex-0f1219: #0f1219;
@@ -221,6 +245,8 @@
   --hex-1287b1: #1287b1;
   --hex-13161f: #13161f;
   --hex-134f72: #134f72;
+  --hex-141a3a: #141a3a;
+  --hex-141c3a: #141c3a;
   --hex-161a23: #161a23;
   --hex-181c26: #181c26;
   --hex-1a1a2e: #1a1a2e;
@@ -229,6 +255,7 @@
   --hex-1a5c35: #1a5c35;
   --hex-1b1f2a: #1b1f2a;
   --hex-1c5560: #1c5560;
+  --hex-1d3a5c: #1d3a5c;
   --hex-1e1a2e: #1e1a2e;
   --hex-1f2533: #1f2533;
   --hex-1f2937: #1f2937;
@@ -236,10 +263,12 @@
   --hex-272d3a: #272d3a;
   --hex-27ae60: #27ae60;
   --hex-2a2f3a: #2a2f3a;
+  --hex-2a3a72: #2a3a72;
   --hex-2a4a6a: #2a4a6a;
   --hex-2a5a7a: #2a5a7a;
   --hex-2a6fdb: #2a6fdb;
   --hex-2b2a05: #2b2a05;
+  --hex-2b3670: #2b3670;
   --hex-2e1a12: #2e1a12;
   --hex-2e2600: #2e2600;
   --hex-301410: #301410;
@@ -248,13 +277,16 @@
   --hex-333b4d: #333b4d;
   --hex-336791: #336791;
   --hex-3858e9: #3858e9;
+  --hex-3a120b: #3a120b;
   --hex-3a2e0c: #3a2e0c;
   --hex-3a4150: #3a4150;
+  --hex-3c78b4: #3c78b4;
   --hex-3d0a09: #3d0a09;
   --hex-3d0c08: #3d0c08;
   --hex-3d2800: #3d2800;
   --hex-3d2f6b: #3d2f6b;
   --hex-4b5563: #4b5563;
+  --hex-527fff: #527fff;
   --hex-56b6c2: #56b6c2;
   --hex-57e39a: #57e39a;
   --hex-5b6473: #5b6473;
@@ -273,22 +305,28 @@
   --hex-60b8f5: #60b8f5;
   --hex-61afef: #61afef;
   --hex-665514: #665514;
+  --hex-6983ff: #6983ff;
   --hex-6b1515: #6b1515;
   --hex-6b1a14: #6b1a14;
+  --hex-6b2416: #6b2416;
   --hex-6b3412: #6b3412;
   --hex-6b4400: #6b4400;
   --hex-6b5012: #6b5012;
   --hex-6b7486: #6b7486;
   --hex-6cd5e7: #6cd5e7;
   --hex-6ee7a0: #6ee7a0;
+  --hex-6fb1ea: #6fb1ea;
   --hex-7ec8f0: #7ec8f0;
   --hex-7f8a9e: #7f8a9e;
   --hex-8a93a6: #8a93a6;
   --hex-8ae3f0: #8ae3f0;
   --hex-8b5cf6: #8b5cf6;
+  --hex-8fb6e0: #8fb6e0;
   --hex-98c379: #98c379;
   --hex-9aa4b8: #9aa4b8;
+  --hex-a9bcff: #a9bcff;
   --hex-aab2c4: #aab2c4;
+  --hex-aab8ff: #aab8ff;
   --hex-b48ead: #b48ead;
   --hex-c0765a: #c0765a;
   --hex-c4b5fd: #c4b5fd;
@@ -302,6 +340,7 @@
   --hex-d82c20: #d82c20;
   --hex-e03131: #e03131;
   --hex-e06c75: #e06c75;
+  --hex-e14226: #e14226;
   --hex-e2e6ef: #e2e6ef;
   --hex-e5c07b: #e5c07b;
   --hex-e6e9f0: #e6e9f0;
@@ -316,6 +355,7 @@
   --hex-f0a020: #f0a020;
   --hex-f0a0a6: #f0a0a6;
   --hex-f0c674: #f0c674;
+  --hex-f28a76: #f28a76;
   --hex-f29111: #f29111;
   --hex-f4f6fb: #f4f6fb;
   --hex-f5b84a: #f5b84a;

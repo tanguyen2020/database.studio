@@ -28,6 +28,7 @@
   } from '$lib/elastic/format'
   import { toCsv, withBom } from '$lib/export/rows'
   import { saveText } from '$lib/elastic/save'
+  import { searchProduct } from '$lib/elastic/flavor'
   import { explorer } from '$lib/stores/explorer.svelte'
   import { toasts } from '$lib/stores/toast.svelte'
 
@@ -310,7 +311,7 @@
   <!-- query bar -->
   <div class="esd-bar">
     <span class="es-seg" title="Query language">
-      <button class:on={language === 'kql'} onclick={() => { language = 'kql'; void run(true) }} title="Kibana Query Language">KQL</button>
+      <button class:on={language === 'kql'} onclick={() => { language = 'kql'; void run(true) }} title={searchProduct(connId).queryLanguageLong}>{searchProduct(connId).queryLanguage}</button>
       <button class:on={language === 'lucene'} onclick={() => { language = 'lucene'; void run(true) }} title="Lucene query syntax">Lucene</button>
     </span>
     <div class="esd-q" class:invalid={!!queryError}>
@@ -342,7 +343,7 @@
     </button>
   </div>
   {#if queryError}
-    <div class="esd-qerr" role="alert">{language === 'kql' ? 'KQL syntax error' : 'Syntax error'}: {queryError.message} (at character {queryError.pos + 1})</div>
+    <div class="esd-qerr" role="alert">{language === 'kql' ? `${searchProduct(connId).queryLanguage} syntax error` : 'Syntax error'}: {queryError.message} (at character {queryError.pos + 1})</div>
   {/if}
 
   <!-- filter pills -->
@@ -436,7 +437,7 @@
         {#if tookMs != null && !loading}<span class="es-badge">{tookMs} ms</span>{/if}
         {#if timeField}<span class="es-badge" title="Time field">{timeField}</span>{/if}
         <span style="margin-left:auto;display:flex;gap:var(--px-6)">
-          <button class="eg-btn" onclick={() => (inspect = 'request')} disabled={!lastRequest} title="Show the request sent to Elasticsearch and its response"><EsIcon name="inspect" size={13} /> Inspect</button>
+          <button class="eg-btn" onclick={() => (inspect = 'request')} disabled={!lastRequest} title="Show the request sent to {searchProduct(connId).name} and its response"><EsIcon name="inspect" size={13} /> Inspect</button>
           <button class="eg-btn" onclick={() => (flyout = { hit: null })}><EsIcon name="plus" size={13} /> Add document</button>
           <button class="eg-btn" onclick={() => exportPage('csv')} disabled={!hits.length} title="Export this page as CSV"><EsIcon name="download" size={13} /> CSV</button>
           <button class="eg-btn" onclick={() => exportPage('json')} disabled={!hits.length} title="Export this page as JSON"><EsIcon name="download" size={13} /> JSON</button>

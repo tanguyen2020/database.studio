@@ -18,6 +18,9 @@
   import CassandraUserManager from './users/CassandraUserManager.svelte'
   import RabbitUserManager from './users/RabbitUserManager.svelte'
   import EsUserManager from './users/EsUserManager.svelte'
+  import OsSecurityManager from './users/OsSecurityManager.svelte'
+  import { isOpenSearch } from '$lib/brand'
+  import { connections } from '$lib/stores/connections.svelte'
 
   interface Props {
     tab: TabState
@@ -139,6 +142,9 @@
   <CassandraUserManager {tab} />
 {:else if tab.systemType === 'rabbitmq'}
   <RabbitUserManager {tab} />
+{:else if tab.systemType === 'elasticsearch' && isOpenSearch(connections.byId(tab.connectionId ?? ''))}
+  <!-- OpenSearch: the security plugin's own API (SPEC-OPENSEARCH.md O16) -->
+  <OsSecurityManager {tab} />
 {:else if tab.systemType === 'elasticsearch'}
   <EsUserManager {tab} />
 {:else}

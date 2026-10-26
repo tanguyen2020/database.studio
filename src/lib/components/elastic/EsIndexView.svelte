@@ -35,6 +35,8 @@
     type MappingProps,
   } from '$lib/elastic/api'
   import { FIELD_TYPES } from '$lib/elastic/console'
+  import { searchProduct } from '$lib/elastic/flavor'
+  import { ismSummary, parseIsmExplain, type IsmIndexState } from '$lib/elastic/ism'
   import { fmtCount, formatBytes, healthColor, healthLabel } from '$lib/elastic/format'
   import { explorer } from '$lib/stores/explorer.svelte'
   import { tabs } from '$lib/stores/tabs.svelte'
@@ -318,14 +320,54 @@
   }
 
   // ---- lifecycle ----------------------------------------------------------------------
+  // Elasticsearch: ILM. OpenSearch: Index State Management (SPEC-OPENSEARCH.md O7).
+  const product = $derived(searchProduct(connId))
   let ilm = $state<unknown | null>(null)
   let ilmError = $state<string | null>(null)
+  let ism = $state<IsmIndexState | null>(null)
+  let ismPolicies = $state<string[]>([])
+  let ismPick = $state('')
+  let ismBusy = $state(false)
   async function loadIlm() {
     try {
-      ilm = await es(connId, 'GET', `/${seg(index)}/_ilm/explain?human=true`)
+      if (product.os) {
+        const [explain, pols] = await Promise.all([
+          es(connId, 'GET', `/_plugins/_ism/explain/${seg(index)}`),
+          es<{ policies?: { _id: string }[] }>(connId, 'GET', '/_plugins/_ism/policies?size=1000').catch(() => ({ policies: [] })),
+        ])
+        ism = parseIsmExplain(explain, index)
+        ismPolicies = (pols.policies ?? []).map((p) => p._id).sort()
+        if (!ismPick || !ismPolicies.includes(ismPick)) ismPick = ism.policy ?? ismPolicies[0] ?? ''
+        ilm = explain
+      } else {
+        ilm = await es(connId, 'GET', `/${seg(index)}/_ilm/explain?human=true`)
+      }
       ilmError = null
     } catch (e) {
       ilmError = String((e as Error).message ?? e)
+    }
+  }
+
+  /** attach / change / detach / retry ISM on this index, then read the state back */
+  async function ismAction(kind: 'add' | 'change' | 'remove' | 'retry') {
+    if (ismBusy) return
+    ismBusy = true
+    try {
+      const path = kind === 'add' ? 'add' : kind === 'change' ? 'change_policy' : kind === 'remove' ? 'remove' : 'retry'
+      const body = kind === 'add' || kind === 'change' ? { policy_id: ismPick } : undefined
+      const r = await es<{ failures?: boolean; failed_indices?: { reason?: string }[] }>(connId, 'POST', `/_plugins/_ism/${path}/${seg(index)}`, body)
+      if (r.failures) throw new Error(r.failed_indices?.[0]?.reason ?? 'ISM refused the change')
+      toasts.success(
+        kind === 'add' ? `Policy ${ismPick} attached` : kind === 'change' ? `Switching to ${ismPick} on the next state change` : kind === 'remove' ? 'Policy removed' : 'Retrying the failed action',
+        'elasticsearch',
+      )
+      // ISM records the change asynchronously (~1–2 s measured)
+      await new Promise((r) => setTimeout(r, 1500))
+      await loadIlm()
+    } catch (e) {
+      toasts.error(String((e as Error).message ?? e), 'elasticsearch')
+    } finally {
+      ismBusy = false
     }
   }
 
@@ -467,7 +509,7 @@
               <div><label class="es-label" for="es-set-replicas">Replicas</label><input id="es-set-replicas" class="es-input" type="number" min="0" style="width:100%" bind:value={edit.replicas} /></div>
               <div><label class="es-label" for="es-set-refresh">Refresh interval</label><input id="es-set-refresh" class="es-input mono" style="width:100%" bind:value={edit.refresh} placeholder="1s or -1" /></div>
               <div><label class="es-label" for="es-set-window">Max result window</label><input id="es-set-window" class="es-input" type="number" min="1" style="width:100%" bind:value={edit.maxWindow} /></div>
-              <div><label class="es-label" for="es-set-ilm">Lifecycle policy</label><input id="es-set-ilm" class="es-input mono" style="width:100%" bind:value={edit.lifecycle} placeholder="(none)" /></div>
+              {#if !product.os}<div><label class="es-label" for="es-set-ilm">Lifecycle policy</label><input id="es-set-ilm" class="es-input mono" style="width:100%" bind:value={edit.lifecycle} placeholder="(none)" /></div>{/if}
               <label class="es-label" style="display:flex;align-items:center;gap:var(--px-8);margin-top:var(--px-20)"><input type="checkbox" bind:checked={edit.readOnly} /> Block writes (read-only)</label>
             </div>
             <div class="es-modal-f" style="justify-content:flex-start">
@@ -556,6 +598,42 @@
           <div class="es-callout warn" role="alert">{ilmError}</div>
         {:else if !ilm}
           <div class="es-empty">Loading lifecycle state…</div>
+        {:else if product.os && ism}
+          <div class="es-card" data-testid="es-ism">
+            <div class="es-card-h">
+              <span class="es-card-title">Index State Management</span>
+              {#if ism.failed}<span class="es-badge red">failed</span>{:else if ism.pending}<span class="es-badge yellow">waiting for first run</span>{:else if ism.managed}<span class="es-badge green">managed</span>{:else}<span class="es-badge">not managed</span>{/if}
+              <button class="eg-btn" style="margin-left:auto" onclick={() => loadIlm()}><EsIcon name="refresh" size={13} /> Refresh</button>
+              <button class="eg-btn" onclick={() => tabs.openEsManage(connId, 'ism', 'Index State Management policies')}>Manage policies</button>
+            </div>
+            <div class="es-card-b" style="display:flex;flex-direction:column;gap:var(--px-12)">
+              <div class="es-callout {ism.failed ? 'danger' : ''}">{ismSummary(ism)}{#if ism.info}<div class="es-help" style="margin-top:var(--px-4)">{ism.info}</div>{/if}</div>
+              {#if ism.managed}
+                <dl class="es-kv" style="margin:0">
+                  <dt>Policy</dt><dd class="mono">{ism.policy}</dd>
+                  <dt>State</dt><dd class="mono">{ism.state ?? '—'}</dd>
+                  <dt>Action / step</dt><dd class="mono">{ism.action ?? '—'}{ism.step ? ` › ${ism.step}` : ''}{ism.stepStatus ? ` (${ism.stepStatus})` : ''}</dd>
+                </dl>
+              {/if}
+              {#if ismPolicies.length}
+                <div class="es-toolbar">
+                  <label class="es-label" for="es-ism-pick" style="margin:0">{ism.managed ? 'Switch to' : 'Apply policy'}</label>
+                  <select id="es-ism-pick" class="es-input mono" bind:value={ismPick}>
+                    {#each ismPolicies as p (p)}<option value={p}>{p}</option>{/each}
+                  </select>
+                  {#if ism.managed}
+                    <button class="eg-btn" onclick={() => ismAction('change')} disabled={ismBusy || !ismPick || ismPick === ism.policy}>Change policy</button>
+                    {#if ism.failed}<button class="eg-btn" onclick={() => ismAction('retry')} disabled={ismBusy}>Retry failed action</button>{/if}
+                    <button class="eg-btn ds-danger-outline" onclick={() => ismAction('remove')} disabled={ismBusy}>Remove policy</button>
+                  {:else}
+                    <button class="eg-btn primary" onclick={() => ismAction('add')} disabled={ismBusy || !ismPick} aria-busy={ismBusy}>Apply policy</button>
+                  {/if}
+                </div>
+              {:else}
+                <div class="es-help" style="margin:0">No ISM policies exist yet — create one under Management › Index State Management policies.</div>
+              {/if}
+            </div>
+          </div>
         {:else}
           <div class="es-card">
             <div class="es-card-h">

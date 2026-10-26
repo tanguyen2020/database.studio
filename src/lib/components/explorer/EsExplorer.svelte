@@ -18,6 +18,8 @@
   import { es, aliases as listAliases, indexAction, type AliasEntry, type IndexAction, seg } from '$lib/elastic/api'
   import { fmtCompact, formatBytes, healthColor, healthLabel } from '$lib/elastic/format'
   import { RESOURCE_KINDS } from '$lib/elastic/resources'
+  import { OS_RESOURCE_KINDS } from '$lib/elastic/os-resources'
+  import { LANGUAGE_LABEL, queryLanguages, searchProduct } from '$lib/elastic/flavor'
 
   interface Props {
     connId: string
@@ -209,7 +211,32 @@
     enrich: 'enrich',
     transforms: 'transform',
     watches: 'watch',
+    ism: 'lifecycle',
+    sm: 'history',
+    rollups: 'stats',
+    monitors: 'watch',
   }
+
+  // Elasticsearch or OpenSearch: management pages, security sections and query
+  // languages follow the server (SPEC-OPENSEARCH.md)
+  const product = $derived(searchProduct(connId))
+  const manageKinds = $derived(product.os ? OS_RESOURCE_KINDS : RESOURCE_KINDS)
+  const securitySections = $derived(
+    product.os
+      ? [
+          { s: 'users', l: 'Internal users', i: 'user' },
+          { s: 'roles', l: 'Roles', i: 'shield' },
+          { s: 'mappings', l: 'Role mappings', i: 'alias' },
+          { s: 'actiongroups', l: 'Action groups', i: 'key' },
+          { s: 'tenants', l: 'Tenants', i: 'users' },
+        ]
+      : [
+          { s: 'users', l: 'Users', i: 'user' },
+          { s: 'roles', l: 'Roles', i: 'shield' },
+          { s: 'apikeys', l: 'API keys', i: 'key' },
+          { s: 'mappings', l: 'Role mappings', i: 'alias' },
+        ],
+  )
 
   const CLUSTER_PAGES = [
     { key: 'overview', label: 'Overview', icon: 'cluster' },
@@ -234,14 +261,14 @@
       {#if loading && !overview}
         <span class="es-spin" aria-hidden="true"><EsIcon name="refresh" size={12} /></span> Loading cluster…
       {:else if overview}
-        {overview.info.distribution === 'opensearch' ? 'OpenSearch' : 'Elasticsearch'}
+        {overview.info.distribution === 'opensearch' || product.os ? 'OpenSearch' : 'Elasticsearch'}
         {overview.info.version || ''}{#if overview.docs != null} · {fmtCompact(overview.docs)} docs{/if}{#if overview.store_bytes != null} · {formatBytes(overview.store_bytes)}{/if}
       {/if}
     </div>
     <div class="esx-actions">
       <button class="esx-act primary" onclick={() => (createOpen = true)} title="Create a new index"><EsIcon name="plus" size={13} /> Index</button>
       <button class="esx-act" onclick={() => tabs.openEsConsole(connId)} title="Dev Tools console"><EsIcon name="console" size={13} /> Console</button>
-      <button class="esx-act" onclick={() => tabs.openEsQuery(connId, 'esql')} title="ES|QL / SQL query"><EsIcon name="sql" size={13} /> Query</button>
+      <button class="esx-act" onclick={() => tabs.openEsQuery(connId)} title="{queryLanguages(product.flavor).map((l) => LANGUAGE_LABEL[l]).join(' / ')} query"><EsIcon name="sql" size={13} /> Query</button>
     </div>
     <div class="esx-filter">
       <EsIcon name="search" size={13} />
@@ -259,7 +286,7 @@
     <div class="es-callout warn" role="note" style="margin:var(--px-8);font-size:var(--px-11_5)">Limited privileges: {overview.warning}</div>
   {/if}
 
-  <div class="esx-tree" aria-busy={loading} role="tree" aria-label="Elasticsearch">
+  <div class="esx-tree" aria-busy={loading} role="tree" aria-label={product.name}>
     <!-- Indices -->
     <div class="esx-row head" role="treeitem" aria-selected="false" aria-expanded={open.indices} tabindex="0" onclick={() => toggle('indices')} onkeydown={(e) => e.key === 'Enter' && toggle('indices')}>
       <span class="esx-chev"><Chevron open={open.indices} size={12} /></span>
@@ -387,10 +414,10 @@
     <div class="esx-row head" role="treeitem" aria-selected="false" aria-expanded={open.manage} tabindex="0" onclick={() => toggle('manage')} onkeydown={(e) => e.key === 'Enter' && toggle('manage')}>
       <span class="esx-chev"><Chevron open={open.manage} size={12} /></span>
       <EsIcon name="wrench" size={14} />
-      <span class="esx-label">Stack Management</span>
+      <span class="esx-label">{product.os ? 'Management' : 'Stack Management'}</span>
     </div>
     {#if open.manage}
-      {#each RESOURCE_KINDS as k (k.key)}
+      {#each manageKinds as k (k.key)}
         <div out:treeOut|global class="esx-row leaf" class:sel={active === `m:${k.key}`} role="treeitem" aria-selected={active === `m:${k.key}`} tabindex="0" title={k.blurb} onclick={() => tabs.openEsManage(connId, k.key, k.label)} onkeydown={(e) => e.key === 'Enter' && tabs.openEsManage(connId, k.key, k.label)}>
           <span class="esx-ic"><EsIcon name={kindIcon[k.key] ?? 'gear'} size={13} /></span>
           <span class="esx-name es-ellipsis">{k.label}</span>
@@ -420,7 +447,7 @@
       <span class="esx-label">Security</span>
     </div>
     {#if open.security}
-      {#each [{ s: 'users', l: 'Users', i: 'user' }, { s: 'roles', l: 'Roles', i: 'shield' }, { s: 'apikeys', l: 'API keys', i: 'key' }, { s: 'mappings', l: 'Role mappings', i: 'alias' }] as r (r.s)}
+      {#each securitySections as r (r.s)}
         <div out:treeOut|global class="esx-row leaf" role="treeitem" aria-selected="false" tabindex="0" onclick={() => tabs.openUserManager(connId, `section:${r.s}`)} onkeydown={(e) => e.key === 'Enter' && tabs.openUserManager(connId, `section:${r.s}`)}>
           <span class="esx-ic"><EsIcon name={r.i as EsIconName} size={13} /></span>
           <span class="esx-name es-ellipsis">{r.l}</span>
@@ -438,12 +465,11 @@
       <div out:treeOut|global class="esx-row leaf" class:sel={active === 'tool:console'} role="treeitem" aria-selected={active === 'tool:console'} tabindex="0" onclick={() => tabs.openEsConsole(connId)} onkeydown={(e) => e.key === 'Enter' && tabs.openEsConsole(connId)}>
         <span class="esx-ic"><EsIcon name="console" size={13} /></span><span class="esx-name">Console</span>
       </div>
-      <div out:treeOut|global class="esx-row leaf" role="treeitem" aria-selected="false" tabindex="0" onclick={() => tabs.openEsQuery(connId, 'esql')} onkeydown={(e) => e.key === 'Enter' && tabs.openEsQuery(connId, 'esql')}>
-        <span class="esx-ic"><EsIcon name="sql" size={13} /></span><span class="esx-name">ES|QL query</span>
-      </div>
-      <div out:treeOut|global class="esx-row leaf" role="treeitem" aria-selected="false" tabindex="0" onclick={() => tabs.openEsQuery(connId, 'sql')} onkeydown={(e) => e.key === 'Enter' && tabs.openEsQuery(connId, 'sql')}>
-        <span class="esx-ic"><EsIcon name="sql" size={13} /></span><span class="esx-name">SQL query</span>
-      </div>
+      {#each queryLanguages(product.flavor) as l (l)}
+        <div out:treeOut|global class="esx-row leaf" role="treeitem" aria-selected="false" tabindex="0" onclick={() => tabs.openEsQuery(connId, l)} onkeydown={(e) => e.key === 'Enter' && tabs.openEsQuery(connId, l)}>
+          <span class="esx-ic"><EsIcon name="sql" size={13} /></span><span class="esx-name">{LANGUAGE_LABEL[l]} query</span>
+        </div>
+      {/each}
       {#each [{ t: 'profiler', l: 'Search Profiler', i: 'inspect' }, { t: 'grok', l: 'Grok Debugger', i: 'pipeline' }, { t: 'painless', l: 'Painless Lab', i: 'script' }, { t: 'analyzer', l: 'Analyzer', i: 'search' }] as d (d.t)}
         <div out:treeOut|global class="esx-row leaf" class:sel={active === `dt:${d.t}`} role="treeitem" aria-selected={active === `dt:${d.t}`} tabindex="0" onclick={() => tabs.openEsDevTools(connId, d.t as 'profiler')} onkeydown={(e) => e.key === 'Enter' && tabs.openEsDevTools(connId, d.t as 'profiler')}>
           <span class="esx-ic"><EsIcon name={d.i as EsIconName} size={13} /></span><span class="esx-name">{d.l}</span>

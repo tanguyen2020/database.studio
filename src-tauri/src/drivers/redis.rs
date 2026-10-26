@@ -108,16 +108,14 @@ impl RedisDriver {
                 if let Err(e) = pong {
                     return TestResult { ok: false, latency_ms: None, server_version: None, error: Some(e.to_string()) };
                 }
-                // INFO server → phiên bản (best-effort).
+                // INFO server → "Redis 7.2.4" / "Valkey 8.1.10" (best-effort). Valkey
+                // keeps redis_version at 7.2.4 for old clients, so read its own field.
                 let version = redis::cmd("INFO")
                     .arg("server")
                     .query_async::<String>(&mut conn)
                     .await
                     .ok()
-                    .and_then(|info| {
-                        info.lines()
-                            .find_map(|l| l.strip_prefix("redis_version:").map(|v| format!("Redis {}", v.trim())))
-                    });
+                    .and_then(|info| server_identity(&info).label);
                 TestResult {
                     ok: true,
                     latency_ms: Some(started.elapsed().as_millis() as u64),
@@ -431,6 +429,16 @@ impl RedisDriver {
         redis::cmd("INFO").query_async(&mut self.conn).await.map_err(|e| err("INFO error", e))
     }
 
+    /// Which server this is — Redis or Valkey — from `INFO server` (SPEC-VALKEY.md §1).
+    pub async fn server_info(&mut self) -> Result<RedisServerInfo, QueryError> {
+        let text: String = redis::cmd("INFO")
+            .arg("server")
+            .query_async(&mut self.conn)
+            .await
+            .map_err(|e| err("INFO error", e))?;
+        Ok(server_identity(&text))
+    }
+
     /// Size + encoding of the keys currently on screen: ONE pipeline of
     /// `MEMORY USAGE k` + `OBJECT ENCODING k` per key. A missing key → both None.
     /// Some servers forbid one of the two commands (managed Redis); then each is
@@ -464,6 +472,38 @@ impl RedisDriver {
         }
         Ok(zip_key_meta(keys, &interleaved))
     }
+}
+
+/// Which server speaks the Redis protocol on this connection (SPEC-VALKEY.md §1).
+/// Valkey is a fork of Redis 7.2.4 with the same protocol and commands; the driver
+/// treats both the same and only the brand shown to the user differs.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct RedisServerInfo {
+    /// "redis" | "valkey"
+    pub flavor: String,
+    /// The server's own version: `valkey_version` on Valkey, `redis_version` on Redis.
+    pub version: Option<String>,
+    /// "Valkey 8.1.10" / "Redis 7.2.4" — None when INFO reported no version.
+    pub label: Option<String>,
+}
+
+/// Read the product and version out of `INFO server` text. Measured on Valkey 8.1:
+/// it still reports `redis_version:7.2.4` (frozen for old clients) and adds
+/// `server_name:valkey` + `valkey_version:8.1.10`.
+pub fn server_identity(info: &str) -> RedisServerInfo {
+    let field = |name: &str| {
+        info.lines()
+            .find_map(|l| l.trim().strip_prefix(name).and_then(|r| r.strip_prefix(':')).map(|v| v.trim().to_string()))
+            .filter(|v| !v.is_empty())
+    };
+    let valkey_version = field("valkey_version");
+    let is_valkey = valkey_version.is_some() || field("server_name").is_some_and(|n| n.eq_ignore_ascii_case("valkey"));
+    let (flavor, product, version) = if is_valkey {
+        ("valkey", "Valkey", valkey_version.or_else(|| field("redis_version")))
+    } else {
+        ("redis", "Redis", field("redis_version"))
+    };
+    RedisServerInfo { flavor: flavor.into(), label: version.as_ref().map(|v| format!("{product} {v}")), version }
 }
 
 /// One `SLOWLOG GET` entry.
@@ -735,6 +775,28 @@ mod tests {
 
     fn ty(s: &str) -> Value {
         Value::SimpleString(s.into())
+    }
+
+    #[test]
+    fn server_identity_tells_valkey_from_redis() {
+        // INFO server as measured on valkey/valkey:8.1 (CRLF, redis_version frozen at 7.2.4)
+        let valkey = "# Server\r\nredis_version:7.2.4\r\nserver_name:valkey\r\nvalkey_version:8.1.10\r\nserver_mode:standalone\r\n";
+        let v = server_identity(valkey);
+        assert_eq!(v.flavor, "valkey");
+        assert_eq!(v.version.as_deref(), Some("8.1.10"));
+        assert_eq!(v.label.as_deref(), Some("Valkey 8.1.10"));
+
+        let redis = "# Server\r\nredis_version:7.2.4\r\nredis_mode:standalone\r\n";
+        let r = server_identity(redis);
+        assert_eq!(r.flavor, "redis");
+        assert_eq!(r.label.as_deref(), Some("Redis 7.2.4"));
+
+        // server_name alone is enough; a missing valkey_version falls back to redis_version
+        let named = server_identity("server_name:valkey\nredis_version:7.2.4\n");
+        assert_eq!((named.flavor.as_str(), named.label.as_deref()), ("valkey", Some("Valkey 7.2.4")));
+        // a field whose name only starts with the key is not read
+        assert_eq!(server_identity("redis_version_extra:9\n").version, None);
+        assert_eq!(server_identity("").label, None);
     }
 
     #[test]

@@ -6,7 +6,7 @@
   import AppLogo from '$lib/components/AppLogo.svelte'
   import Icon from '$lib/components/Icon.svelte'
   import SystemIcon from '$lib/components/SystemIcon.svelte'
-  import { brandKey, brandMeta } from '$lib/scylla/brand'
+  import { brandKey, brandMeta } from '$lib/brand'
   import { connections } from '$lib/stores/connections.svelte'
   import { tabs } from '$lib/stores/tabs.svelte'
   import { ui } from '$lib/stores/ui.svelte'
@@ -36,9 +36,10 @@
 
   async function openConnection(p: ProfilePublic) {
     connections.select(p.id)
-    if (!p.connected && !(await connections.connect(p.id))) return
-    // Redis · Kafka · NATS · RabbitMQ have no object tree — their workspace is the view
+    // Redis · Kafka · NATS · RabbitMQ have no object tree — their workspace is the view,
+    // opened first so it shows the connect attempt (and why it failed)
     if (opensWorkspace(p.system)) tabs.openStreamWorkspace(p.id)
+    if (!p.connected) await connections.connect(p.id)
   }
   async function queryOn(p: ProfilePublic) {
     connections.select(p.id)

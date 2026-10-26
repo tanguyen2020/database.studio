@@ -114,6 +114,7 @@ fn profile(id: &str, user: &str) -> ConnectionProfile {
         cassandra_dc: "datacenter1".into(),
         cassandra_consistency: "ONE".into(),
         cassandra_flavor: String::new(),
+        admin_url: String::new(),
     }
 }
 

@@ -991,11 +991,83 @@ pub fn parse_cassandra_trace(
 // Fallback text (ClickHouse/khác trước khi có parser chuyên biệt): 1 node raw.
 // ---------------------------------------------------------------------------
 
+/// FerretDB runs MongoDB commands on PostgreSQL (the DocumentDB extension), so its
+/// explain answers a PostgreSQL plan under `queryPlanner.Plan` (measured on v2.7.0 —
+/// `executionStats` gives the same estimate, no runtime numbers). Read it with the
+/// PostgreSQL parser, then speak the user's language: the collection instead of the
+/// internal `documents_N` table, the query instead of the BSON-encoded filter.
+fn parse_ferretdb_plan(json: &Value, pg: &Value, _actual: bool) -> QueryPlan {
+    let cmd = json.get("command");
+    let coll = cmd
+        .and_then(|c| ["find", "aggregate", "count", "distinct", "delete", "update", "findAndModify"].iter().find_map(|k| c.get(*k).and_then(Value::as_str)))
+        .map(str::to_string);
+    let query = cmd.and_then(|c| c.get("filter").or_else(|| c.get("query")).or_else(|| c.get("pipeline"))).cloned();
+    let mut warnings = Vec::new();
+    let mut root = parse_pg_node(pg, &mut warnings);
+    assign_cost_pct(&mut root, true);
+    let name = coll.unwrap_or_else(|| "collection".into());
+    ferret_tidy(&mut root, &name);
+    // the query itself, once, on the top step (the conditions below are BSON-encoded)
+    if let Some(q) = query {
+        root.extra.insert("Query".into(), q);
+    }
+    let warnings = warnings.into_iter().map(|w| replace_internal_table(&w, &name)).collect();
+    QueryPlan {
+        system: "mongodb".into(),
+        // no runtime numbers on FerretDB: the plan stays an estimate
+        mode: "estimated".into(),
+        summary: PlanSummary { total_cost: root.estimated_cost, total_time_ms: None, warnings },
+        root: Some(root),
+        raw: serde_json::to_string_pretty(json).unwrap_or_default(),
+        missing_index: None,
+    }
+}
+
+fn ferret_tidy(node: &mut PlanNode, coll: &str) {
+    if let Some(Value::String(rel)) = node.extra.get("Relation Name").cloned() {
+        if rel.starts_with("documents_") {
+            node.extra.insert("Relation Name".into(), Value::String(coll.to_string()));
+        }
+    }
+    // Filter / Index Cond / Recheck Cond carry the query as BSON hex — unreadable, dropped
+    let encoded: Vec<String> = node.extra.iter().filter(|(_, v)| v.as_str().is_some_and(|t| t.contains("BSONHEX"))).map(|(k, _)| k.clone()).collect();
+    for k in encoded {
+        node.extra.remove(&k);
+    }
+    for c in &mut node.children {
+        ferret_tidy(c, coll);
+    }
+}
+
+/// "Seq Scan on documents_2 (~5000 rows)" → "Seq Scan on orders (~5000 rows)".
+fn replace_internal_table(text: &str, coll: &str) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(i) = rest.find("documents_") {
+        out.push_str(&rest[..i]);
+        let tail = &rest[i + "documents_".len()..];
+        let digits = tail.chars().take_while(|c| c.is_ascii_digit()).count();
+        if digits == 0 {
+            out.push_str("documents_");
+            rest = tail;
+            continue;
+        }
+        out.push_str(coll);
+        rest = &tail[digits..];
+    }
+    out.push_str(rest);
+    out
+}
+
 /// MongoDB `.explain()` JSON → QueryPlan. Reads `queryPlanner.winningPlan`
 /// (estimated) or `executionStats.executionStages` (actual, with runtime counts).
 /// The stage tree descends via `inputStage` (single) / `inputStages` (array).
 /// COLLSCAN marks a hotspot + warning. No per-stage cost (Mongo exposes none).
 pub fn parse_mongodb(json: &Value, actual: bool) -> QueryPlan {
+    // FerretDB answers a PostgreSQL plan instead of winningPlan (SPEC-FERRETDB-DOCUMENTDB.md)
+    if let Some(pg) = json.get("queryPlanner").and_then(|q| q.get("Plan")) {
+        return parse_ferretdb_plan(json, pg, actual);
+    }
     let winning = json.get("queryPlanner").and_then(|q| q.get("winningPlan"));
     let exec = json.get("executionStats");
     let root_stage = if actual {
@@ -1345,6 +1417,41 @@ fn mark_hotspot(node: &mut PlanNode, warnings: &mut Vec<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ferretdb_explain_reads_as_a_plan_of_the_collection() {
+        // measured on ferretdb-eval:2 (v2.7.0): find on shop.items with an index on _id
+        let j = serde_json::json!({
+            "queryPlanner": { "Plan": {
+                "Node Type": "Bitmap Heap Scan", "Alias": "collection", "Startup Cost": 4.18, "Total Cost": 12.65,
+                "Plan Rows": 2, "Relation Name": "documents_7", "Recheck Cond": "(shard_key_value = '7'::bigint)",
+                "Filter": "(document OPERATOR(documentdb_api_catalog.@=) 'BSONHEX0c00000010'::documentdb_core.bson)",
+                "Plans": [{ "Node Type": "Bitmap Index Scan", "Index Name": "tag_1", "Total Cost": 4.18, "Plan Rows": 4,
+                            "Index Cond": "(document OPERATOR(documentdb_api_catalog.@=) 'BSONHEX1100000002746167000300000074320000'::documentdb_core.bson)" }]
+            }},
+            "explainVersion": "1",
+            "command": { "find": "items", "filter": { "a": 2 }, "$db": "shop" },
+            "serverInfo": { "version": "7.0.77", "ferretdb": { "version": "v2.7.0" } },
+            "ok": 1
+        });
+        let p = parse_mongodb(&j, false);
+        assert_eq!(p.system, "mongodb");
+        assert_eq!(p.mode, "estimated");
+        let root = p.root.expect("a plan");
+        assert_eq!(root.native_op, "Bitmap Heap Scan");
+        // the collection, not the internal table; the query, not the BSON hex
+        assert_eq!(root.extra.get("Relation Name"), Some(&serde_json::json!("items")));
+        assert!(root.extra.get("Filter").is_none());
+        assert_eq!(root.extra.get("Query"), Some(&serde_json::json!({ "a": 2 })));
+        assert_eq!(root.children[0].extra.get("Index Name"), Some(&serde_json::json!("tag_1")));
+        // an index condition is BSON-encoded too (measured when the index is used) — dropped
+        assert!(root.children[0].extra.get("Index Cond").is_none());
+        assert_eq!(replace_internal_table("Seq Scan on documents_12 (~9000 rows)", "orders"), "Seq Scan on orders (~9000 rows)");
+        assert_eq!(replace_internal_table("documents_x stays", "orders"), "documents_x stays");
+        // a MongoDB plan still reads winningPlan
+        let m = parse_mongodb(&serde_json::json!({ "queryPlanner": { "winningPlan": { "stage": "COLLSCAN" } } }), false);
+        assert_eq!(m.root.unwrap().native_op, "COLLSCAN");
+    }
 
     #[test]
     fn duckdb_estimated_and_analyze_plans() {

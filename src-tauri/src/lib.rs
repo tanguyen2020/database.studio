@@ -114,6 +114,7 @@ pub fn run() {
             commands::redis::redis_flushdb,
             // stream-workspace:redis — Browser / Slow commands / Server info
             commands::redis::redis_info,
+            commands::redis::redis_server_info,
             commands::redis::redis_slowlog,
             commands::redis::redis_key_meta,
             commands::redis::redis_select_db,
@@ -171,6 +172,7 @@ pub fn run() {
             commands::nats::nats_obj_delete,
             // elasticsearch (REST API)
             commands::elasticsearch::es_request,
+            commands::elasticsearch::es_server_info,
             commands::elasticsearch::es_overview,
             commands::elasticsearch::es_indices,
             commands::elasticsearch::es_mapping_fields,
@@ -235,6 +237,11 @@ pub fn run() {
             commands::kafka::kafka_topic_configs,
             commands::kafka::kafka_alter_topic_configs,
             commands::kafka::kafka_delete_group,
+            commands::redpanda::redpanda_admin_request,
+            commands::redpanda::redpanda_server_info,
+            commands::redpanda::kafka_acls,
+            commands::redpanda::kafka_create_acls,
+            commands::redpanda::kafka_delete_acls,
             commands::kafka::kafka_offsets_for_time,
             commands::kafka::kafka_sr_subjects,
             commands::kafka::kafka_sr_versions,
@@ -250,6 +257,7 @@ pub fn run() {
             commands::cassandra::cassandra_server_info,
             // mongodb
             commands::mongo::mongo_exec,
+            commands::mongo::mongo_server_info,
             commands::mongo::mongo_users,
             commands::mongo::mongo_roles,
             commands::mongo::mongo_create_user,

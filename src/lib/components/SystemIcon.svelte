@@ -6,6 +6,7 @@
   import { systemMeta } from '$lib/systems'
   import { ES_LOGO } from '$lib/elastic/eui-icons'
   import { brandBody, brandViewBox } from '$lib/brand-icons'
+  import { FLAVOR_BRANDS } from '$lib/brand'
 
   interface Props {
     system: string | null | undefined
@@ -15,8 +16,8 @@
   let { system, size = 16 }: Props = $props()
 
   const meta = $derived(systemMeta(system))
-  // 'scylladb' is a brand of the Cassandra engine (lib/scylla/brand.ts), not a SystemKey
-  const key = $derived(system === 'scylladb' ? 'scylladb' : meta.key)
+  // 'scylladb' (Cassandra) and 'valkey' (Redis) are flavor brands (lib/brand.ts), not SystemKeys
+  const key = $derived(system && system in FLAVOR_BRANDS ? system : meta.key)
   const color = $derived(meta.accent)
   // ClickHouse, Redis, Kafka, Cassandra, MongoDB, SQLite, RabbitMQ: official marks
   const brand = $derived(brandBody(key))

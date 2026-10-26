@@ -6,6 +6,8 @@
   import * as ipc from '$lib/ipc'
   import Icon from '$lib/components/Icon.svelte'
   import { autofocus } from '$lib/actions/autofocus'
+  import { connections } from '$lib/stores/connections.svelte'
+  import { brandLabel } from '$lib/brand'
   import { typeHelp, typeLabel, expirySentence } from '$lib/stream/redis-keys'
   import '$lib/components/workspace/users/um.css'
 
@@ -16,6 +18,8 @@
     onCreated: (key: string) => void
   }
   let { connId, db, onClose, onCreated }: Props = $props()
+  // Redis or Valkey (SPEC-VALKEY.md) — the name every sentence uses
+  const product = $derived(brandLabel(connections.byId(connId) ?? { system: 'redis' }))
 
   type Kind = 'string' | 'hash' | 'list' | 'set' | 'zset' | 'stream'
   const KINDS: Kind[] = ['string', 'hash', 'list', 'set', 'zset', 'stream']
@@ -69,7 +73,7 @@
     }
     const lines = data.split('\n').filter((l) => l.trim().length)
     if (kind !== 'string' && lines.length === 0) {
-      error = `A ${typeLabel(kind).toLowerCase()} needs at least one ${kind === 'hash' || kind === 'stream' ? 'field' : 'item'} — Redis does not keep empty collections.`
+      error = `A ${typeLabel(kind).toLowerCase()} needs at least one ${kind === 'hash' || kind === 'stream' ? 'field' : 'item'} — ${product} does not keep empty collections.`
       return
     }
     if (kind === 'zset' && pairs(data).some(([, s]) => s === '' || !Number.isFinite(Number(s)))) {

@@ -11,7 +11,11 @@ import { subjectMatches } from './stream/nats-match'
 import { rabbitDemo, rabbitDemoEnabled } from './rabbitmq/demo'
 import { DUCK_DEMO_ID, duckDemo, duckDemoEnabled, isDuckConn } from './duckdb/demo'
 import { SCYLLA_DEMO_ID, isScyllaDemo, scyllaDemoEnabled, scyllaDemoTree } from './scylla/demo'
+import { VALKEY_DEMO_ID, valkeyDemoEnabled, valkeyDemoUndetected } from './valkey/demo'
 import { ES_DEMO_ID, esDemo, esDemoEnabled } from './elastic/demo'
+import { OS_DEMO_ID, isOsDemo, osDemo, osDemoEnabled } from './elastic/os-demo'
+import { RP_DEMO_ID, redpandaDemo, redpandaDemoEnabled } from './redpanda/demo'
+import { DOCDB_DEMO_ID, FERRET_DEMO_ID, docdbDemoEnabled, ferretDemoEnabled, mongoFlavorDemo } from './mongo/flavor-demo'
 import { backupDemo } from './backup/demo'
 
 export const IS_TAURI =
@@ -348,6 +352,11 @@ function lagFor(param: string): number {
 }
 
 /** A seam that is on by its mere presence (`?hangIntrospect=1`). */
+/** connections whose one-off simulated connect failure (`?connectFailOnce=`) was used */
+const demoConnectFailedOnce = new Set<string>()
+/** ids handed to new profiles saved from the connection form */
+let demoNewConnSeq = 0
+
 function hasParam(param: string): boolean {
   return typeof window !== 'undefined' && new URLSearchParams(window.location.search).has(param)
 }
@@ -549,6 +558,12 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
   // Elasticsearch commands are served by a stateful in-memory cluster (elastic/demo.ts).
   if (cmd.startsWith('es_')) {
     try {
+      // OpenSearch demo (`?opensearch=1`): its plugin APIs first, the shared cluster for the rest
+      if (isOsDemo(args)) {
+        const r = osDemo(cmd, args ?? {})
+        if (r !== undefined) return ok(r)
+      }
+      if (cmd === 'es_server_info') return ok({ flavor: 'elasticsearch', version: '8.15.3', label: 'Elasticsearch 8.15.3' })
       return ok(esDemo(cmd, args ?? {}))
     } catch (e) {
       return Promise.reject(String((e as Error).message ?? e))
@@ -569,6 +584,24 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
   if (cmd.startsWith('redis_')) {
     try {
       const r = redisDemo(cmd, args ?? {})
+      if (r !== undefined) return ok(r)
+    } catch (e) {
+      return Promise.reject(String((e as Error).message ?? e))
+    }
+  }
+  // FerretDB / Amazon DocumentDB (mongo/flavor-demo.ts) — only what differs from MongoDB
+  if (cmd.startsWith('mongo_')) {
+    try {
+      const r = mongoFlavorDemo(cmd, args ?? {})
+      if (r !== undefined) return ok(r)
+    } catch (e) {
+      return Promise.reject(String((e as Error).message ?? e))
+    }
+  }
+  // Redpanda Admin API + Kafka ACLs (redpanda/demo.ts); the rest of Kafka stays shared
+  if (cmd.startsWith('redpanda_') || cmd.startsWith('kafka_') && cmd.includes('acl')) {
+    try {
+      const r = redpandaDemo(cmd, args ?? {})
       if (r !== undefined) return ok(r)
     } catch (e) {
       return Promise.reject(String((e as Error).message ?? e))
@@ -607,6 +640,27 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
               }),
             ]
           : []),
+        // OpenSearch = a flavor of the Elasticsearch engine (SPEC-OPENSEARCH.md), opt-in `?opensearch=1`
+        ...(osDemoEnabled()
+          ? [
+              conn(OS_DEMO_ID, 'Search OpenSearch', 'elasticsearch', '10.0.14.3', 9200, '', 'admin', 'Search', 'production', {
+                connected: true,
+                latency_ms: 5,
+                mssql_auth: 'basic',
+                cassandra_flavor: 'opensearch',
+              }),
+            ]
+          : []),
+        // Valkey = a flavor of the Redis engine (SPEC-VALKEY.md), opt-in `?valkey=1`
+        ...(valkeyDemoEnabled()
+          ? [
+              conn(VALKEY_DEMO_ID, 'Session Valkey', 'redis', '10.0.6.12', 6379, '0', '', 'Cache', 'production', {
+                connected: !valkeyDemoUndetected(),
+                latency_ms: 2,
+                cassandra_flavor: valkeyDemoUndetected() ? '' : 'valkey',
+              }),
+            ]
+          : []),
         // ScyllaDB = a flavor of the Cassandra engine (SPEC-SCYLLADB.md), opt-in `?scylla=1`
         ...(scyllaDemoEnabled()
           ? [
@@ -616,6 +670,23 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
                 cassandra_flavor: 'scylla',
               }),
             ]
+          : []),
+        // Redpanda = a flavor of the Kafka engine (SPEC-REDPANDA.md), opt-in `?redpanda=1`
+        ...(redpandaDemoEnabled()
+          ? [
+              conn(RP_DEMO_ID, 'Orders Redpanda', 'kafka', 'redpanda-0', 9092, '', 'admin', 'Streaming', 'production', {
+                connected: true,
+                latency_ms: 4,
+                cassandra_flavor: 'redpanda',
+              }),
+            ]
+          : []),
+        // FerretDB / Amazon DocumentDB = flavors of the MongoDB engine (SPEC-FERRETDB-DOCUMENTDB.md)
+        ...(ferretDemoEnabled()
+          ? [conn(FERRET_DEMO_ID, 'Catalog FerretDB', 'mongodb', '10.0.6.30', 27017, 'app', 'app', 'Document', 'production', { connected: true, latency_ms: 3, cassandra_flavor: 'ferretdb' })]
+          : []),
+        ...(docdbDemoEnabled()
+          ? [conn(DOCDB_DEMO_ID, 'Orders DocumentDB', 'mongodb', 'orders.cluster-c1abc.us-east-1.docdb.amazonaws.com', 27017, 'app', 'admin', 'Document', 'production', { connected: true, latency_ms: 21, ssl: true, cassandra_flavor: 'documentdb' })]
           : []),
       ])
     case 'load_tabs':
@@ -628,16 +699,32 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
     case 'disconnect':
       return ok(null)
     case 'connect':
-    case 'reconnect':
+    case 'reconnect': {
+      // `?connectFail=<id>` makes every attempt on that connection fail;
+      // `?connectFailOnce=<id>` only the first one (so Retry can succeed).
+      // `?connectFailMsg=` sets the driver text (default: connection refused).
+      const id = String(args?.id ?? '')
+      const qs = typeof window === 'undefined' ? null : new URLSearchParams(window.location.search)
+      const always = qs?.get('connectFail') === id
+      const once = qs?.get('connectFailOnce') === id && !demoConnectFailedOnce.has(id)
+      if (id && (always || once)) {
+        demoConnectFailedOnce.add(id)
+        const msg = qs?.get('connectFailMsg') || 'driver error: Connection refused (os error 10061)'
+        return new Promise<T>((_, rej) => setTimeout(() => rej(msg), lag))
+      }
       return ok(12)
+    }
     case 'ping_connection':
       return ok(true)
     case 'test_connection':
       return ok({ ok: true, latency_ms: 12, server_version: 'demo' })
     case 'cancel_test':
       return ok(null)
-    case 'save_connection':
-      return ok((args?.draft as { profile: unknown })?.profile)
+    case 'save_connection': {
+      // like the backend: a new profile (empty id) gets an id when it is saved
+      const p = (args?.draft as { profile: ProfilePublic })?.profile
+      return ok(p && !p.id ? { ...p, id: `demo-new-${++demoNewConnSeq}`, connected: false } : p)
+    }
     case 'quick_connect': {
       const p = (args?.draft as { profile: ProfilePublic })?.profile
       return ok({ ...p, id: `quick-demo-${p?.name ?? ''}`, connected: true, latency_ms: 7, has_password: false })

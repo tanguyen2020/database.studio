@@ -14,7 +14,7 @@
   import SharedContextMenu from '$lib/components/ui/context-menu/SharedContextMenu.svelte'
   import * as ipc from '$lib/ipc'
   import SystemIcon from '$lib/components/SystemIcon.svelte'
-  import { brandKey, isScylla } from '$lib/scylla/brand'
+  import { brandKey, isScylla } from '$lib/brand'
   import { cassandraProps } from '$lib/explorer/cass-props'
   import MongoExplorer from '$lib/components/explorer/MongoExplorer.svelte'
   import EsExplorer from '$lib/components/explorer/EsExplorer.svelte'

@@ -30,6 +30,7 @@
     type ConsoleRequest,
   } from '$lib/elastic/console'
   import { ES_CONSOLE_LANG, registerConsoleLanguage, setConsoleContext } from '$lib/elastic/monaco-console'
+  import { searchProduct } from '$lib/elastic/flavor'
 
   let { tab }: { tab: TabState } = $props()
   const connId = $derived(tab.connectionId ?? '')
@@ -122,6 +123,7 @@ GET /_search
       .catch(() => {})
     const ctx = {
       indexNames: () => indexNames,
+      flavor: () => searchProduct(connId).flavor,
       fieldsOf: (index: string) => {
         if (!fieldsCache.has(index)) fieldsCache.set(index, ipc.esMappingFields(connId, index).then((f) => f.map(([n]) => n)).catch(() => []))
         return fieldsCache.get(index)!

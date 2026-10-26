@@ -964,6 +964,33 @@ impl KafkaDriver {
 
     /// Delete a consumer group (its committed positions). Kafka refuses while the
     /// group still has running consumers.
+    /// ACL bindings matching a filter (SPEC-REDPANDA.md R10) — Kafka protocol DescribeAcls.
+    pub async fn acls(&self, filter: crate::drivers::kafka_acl::AclFilter) -> Result<Vec<crate::drivers::kafka_acl::KafkaAcl>, QueryError> {
+        let c = self.consumer.clone();
+        tokio::task::spawn_blocking(move || unsafe { crate::drivers::kafka_acl::describe(c.client().native_ptr(), &filter, 15_000) })
+            .await
+            .map_err(|e| err("ACL task failed", e))?
+            .map_err(|m| QueryError::new("kafka", m.clone(), m))
+    }
+
+    /// Create ACL bindings (CreateAcls); returns how many the broker accepted.
+    pub async fn create_acls(&self, acls: Vec<crate::drivers::kafka_acl::KafkaAcl>) -> Result<usize, QueryError> {
+        let c = self.consumer.clone();
+        tokio::task::spawn_blocking(move || unsafe { crate::drivers::kafka_acl::create(c.client().native_ptr(), &acls, 15_000) })
+            .await
+            .map_err(|e| err("ACL task failed", e))?
+            .map_err(|m| QueryError::new("kafka", m.clone(), m))
+    }
+
+    /// Delete the ACL bindings matching each filter (DeleteAcls); returns what was removed.
+    pub async fn delete_acls(&self, filters: Vec<crate::drivers::kafka_acl::AclFilter>) -> Result<Vec<crate::drivers::kafka_acl::KafkaAcl>, QueryError> {
+        let c = self.consumer.clone();
+        tokio::task::spawn_blocking(move || unsafe { crate::drivers::kafka_acl::delete(c.client().native_ptr(), &filters, 15_000) })
+            .await
+            .map_err(|e| err("ACL task failed", e))?
+            .map_err(|m| QueryError::new("kafka", m.clone(), m))
+    }
+
     pub async fn delete_group(&self, group: &str) -> Result<(), QueryError> {
         let admin: AdminClient<DefaultClientContext> =
             self.config.create().map_err(|e| err("Failed to create admin client", e))?;

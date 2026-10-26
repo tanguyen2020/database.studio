@@ -11,6 +11,7 @@
   import RabbitClusterView from './rabbitmq/RabbitClusterView.svelte'
   import RedisBrowserView from './redis/RedisBrowserView.svelte' // stream-workspace:redis
   import NatsClusterView from './nats/NatsClusterView.svelte' // stream-workspace:nats
+  import StreamConnectionState from './StreamConnectionState.svelte'
 
   let { tab }: { tab: TabState } = $props()
   const profile = $derived(connections.byId(tab.connectionId))
@@ -35,7 +36,7 @@
 {#if !profile}
   <div class="ds-empty"><b>This connection no longer exists</b>Close this tab, or pick another connection in the sidebar.</div>
 {:else if !profile.connected}
-  <div class="ds-empty"><b>{profile.name} is not connected</b>Open the connection in the sidebar to see its workspace.</div>
+  <StreamConnectionState {profile} />
 {:else}
   {#key reload}
     {#if system === 'kafka'}

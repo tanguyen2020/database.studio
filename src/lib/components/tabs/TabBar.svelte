@@ -10,7 +10,7 @@
   import SystemIcon from '$lib/components/SystemIcon.svelte'
   import { tabs } from '$lib/stores/tabs.svelte'
   import { connections } from '$lib/stores/connections.svelte'
-  import { brandKey, brandMeta } from '$lib/scylla/brand'
+  import { brandKey, brandMeta, hasFlavors } from '$lib/brand'
 
   // pane = 0 (mặc định / khi không split) hoặc 1 (pane thứ hai của split view)
   let { pane = 0 }: { pane?: 0 | 1 } = $props()
@@ -63,10 +63,10 @@
     dropIdx = null
   }
 
-  /** A tab on a ScyllaDB connection wears the ScyllaDB brand (same Cassandra engine). */
+  /** A tab on a ScyllaDB / Valkey connection wears that brand (same engine). */
   function tabBrand(tab: { systemType: string; connectionId?: string | null }): string {
-    if (tab.systemType !== 'cassandra') return tab.systemType
-    return brandKey(connections.byId(tab.connectionId) ?? { system: 'cassandra' })
+    if (!hasFlavors(tab.systemType)) return tab.systemType
+    return brandKey(connections.byId(tab.connectionId) ?? { system: tab.systemType })
   }
 
   function scrollActiveIntoView(node: HTMLElement, isActive: boolean) {

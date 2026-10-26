@@ -8,6 +8,7 @@ import { baseConnId, connections } from './connections.svelte'
 import { results } from './results.svelte'
 import { explorer } from './explorer.svelte'
 import { messagesSection } from '$lib/stream/workspace-systems'
+import { LANGUAGE_LABEL, languageFor, searchProduct, type QueryLanguage } from '$lib/elastic/flavor'
 
 const MAX_CLOSED_STACK = 20
 
@@ -194,10 +195,12 @@ class TabsStore {
     return this.openEsTab('es-devtools', connectionId, 'devtools', 'Dev Tools', { tool })
   }
 
-  /** ES|QL / SQL query tab. */
-  openEsQuery(connectionId: string, language: 'esql' | 'sql' = 'esql', query?: string): TabState {
-    return this.openEsTab('es-query', connectionId, `query-${uuid()}`, language === 'esql' ? 'ES|QL query' : 'SQL query', {
-      language,
+  /** Query tab — ES|QL / SQL on Elasticsearch, PPL / SQL on OpenSearch. A piped language the
+   *  server lacks (ES|QL asked on OpenSearch) becomes the server's own (SPEC-OPENSEARCH.md O5). */
+  openEsQuery(connectionId: string, language?: QueryLanguage, query?: string): TabState {
+    const lang = languageFor(searchProduct(connectionId).flavor, language)
+    return this.openEsTab('es-query', connectionId, `query-${uuid()}`, `${LANGUAGE_LABEL[lang]} query`, {
+      language: lang,
       query: query ?? '',
     })
   }

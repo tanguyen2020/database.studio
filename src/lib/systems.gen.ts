@@ -1,6 +1,6 @@
 //
 // GENERATED — do not edit by hand.
-// Sinh bởi scripts/extract-tokens.mjs từ "Database Studio.dc.html" (sha256 493c0130a76d).
+// Sinh bởi scripts/extract-tokens.mjs từ "Database Studio.dc.html" (sha256 0f7fa76d542c).
 // Chạy lại: npm run tokens
 // 
 
@@ -46,6 +46,14 @@ export const SYS_GEN = {
     "badge": "RE",
     "label": "Redis"
   },
+  "valkey": {
+    "accent": "#6983FF",
+    "bg": "#141a3a",
+    "border": "#2b3670",
+    "fg": "#aab8ff",
+    "badge": "VK",
+    "label": "Valkey"
+  },
   "kafka": {
     "accent": "#8B5CF6",
     "bg": "#1e1a2e",
@@ -53,6 +61,14 @@ export const SYS_GEN = {
     "fg": "#c4b5fd",
     "badge": "KF",
     "label": "Kafka"
+  },
+  "redpanda": {
+    "accent": "#E14226",
+    "bg": "#3a120b",
+    "border": "#6b2416",
+    "fg": "#f28a76",
+    "badge": "RP",
+    "label": "Redpanda"
   },
   "nats": {
     "accent": "#27AE60",
@@ -110,6 +126,22 @@ export const SYS_GEN = {
     "badge": "MG",
     "label": "MongoDB"
   },
+  "ferretdb": {
+    "accent": "#3C78B4",
+    "bg": "#0c1a2a",
+    "border": "#1d3a5c",
+    "fg": "#8fb6e0",
+    "badge": "FD",
+    "label": "FerretDB"
+  },
+  "documentdb": {
+    "accent": "#527FFF",
+    "bg": "#141c3a",
+    "border": "#2a3a72",
+    "fg": "#a9bcff",
+    "badge": "DD",
+    "label": "Amazon DocumentDB"
+  },
   "oracle": {
     "accent": "#C74634",
     "bg": "#301410",
@@ -141,6 +173,14 @@ export const SYS_GEN = {
     "fg": "#5ee7df",
     "badge": "ES",
     "label": "Elasticsearch"
+  },
+  "opensearch": {
+    "accent": "#005EB8",
+    "bg": "#04223d",
+    "border": "#0b3f6b",
+    "fg": "#6fb1ea",
+    "badge": "OS",
+    "label": "OpenSearch"
   },
   "orphan": {
     "accent": "#5b6473",

@@ -54,9 +54,12 @@ export interface ConnectionProfile {
   schema_registry_url: string
   cassandra_dc: string
   cassandra_consistency: string
-  /** Cassandra only: which CQL server — '' (not known yet) | 'cassandra' | 'scylla'.
-   *  Detected on connect; ScyllaDB is a flavor of this engine (SPEC-SCYLLADB.md). */
+  /** The server behind the engine (a flavor brand), detected on connect: Cassandra 'cassandra' | 'scylla',
+   *  Redis 'redis' | 'valkey', Elasticsearch 'elasticsearch' | 'opensearch', Kafka 'kafka' | 'redpanda'
+   *  (SPEC-SCYLLADB / VALKEY / OPENSEARCH / REDPANDA). Named after its first user. */
   cassandra_flavor?: string
+  /** Kafka / Redpanda: Redpanda Admin API URL (empty = first host on port 9644) — SPEC-REDPANDA.md */
+  admin_url?: string
 }
 
 /** Profile as returned by the backend: never carries ciphertext. */

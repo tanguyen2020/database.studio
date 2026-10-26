@@ -11,6 +11,7 @@ pub mod elasticsearch;
 pub mod grid;
 pub mod index_scan;
 pub mod kafka;
+pub mod kafka_acl;
 pub mod mongo;
 pub mod mssql;
 pub mod mysql;
@@ -21,6 +22,7 @@ pub mod postgres;
 pub mod rabbitmq;
 pub mod redis;
 pub mod schema_registry;
+pub mod redpanda;
 pub mod sqlite;
 pub mod types;
 pub mod util;
@@ -254,6 +256,24 @@ fn kafka_params(p: &ConnectionProfile, ep: &Endpoint, password: &str) -> KafkaCo
     }
 }
 
+/// Redpanda Admin API of a Kafka-engine profile: the configured URL, or the first broker
+/// host on 9644. Basic auth with the SASL user (Redpanda's Admin API uses the same users).
+pub fn redpanda_admin_params(p: &ConnectionProfile, password: &str) -> redpanda::RpAdminParams {
+    redpanda::RpAdminParams {
+        base_url: redpanda::service_url(&p.admin_url, &p.host, p.ssl, redpanda::ADMIN_PORT),
+        user: if p.mssql_auth.is_empty() { String::new() } else { p.user.clone() },
+        password: if p.mssql_auth.is_empty() { String::new() } else { password.to_string() },
+        ssl_ca: p.ssl_ca.clone(),
+    }
+}
+
+/// Is the Kafka-engine server Redpanda? A quick Admin API probe (3 s cap) — `None` when
+/// nothing answers there (Apache Kafka, or an Admin API we cannot reach).
+pub async fn probe_redpanda(p: &ConnectionProfile, password: &str) -> Option<redpanda::RpServerInfo> {
+    let admin = redpanda::RpAdmin::new(&redpanda_admin_params(p, password)).ok()?;
+    tokio::time::timeout(std::time::Duration::from_secs(3), admin.server_info()).await.ok()?.ok()
+}
+
 fn kafka_not_sql() -> QueryError {
     QueryError::new(
         "kafka",
@@ -316,6 +336,9 @@ pub(crate) fn mongo_params(p: &ConnectionProfile, ep: &Endpoint, password: &str)
         password: password.to_string(),
         ssl: p.ssl,
         ssl_ca: p.ssl_ca.clone(),
+        flavor: p.cassandra_flavor.clone(),
+        // an SSH tunnel hands us 127.0.0.1 instead of the server name
+        tunneled: ep.host != p.host,
     }
 }
 
@@ -396,7 +419,19 @@ impl LiveConnection {
             SystemType::Sqlite => SqliteDriver::test(&sqlite_params(profile)).await,
             SystemType::Redis => RedisDriver::test(&redis_params(profile, endpoint, password)).await,
             SystemType::Nats => NatsDriver::test(&nats_params(profile, endpoint, password)).await,
-            SystemType::Kafka => KafkaDriver::test(&kafka_params(profile, endpoint, password)).await,
+            SystemType::Kafka => {
+                let mut t = KafkaDriver::test(&kafka_params(profile, endpoint, password)).await;
+                // Redpanda answers its Admin API beside the Kafka port (SPEC-REDPANDA.md R1)
+                if t.ok {
+                    if let Some(rp) = probe_redpanda(profile, password).await {
+                        t.server_version = Some(match t.server_version.take() {
+                            Some(v) if !v.is_empty() => format!("{} · {v}", rp.label),
+                            _ => rp.label,
+                        });
+                    }
+                }
+                t
+            }
             SystemType::Cassandra => {
                 CassandraDriver::test(&cassandra_params(profile, endpoint, password)).await
             }
@@ -900,6 +935,7 @@ mod tests {
             cassandra_dc: String::new(),
             cassandra_consistency: String::new(),
             cassandra_flavor: String::new(),
+            admin_url: String::new(),
         }
     }
 

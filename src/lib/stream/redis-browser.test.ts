@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { databaseLabel, durationWords, expiresIn, expirySentence, itemNoun, keyspaceCounts, typeHelp, typeLabel } from './redis-keys'
-import { evictionPolicyText, headerStats, memoryText, redisHealth, serverInfoGroups, slowCommand, slowDuration, slowRows, slowThresholdText } from './redis-info'
+import { evictionPolicyText, headerStats, memoryText, redisHealth, serverInfoGroups, serverProduct, slowCommand, slowDuration, slowRows, slowThresholdText } from './redis-info'
 import type { RedisInfo } from '$lib/ipc'
 
 const NOW = Date.UTC(2026, 9, 21, 8, 0, 0)
@@ -93,6 +93,33 @@ describe('Redis server info', () => {
     expect(redisHealth(info({ Persistence: { rdb_last_bgsave_status: 'err' } }))?.tone).toBe('bad')
     expect(redisHealth(info({ Replication: { role: 'slave', master_link_status: 'down', master_host: '10.0.0.5', master_port: '6379' } }))?.detail).toContain('10.0.0.5:6379')
     expect(redisHealth(null)).toBeNull()
+  })
+})
+
+describe('Valkey server info (a Redis-engine flavor — SPEC-VALKEY.md)', () => {
+  // INFO server exactly as measured on valkey/valkey:8.1: redis_version is frozen at
+  // 7.2.4 for old clients, server_mode replaces redis_mode
+  const valkey = info({
+    Server: { redis_version: '7.2.4', server_name: 'valkey', valkey_version: '8.1.10', server_mode: 'standalone', uptime_in_seconds: '60' },
+    Clients: { connected_clients: '1' },
+  })
+
+  it('names the product and its own version, not the frozen redis_version', () => {
+    expect(serverProduct(valkey)).toEqual({ name: 'Valkey', version: '8.1.10' })
+    expect(headerStats(valkey)).toMatchObject({ product: 'Valkey', version: '8.1.10' })
+    const fact = (l: string) => serverInfoGroups(valkey, NOW).find((g) => g.name === 'Server')?.facts.find((f) => f.label === l)
+    expect(fact('Version')?.value).toBe('Valkey 8.1.10')
+    // the Mode row comes from server_mode (it was missing before)
+    expect(fact('Mode')?.value).toBe('Single server')
+    expect(redisHealth(valkey)?.headline).toBe('Valkey is running normally')
+  })
+
+  it('server_name alone is enough; plain Redis stays Redis; no INFO uses the saved brand', () => {
+    expect(serverProduct(info({ Server: { server_name: 'valkey', redis_version: '7.2.4' } }))).toEqual({ name: 'Valkey', version: '7.2.4' })
+    expect(serverProduct(info({ Server: { redis_version: '7.4.1', redis_mode: 'cluster' } }))).toEqual({ name: 'Redis', version: '7.4.1' })
+    expect(serverProduct(null, 'Valkey')).toEqual({ name: 'Valkey', version: null })
+    expect(headerStats(null, 'Valkey').product).toBe('Valkey')
+    expect(serverInfoGroups(info({ Server: { redis_version: '7.4.1', redis_mode: 'cluster' } }), NOW)[0].facts.find((f) => f.label === 'Mode')?.value).toBe('Cluster')
   })
 })
 

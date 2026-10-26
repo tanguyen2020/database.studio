@@ -35,6 +35,10 @@
   --tbl-name-weight: 500;
   /* ScyllaDB mark: the brand cyan #6CD5E7 is unreadable on white — a deeper cyan here */
   --brand-scylla: #138ba0;
+  /* OpenSearch mark: its navy part as the brand draws it on light backgrounds */
+  --brand-opensearch-ink: #003b5c;
+  /* FerretDB navy (#042133) in light mode; a light tint in dark so the mark never vanishes */
+  --brand-ferretdb-ink: #042133;
   --tbl-cell: #4b5363;
   --tbl-zero: #8b92a0;
   --tbl-th: #5b6372;
@@ -96,6 +100,9 @@
   --tbl-name: #cdd2db;
   --tbl-name-weight: 450;
   --brand-scylla: #6cd5e7;
+  /* OpenSearch mark on dark: the navy part turns light, like the brand's reversed logo */
+  --brand-opensearch-ink: #dbe7f3;
+  --brand-ferretdb-ink: #c9d7e8;
   --tbl-cell: #9aa1ad;
   --tbl-zero: #636a78;
   --tbl-th: #8d94a2;

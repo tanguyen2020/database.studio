@@ -8,17 +8,19 @@
   import { connections } from '$lib/stores/connections.svelte'
   import { ui } from '$lib/stores/ui.svelte'
   import type { SystemType } from '$lib/types'
-  import { brandMeta } from '$lib/scylla/brand'
+  import { FLAVOR_BRANDS, brandMeta, withFlavorBrands } from '$lib/brand'
 
-  // ScyllaDB is a flavor of the Cassandra engine (SPEC-SCYLLADB.md) with its own
-  // card here: it creates a Cassandra profile that starts with the ScyllaDB brand.
-  const PICKER_ORDER: string[] = SYSTEM_ORDER.flatMap((k) => (k === 'cassandra' ? ['cassandra', 'scylladb'] : [k]))
+  // Flavor brands have their own card: ScyllaDB (Cassandra engine, SPEC-SCYLLADB.md)
+  // and Valkey (Redis engine, SPEC-VALKEY.md) create a profile of their engine that
+  // starts with that brand.
+  const PICKER_ORDER: string[] = withFlavorBrands(SYSTEM_ORDER)
 
   function pick(key: string) {
-    if (key === 'scylladb') {
+    const flavor = FLAVOR_BRANDS[key]
+    if (flavor) {
       ui.pickerOpen = false
       ui.formQuick = ui.pickerQuick
-      ui.formProfile = connections.makeBlankProfile('cassandra', 'scylla')
+      ui.formProfile = connections.makeBlankProfile(flavor.engine as SystemType, flavor.flavor)
       return
     }
     const system = key as SystemType
@@ -59,8 +61,13 @@
     scylladb: 'High-performance, Cassandra-compatible',
     mongodb: 'JSON document database',
     elasticsearch: 'Full-text search and analytics',
+    opensearch: 'Open-source search and analytics, by the OpenSearch Foundation',
     redis: 'In-memory keys, hashes, streams',
+    valkey: 'Open-source Redis fork by the Linux Foundation',
     kafka: 'Topics, partitions and consumer groups',
+    redpanda: 'Kafka-compatible streaming, no ZooKeeper or JVM',
+    ferretdb: 'Open-source MongoDB alternative on PostgreSQL',
+    documentdb: 'MongoDB-compatible database service on AWS',
     nats: 'Subjects, JetStream, KV and objects',
     rabbitmq: 'Queues and exchanges (AMQP)',
     sqlite: 'A local database file',

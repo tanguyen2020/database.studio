@@ -62,7 +62,8 @@ test('new connection picker: cards lift on hover, search narrows and Enter picks
   const search = dialog.getByLabel('Search database types')
   await expect(search).toBeFocused()
   await search.fill('broker')
-  await expect(dialog.locator('.picker-card')).toHaveCount(3) // Kafka, NATS, RabbitMQ
+  await expect(dialog.locator('.picker-card')).toHaveCount(4) // Kafka, Redpanda, NATS, RabbitMQ
+  await expect(dialog.locator('.picker-card[title="Redpanda"]')).toBeVisible()
   await search.fill('zzzz')
   await expect(dialog.getByText(/Nothing matches/)).toBeVisible()
   await search.fill('duck')

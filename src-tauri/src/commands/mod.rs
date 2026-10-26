@@ -7,6 +7,7 @@ pub mod export;
 pub mod files;
 pub mod grid;
 pub mod kafka;
+pub mod redpanda;
 pub mod library;
 pub mod lint;
 pub mod mongo;

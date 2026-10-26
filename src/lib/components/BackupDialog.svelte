@@ -16,7 +16,7 @@
   import Icon from '$lib/components/Icon.svelte'
   import SearchSelect from '$lib/components/SearchSelect.svelte'
   import SystemIcon from '$lib/components/SystemIcon.svelte'
-  import { brandKey, brandMeta } from '$lib/scylla/brand'
+  import { brandKey, brandMeta, hasFlavors } from '$lib/brand'
   import '$lib/components/workspace/users/um.css'
   import { backupJobs } from '$lib/stores/backupJobs.svelte'
   import {
@@ -59,8 +59,8 @@
 
   const base = $derived(baseConnectionId(connId))
   const profile = $derived(connections.byId(base))
-  // ScyllaDB connections wear their own brand (same Cassandra engine/backup path)
-  const brand = $derived(system === 'cassandra' ? brandKey(profile ?? { system }) : system)
+  // ScyllaDB / Valkey connections wear their own brand (same engine and backup path)
+  const brand = $derived(hasFlavors(system) ? brandKey(profile ?? { system }) : system)
   const meta = $derived(brandMeta(brand))
   const noun = $derived(targetNoun(system))
   const isOracle = $derived(system === 'oracle')

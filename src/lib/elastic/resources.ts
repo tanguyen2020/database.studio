@@ -7,6 +7,8 @@ import { seg } from './api'
 
 export interface ResourceRow {
   name: string
+  /** id used in the REST paths when it differs from the shown name (OpenSearch alerting monitors) */
+  id?: string
   /** short secondary text in the list */
   meta?: string
   /** small pills (e.g. "managed", "hidden", status) */
@@ -53,6 +55,21 @@ export interface ResourceKind {
   namePlaceholder?: string
   /** license / feature hint when the cluster refuses the list */
   requires?: string
+  /** list request method + body (OpenSearch monitors are listed with a search) */
+  listMethod?: string
+  listBody?: unknown
+  /** a 404 on the list means "none yet" (the plugin has not created its config index —
+   *  SPEC-OPENSEARCH.md O15) */
+  emptyOn404?: boolean
+  /** create a NEW one with a different method / path than updating (SM policies: POST to
+   *  create, PUT to update; monitors: POST to the collection — the id is generated) */
+  createMethod?: string
+  createPath?: (name: string) => string
+  /** updates must carry `if_seq_no` / `if_primary_term` read just before saving — taken
+   *  from the GET one answer (SPEC-OPENSEARCH.md O14) */
+  concurrency?: (getJson: unknown) => { seq: number; term: number } | null
+  /** one-line help under the editor (what the JSON means, where the docs are) */
+  editorHelp?: string
 }
 
 const objEntries = (j: unknown): [string, Record<string, unknown>][] =>
@@ -346,6 +363,12 @@ export const RESOURCE_KINDS: ResourceKind[] = [
   },
 ]
 
-export function resourceKind(key: string): ResourceKind | undefined {
-  return RESOURCE_KINDS.find((k) => k.key === key)
+export function resourceKind(key: string, kinds: ResourceKind[] = RESOURCE_KINDS): ResourceKind | undefined {
+  return kinds.find((k) => k.key === key)
+}
+
+/** `?if_seq_no=…&if_primary_term=…` appended to a path that may already have a query. */
+export function withConcurrency(path: string, c: { seq: number; term: number } | null): string {
+  if (!c) return path
+  return `${path}${path.includes('?') ? '&' : '?'}if_seq_no=${c.seq}&if_primary_term=${c.term}`
 }

@@ -6,7 +6,7 @@
   import Icon from '$lib/components/Icon.svelte'
   import SystemIcon from '$lib/components/SystemIcon.svelte'
   import { connections } from '$lib/stores/connections.svelte'
-  import { brandKey } from '$lib/scylla/brand'
+  import { brandKey, hasFlavors } from '$lib/brand'
   import type { SystemType } from '$lib/types'
 
   interface Props {
@@ -23,8 +23,8 @@
   let { system, connectionId, title, count, countLabel = '', refreshing = false, onRefresh, children }: Props = $props()
 
   const profile = $derived(connectionId ? connections.byId(connectionId) : null)
-  // a ScyllaDB connection shows the ScyllaDB logo (same Cassandra engine)
-  const brand = $derived(system === 'cassandra' ? brandKey(profile ?? { system }) : system)
+  // a ScyllaDB / Valkey connection shows its own logo (same engine)
+  const brand = $derived(hasFlavors(system) ? brandKey(profile ?? { system }) : system)
   const db = $derived(connectionId ? connections.databaseOf(connectionId) : '')
   const where = $derived([profile?.name, db].filter(Boolean).join(' · '))
 </script>

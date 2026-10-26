@@ -44,14 +44,22 @@ class ConnectionsStore {
     explorer.bumpReload(id)
   }
 
-  /** Cassandra only: ask the server whether it is Apache Cassandra or ScyllaDB
-   *  (SPEC-SCYLLADB.md §3.1). The backend persists it; mirror it here so the
-   *  logo / sidebar group switch without a reload. Best-effort, never blocks. */
+  /** Ask the server which product it is — Apache Cassandra or ScyllaDB
+   *  (SPEC-SCYLLADB.md §3.1), Redis or Valkey (SPEC-VALKEY.md §3). The backend
+   *  persists it; mirror it here so the logo / sidebar group switch without a
+   *  reload. Best-effort, never blocks. */
   private learnFlavor(id: string) {
     const p = this.byId(id)
-    if (!p || p.system !== 'cassandra') return
-    void ipc
-      .cassandraServerInfo(id)
+    if (!p || !['cassandra', 'redis', 'elasticsearch', 'kafka', 'mongodb'].includes(p.system)) return
+    void (p.system === 'cassandra'
+      ? ipc.cassandraServerInfo(id)
+      : p.system === 'redis'
+        ? ipc.redisServerInfo(id)
+        : p.system === 'kafka'
+          ? ipc.redpandaServerInfo(id)
+          : p.system === 'mongodb'
+            ? ipc.mongoServerInfo(id)
+            : ipc.esServerInfo(id))
       .then((info) => {
         const cur = this.byId(id)
         if (cur && cur.cassandra_flavor !== info.flavor) cur.cassandra_flavor = info.flavor
@@ -301,22 +309,26 @@ class ConnectionsStore {
     return ipc.cancelTest(testId)
   }
 
-  /** `flavor` = 'scylla' when the picker's ScyllaDB card was chosen (a Cassandra
-   *  profile that starts with the ScyllaDB brand; detection on connect wins). */
-  makeBlankProfile(system: SystemType, flavor?: 'scylla'): ProfilePublic {
+  /** `flavor` = 'scylla' / 'valkey' when the picker's ScyllaDB / Valkey card was
+   *  chosen (a Cassandra / Redis profile that starts with that brand; detection on
+   *  connect wins). */
+  makeBlankProfile(system: SystemType, flavor?: string): ProfilePublic {
     const scylla = system === 'cassandra' && flavor === 'scylla'
+    const valkey = system === 'redis' && flavor === 'valkey'
     return {
       id: '',
       name: '',
       system,
       host: system === 'sqlite' || system === 'duckdb' ? '' : 'localhost',
       port: 0,
-      database: '',
+      // Redis/Valkey: `database` is the DB index — start on 0 so the picker shows it
+      database: system === 'redis' ? '0' : '',
       user: '',
       group: '',
       env: 'development',
       ssh: { enabled: false, host: '', port: 22, user: '', auth: 'password', key_path: '' },
-      ssl: false,
+      // Amazon DocumentDB always uses TLS
+      ssl: system === 'mongodb' && flavor === 'documentdb',
       ssl_ca: '',
       ssl_cert: '',
       ssl_key: '',
@@ -328,7 +340,22 @@ class ConnectionsStore {
       // ScyllaDB names its default datacenter "datacenter1"
       cassandra_dc: scylla ? 'datacenter1' : system === 'cassandra' ? 'dc1' : '',
       cassandra_consistency: system === 'cassandra' ? 'LOCAL_QUORUM' : '',
-      cassandra_flavor: scylla ? 'scylla' : system === 'cassandra' ? 'cassandra' : '',
+      cassandra_flavor: scylla
+        ? 'scylla'
+        : system === 'cassandra'
+          ? 'cassandra'
+          : valkey
+            ? 'valkey'
+            : system === 'redis'
+              ? 'redis'
+              : system === 'elasticsearch'
+                ? flavor === 'opensearch' ? 'opensearch' : 'elasticsearch'
+                : system === 'kafka'
+                  ? flavor === 'redpanda' ? 'redpanda' : 'kafka'
+                  : system === 'mongodb'
+                    ? flavor === 'ferretdb' || flavor === 'documentdb' ? flavor : 'mongodb'
+                    : '',
+      admin_url: '',
       has_password: false,
       connected: false,
     }

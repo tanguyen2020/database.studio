@@ -28,6 +28,7 @@
   import { REDIS_TYPES, databaseLabel, expiresIn, typeColor, typeHelp, typeLabel } from '$lib/stream/redis-keys'
   import { headerStats, memoryText, redisHealth, serverInfoGroups, slowRows, slowThresholdText, type SlowRow } from '$lib/stream/redis-info'
   import { formatBytes, fullCount, plural } from '$lib/stream/humanize'
+  import { brandKey, brandLabel } from '$lib/brand'
   import { autofocus } from '$lib/actions/autofocus'
   import '$lib/components/workspace/users/um.css'
 
@@ -35,6 +36,8 @@
 
   const connId = $derived(tab.connectionId ?? '')
   const profile = $derived(connections.byId(connId))
+  // Redis or Valkey (SPEC-VALKEY.md): the brand of the saved profile until INFO names the server
+  const brand = $derived(brandKey(profile ?? { system: 'redis' }))
   const ws = $derived(tab.state as { section?: string; focus?: string; view?: 'list' | 'tree' })
   const section = $derived(ws.section && ws.section !== 'overview' ? ws.section : 'browser')
   const view = $derived(ws.view ?? 'list')
@@ -56,8 +59,10 @@
   let infoError = $state<string | null>(null)
   let loadingInfo = $state(false)
   let dbCount = $state(16)
-  const stats = $derived(headerStats(info))
-  const health = $derived(redisHealth(info))
+  const stats = $derived(headerStats(info, brandLabel(profile ?? { system: 'redis' })))
+  const health = $derived(redisHealth(info, stats.product))
+  /** "Redis" | "Valkey" — every sentence that names the server uses this */
+  const product = $derived(stats.product)
 
   async function loadInfo() {
     if (!connId) return
@@ -289,13 +294,13 @@
     { id: 'slowlog', label: 'Slow commands', count: slow ? slow.entries.length : null },
     { id: 'info', label: 'Server info', badge: health && health.tone !== 'ok' ? (health.tone === 'bad' ? 'Problem' : 'Needs attention') : null },
   ])
-  const DESCRIPTIONS: Record<string, string> = {
+  const DESCRIPTIONS: Record<string, string> = $derived({
     browser: 'Keys of the selected database. Pick a key to see and edit its value on the right. Big databases are read in batches, so the list may be partial — “Scan more” continues.',
-    workbench: 'Run Redis commands directly, like redis-cli. Commands that delete data or stop the server ask before they run.',
-    pubsub: 'Listen to channels in real time and publish messages. Redis does not store these messages — you only see what arrives while listening.',
-    slowlog: 'The commands Redis itself recorded as slow. Use it to find what slows your apps down.',
+    workbench: `Run ${product} commands directly, like ${product === 'Valkey' ? 'valkey-cli' : 'redis-cli'}. Commands that delete data or stop the server ask before they run.`,
+    pubsub: `Listen to channels in real time and publish messages. ${product} does not store these messages — you only see what arrives while listening.`,
+    slowlog: `The commands ${product} itself recorded as slow. Use it to find what slows your apps down.`,
     info: 'How the server is doing: memory, clients, saving to disk and replication.',
-  }
+  })
   const status: ShellStatus | null = $derived.by(() => {
     if (section !== 'info' && section !== 'browser') return null
     if (infoError) return section === 'info' ? { tone: 'bad', headline: 'Could not read the server status', detail: infoError, actionLabel: 'Try again', onAction: () => void loadInfo() } : null
@@ -316,20 +321,20 @@
       value: mem.value,
       sub: mem.sub,
       tone: stats.memoryUsed != null && stats.maxMemory ? (stats.memoryUsed / stats.maxMemory >= 0.9 ? 'warn' : null) : null,
-      help: 'Memory Redis uses for your data. The limit is the server setting maxmemory.',
+      help: `Memory ${product} uses for your data. The limit is the server setting maxmemory.`,
     },
     { label: 'Clients', value: stats.clients == null ? '?' : fullCount(stats.clients), sub: 'connected right now', help: 'Apps and tools with an open connection to this server.' },
     { label: 'Commands / second', value: stats.opsPerSec == null ? '?' : fullCount(stats.opsPerSec), tone: 'num', sub: 'right now', help: 'How many commands the server is handling each second.' },
   ])
-  const groups = $derived(serverInfoGroups(info))
+  const groups = $derived(serverInfoGroups(info, Date.now(), product))
 
   // ---- list columns -----------------------------------------------------------
-  const keyCols: StreamColumn<RedisKeyInfo>[] = [
+  const keyCols: StreamColumn<RedisKeyInfo>[] = $derived([
     { key: 'type', label: 'Type', width: 'var(--px-110)', sort: (k) => typeLabel(k.key_type), help: 'The kind of value stored in the key.' },
     { key: 'name', label: 'Key', sort: (k) => k.name },
-    { key: 'ttl', label: 'Expires in', width: 'var(--px-120)', sort: (k) => (k.ttl < 0 ? Number.MAX_SAFE_INTEGER - (k.ttl === -2 ? 1 : 0) : k.ttl), help: 'When Redis deletes the key automatically. Never = the key stays until deleted.' },
+    { key: 'ttl', label: 'Expires in', width: 'var(--px-120)', sort: (k) => (k.ttl < 0 ? Number.MAX_SAFE_INTEGER - (k.ttl === -2 ? 1 : 0) : k.ttl), help: `When ${product} deletes the key automatically. Never = the key stays until deleted.` },
     { key: 'size', label: 'Size', align: 'right', width: 'var(--px-100)', sort: (k) => meta[k.name]?.bytes ?? null, help: 'Memory the key uses on the server. Measured for the keys on screen.' },
-  ]
+  ])
   const slowCols: StreamColumn<SlowRow>[] = [
     { key: 'when', label: 'When', width: 'var(--px-130)', sort: (r) => r.timestamp },
     { key: 'duration', label: 'Took', align: 'right', width: 'var(--px-100)', sort: (r) => r.durationUs, help: 'How long the server spent running the command (network time not included).' },
@@ -410,7 +415,7 @@
   }
 
   const subtitle = $derived(
-    [stats.version ? `Redis ${stats.version}` : null, profile ? `${profile.host}:${profile.port}` : null, stats.role ? (stats.role === 'master' ? 'Primary' : stats.role === 'slave' ? 'Replica' : stats.role) : null]
+    [stats.version ? `${product} ${stats.version}` : null, profile ? `${profile.host}:${profile.port}` : null, stats.role ? (stats.role === 'master' ? 'Primary' : stats.role === 'slave' ? 'Replica' : stats.role) : null]
       .filter(Boolean)
       .join(' · ') || undefined,
   )
@@ -421,7 +426,8 @@
 
 <StreamShell
   system="redis"
-  title={profile?.name ?? 'Redis'}
+  {brand}
+  title={profile?.name ?? product}
   {subtitle}
   {sections}
   active={section}
@@ -455,7 +461,7 @@
         <input class="mono" bind:value={pattern} placeholder="Key pattern, e.g. user:*" aria-label="Key pattern" spellcheck="false" />
         {#if pattern}<button type="button" class="rb-clear" onclick={() => (pattern = '')} aria-label="Clear the pattern"><Icon name="close" size={11} /></button>{/if}
       </label>
-      <HelpTip text="Redis matches key names: * = any text, ? = one character. Example: user:* finds every key that starts with user:." />
+      <HelpTip text={`${product} matches key names: * = any text, ? = one character. Example: user:* finds every key that starts with user:.`} />
       <label class="rb-field">
         <span class="rb-label">Type</span>
         <select class="ds-control" bind:value={typeFilter} aria-label="Show keys of type">
@@ -472,7 +478,7 @@
           <span class="rb-spin" aria-hidden="true"><Icon name="refresh" size={12} /></span>
           Scanning Database {db}…
         {:else if partial}
-          <span class="rb-partial" title="Redis returns keys in batches and applies the pattern afterwards, so a narrow pattern on a big database needs several passes. Keys not read yet are not shown.">
+          <span class="rb-partial" title="{product} returns keys in batches and applies the pattern afterwards, so a narrow pattern on a big database needs several passes. Keys not read yet are not shown.">
             <Icon name="warning" size={12} /> Partial list · read ~{fullCount(scanned)} of {fullCount(dbsize)} keys
           </span>
           <button type="button" class="cfm-btn rb-more" onclick={scanMore} disabled={loadingMore}>Scan more</button>
@@ -586,7 +592,7 @@
                 {@const m = meta[focus ?? '']}
                 <AdvancedToggle>
                   <dl class="rb-adv">
-                    <dt>Encoding <HelpTip text="How Redis stores this value internally (e.g. listpack for small collections). Changes automatically as the key grows." /></dt>
+                    <dt>Encoding <HelpTip text={`How ${product} stores this value internally (e.g. listpack for small collections). Changes automatically as the key grows.`} /></dt>
                     <dd class="mono">{m?.encoding ?? 'not measured'}</dd>
                     <dt>Memory</dt>
                     <dd class="mono">{m?.bytes != null ? `${fullCount(m.bytes)} bytes` : 'not measured'}</dd>
@@ -625,7 +631,7 @@
       loading={loadingSlow}
       error={slowError}
       emptyTitle="No slow commands recorded"
-      emptyBody="Redis has not logged any command over its threshold. That is good news."
+      emptyBody={`${product} has not logged any command over its threshold. That is good news.`}
     >
       {#snippet cell(r, c)}
         {#if c.key === 'when'}<span title={r.whenExact}>{r.when}</span>

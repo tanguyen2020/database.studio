@@ -12,6 +12,8 @@
   import { explorer } from '$lib/stores/explorer.svelte'
   import { toasts } from '$lib/stores/toast.svelte'
   import { autofocus } from '$lib/actions/autofocus'
+  import { connections } from '$lib/stores/connections.svelte'
+  import { brandLabel } from '$lib/brand'
   import type { Snippet } from 'svelte'
   import { expirySentence, itemNoun as itemWords, typeHelp, typeLabel } from '$lib/stream/redis-keys'
   import { draftOf, itemDeleteOp, itemEditable, itemEditText, planItemEdit, type ItemDraft, type ItemRef } from '$lib/redis/item-edit'
@@ -29,6 +31,8 @@
     extra?: Snippet
   }
   let { connId, keyName, onDeleted, onClose, onRenamed, extra }: Props = $props()
+  // Redis or Valkey (SPEC-VALKEY.md) — the name every sentence uses
+  const product = $derived(brandLabel(connections.byId(connId) ?? { system: 'redis' }))
   const cid = $derived(connId)
   const key = $derived(keyName)
   const accent = systemMeta('redis').accent
@@ -315,7 +319,7 @@
       <div class="rk-btns rk-btns-panel">
         <button type="button" class="cfm-btn rk-btn" onclick={load} disabled={loading} title="Read the key again from Redis"><Icon name="refresh" size={12} />Refresh</button>
         {#if onRenamed}<button type="button" class="cfm-btn" onclick={openRename} disabled={!v || v.key_type === 'none'}>Rename…</button>{/if}
-        <button type="button" class="cfm-btn" onclick={openTtl} disabled={!v || v.key_type === 'none'} title="Set when Redis deletes this key automatically">Set expiry…</button>
+        <button type="button" class="cfm-btn" onclick={openTtl} disabled={!v || v.key_type === 'none'} title="Set when {product} deletes this key automatically">Set expiry…</button>
         <button type="button" class="cfm-btn ds-danger-outline" onclick={() => (confirmDel = true)} disabled={!v || v.key_type === 'none'}>Delete…</button>
       </div>
       {@render extra?.()}

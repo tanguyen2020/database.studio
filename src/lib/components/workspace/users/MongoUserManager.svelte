@@ -17,12 +17,22 @@
   import Avatar from './Avatar.svelte'
   import { CARD, CARD_TITLE, EXPLAINER } from './ui'
   import type { TabState } from '$lib/types'
+  import { connections } from '$lib/stores/connections.svelte'
+  import { isFerretDB } from '$lib/brand'
 
   interface Props {
     tab: TabState
   }
   let { tab }: Props = $props()
   const cid = $derived(tab.connectionId)
+  // FerretDB v2 accepts users but does not enforce roles (measured: a "read" user writes
+  // anywhere; rolesInfo / grantRolesToUser do not exist) — SPEC-FERRETDB-DOCUMENTDB.md
+  const ferret = $derived(isFerretDB(connections.byId(cid ?? '')))
+  /** the DocumentDB extension's own background user, not one of yours */
+  const FERRET_INTERNAL = 'documentdb_bg_worker_role'
+  $effect(() => {
+    if (ferret && detailTab === 'roles') detailTab = 'password'
+  })
 
   type Row = Record<string, unknown>
   let usersRows = $state<Row[]>([])
@@ -60,7 +70,7 @@
     error = null
     try {
       const [u, dbs] = await Promise.all([ipc.mongoUsers(cid), ipc.listDatabases(cid).catch(() => [])])
-      usersRows = u.rows
+      usersRows = ferret ? u.rows.filter((r) => r.user !== FERRET_INTERNAL) : u.rows
       databases = dbs.map((d) => d.name)
       if (!gridDb) gridDb = tab.systemType === 'mongodb' ? (databases[0] ?? 'admin') : 'admin'
       if (!selectedKey || !usersRows.some((x) => keyOf(x) === selectedKey)) {
@@ -191,7 +201,11 @@
   </ManagerHeader>
 
   <!-- Engine model explainer — MongoDB's auth-database + roles-per-database RBAC. -->
+  {#if ferret}
+    <div class="um-callout warn" data-testid="ferret-roles-note"><Icon name="warning" size={15} /><span><b>FerretDB does not enforce roles.</b> Every user can read and write every database — users are only a way to sign in with a password. Control access in PostgreSQL or in your network.</span></div>
+  {:else}
   <div class="um-callout"><Icon name="info" size={15} /><span>A MongoDB user belongs to an <b>authentication database</b> and gets <b>roles per database</b> — built-in ones like <span class="mono" style="color:var(--text)">read</span>, <span class="mono" style="color:var(--text)">readWrite</span>, <span class="mono" style="color:var(--text)">dbOwner</span>, or custom roles. Roles on <span class="mono" style="color:var(--text)">admin</span> (e.g. root) apply to the whole cluster.</span></div>
+  {/if}
 
   <div class="um-body" style="margin-top:var(--px-12);border-top:var(--px-1) solid var(--border)">
     <div class="um-list"><div class="um-list-search"><input class="um-input" style="width:100%" placeholder="Search users" bind:value={listFilter} aria-label="Search users" spellcheck="false" /></div>
@@ -228,7 +242,7 @@
           {/snippet}
         </PrincipalHeader>
         <div class="um-tabs" role="tablist">
-          {#each [['roles', 'Roles per Database'], ['access', 'Access'], ['password', 'Password']] as [k, label] (k)}
+          {#each ferret ? [['access', 'Access'], ['password', 'Password']] : [['roles', 'Roles per Database'], ['access', 'Access'], ['password', 'Password']] as [k, label] (k)}
             <span onclick={() => (detailTab = k as typeof detailTab)} onkeydown={(e) => e.key === 'Enter' && (detailTab = k as typeof detailTab)} role="tab" tabindex="0" aria-selected={detailTab === k} class="um-tab">{label}</span>
           {/each}
         </div>
@@ -289,6 +303,9 @@
             <!-- Access overview: what this user can access, per database (via roles) -->
             <div class="um-card">
             <div class="um-card-title">Access by database</div>
+            {#if ferret}
+              <div class="um-field-hint" data-testid="ferret-access"><b>Full access to every database.</b> FerretDB records roles but does not apply them, so this user can read and write everything.</div>
+            {:else}
             <div style="font-size:var(--px-12);color:var(--text2);margin-bottom:var(--px-10)">What <span class="mono" style="color:var(--text);font-weight:600">{selName}@{selDb}</span> can access, per database (through its roles).</div>
             {#if mongoAccess.length}
               <div style="display:flex;flex-direction:column;gap:var(--px-8)">
@@ -312,6 +329,7 @@
               <div class="um-field-hint">No roles — this user cannot access any database yet.</div>
             {/if}
             <div class="um-field-hint" style="margin-top:var(--px-10)">MongoDB access is role-based per database; *AnyDatabase / root / clusterAdmin roles on the admin database apply cluster-wide.</div>
+            {/if}
             </div>
           {:else}
             <div class="um-card">

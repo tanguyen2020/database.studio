@@ -31,6 +31,28 @@
   import Icon from '$lib/components/Icon.svelte'
   import { toasts } from '$lib/stores/toast.svelte'
   import { autofocus } from '$lib/actions/autofocus'
+  import KafkaSecurityView from './KafkaSecurityView.svelte'
+  import RedpandaConfigView from './RedpandaConfigView.svelte'
+  import RedpandaTransformsView from './RedpandaTransformsView.svelte'
+  import { brandKey, isRedpanda } from '$lib/brand'
+  import {
+    balancerText,
+    brokerStatus,
+    diskUsed,
+    licenseSummary,
+    parseBalancer,
+    parseBrokers,
+    parseHealth,
+    parseLicense,
+    reasonText,
+    rp,
+    type RpBalancer,
+    type RpBroker,
+    type RpHealth,
+    type RpLicense,
+  } from '$lib/redpanda/admin'
+  import { rpCall, rpMessage } from '$lib/redpanda/client'
+  import { formatBytes } from '$lib/stream/humanize'
   import '$lib/components/workspace/users/um.css'
 
   let { tab }: { tab: TabState } = $props()
@@ -163,17 +185,69 @@
     }
   }
 
+  // ---- Redpanda: what only its Admin API knows (SPEC-REDPANDA.md R2–R7) ----
+  const redpanda = $derived(isRedpanda(profile))
+  let rpBrokers = $state<RpBroker[]>([])
+  let rpHealth = $state<RpHealth | null>(null)
+  let rpLicense = $state<RpLicense | null>(null)
+  let rpBalancer = $state<RpBalancer | null>(null)
+  let rpError = $state<string | null>(null)
+  let loadingRp = $state(false)
+  const rpById = $derived(new Map(rpBrokers.map((b) => [b.id, b])))
+  const rpVersion = $derived(rpBrokers.find((b) => b.version)?.version ?? '')
+
+  async function loadRedpanda() {
+    if (!connId || !redpanda) return
+    loadingRp = true
+    rpError = null
+    const [b, h, l, bal] = await Promise.allSettled([
+      rpCall(connId, rp.brokers()),
+      rpCall(connId, rp.health()),
+      rpCall(connId, rp.license()),
+      rpCall(connId, rp.balancer()),
+    ])
+    if (b.status === 'fulfilled') rpBrokers = parseBrokers(b.value)
+    else rpError = rpMessage(b.reason)
+    rpHealth = h.status === 'fulfilled' ? parseHealth(h.value) : null
+    rpLicense = l.status === 'fulfilled' ? parseLicense(l.value) : null
+    rpBalancer = bal.status === 'fulfilled' ? parseBalancer(bal.value) : null
+    loadingRp = false
+  }
+
+  // broker maintenance (drains leadership off a broker before it is restarted)
+  let maintFor = $state<{ id: number; on: boolean } | null>(null)
+  let maintBusy = $state(false)
+  let maintError = $state<string | null>(null)
+  async function runMaintenance() {
+    if (!maintFor || maintBusy) return
+    maintBusy = true
+    maintError = null
+    try {
+      await rpCall(connId, maintFor.on ? rp.maintenanceOn(maintFor.id) : rp.maintenanceOff(maintFor.id))
+      toasts.success(maintFor.on ? `Broker ${maintFor.id} is going into maintenance` : `Broker ${maintFor.id} is back in service`)
+      maintFor = null
+      await loadRedpanda()
+    } catch (e) {
+      maintError = rpMessage(e)
+    } finally {
+      maintBusy = false
+    }
+  }
+
   function refresh() {
     void loadCluster()
     void loadGroups()
+    void loadRedpanda()
     void explorer.loadStreaming(connId, 'kafka', true)
   }
 
   $effect(() => {
     void connId
+    void redpanda
     untrack(() => {
       void loadCluster()
       void loadGroups()
+      void loadRedpanda()
       void explorer.loadStreaming(connId, 'kafka')
     })
   })
@@ -197,6 +271,13 @@
     { id: 'topics', label: 'Topics', count: health.topicCount, badge: health.missingCopies.length ? `${health.missingCopies.length} missing copies` : null },
     { id: 'groups', label: 'Consumer groups', count: groups.length || null, badge: totalBehind ? `${compactCount(totalBehind)} behind` : null },
     { id: 'registry', label: 'Schema Registry' },
+    { id: 'security', label: 'Security' },
+    ...(redpanda
+      ? [
+          { id: 'configuration', label: 'Configuration' },
+          { id: 'transforms', label: 'Transforms' },
+        ]
+      : []),
   ])
 
   const DESCRIPTIONS: Record<string, string> = {
@@ -205,12 +286,26 @@
     topics: 'Topics hold your messages. A topic is split into partitions; each partition keeps several copies on different brokers.',
     groups: 'Consumer groups are the applications reading from this cluster. “Behind” = messages they have not read yet.',
     registry: 'Schemas describe the shape of messages so producers and consumers agree on it.',
+    security: 'Who may connect and what each user may do. ACLs grant actions on topics, consumer groups and the cluster.',
+    configuration: 'Settings of the whole cluster, read from Redpanda itself. Changes are checked before they are saved.',
+    transforms: 'Data transforms run small WebAssembly programs inside the brokers to filter or reshape messages between topics.',
   }
 
   const status: ShellStatus | null = $derived.by(() => {
     if (section !== 'overview') return null
     if (clusterError) return { tone: 'bad', headline: 'Could not read the cluster', detail: clusterError, actionLabel: 'Try again', onAction: refresh }
     if (!cluster) return null
+    // Redpanda judges its own health (nodes down, disk, leaderless partitions…)
+    if (redpanda && rpHealth && !rpHealth.healthy) {
+      const parts = rpHealth.reasons.map(reasonText)
+      return {
+        tone: rpHealth.nodesDown.length || rpHealth.leaderless ? 'bad' : 'warn',
+        headline: 'The cluster needs attention',
+        detail: `${parts.length ? parts.join(', ').replace(/^./, (c) => c.toUpperCase()) : 'Redpanda reports a problem'}.${rpHealth.nodesDown.length ? ` Down: broker ${rpHealth.nodesDown.join(', ')}.` : ''}`,
+        actionLabel: 'Show brokers',
+        onAction: () => go('brokers'),
+      }
+    }
     return {
       tone: health.tone,
       headline: health.headline,
@@ -219,7 +314,7 @@
     }
   })
 
-  const cards: StatCard[] = $derived([
+  const cards: StatCard[] = $derived.by(() => [
     { label: 'Brokers', value: cluster ? String(cluster.brokers.length) : '—', sub: cluster ? `controller: broker ${cluster.controller_id}` : undefined, onClick: () => go('brokers') },
     { label: 'Topics', value: String(health.topicCount), sub: internalCount ? `${internalCount} internal not counted` : undefined, onClick: () => go('topics') },
     { label: 'Partitions', value: fullCount(health.partitionCount), help: 'Topics are split into partitions; messages keep their order within a partition.' },
@@ -227,14 +322,45 @@
     { label: 'Unavailable', value: String(health.unavailable.length), tone: health.unavailable.length ? 'bad' : 'ok', sub: health.unavailable.length ? 'partitions without a leader' : 'all partitions are served', help: 'Partitions no broker is serving: reads and writes to them fail.' },
     { label: 'Messages kept', value: health.messages == null ? '?' : compactCount(health.messages), tone: 'num', sub: health.messages == null ? 'some offsets could not be read' : 'across your topics', help: 'Messages currently stored, from the oldest to the newest position of each partition.' },
     { label: 'Messages behind', value: totalBehind == null ? '?' : compactCount(totalBehind), tone: totalBehind ? 'warn' : 'ok', sub: groups.length ? `not yet read by ${plural(groups.length, 'group')}` : 'no consumer groups', help: 'Messages the consumer groups have not read yet.', onClick: () => go('groups') },
+    ...(redpanda ? redpandaCards : []),
+  ])
+
+  const lic = $derived(licenseSummary(rpLicense))
+  const disk = $derived.by(() => {
+    const known = rpBrokers.filter((b) => diskUsed(b) != null)
+    if (!known.length) return null
+    const worst = known.reduce((a, b) => ((diskUsed(b) ?? 0) > (diskUsed(a) ?? 0) ? b : a))
+    return { broker: worst, used: diskUsed(worst) ?? 0 }
+  })
+  const redpandaCards: StatCard[] = $derived([
+    { label: 'Version', value: rpVersion || '—', sub: rpBrokers.length ? (new Set(rpBrokers.map((b) => b.version)).size > 1 ? 'brokers run different versions' : 'on every broker') : rpError ? 'Admin API unavailable' : undefined, tone: rpBrokers.length && new Set(rpBrokers.map((b) => b.version)).size > 1 ? 'warn' : undefined },
+    { label: 'Fullest disk', value: disk ? `${Math.round(disk.used * 100)}%` : '—', tone: disk && disk.used >= 0.85 ? 'bad' : disk && disk.used >= 0.7 ? 'warn' : undefined, sub: disk ? `broker ${disk.broker.id} · ${formatBytes(disk.broker.diskFree ?? 0)} free` : undefined, help: 'How full the most used data disk is. Redpanda stops accepting writes when free space runs out.', onClick: () => go('brokers') },
+    { label: 'Partition balancer', value: rpBalancer ? (rpBalancer.status === 'ready' ? 'Balanced' : balancerText(rpBalancer).split(' — ')[0]) : '—', tone: rpBalancer?.status === 'stalled' ? 'bad' : rpBalancer && rpBalancer.status !== 'ready' && rpBalancer.status !== 'off' ? 'warn' : undefined, sub: rpBalancer ? (rpBalancer.reassignments ? `${rpBalancer.reassignments} partitions moving` : 'no partition is moving') : undefined, help: 'Redpanda moves partitions between brokers to keep them evenly loaded.' },
+    { label: 'License', value: lic.title, tone: lic.tone === 'bad' ? 'bad' : lic.tone === 'warn' ? 'warn' : undefined, sub: lic.detail, help: 'Enterprise features (audit log, tiered storage, RBAC…) need a license.' },
   ])
 
   const largest = $derived([...shownRows].filter((r) => r.messages != null).sort((a, b) => (b.messages ?? 0) - (a.messages ?? 0)).slice(0, 5))
 
   // ---- brokers table ----
-  const brokerCols: StreamColumn<BrokerStats>[] = [
+  // a Redpanda broker that is down is missing from the Kafka metadata: show it anyway
+  const brokerRows = $derived.by<BrokerStats[]>(() => {
+    if (!redpanda) return health.brokers
+    const known = new Set(health.brokers.map((b) => b.id))
+    const missing = rpBrokers
+      .filter((r) => !known.has(r.id))
+      .map((r) => ({ id: r.id, host: r.address.split(':')[0] || `broker ${r.id}`, port: 0, isController: false, leads: 0, holds: 0, behind: 0 }))
+    return [...health.brokers, ...missing]
+  })
+  const rpBrokerCols: StreamColumn<BrokerStats>[] = [
+    { key: 'status', label: 'Status', width: 'var(--px-120)', sort: (b) => (rpById.get(b.id) ? brokerStatus(rpById.get(b.id)!).label : ''), help: 'In maintenance: the broker hands its partitions over to others so it can be restarted safely.' },
+    { key: 'version', label: 'Version', width: 'var(--px-90)', sort: (b) => rpById.get(b.id)?.version ?? '' },
+    { key: 'disk', label: 'Disk used', width: 'var(--px-130)', sort: (b) => (rpById.get(b.id) ? diskUsed(rpById.get(b.id)!) : null) },
+    { key: 'maint', label: '', width: 'var(--px-140)' },
+  ]
+  const brokerCols: StreamColumn<BrokerStats>[] = $derived.by(() => (redpanda ? [...baseBrokerCols, ...rpBrokerCols] : baseBrokerCols))
+  const baseBrokerCols: StreamColumn<BrokerStats>[] = [
     { key: 'id', label: 'Broker', width: 'var(--px-90)', sort: (b) => b.id },
-    { key: 'host', label: 'Address', sort: (b) => `${b.host}:${b.port}` },
+    { key: 'host', label: 'Address', min: 'var(--px-140)', sort: (b) => `${b.host}:${b.port}` },
     { key: 'role', label: 'Role', width: 'var(--px-130)', sort: (b) => (b.isController ? 0 : 1), help: 'The controller manages the cluster: it elects partition leaders.' },
     { key: 'leads', label: 'Leads', align: 'right', width: 'var(--px-120)', sort: (b) => b.leads, help: 'Partitions this broker is the leader for (it serves their reads and writes).' },
     { key: 'holds', label: 'Holds copies', align: 'right', width: 'var(--px-130)', sort: (b) => b.holds, help: 'Partition copies stored on this broker.' },
@@ -280,14 +406,15 @@
 
 <StreamShell
   system="kafka"
-  title={profile?.name ?? 'Kafka'}
-  subtitle={cluster ? `${plural(cluster.brokers.length, 'broker')} · controller: broker ${cluster.controller_id}${cluster.brokers[0] ? ` · ${cluster.brokers[0].host}:${cluster.brokers[0].port}` : ''}` : loading ? 'Reading cluster…' : undefined}
+  brand={profile ? brandKey(profile) : undefined}
+  title={profile?.name ?? (redpanda ? 'Redpanda' : 'Kafka')}
+  subtitle={cluster ? `${redpanda && rpVersion ? `Redpanda ${rpVersion} · ` : ''}${plural(cluster.brokers.length, 'broker')} · controller: broker ${cluster.controller_id}${cluster.brokers[0] ? ` · ${cluster.brokers[0].host}:${cluster.brokers[0].port}` : ''}` : loading ? 'Reading cluster…' : undefined}
   {sections}
   active={section}
   onSection={(id) => go(id)}
   {status}
   description={DESCRIPTIONS[section]}
-  {loading}
+  loading={loading || loadingRp}
   onRefresh={refresh}
 >
   {#snippet actions()}
@@ -367,7 +494,7 @@
     </div>
   {:else if section === 'brokers'}
     <StreamTable
-      rows={health.brokers}
+      rows={brokerRows}
       columns={brokerCols}
       rowKey={(b) => String(b.id)}
       ariaLabel="Brokers"
@@ -379,11 +506,15 @@
     >
       {#snippet cell(b, c)}
         {#if c.key === 'id'}<span class="kc-strong">Broker {b.id}</span>
-        {:else if c.key === 'host'}<span class="mono kc-dim">{b.host}:{b.port}</span>
+        {:else if c.key === 'host'}<span class="mono kc-dim">{b.port ? `${b.host}:${b.port}` : b.host}</span>
         {:else if c.key === 'role'}{#if b.isController}<span class="ds-chip live">Controller</span>{:else}<span class="kc-dim">Member</span>{/if}
         {:else if c.key === 'leads'}<span class="ds-num">{fullCount(b.leads)} {b.leads === 1 ? 'partition' : 'partitions'}</span>
         {:else if c.key === 'holds'}<span class="ds-num">{fullCount(b.holds)}</span>
         {:else if c.key === 'behind'}<span class="ds-num" class:kc-warn={b.behind > 0} class:kc-ok={b.behind === 0}>{b.behind === 0 ? 'None' : fullCount(b.behind)}</span>
+        {:else if c.key === 'status'}{@const r = rpById.get(b.id)}{#if r}{@const st = brokerStatus(r)}<span class="kc-state {st.tone}">{st.label}</span>{:else}<span class="kc-dim">—</span>{/if}
+        {:else if c.key === 'version'}<span class="mono kc-dim">{rpById.get(b.id)?.version || '—'}</span>
+        {:else if c.key === 'disk'}{@const r = rpById.get(b.id)}{@const u = r ? diskUsed(r) : null}{#if r && u != null}<span class="kc-disk" title="{formatBytes(r.diskFree ?? 0)} free of {formatBytes(r.diskTotal ?? 0)}"><span class="kc-meter"><span style="width:{Math.round(u * 100)}%" class:warn={u >= 0.7} class:bad={u >= 0.85}></span></span><span class="ds-num">{Math.round(u * 100)}%</span></span>{:else}<span class="kc-dim">—</span>{/if}
+        {:else if c.key === 'maint'}{@const r = rpById.get(b.id)}{#if r && r.alive}<button type="button" class="eg-btn" onclick={(e) => { e.stopPropagation(); maintError = null; maintFor = { id: b.id, on: !r.draining } }}>{r.draining ? 'End maintenance' : 'Maintenance…'}</button>{/if}
         {/if}
       {/snippet}
     </StreamTable>
@@ -608,8 +739,33 @@
     </SplitDetail>
   {:else if section === 'registry'}
     <SchemaRegistryWorkspace {tab} />
+  {:else if section === 'security'}
+    <KafkaSecurityView {connId} {redpanda} topics={rows.filter((r) => !r.internal).map((r) => r.name)} groups={groups.map((g) => g.name)} />
+  {:else if section === 'configuration' && redpanda}
+    <RedpandaConfigView {connId} />
+  {:else if section === 'transforms' && redpanda}
+    <RedpandaTransformsView {connId} onOpenTopic={(t) => go('topics', t)} />
   {/if}
 </StreamShell>
+
+{#if maintFor}
+  <div class="um-backdrop" role="presentation" onkeydown={(e) => e.key === 'Escape' && !maintBusy && (maintFor = null)}>
+    <div class="um-dlg sm" role="dialog" aria-modal="true" aria-label={maintFor.on ? 'Start maintenance' : 'End maintenance'} tabindex="-1" use:autofocus>
+      <div class="um-dlg-head">
+        <span class="um-dlg-icon"><Icon name="server" size={18} /></span>
+        <div class="um-dlg-title">
+          <b>{maintFor.on ? `Put broker ${maintFor.id} into maintenance?` : `End maintenance of broker ${maintFor.id}?`}</b>
+          <span>{maintFor.on ? 'Its partition leaders move to other brokers so it can be restarted or upgraded without errors for clients. Only one broker can be in maintenance at a time.' : 'The broker takes partition leadership again.'}</span>
+        </div>
+      </div>
+      {#if maintError}<div class="um-dlg-body"><div class="um-callout danger" role="alert"><Icon name="warning" size={15} /><span>{maintError}</span></div></div>{/if}
+      <div class="um-dlg-foot">
+        <button type="button" class="cfm-btn" onclick={() => (maintFor = null)} disabled={maintBusy}>Cancel</button>
+        <button type="button" class="cfm-btn primary" onclick={runMaintenance} disabled={maintBusy}>{maintBusy ? 'Working…' : maintFor.on ? 'Start maintenance' : 'End maintenance'}</button>
+      </div>
+    </div>
+  </div>
+{/if}
 
 {#if resetFor}
   {@const g = groups.find((x) => x.name === resetFor)}
@@ -839,6 +995,33 @@
   }
   .kc-state.quiet {
     color: var(--muted);
+  }
+  .kc-state.muted {
+    color: var(--muted);
+  }
+  .kc-disk {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--px-8);
+  }
+  .kc-meter {
+    display: inline-block;
+    width: var(--px-48);
+    height: var(--px-6);
+    border-radius: var(--px-3);
+    background: var(--panel);
+    overflow: hidden;
+  }
+  .kc-meter > span {
+    display: block;
+    height: 100%;
+    background: color-mix(in srgb, var(--text2) 55%, transparent);
+  }
+  .kc-meter > span.warn {
+    background: var(--sacc-amber);
+  }
+  .kc-meter > span.bad {
+    background: var(--danger-solid);
   }
   .kc-subtabs {
     display: flex;

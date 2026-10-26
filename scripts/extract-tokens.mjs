@@ -58,8 +58,8 @@ for (const [, key, accent, bg, border, fg, badge, label] of sysBlock.matchAll(sy
   SYS[key] = { accent, bg, border, fg, badge, label }
 }
 const EXPECTED_SYSTEMS = [
-  'postgres', 'mysql', 'mssql', 'redis', 'kafka', 'nats',
-  'clickhouse', 'mariadb', 'cassandra', 'scylladb', 'sqlite', 'mongodb', 'oracle', 'rabbitmq', 'duckdb', 'elasticsearch', 'orphan',
+  'postgres', 'mysql', 'mssql', 'redis', 'valkey', 'kafka', 'redpanda', 'nats',
+  'clickhouse', 'mariadb', 'cassandra', 'scylladb', 'sqlite', 'mongodb', 'ferretdb', 'documentdb', 'oracle', 'rabbitmq', 'duckdb', 'elasticsearch', 'opensearch', 'orphan',
 ]
 for (const k of EXPECTED_SYSTEMS) {
   if (!SYS[k]) throw new Error(`map SYS thiếu hệ: ${k}`)

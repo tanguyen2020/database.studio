@@ -1091,6 +1091,7 @@ async fn quick_connect_ephemeral_id_is_queryable_via_registry() {
         cassandra_dc: String::new(),
         cassandra_consistency: String::new(),
         cassandra_flavor: String::new(),
+        admin_url: String::new(),
     };
 
     let registry = Registry::default();
@@ -1162,6 +1163,7 @@ async fn tab_connections_are_isolated_hung_query_does_not_block() {
         cassandra_dc: String::new(),
         cassandra_consistency: String::new(),
         cassandra_flavor: String::new(),
+        admin_url: String::new(),
     };
 
     let registry = Arc::new(Registry::default());
@@ -3136,6 +3138,7 @@ async fn pg_over_ssh_tunnel_recovers_after_the_ssh_session_dies() {
         cassandra_dc: String::new(),
         cassandra_consistency: String::new(),
         cassandra_flavor: String::new(),
+        admin_url: String::new(),
     };
 
     let registry = Registry::default();
@@ -4164,6 +4167,7 @@ async fn connection_test_bounded_and_cancellable() {
             cassandra_dc: String::new(),
             cassandra_consistency: String::new(),
             cassandra_flavor: String::new(),
+            admin_url: String::new(),
         }
     }
 
@@ -4246,6 +4250,7 @@ async fn query_cancel_aborts_and_connection_recovers() {
         cassandra_dc: String::new(),
         cassandra_consistency: String::new(),
         cassandra_flavor: String::new(),
+        admin_url: String::new(),
     };
 
     let reg = Arc::new(Registry::default());
@@ -4351,6 +4356,7 @@ async fn query_cancel_stops_a_large_result_and_the_server() {
         cassandra_dc: String::new(),
         cassandra_consistency: String::new(),
         cassandra_flavor: String::new(),
+        admin_url: String::new(),
     };
 
     let reg = Arc::new(Registry::default());
@@ -4805,6 +4811,7 @@ async fn pg_registry_concurrent_and_rollback() {
         cassandra_dc: String::new(),
         cassandra_consistency: String::new(),
         cassandra_flavor: String::new(),
+        admin_url: String::new(),
     };
 
     let reg = Arc::new(Registry::default());
@@ -7237,6 +7244,7 @@ async fn pg_idle_connection_is_healed_and_a_dead_server_is_reported() {
         cassandra_dc: String::new(),
         cassandra_consistency: String::new(),
         cassandra_flavor: String::new(),
+        admin_url: String::new(),
     };
 
     let registry = Registry::default();
@@ -7366,6 +7374,7 @@ async fn mysql_idle_connection_past_wait_timeout_is_healed() {
         cassandra_dc: String::new(),
         cassandra_consistency: String::new(),
         cassandra_flavor: String::new(),
+        admin_url: String::new(),
     };
     let registry = Registry::default();
     let deadline = Instant::now() + Duration::from_secs(240);
@@ -7472,6 +7481,7 @@ async fn mysql_keepalive_sweep_keeps_an_idle_connection_alive() {
         cassandra_dc: String::new(),
         cassandra_consistency: String::new(),
         cassandra_flavor: String::new(),
+        admin_url: String::new(),
     };
 
     // Sweep every 2s, i.e. inside the server's 5s idle window.
@@ -9493,6 +9503,7 @@ async fn pg_session_init_is_sent_once_and_survives_a_reconnect() {
         cassandra_dc: String::new(),
         cassandra_consistency: String::new(),
         cassandra_flavor: String::new(),
+        admin_url: String::new(),
     };
     let registry = Registry::default();
     let deadline = Instant::now() + Duration::from_secs(240);

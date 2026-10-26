@@ -3,6 +3,11 @@
 // sinh tự động). Test fail nếu badge/màu lệch nguồn.
 
 import { describe, expect, it } from 'vitest'
+import VALKEY_ICON_D from './__fixtures__/valkey-icon.d.txt?raw'
+import OPENSEARCH_PARTS from './__fixtures__/opensearch-icon.parts.json'
+import REDPANDA_ICON from './__fixtures__/redpanda-icon.parts.json'
+import FERRETDB_ICON_D from './__fixtures__/ferretdb-icon.d.txt?raw'
+import DOCUMENTDB_ICON from './__fixtures__/documentdb-icon.json'
 import { render } from '@testing-library/svelte'
 import SystemBadge from './SystemBadge.svelte'
 import SystemIcon from './SystemIcon.svelte'
@@ -152,8 +157,11 @@ describe('SystemIcon (port dbIcon() HTML dòng 3883)', () => {
 
   it('every brand mark is a real path, not a stand-in', () => {
     for (const [key, m] of Object.entries(BRAND_MARKS)) {
-      expect(m.d.length, key).toBeGreaterThan(100)
-      expect(m.d.startsWith('M'), key).toBe(true)
+      // a multi-colour mark carries its sub-paths in `parts` — the mark as a whole must be
+      // real (a small part such as one stroke of the Redpanda paw can be short)
+      const ds = m.parts ? m.parts.map((p) => p.d) : [m.d]
+      expect(ds.join('').length, key).toBeGreaterThan(100)
+      for (const d of ds) expect(d.startsWith('M'), key).toBe(true)
     }
   })
 })
@@ -193,5 +201,101 @@ describe('ScyllaDB brand (a flavor of the Cassandra engine — SPEC-SCYLLADB.md 
     expect(SYS_GEN.scylladb).toMatchObject({ badge: 'SC', accent: '#6CD5E7', label: 'ScyllaDB' })
     expect(SYSTEM_ORDER).not.toContain('scylladb')
     expect(systemMeta('cassandra').label).toBe('Cassandra')
+  })
+})
+
+describe('Valkey brand (a flavor of the Redis engine — SPEC-VALKEY.md §4)', () => {
+  // the official mark, as published in svg-logos "valkey-icon" (CC0) — never redrawn
+  const OFFICIAL_D = VALKEY_ICON_D.trim()
+
+  it('shows the official Valkey mark verbatim in the brand periwinkle', () => {
+    const { container } = render(SystemIcon, { system: 'valkey', size: 16 })
+    const svg = container.querySelector('svg')!
+    expect(svg.getAttribute('data-logo')).toBe('valkey')
+    expect(svg.getAttribute('viewBox')).toBe('0 0 256 295')
+    const path = svg.querySelector('path')!
+    expect(path.getAttribute('d')).toBe(OFFICIAL_D)
+    expect(path.getAttribute('fill')).toBe('#6983FF')
+    expect(BRAND_MARKS.valkey.slug).toBe('valkey-icon')
+  })
+
+  it('is not a SystemKey — the Redis engine metadata is unchanged', () => {
+    expect(SYS_GEN.valkey).toMatchObject({ badge: 'VK', accent: '#6983FF', label: 'Valkey' })
+    expect(SYSTEM_ORDER).not.toContain('valkey')
+    expect(systemMeta('redis').label).toBe('Redis')
+  })
+})
+
+describe('OpenSearch brand (a flavor of the Elasticsearch engine — SPEC-OPENSEARCH.md)', () => {
+  // the official two-tone mark, as published in svg-logos "opensearch-icon" (CC0) — never redrawn
+  it('shows the official OpenSearch mark verbatim, its navy part theme-aware', () => {
+    const { container } = render(SystemIcon, { system: 'opensearch', size: 16 })
+    const svg = container.querySelector('svg')!
+    expect(svg.getAttribute('data-logo')).toBe('opensearch')
+    expect(svg.getAttribute('viewBox')).toBe('0 0 256 256')
+    const paths = [...svg.querySelectorAll('path')]
+    expect(paths.map((p) => p.getAttribute('d'))).toEqual(OPENSEARCH_PARTS.map((p) => p.d))
+    // brand blue as published; the navy #003b5c follows the theme so it never vanishes on dark
+    expect(paths.map((p) => p.getAttribute('fill'))).toEqual(
+      OPENSEARCH_PARTS.map((p) => (p.fill === '#003b5c' ? 'var(--brand-opensearch-ink)' : p.fill.toUpperCase())),
+    )
+  })
+
+  it('is not a SystemKey — the Elasticsearch engine metadata is unchanged', () => {
+    expect(SYS_GEN.opensearch).toMatchObject({ badge: 'OS', accent: '#005EB8', label: 'OpenSearch' })
+    expect(SYSTEM_ORDER).not.toContain('opensearch')
+    expect(systemMeta('elasticsearch').label).toBe('Elasticsearch')
+  })
+})
+
+describe('Redpanda brand (a flavor of the Kafka engine — SPEC-REDPANDA.md)', () => {
+  // the official mark from Redpanda's own UI kit (@redpanda-data/ui Logos.redpandaIconColorSvg) — never redrawn
+  it('shows the official Redpanda mark verbatim in brand red', () => {
+    const { container } = render(SystemIcon, { system: 'redpanda', size: 16 })
+    const svg = container.querySelector('svg')!
+    expect(svg.getAttribute('data-logo')).toBe('redpanda')
+    expect(svg.getAttribute('viewBox')).toBe(REDPANDA_ICON.viewBox)
+    const paths = [...svg.querySelectorAll('path')]
+    expect(paths.map((p) => p.getAttribute('d'))).toEqual(REDPANDA_ICON.d)
+    expect(paths.every((p) => p.getAttribute('fill') === '#E14226')).toBe(true)
+  })
+
+  it('is not a SystemKey — the Kafka engine metadata is unchanged', () => {
+    expect(SYS_GEN.redpanda).toMatchObject({ badge: 'RP', accent: '#E14226', label: 'Redpanda' })
+    expect(SYSTEM_ORDER).not.toContain('redpanda')
+    expect(systemMeta('kafka').label).toBe('Kafka')
+  })
+})
+
+describe('FerretDB and Amazon DocumentDB brands (flavors of MongoDB — SPEC-FERRETDB-DOCUMENTDB.md)', () => {
+  it('FerretDB: the official simple-icons mark verbatim, its navy theme-aware', () => {
+    const { container } = render(SystemIcon, { system: 'ferretdb', size: 16 })
+    const svg = container.querySelector('svg')!
+    expect(svg.getAttribute('data-logo')).toBe('ferretdb')
+    const path = svg.querySelector('path')!
+    expect(path.getAttribute('d')).toBe(FERRETDB_ICON_D.trim())
+    expect(path.getAttribute('fill')).toBe('var(--brand-ferretdb-ink)')
+  })
+
+  it('Amazon DocumentDB: the official AWS icon verbatim, gradient id unique per drawing', () => {
+    const a = render(SystemIcon, { system: 'documentdb', size: 16 }).container.querySelector('svg')!
+    const b = render(SystemIcon, { system: 'documentdb', size: 16 }).container.querySelector('svg')!
+    expect(a.getAttribute('data-logo')).toBe('documentdb')
+    expect(a.getAttribute('viewBox')).toBe(DOCUMENTDB_ICON.viewBox)
+    expect([...a.querySelectorAll('path')].map((p) => p.getAttribute('d'))).toEqual(DOCUMENTDB_ICON.parts.map((p) => p.d))
+    const ida = a.querySelector('linearGradient')!.getAttribute('id')!
+    const idb = b.querySelector('linearGradient')!.getAttribute('id')!
+    expect(ida).not.toBe(idb)
+    // the tile is painted with this drawing's own gradient
+    expect(a.querySelector('path')!.getAttribute('fill')).toBe(`url(#${ida})`)
+    expect(a.querySelectorAll('path')[1].getAttribute('fill')).toBe('#fff')
+  })
+
+  it('neither is a SystemKey — the MongoDB engine metadata is unchanged', () => {
+    expect(SYS_GEN.ferretdb).toMatchObject({ badge: 'FD', label: 'FerretDB' })
+    expect(SYS_GEN.documentdb).toMatchObject({ badge: 'DD', accent: '#527FFF', label: 'Amazon DocumentDB' })
+    expect(SYSTEM_ORDER).not.toContain('ferretdb')
+    expect(SYSTEM_ORDER).not.toContain('documentdb')
+    expect(systemMeta('mongodb').label).toBe('MongoDB')
   })
 })

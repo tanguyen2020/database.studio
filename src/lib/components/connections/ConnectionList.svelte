@@ -27,7 +27,7 @@
   import type { ProfilePublic } from '$lib/types'
   import ObjectExplorer from '$lib/components/explorer/ObjectExplorer.svelte'
   import { opensWorkspace } from '$lib/stream/workspace-systems'
-  import { brandKey, brandMeta } from '$lib/scylla/brand'
+  import { brandKey, brandMeta, isOpenSearch, withFlavorBrands } from '$lib/brand'
 
   interface Props {
     /** One sidebar mode: each connection opens in place into its own object tree
@@ -133,9 +133,10 @@
     const out: Group[] = []
     let lastCategory = ''
     for (const category of CATEGORY_ORDER) {
-      // ScyllaDB connections get their own band right after Cassandra (same engine,
-      // own brand — SPEC-SCYLLADB.md §3.4); `system` holds the brand key.
-      for (const system of SYSTEM_ORDER.flatMap((k) => (k === 'cassandra' ? ['cassandra', 'scylladb'] : [k]))) {
+      // Flavor brands get their own band right after their engine — ScyllaDB after
+      // Cassandra, Valkey after Redis (SPEC-SCYLLADB.md §3.4, SPEC-VALKEY.md §4);
+      // `system` holds the brand key.
+      for (const system of withFlavorBrands(SYSTEM_ORDER)) {
         const meta = brandMeta(system)
         if (meta.category !== category) continue
         const items = filtered.filter((p) => brandKey(p) === system)
@@ -216,12 +217,15 @@
 
   function select(p: ProfilePublic) {
     connections.selectedId = p.id
-    // Redis · Kafka · NATS · RabbitMQ: the workspace tab IS the view
-    if (p.connected && opensWorkspace(p.system)) tabs.openStreamWorkspace(p.id)
+    // Redis · Kafka · NATS · RabbitMQ: the workspace tab IS the view — opened even
+    // when the connection is closed, so it can say so (connecting / why it failed / Connect)
+    if (opensWorkspace(p.system)) tabs.openStreamWorkspace(p.id)
   }
 
   async function openOrToggle(p: ProfilePublic) {
     connections.selectedId = p.id
+    // workspace engines: open the tab FIRST — it shows the attempt and, if it fails, why
+    if (opensWorkspace(p.system)) tabs.openStreamWorkspace(p.id)
     if (!p.connected) await connections.connect(p.id)
     // Redis/NATS: mở workspace chuyên biệt (không phải SQL editor)
     if (connections.byId(p.id)?.connected) {
@@ -582,7 +586,7 @@
         {#if refreshingId === p.id}
           <span class="conn-refresh-glyph spinning" style="display:inline-flex;flex:none;color:var(--primary);font-size:var(--px-11)" title="Refreshing — reconnecting and reloading the tree"><Icon name="refresh" size={12} /></span>
         {:else if connections.connecting.has(p.id)}
-          <span style="width:var(--px-7);height:var(--px-7);border-radius:50%;flex:none;background:var(--warn)" title="Connecting…"></span>
+          <span class="conn-connecting" role="img" aria-label="Connecting" title="Connecting…"></span>
         {:else if connections.connectErrors[p.id] && !p.connected}
           <span style="width:var(--px-7);height:var(--px-7);border-radius:50%;flex:none;background:var(--error)" title="Not connected — {connections.connectErrors[p.id]}"></span>
         {:else}
@@ -590,7 +594,7 @@
         {/if}
         <div class="conn-text" style="flex:1;min-width:0" aria-busy={refreshingId === p.id}>
           <div class="conn-name" style="font-weight:500;font-size:var(--px-13);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{p.name}</div>
-          <div class="mono conn-sub" style="font-size:var(--px-10_5);margin-top:var(--px-1);color:{refreshingId === p.id ? 'var(--primary)' : 'var(--muted)'};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{refreshingId === p.id ? 'Refreshing…' : p.system === 'sqlite' || p.system === 'duckdb' ? p.sqlite_path || ':memory:' : `${p.host}:${p.port}`}</div>
+          <div class="mono conn-sub" style="font-size:var(--px-10_5);margin-top:var(--px-1);color:{refreshingId === p.id || connections.connecting.has(p.id) ? 'var(--primary)' : connections.connectErrors[p.id] && !p.connected ? 'var(--error)' : 'var(--muted)'};white-space:nowrap;overflow:hidden;text-overflow:ellipsis" data-conn-sub>{refreshingId === p.id ? 'Refreshing…' : connections.connecting.has(p.id) ? 'Connecting…' : `${connections.connectErrors[p.id] && !p.connected ? "Couldn't connect · " : ''}${p.system === 'sqlite' || p.system === 'duckdb' ? p.sqlite_path || ':memory:' : `${p.host}:${p.port}`}`}</div>
         </div>
         {#if p.ephemeral}
           <span style="flex:none;margin-right:var(--px-6);font-size:var(--px-8_5);font-weight:700;letter-spacing:.04em;padding:var(--px-1) var(--px-5);border-radius:var(--px-4);background:var(--panel);color:var(--muted);border:var(--px-1) solid var(--border)" title="One-off · not saved">1×</span>
@@ -645,7 +649,7 @@
     <ContextMenu.Content class="w-56">
       {#if p.system === 'elasticsearch'}
         <ContextMenu.Item onclick={() => { connections.selectedId = p.id; tabs.openEsConsole(p.id) }}>Dev Tools Console</ContextMenu.Item>
-        <ContextMenu.Item onclick={() => { connections.selectedId = p.id; tabs.openEsQuery(p.id, 'esql') }}>New ES|QL Query</ContextMenu.Item>
+        <ContextMenu.Item onclick={() => { connections.selectedId = p.id; tabs.openEsQuery(p.id) }}>New {isOpenSearch(p) ? 'PPL' : 'ES|QL'} Query</ContextMenu.Item>
         <ContextMenu.Item onclick={() => newQueryConsole(p)}>New SQL Query</ContextMenu.Item>
         <ContextMenu.Item onclick={() => { connections.selectedId = p.id; tabs.openEsCluster(p.id) }}>Cluster Overview</ContextMenu.Item>
       {:else if p.system !== 'rabbitmq'}
@@ -902,6 +906,17 @@
     to {
       transform: rotate(360deg);
     }
+  }
+  /* connecting: a small spinning ring in place of the status dot */
+  .conn-connecting {
+    width: var(--px-10);
+    height: var(--px-10);
+    flex: none;
+    box-sizing: border-box;
+    border-radius: 50%;
+    border: var(--px-2) solid color-mix(in srgb, var(--primary) 25%, transparent);
+    border-top-color: var(--primary);
+    animation: conn-refresh-spin 800ms linear infinite;
   }
   .tbtn:hover,
   .hoverable:hover {

@@ -1,7 +1,8 @@
 <script lang="ts">
-  // ES|QL / SQL query tab (Kibana Discover's ES|QL mode + SQL): an editor, Run
-  // (Ctrl+Enter), results in the app's result grid (sort / copy / export), SQL
-  // cursor paging ("Load more") and "Translate to Query DSL".
+  // Query tab — Elasticsearch: ES|QL + SQL (Kibana Discover's ES|QL mode); OpenSearch:
+  // PPL + SQL (the SQL / PPL plugins — SPEC-OPENSEARCH.md O3–O5). An editor, Run
+  // (Ctrl+Enter), results in the app's result grid (sort / copy / export), SQL cursor
+  // paging ("Load more"), "Translate to Query DSL" (Elasticsearch) or "Explain" (OpenSearch).
   import { onMount, untrack } from 'svelte'
   import '$lib/elastic/es.css'
   import * as ipc from '$lib/ipc'
@@ -11,7 +12,8 @@
   import { DS_JSON } from '$lib/editor/monarch'
   import EsIcon from './EsIcon.svelte'
   import EsAppIcon from './EsAppIcon.svelte'
-  import { esqlQuery, sqlNext, sqlQuery, sqlTranslate, type TabularResult } from '$lib/elastic/api'
+  import { esqlQuery, osSqlExplain, osSqlNext, osSqlQuery, pplExplain, pplQuery, sqlNext, sqlQuery, sqlTranslate, type TabularResult } from '$lib/elastic/api'
+  import { LANGUAGE_HELP, LANGUAGE_LABEL, languageFor, queryLanguages, searchProduct, type QueryLanguage } from '$lib/elastic/flavor'
   import { toCsv, withBom } from '$lib/export/rows'
   import { saveText } from '$lib/elastic/save'
   import { tabs } from '$lib/stores/tabs.svelte'
@@ -20,9 +22,12 @@
   let { tab }: { tab: TabState } = $props()
   const connId = $derived(tab.connectionId ?? '')
   // the tab object is stable for this component's lifetime
-  const st = untrack(() => tab.state as { language?: 'esql' | 'sql'; query?: string })
+  const st = untrack(() => tab.state as { language?: QueryLanguage; query?: string })
+  // Elasticsearch or OpenSearch — fixed for this tab's connection
+  const product = untrack(() => searchProduct(tab.connectionId))
+  const languages = queryLanguages(product.flavor)
 
-  let language = $state<'esql' | 'sql'>(st.language ?? 'esql')
+  let language = $state<QueryLanguage>(languageFor(product.flavor, st.language))
   let text = $state(st.query ?? '')
   let indices = $state<string[]>([])
   let running = $state(false)
@@ -30,10 +35,25 @@
   let result = $state<TabularResult | null>(null)
   let took = $state<number | null>(null)
   let translated = $state<string | null>(null)
+  /** Explain result is an execution plan (OpenSearch), not Query DSL */
+  let translatedIsPlan = $state(false)
   let editorKey = $state(0)
 
   const EXAMPLES = $derived.by(() => {
     const ix = indices[0] ?? 'my-index'
+    if (language === 'ppl')
+      return [
+        { label: 'First 100 documents', q: `source = ${ix}\n| head 100` },
+        { label: 'Count by a field', q: `source = ${ix}\n| stats count() as n by status\n| sort - n\n| head 20` },
+        { label: 'Filter, pick fields, sort', q: `source = ${ix}\n| where amount > 100\n| fields @timestamp, customer, amount\n| sort - amount\n| head 50` },
+        { label: 'Top values of a field', q: `source = ${ix}\n| top 10 status` },
+      ]
+    if (language === 'sql' && product.os)
+      return [
+        { label: 'Show indices', q: 'SHOW TABLES LIKE %' },
+        { label: 'Describe an index', q: `DESCRIBE TABLES LIKE ${ix}` },
+        { label: 'Group and count', q: `SELECT status, COUNT(*) AS n\nFROM \`${ix}\`\nGROUP BY status\nORDER BY n DESC` },
+      ]
     return language === 'esql'
       ? [
           { label: 'First 100 documents', q: `FROM ${ix}\n| LIMIT 100` },
@@ -60,14 +80,14 @@
       .catch(() => {})
   })
 
-  function setLanguage(l: 'esql' | 'sql') {
+  function setLanguage(l: QueryLanguage) {
     if (l === language) return
     language = l
     st.language = l
     result = null
     error = null
     translated = null
-    tab.title = l === 'esql' ? 'ES|QL query' : 'SQL query'
+    tab.title = `${LANGUAGE_LABEL[l]} query`
     text = EXAMPLES[0].q
     st.query = text
     editorKey++
@@ -82,7 +102,15 @@
     st.query = text
     const started = performance.now()
     try {
-      result = language === 'esql' ? await esqlQuery(connId, q) : await sqlQuery(connId, q.replace(/;\s*$/, ''))
+      const query = q.replace(/;\s*$/, '')
+      result =
+        language === 'esql'
+          ? await esqlQuery(connId, q)
+          : language === 'ppl'
+            ? await pplQuery(connId, query)
+            : product.os
+              ? await osSqlQuery(connId, query)
+              : await sqlQuery(connId, query)
       took = Math.round(performance.now() - started)
     } catch (e) {
       error = String((e as Error).message ?? e)
@@ -96,7 +124,7 @@
     if (!result?.cursor || running) return
     running = true
     try {
-      const next = await sqlNext(connId, result.cursor, result.cols)
+      const next = product.os ? await osSqlNext(connId, result.cursor, result.cols) : await sqlNext(connId, result.cursor, result.cols)
       result = { cols: result.cols, rows: [...result.rows, ...next.rows], cursor: next.cursor }
     } catch (e) {
       error = String((e as Error).message ?? e)
@@ -106,8 +134,11 @@
   }
 
   async function translate() {
+    const q = text.trim().replace(/;\s*$/, '')
     try {
-      translated = JSON.stringify(await sqlTranslate(connId, text.trim().replace(/;\s*$/, '')), null, 2)
+      translatedIsPlan = product.os
+      const r = !product.os ? await sqlTranslate(connId, q) : language === 'ppl' ? await pplExplain(connId, q) : await osSqlExplain(connId, q)
+      translated = JSON.stringify(r, null, 2)
     } catch (e) {
       error = String((e as Error).message ?? e)
     }
@@ -126,20 +157,21 @@
   <div class="es-header" style="padding-bottom:var(--px-12)">
     <span class="es-header-icon"><EsAppIcon name="sql" size={24} /></span>
     <div style="min-width:0">
-      <div class="es-title">{language === 'esql' ? 'ES|QL' : 'SQL'}</div>
-      <div class="es-sub">{language === 'esql' ? 'Piped query language — FROM, WHERE, EVAL, STATS … BY, KEEP, SORT, LIMIT.' : 'Elasticsearch SQL over your indices — results stream through a cursor.'}</div>
+      <div class="es-title">{LANGUAGE_LABEL[language]}</div>
+      <div class="es-sub">{language === 'sql' ? `${product.name} SQL over your indices — results stream through a cursor.` : LANGUAGE_HELP[language]}</div>
     </div>
     <div class="es-header-actions">
       <span class="es-seg" title="Query language">
-        <button class:on={language === 'esql'} onclick={() => setLanguage('esql')}>ES|QL</button>
-        <button class:on={language === 'sql'} onclick={() => setLanguage('sql')}>SQL</button>
+        {#each languages as l (l)}
+          <button class:on={language === l} aria-pressed={language === l} onclick={() => setLanguage(l)}>{LANGUAGE_LABEL[l]}</button>
+        {/each}
       </span>
     </div>
   </div>
 
   <div class="esq-editor">
     {#key editorKey}
-      <CodeView value={text} language="sql" height="auto" minHeight={110} maxHeight={280} onChange={(t) => (text = t)} onSubmit={run} ariaLabel="{language === 'esql' ? 'ES|QL' : 'SQL'} query" />
+      <CodeView value={text} language="sql" height="auto" minHeight={110} maxHeight={280} onChange={(t) => (text = t)} onSubmit={run} ariaLabel="{LANGUAGE_LABEL[language]} query" />
     {/key}
     <div class="es-toolbar" style="margin-top:var(--px-8)">
       <button class="eg-btn primary" onclick={run} disabled={running || !text.trim()} aria-busy={running}>
@@ -147,7 +179,9 @@
         {running ? 'Running…' : 'Run query'}
       </button>
       <span class="es-help" style="margin:0">Ctrl+Enter</span>
-      {#if language === 'sql'}
+      {#if product.os}
+        <button class="eg-btn" onclick={translate} disabled={!text.trim()} title="Show how {product.name} will run this {LANGUAGE_LABEL[language]} query"><EsIcon name="json" size={13} /> Explain</button>
+      {:else if language === 'sql'}
         <button class="eg-btn" onclick={translate} disabled={!text.trim()} title="Show the Query DSL this SQL becomes"><EsIcon name="json" size={13} /> Translate to Query DSL</button>
       {/if}
       <select class="es-input" style="margin-left:auto;padding:var(--px-4) var(--px-8)" aria-label="Examples" value="" onchange={(e) => { const v = (e.currentTarget as HTMLSelectElement).value; if (v) { text = v; editorKey++ } ; (e.currentTarget as HTMLSelectElement).value = '' }}>
@@ -164,11 +198,13 @@
     {#if translated}
       <div class="es-card" style="margin:var(--px-12) var(--px-16)">
         <div class="es-card-h">
-          <span class="es-card-title">Query DSL</span>
-          <button class="eg-btn" style="margin-left:auto" onclick={() => tabs.openEsConsole(connId, true, `POST /_search\n${translated}\n`)}><EsIcon name="console" size={13} /> Open in console</button>
-          <button class="eg-btn" onclick={() => (translated = null)}>Close</button>
+          <span class="es-card-title">{translatedIsPlan ? 'Execution plan' : 'Query DSL'}</span>
+          {#if !translatedIsPlan}
+            <button class="eg-btn" style="margin-left:auto" onclick={() => tabs.openEsConsole(connId, true, `POST /_search\n${translated}\n`)}><EsIcon name="console" size={13} /> Open in console</button>
+          {/if}
+          <button class="eg-btn" style={translatedIsPlan ? 'margin-left:auto' : ''} onclick={() => (translated = null)}>Close</button>
         </div>
-        <div class="es-card-b"><CodeView value={translated} language={DS_JSON} readOnly height="auto" minHeight={100} maxHeight={320} ariaLabel="Translated Query DSL" /></div>
+        <div class="es-card-b"><CodeView value={translated} language={DS_JSON} readOnly height="auto" minHeight={100} maxHeight={320} ariaLabel={translatedIsPlan ? 'Execution plan' : 'Translated Query DSL'} /></div>
       </div>
     {/if}
     {#if grid}

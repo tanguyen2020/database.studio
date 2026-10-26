@@ -16,6 +16,7 @@
   import { buildQuery, KqlError } from '$lib/elastic/kql'
   import { indexNameError } from '$lib/elastic/format'
   import { focusOnMount } from '$lib/elastic/actions'
+  import { searchProduct } from '$lib/elastic/flavor'
 
   interface Props {
     connId: string
@@ -179,12 +180,12 @@
           </div>
           <label style="display:flex;gap:var(--px-8);align-items:flex-start;font-size:var(--px-12_5)">
             <input type="checkbox" bind:checked={blockWrite} style="margin-top:var(--px-3)" />
-            <span>Block writes on <span class="mono">{index}</span> while copying, then lift the block (required by Elasticsearch).</span>
+            <span>Block writes on <span class="mono">{index}</span> while copying, then lift the block (required by {searchProduct(connId).name}).</span>
           </label>
         {/if}
         {#if op === 'reindex' || op === 'delete-by-query' || op === 'update-by-query'}
           <div>
-            <label class="es-label" for="es-op-query">{op === 'reindex' ? 'Only documents matching (KQL, optional)' : 'Documents matching (KQL)'}</label>
+            <label class="es-label" for="es-op-query">{op === 'reindex' ? `Only documents matching (${searchProduct(connId).queryLanguage}, optional)` : `Documents matching (${searchProduct(connId).queryLanguage})`}</label>
             <input id="es-op-query" class="es-input mono" class:invalid={!!dsl.err} style="width:100%" bind:value={query} placeholder="status:refunded and amount < 10" spellcheck="false" />
             {#if dsl.err}<div class="es-error-text">{dsl.err}</div>{/if}
             {#if matched != null}

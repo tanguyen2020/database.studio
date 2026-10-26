@@ -37,7 +37,7 @@ export function sqlDialectFor(system: string): SQLDialect {
       return PLSQL
     case 'cassandra':
       return Cassandra
-    // a Cassandra-engine tab on a ScyllaDB server (lib/scylla/brand.ts)
+    // a Cassandra-engine tab on a ScyllaDB server (lib/brand.ts)
     case 'scylladb':
       return scyllaDialect
     case 'clickhouse':

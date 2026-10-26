@@ -32,14 +32,44 @@ fn cmd(args: &[&str]) -> Vec<String> {
 
 #[tokio::test]
 async fn redis_workspace_slowlog_info_and_key_meta() {
-    let c = GenericImage::new("redis", "7-alpine")
+    workspace_suite("redis", "7-alpine", "redis-server").await
+}
+
+/// Valkey — a flavor of the Redis engine (SPEC-VALKEY.md): the SAME workspace
+/// calls must work unchanged on a real Valkey server, and the server is named
+/// by its own version, not the frozen `redis_version:7.2.4`.
+#[tokio::test]
+async fn valkey_workspace_slowlog_info_and_key_meta() {
+    workspace_suite("valkey/valkey", "8.1-alpine", "valkey-server").await
+}
+
+async fn workspace_suite(image: &str, tag: &str, server: &str) {
+    let valkey = server.starts_with("valkey");
+    let c = GenericImage::new(image, tag)
         .with_exposed_port(6379.tcp())
-        .with_cmd(vec!["redis-server", "--requirepass", "test123"])
+        .with_cmd(vec![server, "--requirepass", "test123"])
         .start()
         .await
-        .expect("start redis container (Docker must be running)");
+        .expect("start redis/valkey container (Docker must be running)");
     let port = c.get_host_port_ipv4(6379).await.unwrap();
     let mut drv = connect(port).await;
+
+    // ---- which server is this (Test connection + sidebar brand) ----
+    let params = RedisConnParams { host: "localhost".into(), port, password: "test123".into(), db: 0, ssl: false, ssl_ca: String::new() };
+    let tested = RedisDriver::test(&params).await;
+    assert!(tested.ok, "{:?}", tested.error);
+    let id = drv.server_info().await.unwrap();
+    let label = tested.server_version.clone().unwrap_or_default();
+    if valkey {
+        assert_eq!(id.flavor, "valkey");
+        let v = id.version.clone().unwrap();
+        assert!(v.starts_with("8."), "Valkey reports its own version, not redis_version 7.2.4: {v}");
+        assert_eq!(label, format!("Valkey {v}"));
+    } else {
+        assert_eq!(id.flavor, "redis");
+        assert!(label.starts_with("Redis 7"), "{label}");
+    }
+    assert_eq!(id.label.as_deref(), Some(label.as_str()));
 
     // ---- Slow commands: log everything, run a few commands, read them back ----
     drv.command(&cmd(&["CONFIG", "SET", "slowlog-log-slower-than", "0"])).await.unwrap();
@@ -82,7 +112,15 @@ async fn redis_workspace_slowlog_info_and_key_meta() {
             .map(|(_, v)| v.clone())
     };
     assert!(get("Server", "redis_version").is_some_and(|v| v.starts_with('7')), "redis_version");
-    assert_eq!(get("Server", "redis_mode").as_deref(), Some("standalone"));
+    if valkey {
+        // Valkey: server_mode replaces redis_mode; its real version has its own field
+        assert_eq!(get("Server", "server_mode").as_deref(), Some("standalone"));
+        assert_eq!(get("Server", "redis_mode"), None);
+        assert_eq!(get("Server", "server_name").as_deref(), Some("valkey"));
+        assert_eq!(get("Server", "valkey_version"), id.version);
+    } else {
+        assert_eq!(get("Server", "redis_mode").as_deref(), Some("standalone"));
+    }
     assert!(get("Memory", "used_memory").and_then(|v| v.parse::<u64>().ok()).is_some_and(|n| n > 0));
     assert_eq!(get("Replication", "role").as_deref(), Some("master"));
 
@@ -163,5 +201,29 @@ async fn redis_workspace_slowlog_info_and_key_meta() {
     assert!(drv.apply_edit("e:zset", RedisEditOp::ZReplace { from: "anh".into(), to: "binh".into(), score: 1.0 }).await.is_err());
     assert_eq!(drv.command(&cmd(&["ZSCORE", "e:zset", "binh"])).await.unwrap(), "\"2\"");
 
-    eprintln!("CHK redis_workspace_slowlog_info_and_key_meta OK ({} slow entries, {} sections)", slow.entries.len(), sections.len());
+    // ---- key browser: SCAN + one TYPE/TTL/DBSIZE pipeline per page, delete ----
+    drv.command(&cmd(&["SET", "b:ttl", "x", "EX", "300"])).await.unwrap();
+    let mut cursor = 0u64;
+    let mut seen = Vec::new();
+    let mut dbsize: u64;
+    loop {
+        let (next, keys, size) = drv.scan_page("*", cursor, 7).await.unwrap();
+        seen.extend(keys);
+        dbsize = size;
+        if next == 0 {
+            break;
+        }
+        cursor = next;
+    }
+    let total: u64 = drv.command(&cmd(&["DBSIZE"])).await.unwrap().trim_start_matches("(integer) ").parse().unwrap();
+    assert_eq!(dbsize, total, "DBSIZE rides in the scan pipeline");
+    let find = |k: &str| seen.iter().find(|x| x.name == k).unwrap_or_else(|| panic!("{k} scanned"));
+    assert_eq!(find("m:hash").key_type, "hash");
+    assert_eq!(find("m:stream").key_type, "stream");
+    assert_eq!(find("m:str").ttl, -1);
+    assert!((1..=300).contains(&find("b:ttl").ttl), "TTL read per key");
+    assert_eq!(drv.del("b:ttl").await.unwrap(), 1);
+    assert_eq!(drv.del("b:ttl").await.unwrap(), 0);
+
+    eprintln!("CHK {image}:{tag} workspace OK ({label}, {} slow entries, {} sections)", slow.entries.len(), sections.len());
 }

@@ -245,11 +245,23 @@ pub fn describe_error(status: u16, body: &str) -> String {
     let v = serde_json::from_str::<Value>(body).ok();
     let err = v.as_ref().and_then(|v| v.get("error"));
     let (etype, reason) = match err {
-        Some(Value::Object(o)) => (
-            o.get("type").and_then(Value::as_str).unwrap_or("").to_string(),
-            o.get("reason").and_then(Value::as_str).unwrap_or("").to_string(),
-        ),
+        Some(Value::Object(o)) => {
+            let reason = o.get("reason").and_then(Value::as_str).unwrap_or("").to_string();
+            // OpenSearch SQL / PPL put the useful part in `details` and keep `reason`
+            // generic ("Invalid SQL query") — SPEC-OPENSEARCH.md O6.
+            let reason = match o.get("details").and_then(Value::as_str).map(str::trim).filter(|d| !d.is_empty()) {
+                Some(d) if !reason.is_empty() && d != reason => format!("{reason} — {d}"),
+                Some(d) => d.to_string(),
+                None => reason,
+            };
+            (o.get("type").and_then(Value::as_str).unwrap_or("").to_string(), reason)
+        }
         Some(Value::String(s)) => (String::new(), s.clone()),
+        // OpenSearch security REST API: {"status":"error","reason":"…"} / {"status":…,"message":"…"}
+        _ if v.as_ref().and_then(|v| v.get("reason").or_else(|| v.get("message"))).and_then(Value::as_str).is_some() => (
+            String::new(),
+            v.as_ref().and_then(|v| v.get("reason").or_else(|| v.get("message"))).and_then(Value::as_str).unwrap_or("").to_string(),
+        ),
         _ => (String::new(), body.trim().chars().take(300).collect()),
     };
     match status {
@@ -409,6 +421,35 @@ pub fn sql_result(v: &Value) -> (Vec<(String, String)>, Vec<Value>) {
     (cols, rows)
 }
 
+/// OpenSearch SQL / PPL answer (`format=jdbc`): `{schema:[{name,type}], datarows:[[…]],
+/// cursor}` → the app's result set (SPEC-OPENSEARCH.md O3). Continuation pages carry
+/// the schema again; an empty schema keeps the caller's columns.
+pub fn os_sql_result(v: &Value) -> (Vec<(String, String)>, Vec<Value>) {
+    let cols: Vec<(String, String)> = v
+        .get("schema")
+        .and_then(Value::as_array)
+        .map(|a| a.iter().map(|c| (str_at(c, "name"), str_at(c, "type"))).collect())
+        .unwrap_or_default();
+    let rows = v
+        .get("datarows")
+        .and_then(Value::as_array)
+        .map(|rows| {
+            rows.iter()
+                .map(|r| {
+                    let mut o = Map::new();
+                    if let Some(cells) = r.as_array() {
+                        for (i, (name, _)) in cols.iter().enumerate() {
+                            o.insert(name.clone(), cells.get(i).cloned().unwrap_or(Value::Null));
+                        }
+                    }
+                    Value::Object(o)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    (cols, rows)
+}
+
 fn warnings_of(headers: &reqwest::header::HeaderMap) -> Vec<String> {
     headers
         .get_all("warning")
@@ -473,6 +514,19 @@ impl EsDriver {
                 let user = me.json.as_ref().map(|j| str_at(j, "username")).unwrap_or_default();
                 d.info = EsInfo {
                     distribution: "elasticsearch".into(),
+                    tagline: format!("Connected as {user} — no cluster monitor privilege (version and health are hidden)"),
+                    ..Default::default()
+                };
+                return Ok(d);
+            }
+            // OpenSearch has no `_security/_authenticate` (400, no handler); its
+            // security plugin answers `authinfo` for every authenticated user
+            // (SPEC-OPENSEARCH.md O2).
+            let os = d.send(Method::GET, "_plugins/_security/authinfo", None).await?;
+            if os.ok {
+                let user = os.json.as_ref().map(|j| str_at(j, "user_name")).unwrap_or_default();
+                d.info = EsInfo {
+                    distribution: "opensearch".into(),
                     tagline: format!("Connected as {user} — no cluster monitor privilege (version and health are hidden)"),
                     ..Default::default()
                 };
@@ -694,6 +748,9 @@ impl EsDriver {
         if query.is_empty() {
             return Ok(StatementOutcome::Ok);
         }
+        if self.is_opensearch() {
+            return self.exec_os_sql(&query).await;
+        }
         let first = self
             .sql_call(json!({ "query": query, "fetch_size": SQL_FETCH_SIZE }))
             .await?;
@@ -715,6 +772,47 @@ impl EsDriver {
         rows.truncate(SQL_MAX_ROWS);
         let total = rows.len() as u64;
         Ok(StatementOutcome::Rows { result: QueryResultSet { cols, rows, total } })
+    }
+
+    /// The server is OpenSearch (`GET /` distribution, or its security plugin
+    /// answered the least-privilege login).
+    pub fn is_opensearch(&self) -> bool {
+        self.info.distribution == "opensearch"
+    }
+
+    /// OpenSearch SQL plugin (SPEC-OPENSEARCH.md O3): `_plugins/_sql?format=jdbc`,
+    /// following `cursor` up to [`SQL_MAX_ROWS`]; an unfinished cursor is closed.
+    async fn exec_os_sql(&self, query: &str) -> Result<StatementOutcome, QueryError> {
+        let first = self.os_sql_call(json!({ "query": query, "fetch_size": SQL_FETCH_SIZE })).await?;
+        let (cols, mut rows) = os_sql_result(&first);
+        let mut cursor = first.get("cursor").and_then(Value::as_str).map(str::to_string);
+        while let Some(c) = cursor.clone() {
+            if rows.len() >= SQL_MAX_ROWS {
+                let _ = self.call_json(Method::POST, "_plugins/_sql/close", Some(json!({ "cursor": c }))).await;
+                break;
+            }
+            let next = self.os_sql_call(json!({ "cursor": c })).await?;
+            let (_, more) = os_sql_result(&next);
+            if more.is_empty() {
+                break;
+            }
+            rows.extend(more);
+            cursor = next.get("cursor").and_then(Value::as_str).map(str::to_string);
+        }
+        rows.truncate(SQL_MAX_ROWS);
+        let total = rows.len() as u64;
+        Ok(StatementOutcome::Rows { result: QueryResultSet { cols, rows, total } })
+    }
+
+    async fn os_sql_call(&self, body: Value) -> Result<Value, QueryError> {
+        let r = self.send(Method::POST, "_plugins/_sql?format=jdbc", Some(body.to_string())).await?;
+        if !r.ok {
+            let raw = r.json.as_ref().map(|j| j.to_string()).or(r.text.clone()).unwrap_or_default();
+            let mut e = QueryError::new(SYSTEM, describe_error(r.status, &raw), raw.clone());
+            e.position = sql_error_position(&e.message);
+            return Err(e);
+        }
+        Ok(r.json.unwrap_or(Value::Null))
     }
 
     async fn sql_call(&self, body: Value) -> Result<Value, QueryError> {
@@ -857,6 +955,28 @@ mod tests {
         let p = r#"{"error":{"type":"parsing_exception","reason":"unknown query [mach]"},"status":400}"#;
         assert_eq!(describe_error(400, p), "parsing_exception: unknown query [mach]");
         assert_eq!(describe_error(502, "Bad gateway"), "Elasticsearch 502: Bad gateway");
+        // OpenSearch SQL / PPL: the useful text is in `details` (measured on 3.9)
+        let os = r#"{"error":{"reason":"Invalid SQL query","details":"Query must start with SELECT, DELETE, SHOW or DESCRIBE: SELEC x FROM books","type":"SQLFeatureNotSupportedException"},"status":400}"#;
+        assert_eq!(
+            describe_error(400, os),
+            "SQLFeatureNotSupportedException: Invalid SQL query — Query must start with SELECT, DELETE, SHOW or DESCRIBE: SELEC x FROM books"
+        );
+        let same = r#"{"error":{"reason":"no such index [nope]","details":"no such index [nope]","type":"IndexNotFoundException"},"status":404}"#;
+        assert_eq!(describe_error(400, same), "IndexNotFoundException: no such index [nope]");
+    }
+
+    #[test]
+    fn opensearch_jdbc_answers_become_rows() {
+        // `_plugins/_sql?format=jdbc` page as measured on OpenSearch 3.9
+        let page = json!({"schema":[{"name":"title","type":"text"},{"name":"year","type":"integer"}],
+            "datarows":[["Emma",1815],["Dune",null]],"total":2,"size":2,"status":200,"cursor":"n:abc"});
+        let (cols, rows) = os_sql_result(&page);
+        assert_eq!(cols, vec![("title".into(), "text".into()), ("year".into(), "integer".into())]);
+        assert_eq!(rows, vec![json!({"title":"Emma","year":1815}), json!({"title":"Dune","year":null})]);
+        // a short row is padded with null, never shifted
+        let (_, short) = os_sql_result(&json!({"schema":[{"name":"a","type":"long"},{"name":"b","type":"long"}],"datarows":[[1]]}));
+        assert_eq!(short, vec![json!({"a":1,"b":null})]);
+        assert_eq!(os_sql_result(&json!({})), (vec![], vec![]));
     }
 
     #[test]

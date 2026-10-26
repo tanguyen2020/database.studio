@@ -6,12 +6,13 @@
   import SystemIcon from '$lib/components/SystemIcon.svelte'
   import Icon from '$lib/components/Icon.svelte'
   import { systemMeta } from '$lib/systems'
-  import { brandKey, brandMeta } from '$lib/scylla/brand'
+  import { brandKey, brandMeta } from '$lib/brand'
   import { connections } from '$lib/stores/connections.svelte'
   import { tabs } from '$lib/stores/tabs.svelte'
   import { toasts } from '$lib/stores/toast.svelte'
   import { ui } from '$lib/stores/ui.svelte'
   import { connectionChanged } from '$lib/connection/changes'
+  import { opensWorkspace } from '$lib/stream/workspace-systems'
   import type { ProfilePublic, TestResult } from '$lib/types'
 
   const profile = $derived(ui.formProfile)
@@ -20,11 +21,32 @@
 
   // Local editable copy + secrets (không round-trip từ backend)
   let draft = $state<ProfilePublic | null>(null)
-  // Cassandra engine: which CQL server (Apache Cassandra or ScyllaDB — SPEC-SCYLLADB.md)
-  const FLAVORS = [
-    { v: 'cassandra', brand: 'cassandra', t: 'Apache Cassandra', d: 'The open-source Apache project' },
-    { v: 'scylla', brand: 'scylladb', t: 'ScyllaDB', d: 'Cassandra-compatible, built for speed' },
-  ] as const
+  // Which server speaks the engine's protocol: Apache Cassandra or ScyllaDB
+  // (SPEC-SCYLLADB.md), Redis or Valkey (SPEC-VALKEY.md). First entry = the default.
+  const FLAVORS: Record<string, { v: string; brand: string; t: string; d: string }[]> = {
+    cassandra: [
+      { v: 'cassandra', brand: 'cassandra', t: 'Apache Cassandra', d: 'The open-source Apache project' },
+      { v: 'scylla', brand: 'scylladb', t: 'ScyllaDB', d: 'Cassandra-compatible, built for speed' },
+    ],
+    redis: [
+      { v: 'redis', brand: 'redis', t: 'Redis', d: 'Redis Open Source, Stack or a managed Redis' },
+      { v: 'valkey', brand: 'valkey', t: 'Valkey', d: 'The open-source fork, by the Linux Foundation' },
+    ],
+    mongodb: [
+      { v: 'mongodb', brand: 'mongodb', t: 'MongoDB', d: 'MongoDB Community, Enterprise or Atlas' },
+      { v: 'ferretdb', brand: 'ferretdb', t: 'FerretDB', d: 'MongoDB protocol on PostgreSQL' },
+      { v: 'documentdb', brand: 'documentdb', t: 'Amazon DocumentDB', d: 'MongoDB-compatible AWS service' },
+    ],
+    kafka: [
+      { v: 'kafka', brand: 'kafka', t: 'Apache Kafka', d: 'Apache Kafka, Confluent or Amazon MSK' },
+      { v: 'redpanda', brand: 'redpanda', t: 'Redpanda', d: 'Kafka-compatible, with an Admin API' },
+    ],
+    elasticsearch: [
+      { v: 'elasticsearch', brand: 'elasticsearch', t: 'Elasticsearch', d: 'Elastic Stack or Elastic Cloud' },
+      { v: 'opensearch', brand: 'opensearch', t: 'OpenSearch', d: 'Self-managed or Amazon OpenSearch Service' },
+    ],
+  }
+  const flavors = $derived(FLAVORS[draft?.system ?? ''] ?? [])
   // ScyllaDB wears its own brand on the Cassandra engine (SPEC-SCYLLADB.md §3.4);
   // it follows the draft so choosing "ScyllaDB" in Server type switches the logo.
   const meta = $derived(brandMeta(brandKey(draft ?? profile)))
@@ -75,6 +97,24 @@
   // `mssql_auth` carries the auth method (basic | apikey | bearer | none).
   const isElastic = $derived(draft?.system === 'elasticsearch')
   const esAuth = $derived(isElastic ? draft?.mssql_auth || 'basic' : '')
+  // OpenSearch flavor of the Elasticsearch engine (SPEC-OPENSEARCH.md): no Elastic API keys,
+  // its own hints
+  const draftIsOpenSearch = $derived(isElastic && draft?.cassandra_flavor === 'opensearch')
+  // Redpanda flavor of the Kafka engine (SPEC-REDPANDA.md): Admin API + built-in Schema Registry
+  const draftIsRedpanda = $derived(isKafka && draft?.cassandra_flavor === 'redpanda')
+  const draftIsDocumentDB = $derived(draft?.system === 'mongodb' && draft?.cassandra_flavor === 'documentdb')
+  /** Choose a server flavor card. Amazon DocumentDB always uses TLS, so picking it turns TLS on. */
+  function pickFlavor(v: string) {
+    if (!draft) return
+    draft.cassandra_flavor = v
+    if (v === 'documentdb' && !draft.ssl) draft.ssl = true
+  }
+  /** Redpanda service URL on the first broker host — what an empty field means */
+  function redpandaDefault(port: number): string {
+    const first = (draft?.host ?? '').split(',')[0].trim().split('://').pop() ?? ''
+    const host = first.startsWith('[') ? first.slice(0, first.indexOf(']') + 1) : first.split(':')[0]
+    return `${draft?.ssl ? 'https' : 'http'}://${host || 'localhost'}:${port}`
+  }
   const hostLabel = $derived(isKafka ? 'Host / Bootstrap' : isCassandra ? 'Contact points' : isDuckdb ? 'Database file' : 'Host')
   const hostPlaceholder = $derived(
     isSqlite
@@ -86,7 +126,9 @@
         : isCassandra
           ? '10.0.5.1,10.0.5.2'
           : isElastic
-            ? 'localhost  (or https://my-deployment.es.io)'
+            ? draftIsOpenSearch
+              ? 'localhost  (or https://search-mydomain.eu-west-1.es.amazonaws.com)'
+              : 'localhost  (or https://my-deployment.es.io)'
             : 'localhost',
   )
   const dbPlaceholder = $derived(draft?.system === 'postgres' ? 'postgres' : isOracle ? 'FREEPDB1' : '')
@@ -205,10 +247,26 @@
     testId = id
     try {
       testResult = await connections.test(buildDraftPayload(), id)
-      // The server told us which CQL engine it is — show the right brand right away.
-      if (draft && draft.system === 'cassandra' && testResult.ok && testResult.server_version) {
-        if (testResult.server_version.startsWith('ScyllaDB')) draft.cassandra_flavor = 'scylla'
-        else if (testResult.server_version.startsWith('Cassandra')) draft.cassandra_flavor = 'cassandra'
+      // The server told us which product it is — show the right brand right away.
+      if (draft && testResult.ok && testResult.server_version) {
+        const v = testResult.server_version
+        if (draft.system === 'cassandra') {
+          if (v.startsWith('ScyllaDB')) draft.cassandra_flavor = 'scylla'
+          else if (v.startsWith('Cassandra')) draft.cassandra_flavor = 'cassandra'
+        } else if (draft.system === 'redis') {
+          if (v.startsWith('Valkey')) draft.cassandra_flavor = 'valkey'
+          else if (v.startsWith('Redis')) draft.cassandra_flavor = 'redis'
+        } else if (draft.system === 'mongodb') {
+          if (v.startsWith('FerretDB')) draft.cassandra_flavor = 'ferretdb'
+          else if (v.startsWith('Amazon DocumentDB')) draft.cassandra_flavor = 'documentdb'
+          else if (v.startsWith('MongoDB')) draft.cassandra_flavor = 'mongodb'
+        } else if (draft.system === 'kafka') {
+          if (v.startsWith('Redpanda')) draft.cassandra_flavor = 'redpanda'
+          else draft.cassandra_flavor = 'kafka'
+        } else if (draft.system === 'elasticsearch') {
+          if (v.startsWith('OpenSearch')) draft.cassandra_flavor = 'opensearch'
+          else if (v.startsWith('Elasticsearch')) draft.cassandra_flavor = 'elasticsearch'
+        }
       }
     } catch (e) {
       testResult = { ok: false, error: String(e) }
@@ -251,10 +309,20 @@
       if (saved) {
         toasts.success(`Saved "${saved.name}"`, saved.system)
         close()
+        openSaved(saved)
       }
     } finally {
       saving = false
     }
+  }
+
+  // The button says Connect: after saving, select the connection and open it (a
+  // connection that is already open stays as it is). Redis · Kafka · NATS · RabbitMQ
+  // have no object tree — their workspace tab opens first and shows the attempt.
+  function openSaved(saved: ProfilePublic) {
+    connections.selectedId = saved.id
+    if (opensWorkspace(saved.system)) tabs.openStreamWorkspace(saved.id)
+    if (!connections.byId(saved.id)?.connected) void connections.connect(saved.id)
   }
 
   // the first thing to type is the name — land the caret there when the form opens
@@ -419,21 +487,33 @@
                   <option value="SCRAM-SHA-512">SASL/SCRAM-SHA-512</option>
                 </select>
               </div>
+              {#if draftIsRedpanda}
+                <!-- Redpanda Admin API (SPEC-REDPANDA.md): health, brokers, cluster config, users, roles -->
+                <div style="grid-column:1/3">
+                  <div class="cm-label">Admin API URL <span class="cm-opt">(optional — empty uses {redpandaDefault(9644)})</span></div>
+                  <input class="cm-input mono" bind:value={draft.admin_url} placeholder={redpandaDefault(9644)} aria-label="Admin API URL" />
+                </div>
+              {/if}
               <div style="grid-column:1/3">
-                <div class="cm-label">Schema Registry URL <span class="cm-opt">(optional)</span></div>
-                <input class="cm-input mono" bind:value={draft.schema_registry_url} placeholder="http://localhost:8081" />
+                <div class="cm-label">Schema Registry URL <span class="cm-opt">{draftIsRedpanda ? `(optional — empty uses Redpanda's built-in ${redpandaDefault(8081)})` : '(optional)'}</span></div>
+                <input class="cm-input mono" bind:value={draft.schema_registry_url} placeholder={draftIsRedpanda ? redpandaDefault(8081) : 'http://localhost:8081'} />
               </div>
+              {#if draftIsRedpanda}
+                <div class="cm-note" data-testid="rp-hint" style="grid-column:1/3">
+                  The Admin API and Schema Registry are reached directly (not through the SSH tunnel). With SASL on, they sign in with the same user — Redpanda requires a superuser for cluster settings and security.
+                </div>
+              {/if}
             {/if}
 
-            {#if isCassandra}
-              <!-- Apache Cassandra or ScyllaDB: two logo cards (same chooser style as the
-                   SSH method). A starting hint only — Test / Connect detects it for real. -->
+            {#if flavors.length}
+              <!-- Apache Cassandra or ScyllaDB · Redis or Valkey: two logo cards (same chooser
+                   style as the SSH method). A starting hint only — Test / Connect detects it. -->
               <div style="grid-column:1/3">
-                <div class="cm-label" id="cass-flavor-label">Database engine</div>
-                <div class="cm-ssh-auth cm-flavor" role="radiogroup" aria-labelledby="cass-flavor-label">
-                  {#each FLAVORS as opt (opt.v)}
-                    <!-- a profile not detected yet wears the Cassandra brand, so show that card picked -->
-                    {@const on = (draft.cassandra_flavor || 'cassandra') === opt.v}
+                <div class="cm-label" id="engine-flavor-label">Database engine</div>
+                <div class="cm-ssh-auth cm-flavor" role="radiogroup" aria-labelledby="engine-flavor-label">
+                  {#each flavors as opt (opt.v)}
+                    <!-- a profile not detected yet wears the engine's own brand, so show that card picked -->
+                    {@const on = (draft.cassandra_flavor || flavors[0].v) === opt.v}
                     <div
                       class="cm-ssh-opt {opt.v}"
                       class:on
@@ -441,15 +521,19 @@
                       aria-checked={on}
                       aria-label={opt.t}
                       tabindex={on ? 0 : -1}
-                      onclick={() => draft && (draft.cassandra_flavor = opt.v)}
+                      onclick={() => draft && pickFlavor(opt.v)}
                       onkeydown={(e) => {
                         if (!draft) return
                         if (e.key === 'Enter' || e.key === ' ') {
                           e.preventDefault()
-                          draft.cassandra_flavor = opt.v
+                          pickFlavor(opt.v)
                         } else if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) {
                           e.preventDefault()
-                          draft.cassandra_flavor = draft.cassandra_flavor === 'scylla' ? 'cassandra' : 'scylla'
+                          // two or three cards: arrows move round the group
+                          const cur = draft.cassandra_flavor || flavors[0].v
+                          const i = Math.max(0, flavors.findIndex((f) => f.v === cur))
+                          const step = e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 1
+                          pickFlavor(flavors[(i + step + flavors.length) % flavors.length].v)
                           const next = (e.currentTarget as HTMLElement).parentElement?.querySelector<HTMLElement>(`.cm-ssh-opt.${draft.cassandra_flavor}`)
                           next?.focus()
                         }
@@ -464,7 +548,17 @@
                 <div class="cm-flavor-hint">
                   Not sure? Test the connection — we recognise the engine for you.
                 </div>
+                {#if draftIsDocumentDB}
+                  <div class="cm-note" data-testid="docdb-hint">
+                    Amazon DocumentDB always uses TLS: keep <b>SSL / TLS</b> on and choose Amazon's CA bundle
+                    (<span class="mono">global-bundle.pem</span>) as the CA certificate. Retryable writes are turned off for you
+                    (DocumentDB does not support them). A cluster inside a VPC is reached through SSH via an EC2 host.
+                  </div>
+                {/if}
               </div>
+            {/if}
+
+            {#if isCassandra}
               <!-- Cassandra: Local datacenter + Consistency level (prototype dòng 2188-2191) -->
               <div>
                 <div class="cm-label">Local datacenter</div>
@@ -486,10 +580,10 @@
             {#if isElastic}
               <div style="grid-column:1/3">
                 <div class="cm-label">Authentication</div>
-                <select class="cm-input" value={esAuth} onchange={(e) => draft && (draft.mssql_auth = e.currentTarget.value)} aria-label="Elasticsearch authentication">
+                <select class="cm-input" value={esAuth} onchange={(e) => draft && (draft.mssql_auth = e.currentTarget.value)} aria-label="{draftIsOpenSearch ? 'OpenSearch' : 'Elasticsearch'} authentication">
                   <option value="basic">Basic — user &amp; password</option>
-                  <option value="apikey">API key</option>
-                  <option value="bearer">Bearer token</option>
+                  {#if !draftIsOpenSearch}<option value="apikey">API key</option>{/if}
+                  <option value="bearer">{draftIsOpenSearch ? 'Bearer token (JWT)' : 'Bearer token'}</option>
                   <option value="none">None (security disabled)</option>
                 </select>
               </div>
@@ -589,7 +683,11 @@
                 Port is the <span class="mono cm-code">Management HTTP API</span> (15672, or 15671 with SSL) — not the AMQP port 5672. The <span class="mono cm-code">rabbitmq_management</span> plugin must be enabled, and the user needs the <span class="mono cm-code">management</span> tag. Leave Virtual host empty for <span class="mono cm-code">/</span>.
               </div>
             {/if}
-            {#if isElastic}
+            {#if isElastic && draftIsOpenSearch}
+              <div data-testid="es-port-hint" class="cm-note">
+                Port is the <span class="mono cm-code">REST API</span> (9200) — not the transport port 9300 or OpenSearch Dashboards (5601). With the security plugin OpenSearch serves HTTPS: turn on <b>SSL</b> and set its root CA (<span class="mono cm-code">root-ca.pem</span>). For Amazon OpenSearch Service paste the domain endpoint as Host and sign in with the fine-grained access control user.
+              </div>
+            {:else if isElastic}
               <div data-testid="es-port-hint" class="cm-note">
                 Port is the <span class="mono cm-code">REST API</span> (9200) — not the transport port 9300 or Kibana (5601). Elasticsearch 8 serves HTTPS by default: turn on <b>SSL</b> and set its CA certificate (<span class="mono cm-code">http_ca.crt</span>). For Elastic Cloud paste the endpoint URL as Host. An API key may be the encoded value or <span class="mono cm-code">id:api_key</span>.
               </div>
@@ -1253,6 +1351,44 @@
   }
   .cm-flavor .cm-ssh-opt.scylla {
     --opt: var(--brand-scylla);
+  }
+  .cm-flavor .cm-ssh-opt.redis {
+    --opt: var(--sys-redis-accent);
+  }
+  .cm-flavor .cm-ssh-opt.valkey {
+    --opt: var(--sys-valkey-accent);
+  }
+  .cm-flavor .cm-ssh-opt {
+    min-width: 0;
+  }
+  /* three servers (MongoDB · FerretDB · Amazon DocumentDB): three narrower cards, the
+     description wraps instead of being cut */
+  .cm-flavor:has(.cm-ssh-opt:nth-child(3)) {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .cm-flavor:has(.cm-ssh-opt:nth-child(3)) .cm-ssh-txt span {
+    white-space: normal;
+  }
+  .cm-flavor .cm-ssh-opt.mongodb {
+    --opt: var(--sys-mongodb-accent);
+  }
+  .cm-flavor .cm-ssh-opt.ferretdb {
+    --opt: var(--sys-ferretdb-accent);
+  }
+  .cm-flavor .cm-ssh-opt.documentdb {
+    --opt: var(--sys-documentdb-accent);
+  }
+  .cm-flavor .cm-ssh-opt.kafka {
+    --opt: var(--sys-kafka-accent);
+  }
+  .cm-flavor .cm-ssh-opt.redpanda {
+    --opt: var(--sys-redpanda-accent);
+  }
+  .cm-flavor .cm-ssh-opt.elasticsearch {
+    --opt: var(--sys-elasticsearch-accent);
+  }
+  .cm-flavor .cm-ssh-opt.opensearch {
+    --opt: var(--sys-opensearch-accent);
   }
   .cm-flavor .cm-ssh-ico,
   .cm-flavor .cm-ssh-opt.on .cm-ssh-ico {

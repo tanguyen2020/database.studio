@@ -20,6 +20,19 @@ function num(m: Map<string, string>, k: string): number | null {
   return Number.isFinite(n) ? n : null
 }
 
+/**
+ * The product behind the Redis protocol, from INFO (SPEC-VALKEY.md §1). Valkey keeps
+ * `redis_version:7.2.4` for old clients and names itself in `server_name` /
+ * `valkey_version`, so the version shown must come from its own field.
+ */
+export function serverProduct(info: RedisInfo | null | undefined, fallback = 'Redis'): { name: string; version: string | null } {
+  const m = infoMap(info)
+  const valkey = m.get('valkey_version')
+  if (valkey || m.get('server_name')?.toLowerCase() === 'valkey') return { name: 'Valkey', version: valkey ?? m.get('redis_version') ?? null }
+  if (m.has('redis_version')) return { name: 'Redis', version: m.get('redis_version')! }
+  return { name: fallback, version: null }
+}
+
 const POLICY: Record<string, string> = {
   noeviction: 'Refuse new writes',
   'allkeys-lru': 'Remove the least recently used keys',
@@ -46,12 +59,16 @@ export interface RedisHeaderStats {
   maxMemory: number | null
   clients: number | null
   opsPerSec: number | null
+  /** the server's own version (valkey_version on Valkey) */
   version: string | null
+  /** "Redis" | "Valkey" */
+  product: string
   role: string | null
 }
 
-export function headerStats(info: RedisInfo | null | undefined): RedisHeaderStats {
+export function headerStats(info: RedisInfo | null | undefined, fallbackProduct = 'Redis'): RedisHeaderStats {
   const m = infoMap(info)
+  const product = serverProduct(info, fallbackProduct)
   const keysByDb = keyspaceCounts(info?.sections.find((s) => s.name.toLowerCase() === 'keyspace')?.entries)
   const dbs = Object.values(keysByDb)
   return {
@@ -61,7 +78,8 @@ export function headerStats(info: RedisInfo | null | undefined): RedisHeaderStat
     maxMemory: num(m, 'maxmemory'),
     clients: num(m, 'connected_clients'),
     opsPerSec: num(m, 'instantaneous_ops_per_sec'),
-    version: m.get('redis_version') ?? null,
+    version: product.version,
+    product: product.name,
     role: m.get('role') ?? null,
   }
 }
@@ -80,13 +98,14 @@ export interface RedisHealth {
 }
 
 /** One plain-language sentence about the server (rule U2): ok · needs attention · error. */
-export function redisHealth(info: RedisInfo | null | undefined): RedisHealth | null {
+export function redisHealth(info: RedisInfo | null | undefined, fallbackProduct = 'Redis'): RedisHealth | null {
   if (!info) return null
   const m = infoMap(info)
+  const name = serverProduct(info, fallbackProduct).name
   if (m.get('rdb_last_bgsave_status') === 'err')
     return { tone: 'bad', headline: 'The last snapshot to disk failed', detail: 'Changes since the last good snapshot are only in memory. Check disk space and permissions on the server.' }
   if (m.get('aof_last_write_status') === 'err')
-    return { tone: 'bad', headline: 'Writing the append-only file failed', detail: 'Redis may refuse writes until the disk problem is fixed.' }
+    return { tone: 'bad', headline: 'Writing the append-only file failed', detail: `${name} may refuse writes until the disk problem is fixed.` }
   if (m.get('role') === 'slave' && m.get('master_link_status') === 'down')
     return { tone: 'bad', headline: 'This replica lost its link to the primary', detail: `Data here is no longer updated. Primary: ${m.get('master_host') ?? '?'}:${m.get('master_port') ?? '?'}.` }
   const used = num(m, 'used_memory')
@@ -95,7 +114,7 @@ export function redisHealth(info: RedisInfo | null | undefined): RedisHealth | n
     return {
       tone: 'warn',
       headline: `Memory is ${percent(used, max)} full`,
-      detail: `${formatBytes(used)} of ${formatBytes(max)}. When it is full Redis will: ${evictionPolicyText(m.get('maxmemory_policy')).toLowerCase()}.`,
+      detail: `${formatBytes(used)} of ${formatBytes(max)}. When it is full ${name} will: ${evictionPolicyText(m.get('maxmemory_policy')).toLowerCase()}.`,
     }
   const rejected = num(m, 'rejected_connections')
   if (rejected && rejected > 0)
@@ -103,7 +122,7 @@ export function redisHealth(info: RedisInfo | null | undefined): RedisHealth | n
   const clients = num(m, 'connected_clients')
   return {
     tone: 'ok',
-    headline: 'Redis is running normally',
+    headline: `${name} is running normally`,
     detail: [clients != null ? `${fullCount(clients)} ${clients === 1 ? 'client' : 'clients'} connected` : null, used != null ? `${formatBytes(used)} of memory used` : null]
       .filter(Boolean)
       .join(' · '),
@@ -132,8 +151,11 @@ function yesNo(v: string | undefined): string {
  * INFO as five readable groups (Server · Memory · Clients · Persistence · Replication)
  * plus Activity. Facts the server did not report are left out — never shown as 0.
  */
-export function serverInfoGroups(info: RedisInfo | null | undefined, now: number = Date.now()): InfoGroup[] {
+export function serverInfoGroups(info: RedisInfo | null | undefined, now: number = Date.now(), fallbackProduct = 'Redis'): InfoGroup[] {
   const m = infoMap(info)
+  const product = serverProduct(info, fallbackProduct)
+  // Valkey reports server_mode where Redis reports redis_mode (measured on Valkey 8.1)
+  const mode = m.get('redis_mode') ?? m.get('server_mode')
   const has = (k: string) => m.has(k)
   const groups: InfoGroup[] = []
   const push = (name: string, facts: (InfoFact | null)[]) => {
@@ -142,8 +164,8 @@ export function serverInfoGroups(info: RedisInfo | null | undefined, now: number
   }
   const uptime = num(m, 'uptime_in_seconds')
   push('Server', [
-    has('redis_version') ? { label: 'Version', value: `Redis ${m.get('redis_version')}` } : null,
-    has('redis_mode') ? { label: 'Mode', value: m.get('redis_mode') === 'standalone' ? 'Single server' : m.get('redis_mode') === 'cluster' ? 'Cluster' : m.get('redis_mode') === 'sentinel' ? 'Sentinel' : m.get('redis_mode')! } : null,
+    product.version ? { label: 'Version', value: `${product.name} ${product.version}` } : null,
+    mode ? { label: 'Mode', value: mode === 'standalone' ? 'Single server' : mode === 'cluster' ? 'Cluster' : mode === 'sentinel' ? 'Sentinel' : mode } : null,
     uptime != null ? { label: 'Running for', value: humanDuration(uptime * 1000), title: `Started ${exactUtc(now - uptime * 1000)}` } : null,
     has('os') ? { label: 'Operating system', value: m.get('os')! } : null,
     has('tcp_port') ? { label: 'Port', value: m.get('tcp_port')! } : null,
@@ -152,12 +174,12 @@ export function serverInfoGroups(info: RedisInfo | null | undefined, now: number
   const max = num(m, 'maxmemory')
   const frag = num(m, 'mem_fragmentation_ratio')
   push('Memory', [
-    used != null ? { label: 'Memory used', value: formatBytes(used), help: 'Memory Redis uses for your data and its own bookkeeping.' } : null,
-    max != null ? { label: 'Memory limit', value: max === 0 ? 'No limit' : formatBytes(max), help: 'maxmemory — the most memory Redis may use for data.' } : null,
+    used != null ? { label: 'Memory used', value: formatBytes(used), help: `Memory ${product.name} uses for your data and its own bookkeeping.` } : null,
+    max != null ? { label: 'Memory limit', value: max === 0 ? 'No limit' : formatBytes(max), help: `maxmemory — the most memory ${product.name} may use for data.` } : null,
     used != null && max ? { label: 'Used of limit', value: percent(used, max), tone: used / max >= 0.9 ? 'warn' : 'ok' } : null,
     has('used_memory_peak') ? { label: 'Highest so far', value: formatBytes(num(m, 'used_memory_peak')) } : null,
     has('maxmemory_policy') ? { label: 'When memory is full', value: evictionPolicyText(m.get('maxmemory_policy')), help: `Eviction policy: ${m.get('maxmemory_policy')}` } : null,
-    frag != null ? { label: 'Fragmentation', value: `${frag.toFixed(2)}×`, help: 'Memory the operating system holds for Redis divided by what Redis uses. Close to 1 is good; above 1.5 wastes memory.', tone: frag > 1.5 ? 'warn' : undefined } : null,
+    frag != null ? { label: 'Fragmentation', value: `${frag.toFixed(2)}×`, help: `Memory the operating system holds for ${product.name} divided by what ${product.name} uses. Close to 1 is good; above 1.5 wastes memory.`, tone: frag > 1.5 ? 'warn' : undefined } : null,
   ])
   push('Clients', [
     has('connected_clients') ? { label: 'Connected', value: fullCount(num(m, 'connected_clients')) } : null,

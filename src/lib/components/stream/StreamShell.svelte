@@ -27,6 +27,8 @@
 
   interface Props {
     system: string
+    /** logo to show when it differs from the engine — a flavor brand such as 'valkey' */
+    brand?: string
     title: string
     subtitle?: string
     sections: ShellSection[]
@@ -41,7 +43,7 @@
     children: Snippet
   }
 
-  let { system, title, subtitle, sections, active, onSection, status = null, description = null, loading = false, onRefresh, actions, children }: Props = $props()
+  let { system, brand, title, subtitle, sections, active, onSection, status = null, description = null, loading = false, onRefresh, actions, children }: Props = $props()
 
   // Hidden descriptions are remembered per engine + section, so a reader who already
   // knows the term is not told twice. Storage can be unavailable (private mode).
@@ -76,7 +78,7 @@
 
 <div class="ds-ws sw-shell" data-stream-shell={system}>
   <header class="ds-ws-head">
-    <span class="ds-ws-icon sw-logo" aria-hidden="true"><SystemIcon {system} size={22} /></span>
+    <span class="ds-ws-icon sw-logo" aria-hidden="true"><SystemIcon system={brand ?? system} size={22} /></span>
     <div class="ds-ws-titles">
       <span class="ds-ws-title">{title}</span>
       {#if subtitle}<span class="ds-ws-sub">{subtitle}</span>{/if}

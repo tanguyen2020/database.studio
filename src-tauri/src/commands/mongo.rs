@@ -83,6 +83,39 @@ pub async fn mongo_exec(
     })
 }
 
+// ---- Server flavor (SPEC-FERRETDB-DOCUMENTDB.md) ---------------------------
+
+/// MongoDB, FerretDB or Amazon DocumentDB? Read from `buildInfo` + the host and
+/// written back to the saved profile (`cassandra_flavor` = the generic "server flavor"
+/// field) so the logo, sidebar group and screens are right before the next connect.
+#[tauri::command]
+pub async fn mongo_server_info(state: State<'_, AppState>, conn_id: String) -> Result<crate::drivers::mongo::MongoServerInfo, AppError> {
+    let base = {
+        let no_tab = conn_id.split('#').next().unwrap_or(&conn_id);
+        no_tab.split("::").next().unwrap_or(no_tab).to_string()
+    };
+    let saved = state.storage.get_connection(&base).ok();
+    let (host, chosen) = saved.as_ref().map(|p| (p.host.clone(), p.cassandra_flavor.clone())).unwrap_or_default();
+    let info = state
+        .registry
+        .with_driver(&conn_id, move |driver| async move {
+            let d = driver.lock().await;
+            match &*d {
+                LiveConnection::Mongo(m) => m.server_info(&host, &chosen).await,
+                _ => Err(not_mongo()),
+            }
+        })
+        .await?
+        .map_err(|e| AppError::Driver(e.message))?;
+    if let Some(mut p) = saved {
+        if p.system == crate::drivers::types::SystemType::Mongodb && p.cassandra_flavor != info.flavor {
+            p.cassandra_flavor = info.flavor.clone();
+            state.storage.save_connection(&p)?;
+        }
+    }
+    Ok(info)
+}
+
 // ---- User Manager (U5) — command-based (run_command via driver) -----------
 
 #[tauri::command]

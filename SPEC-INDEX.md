@@ -94,6 +94,10 @@ Driver module `drivers/<system>.rs` + variant trong `LiveConnection` + **nhánh 
 | `SPEC-REDIS-BROWSER.md` | Redis Browser, bỏ kiểu mỗi key một tab (W3) | **Đã code W3 (chưa commit)** |
 | `SPEC-NATS-WORKSPACE.md` | NATS workspace: Overview, Streams (cây), KV, Object stores, Publish & subscribe (W4) | **Đã code W4 (chưa commit)** — Peek theo sequence đã làm |
 | `SPEC-SCYLLADB.md` | ScyllaDB = biến thể của engine Cassandra (nhận diện, tablets, CDC, DESCRIBE, cluster_status, logo) | **Đã implement (chưa commit)** — bằng chứng đo trên Scylla 6.2 ở §1; integration `scylla_integration.rs` EXIT=0 |
+| `SPEC-VALKEY.md` | Valkey = biến thể của engine Redis (nhận diện qua INFO, phiên bản thật, Mode từ server_mode, logo chính thức, nhóm sidebar) | **Đã implement (chưa commit)** — đo trên Valkey 8.1.10 ở §1; integration Redis Browser + Backup chạy trên `valkey/valkey:8.1-alpine` |
+| `SPEC-OPENSEARCH.md` | OpenSearch = biến thể của engine Elasticsearch (PPL/SQL plugin, ISM, Snapshot Management, transforms, rollups, Alerting, security plugin, logo) | **Đã implement (chưa commit)** — đo trên OpenSearch 3.9 ở §1; integration phát lại fixture request của app trên container thật |
+| `SPEC-REDPANDA.md` | Redpanda = biến thể của engine Kafka (Admin API: health, phiên bản, disk, license, balancer, bảo trì broker, cấu hình cluster, SASL users, roles, transforms) + Kafka ACL cho cả Kafka thường, logo | **Đã implement (chưa commit)** — đo trên Redpanda v26.2.6 ở §1; integration phát lại fixture Admin API + Kafka workspace + ACL trên container thật |
+| `SPEC-FERRETDB-DOCUMENTDB.md` | FerretDB và Amazon DocumentDB = biến thể của engine MongoDB (nhận diện, URI DocumentDB, role FerretDB không áp dụng, explain FerretDB, lệnh không hỗ trợ, logo) | **Đã implement (chưa commit)** — FerretDB đo trên v2.7.0 ở §1; DocumentDB theo tài liệu AWS, chưa kiểm trên cluster thật |
 
 ### Addendum thiết kế theo hệ (phần lớn còn đúng — override spec gốc khi mâu thuẫn)
 `spec/Database Studio design/design_handoff_database_studio/`:
