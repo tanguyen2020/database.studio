@@ -1336,6 +1336,21 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
         }
         return ok({ ok: true, result: { cols, rows, total: n }, duration_ms: 239 })
       }
+      // `SELECT * FROM varlen_rows_<N>`: N rows whose text lengths change down the
+      // result (short at the top, long further down) — what makes column widths
+      // jump when a grid sizes columns from only the rows it has drawn.
+      const varM = stmtSql.match(/varlen_rows_(\d+)/i)
+      if (varM) {
+        const n = Math.min(Number(varM[1]) || 0, 100_000)
+        const cols: [string, string][] = [['id', 'int8'], ['code', 'varchar'], ['title', 'varchar'], ['note', 'text']]
+        const rows = Array.from({ length: n }, (_, i) => ({
+          id: i < 100 ? i + 1 : 1_000_000_000 + i,
+          code: i % 97 === 50 ? `ORD-${'X'.repeat(30)}-${i}` : `C${i % 10}`,
+          title: i < 100 ? 'Short' : `A much longer title for row number ${i} that keeps going`,
+          note: i % 13 === 0 ? null : 'n'.repeat((i * 7) % 40),
+        }))
+        return ok({ ok: true, result: { cols, rows, total: n }, duration_ms: 12 })
+      }
       // A read-only result carrying a JSON column: the grid must offer the JSON
       // VIEWER there (no Save) — editing needs the Table Viewer's edit target.
       if (/json_demo/i.test(stmtSql)) {

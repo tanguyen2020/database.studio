@@ -17,8 +17,9 @@
     observeElementRect,
     type VirtualItem,
   } from '@tanstack/virtual-core'
-  import { untrack, tick, onDestroy } from 'svelte'
+  import { untrack, tick, onDestroy, onMount } from 'svelte'
   import { pageWindow, ALL_ROWS } from '$lib/grid/paging'
+  import { sampleRows, columnWidths, clipForMeasure } from '$lib/grid/col-widths'
   import { buildGroups, type AggFn, type GroupNode } from '$lib/grid/groupby'
   import { save as saveFileDialog } from '@tauri-apps/plugin-dialog'
   import { invoke } from '@tauri-apps/api/core'
@@ -485,6 +486,16 @@ Original: ${was.isNull ? 'NULL' : was.text}`
   let scrollEl = $state<HTMLDivElement | null>(null)
   let virtualItems = $state<VirtualItem[]>([])
   let totalSize = $state(0)
+  // Real height of a rendered row (borders, font and zoom make it differ from
+  // ROW_H). The virtualiser and keyboard scrolling use it, so the spacer rows and
+  // the scroll position stay in step with what is drawn.
+  let rowH = $state(ROW_H)
+  $effect(() => {
+    void virtualItems
+    const tr = scrollEl?.querySelector<HTMLElement>('tr.grid-row')
+    const h = tr?.getBoundingClientRect().height ?? 0
+    if (h > 0 && Math.abs(h - untrack(() => rowH)) > 0.25) rowH = h
+  })
 
   // selection: set of row indices, or a single cell
   let selectedRows = $state<Set<number>>(new Set())
@@ -559,6 +570,73 @@ Original: ${was.isNull ? 'NULL' : was.text}`
       document.body.style.cursor = ''
     }
   }
+
+  // ---- content-sized widths, fixed for the whole result ----------------------
+  // The browser's auto layout would size columns from the rows currently drawn,
+  // and the grid only draws the rows on screen — so columns jumped while
+  // scrolling. Widths are measured once from a sample of the whole result
+  // (`grid/col-widths.ts`) and the table stays in fixed layout.
+  let tableEl = $state<HTMLTableElement | null>(null)
+  let autoW = $state<number[] | null>(null)
+  let fontsTick = $state(0)
+  const autoWidth = $derived(autoW ? autoW.reduce((a, b) => a + b, 0) : 0)
+  let measureCtx: CanvasRenderingContext2D | null = null
+
+  function textWidth(text: string, font: string): number {
+    measureCtx ??= document.createElement('canvas').getContext('2d')
+    if (!measureCtx) return text.length * 7.5
+    measureCtx.font = font
+    return measureCtx.measureText(text).width
+  }
+
+  function measureColumns(): number[] | null {
+    if (!tableEl) return null
+    const cs = getComputedStyle(tableEl)
+    const px = parseFloat(cs.fontSize) || 12
+    const s = px / 12 // the --px-* tokens follow the UI zoom; keep paddings in step
+    const fam = cs.fontFamily
+    const cellFont = `400 ${px}px ${fam}`
+    const nameFont = `600 ${px}px ${fam}`
+    const typeFont = `400 ${10 * s}px ${fam}`
+    const badgeFont = `400 ${10 * s}px ${fam}`
+    const jsonFont = `700 ${9 * s}px ${fam}`
+    const pad = 24 * s + 1 // cell padding left+right + the column's right border
+    const nullW = textWidth('NULL', badgeFont) + 12 * s
+    const jsonW = textWidth('{ }', jsonFont) + 10 * s + 6 * s
+    const rows = sampleRows(data.rows.length)
+    const widths = columnWidths(
+      columns.length,
+      rows,
+      (ci) => {
+        const [name, type] = data.cols[ci]
+        return textWidth(name, nameFont) + textWidth(` ${type}`, typeFont) + pad + 4 * s
+      },
+      (r, ci) => {
+        const col = columns[ci]
+        const v = data.rows[r]?.[col]
+        const d = display(v, col)
+        if (d.isNull) return nullW + pad
+        const w = d.text === '' ? textWidth("''", badgeFont) : textWidth(clipForMeasure(d.text), cellFont)
+        return w + pad + (hasJsonBadge(colTypes[col], v) ? jsonW : 0)
+      },
+      { min: MIN_COL_W, max: 420 * s },
+    )
+    const gutter = Math.max(MIN_GUTTER_W, Math.ceil(textWidth(String(Math.max(1, data.rows.length)), `400 ${10.5 * s}px ${fam}`) + 16 * s + 1))
+    return [gutter, ...widths]
+  }
+
+  $effect(() => {
+    void data
+    void columns
+    void tableEl
+    void fontsTick
+    autoW = untrack(measureColumns)
+  })
+
+  onMount(() => {
+    // Widths measured before the grid font finished loading are a little off.
+    void document.fonts?.ready.then(() => fontsTick++)
+  })
 
   /** Double-click a grip → back to content-sized columns. */
   function resetWidths() {
@@ -646,7 +724,7 @@ Original: ${was.isNull ? 'NULL' : was.text}`
     const virtualizer = new Virtualizer<HTMLDivElement, HTMLDivElement>({
       count,
       getScrollElement: () => scrollEl,
-      estimateSize: () => ROW_H,
+      estimateSize: () => rowH,
       overscan: 12,
       scrollToFn: elementScroll,
       observeElementRect,
@@ -821,13 +899,68 @@ Original: ${was.isNull ? 'NULL' : was.text}`
   }
 
   // Move the selected cell by (dRow, dCol), clamped to the grid (AUDIT-5 item 2).
+  // Starts from the selected cell, else the row picked in the # column, else the
+  // first row of the page. Crossing a page edge turns the page, and the cell is
+  // scrolled into view (rows off screen are not rendered by the virtualiser).
   function moveCell(dRow: number, dCol: number) {
-    if (editingCell) return
-    const cur = selectedCell ?? { row: pageOffset, col: columns[0] }
-    const ci = Math.max(0, Math.min(columns.length - 1, columns.indexOf(cur.col) + dCol))
-    const ri = Math.max(0, Math.min(rowCount - 1, cur.row + dRow))
+    if (editingCell || rowCount === 0 || columns.length === 0) return
+    const fromRow = [...selectedRows].sort((a, b) => a - b)
+    const anchor = selectedRows.has(lastAnchorRow) ? lastAnchorRow : fromRow[fromRow.length - 1]
+    const cur = selectedCell ?? { row: anchor ?? pageOffset, col: columns[0] }
+    // Nothing selected yet: the first arrow lands on the first row of the page.
+    const step = selectedCell || selectedRows.size ? dRow : 0
+    const at = columns.indexOf(cur.col)
+    const ci = Math.max(0, Math.min(columns.length - 1, (at < 0 ? 0 : at) + dCol))
+    const ri = Math.max(0, Math.min(rowCount - 1, cur.row + step))
     selectedRows = new Set()
+    lastAnchorRow = ri
     selectedCell = { row: ri, col: columns[ci] }
+    revealCell(ri, columns[ci])
+  }
+
+  function revealCell(ri: number, col: string) {
+    if (ri < pageOffset || ri >= pageOffset + pageRowCount) {
+      const size = pageSize <= ALL_ROWS ? rowCount : pageSize
+      page = Math.floor(ri / Math.max(1, size))
+    }
+    void tick().then(() => {
+      const el = scrollEl
+      if (!el) return
+      const head = headRow?.getBoundingClientRect().height ?? 0
+      const find = () =>
+        el.querySelector<HTMLElement>(`td[data-cell][data-row="${ri}"][data-col="${CSS.escape(col)}"]`)
+      // Row not drawn yet (a long jump): scroll to its estimated position first,
+      // then correct against the real cell once the virtualiser has drawn it.
+      if (!find()) {
+        const top = (ri - pageOffset) * rowH
+        if (top < el.scrollTop) el.scrollTop = top
+        else if (head + top + rowH > el.scrollTop + el.clientHeight) el.scrollTop = head + top + rowH - el.clientHeight
+      }
+      const align = (retry: boolean) => {
+        const td = find()
+        if (!td) {
+          // The virtualiser draws the new rows on its next frame after a scroll.
+          if (retry) requestAnimationFrame(() => void tick().then(() => align(false)))
+          return
+        }
+        const box = el.getBoundingClientRect()
+        const r = td.getBoundingClientRect()
+        // Keep the whole cell between the sticky header and the bottom edge.
+        const viewTop = box.top + head
+        const viewBottom = box.top + el.clientHeight
+        if (r.top < viewTop) el.scrollTop -= viewTop - r.top
+        else if (r.bottom > viewBottom) el.scrollTop += r.bottom - viewBottom
+        const gutter = (headRow?.firstElementChild as HTMLElement | null)?.offsetWidth ?? 0
+        if (r.left < box.left + gutter) el.scrollLeft -= box.left + gutter - r.left
+        else if (r.right > box.left + el.clientWidth) el.scrollLeft += r.right - (box.left + el.clientWidth)
+      }
+      void tick().then(() => align(true))
+    })
+  }
+
+  // After Enter/Escape closes the inline editor, keep the keyboard on the grid.
+  function refocusGrid() {
+    scrollEl?.focus({ preventScroll: true })
   }
 
   function onKeydown(e: KeyboardEvent) {
@@ -1066,12 +1199,13 @@ Original: ${was.isNull ? 'NULL' : was.text}`
   <!-- table — port dòng 421-452: mono 12px, th sticky header 6px 12px/600/text2 -->
   <!-- DataGrip-style data grid: JetBrains Mono (via .mono) + tabular figures so
        columns of ids/timestamps line up crisply. -->
-  <table class="mono" style="border-collapse:separate;border-spacing:0;font-size:var(--px-12);font-variant-numeric:tabular-nums;font-feature-settings:'tnum' 1,'zero' 1;{colW ? `table-layout:fixed;width:${frozenWidth}px;` : 'width:100%;'}">
-    {#if colW}
-      <!-- Frozen widths: fixed layout reads them from here, so a drag resizes ONE
-           column instead of reflowing every one of them. -->
+  <table class="mono" style="border-collapse:separate;border-spacing:0;font-size:var(--px-12);font-variant-numeric:tabular-nums;font-feature-settings:'tnum' 1,'zero' 1;{colW ? `table-layout:fixed;width:${frozenWidth}px;` : autoW ? `table-layout:fixed;width:max(100%, ${autoWidth}px);` : 'width:100%;'}" bind:this={tableEl}>
+    {#if colW ?? autoW}
+      <!-- Fixed layout reads the widths from here: content-sized for the whole
+           result (autoW) or set by dragging (colW) — never from the rows that
+           happen to be on screen, so scrolling does not resize columns. -->
       <colgroup>
-        {#each colW as w, i (i)}<col style="width:{w}px" />{/each}
+        {#each (colW ?? autoW)! as w, i (i)}<col style="width:{w}px" />{/each}
       </colgroup>
     {/if}
     <thead style="position:sticky;top:0;z-index:10">
@@ -1131,6 +1265,10 @@ Original: ${was.isNull ? 'NULL' : was.text}`
             {@const isEditing = editingCell?.row === ri && editingCell?.col === col && editingCell?.insert == null}
             <!-- cell — dòng 436-446: padding 5px 12px, NULL badge; edit → highlight vàng -->
             <td
+              data-cell
+              data-row={ri}
+              data-col={col}
+              aria-selected={isCellSelected}
               style="border-bottom:var(--px-1) solid var(--border);border-right:var(--px-1) solid var(--border);padding:0;white-space:nowrap;max-width:var(--px-420);overflow:hidden;text-overflow:ellipsis;{edited ? `background:var(--rgba-240-160-32-_18);` : isCellSelected ? 'background:color-mix(in srgb, var(--grid-select) 45%, transparent);' : ''}{isCellSelected ? 'box-shadow:inset 0 0 0 var(--px-2) var(--grid-select);color:var(--hex-fff);' : edited ? 'box-shadow:inset var(--px-3) 0 0 var(--warn);' : ''}"
               onclick={(e) => { e.stopPropagation(); clickCell(ri, col) }}
               oncontextmenu={(e) => openCtx(e, ri, col)}
@@ -1156,12 +1294,12 @@ Original: ${was.isNull ? 'NULL' : was.text}`
                     // Keep keys inside the editor — don't let them bubble to the
                     // grid (which would re-open the editor or move the cell).
                     e.stopPropagation()
-                    if (e.key === 'Enter') commitEdit(ri, col, e.currentTarget.value, row?.[col] ?? null)
+                    if (e.key === 'Enter') { commitEdit(ri, col, e.currentTarget.value, row?.[col] ?? null); refocusGrid() }
                     else if (e.key === 'Tab') {
                       e.preventDefault()
                       commitEdit(ri, col, e.currentTarget.value, row?.[col] ?? null)
                       editAdjacent(ri, col, e.shiftKey ? -1 : 1)
-                    } else if (e.key === 'Escape') editingCell = null
+                    } else if (e.key === 'Escape') { editingCell = null; refocusGrid() }
                   }}
                 />
               {:else}
@@ -1218,12 +1356,12 @@ Original: ${was.isNull ? 'NULL' : was.text}`
                     onblur={(e) => commitEdit(insIdx, col, e.currentTarget.value, ins[col], insIdx)}
                     onkeydown={(e) => {
                       e.stopPropagation()
-                      if (e.key === 'Enter') commitEdit(insIdx, col, e.currentTarget.value, ins[col], insIdx)
+                      if (e.key === 'Enter') { commitEdit(insIdx, col, e.currentTarget.value, ins[col], insIdx); refocusGrid() }
                       else if (e.key === 'Tab') {
                         e.preventDefault()
                         commitEdit(insIdx, col, e.currentTarget.value, ins[col], insIdx)
                         editAdjacent(insIdx, col, e.shiftKey ? -1 : 1, insIdx)
-                      } else if (e.key === 'Escape') editingCell = null
+                      } else if (e.key === 'Escape') { editingCell = null; refocusGrid() }
                     }}
                   />
                 {:else}
