@@ -378,7 +378,10 @@ pub fn keep_entry(family: Family, entry: &str) -> bool {
             let plugin_stem = file.split('.').next().unwrap_or(file);
             (parent == "bin" && (shipped_exes(family).contains(&stem) || file.ends_with(".dll")))
                 || (parent == "plugin" && segs.iter().any(|s| *s == "lib") && is_lib && CLIENT_AUTH_PLUGINS.contains(&plugin_stem))
-                || (parent == "lib" && is_lib)
+                // client libraries only: the Galera provider (`libgalera_smm.so`) is a
+                // server replication plugin, and it links OpenSSL 1.1, which current
+                // Linux distributions no longer ship — the AppImage bundler fails on it
+                || (parent == "lib" && is_lib && !file.starts_with("libgalera"))
         }
         Family::Mongodb => parent == "bin" && shipped_exes(family).contains(&stem),
         // a self-contained .NET app: every assembly is loaded by name at run time,
@@ -386,7 +389,11 @@ pub fn keep_entry(family: Family, entry: &str) -> bool {
         // translated resource folders (the English text is built in)
         Family::Sqlpackage => {
             let localized = segs.len() >= 2 && SATELLITE_CULTURES.contains(&segs[segs.len() - 2]);
-            !(localized || file.ends_with(".xml") && !file.ends_with(".deps.xml"))
+            // the runtime's LTTng tracing provider is loaded only when LTTng tracing is
+            // on; it links liblttng-ust, which few machines have, and the AppImage
+            // bundler fails on the missing library
+            let lttng = file == "libcoreclrtraceptprovider.so";
+            !(localized || lttng || file.ends_with(".xml") && !file.ends_with(".deps.xml"))
         }
     }
 }
@@ -678,6 +685,8 @@ mod tests {
         assert!(keep_entry(my, "mariadb-11.8.9-linux-systemd-x86_64/lib/plugin/caching_sha2_password.so"));
         assert!(!keep_entry(my, "mariadb-11.8.9-winx64/lib/plugin/ha_rocksdb.dll"));
         assert!(!keep_entry(my, "mariadb-11.8.9-winx64/lib/plugin/server_audit.dll"));
+        assert!(keep_entry(my, "mariadb-12.3.3-linux-systemd-x86_64/lib/libmariadb.so.3"));
+        assert!(!keep_entry(my, "mariadb-12.3.3-linux-systemd-x86_64/lib/libgalera_smm.so"));
         assert!(!keep_entry(my, "mariadb-11.8.9-winx64/bin/mariadbd.exe"));
         assert!(!keep_entry(my, "mariadb-11.8.9-winx64/bin/mariadbd.pdb"));
         assert!(!keep_entry(my, "mariadb-11.8.9-winx64/share/english/errmsg.sys"));
@@ -696,6 +705,8 @@ mod tests {
         assert!(!keep_entry(sp, "zh-Hant/Microsoft.SqlServer.Dac.resources.dll"));
         assert!(!keep_entry(sp, "Microsoft.SqlServer.Dac.xml"));
         assert!(!keep_entry(sp, "sqlpackage.pdb"));
+        assert!(keep_entry(sp, "libcoreclr.so"));
+        assert!(!keep_entry(sp, "libcoreclrtraceptprovider.so"));
         assert!(!keep_entry(mo, "mongodb-database-tools-windows/README.md"));
     }
 

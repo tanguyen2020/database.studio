@@ -101,6 +101,7 @@ jobs:
             librsvg2-dev \
             libayatana-appindicator3-dev \
             libcurl4-openssl-dev \
+            libaio1t64 \
             patchelf \
             build-essential \
             file
@@ -116,6 +117,19 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npm run tools:fetch
+
+      # The AppImage step (linuxdeploy) copies every library a bundled tool links
+      # into the AppImage's own lib folder — Oracle Instant Client (~107 MB) and
+      # PostgreSQL's ICU (~32 MB) would ship twice. The tools find their libraries
+      # through their own RPATH, so those copies are dead weight. Small common
+      # libraries (ssl, krb5, zstd…) are left alone: the app itself may need them.
+      - name: Keep bundled tool libraries out of the AppImage lib folder
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          names=$( { find src-tauri/resources/instantclient \( -type f -o -type l \) -name '*.so*' -printf '%f\n'
+                     find src-tauri/resources/tools \( -type f -o -type l \) -name 'libicu*.so*' -printf '%f\n'; } | sort -u | paste -sd';')
+          echo "LINUXDEPLOY_EXCLUDED_LIBRARIES=$names" >> "$GITHUB_ENV"
+          echo "$names" | tr ';' '\n'
 
       # tauri-action runs the config's beforeBuildCommand (npm run build) then
       # `tauri build`. Windows/Ubuntu use the config's bundle targets; macOS

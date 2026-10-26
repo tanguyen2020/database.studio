@@ -90,6 +90,9 @@ fn run() -> Res<()> {
     if ic.join(if cfg!(windows) { "expdp.exe" } else { "expdp" }).is_file() {
         notices.push(oracle_notice());
     }
+    if ic.join("libaio.so.1").is_file() {
+        notices.push("libaio (shipped next to Oracle Instant Client on Linux)\n  from the build machine's libaio package — https://pagure.io/libaio\n  license: GNU LGPL v2.1\n".to_string());
+    }
     write_notice(&tools_dir, &notices)?;
     println!("done → {}", args.out.display());
     Ok(())
@@ -540,7 +543,7 @@ fn fetch_oracle(client: &reqwest::blocking::Client, p: Platform, dest: &Path, fo
     let exe = |n: &str| if cfg!(windows) { format!("{n}.exe") } else { n.to_string() };
     if !force && dest.join(exe("expdp")).is_file() && dest.join(exe("impdp")).is_file() {
         println!("  already in place");
-        return Ok(());
+        return prepare_linux_instantclient(dest);
     }
     // Oracle publishes no machine-readable checksum; a digest can be pinned
     // (DBSTUDIO_ORACLE_SHA256=<basic>,<tools>) and is then enforced.
@@ -589,7 +592,76 @@ fn fetch_oracle(client: &reqwest::blocking::Client, p: Platform, dest: &Path, fo
             return Err(format!("{b} missing after unpacking the Oracle Tools package"));
         }
     }
+    prepare_linux_instantclient(dest)?;
     println!("  {:.1} MB → {}", dir_size(dest) as f64 / 1_048_576.0, dest.display());
+    Ok(())
+}
+
+/// Linux only: make the Instant Client folder self-contained.
+///
+/// Oracle's binaries carry no RPATH — they expect LD_LIBRARY_PATH — so the
+/// AppImage bundler (linuxdeploy), which resolves the dependencies of every ELF
+/// file it is given, cannot find `libclntsh.so` next to `expdp` and fails the
+/// build. Every ELF file here gets `RPATH=$ORIGIN`, so it finds its siblings on
+/// its own. Oracle also needs `libaio.so.1`, which Ubuntu 24.04 renamed to
+/// `libaio.so.1t64`; a copy ships under the name Oracle asks for, so Oracle
+/// works on machines without libaio installed.
+fn prepare_linux_instantclient(dest: &Path) -> Res<()> {
+    if !cfg!(target_os = "linux") {
+        return Ok(());
+    }
+    let libaio = dest.join("libaio.so.1");
+    if !libaio.is_file() {
+        let found = ["/usr/lib/x86_64-linux-gnu", "/lib/x86_64-linux-gnu", "/usr/lib/aarch64-linux-gnu", "/lib/aarch64-linux-gnu", "/usr/lib64", "/lib64", "/usr/lib"]
+            .iter()
+            .flat_map(|d| ["libaio.so.1", "libaio.so.1t64"].map(|n| Path::new(d).join(n)))
+            .find(|p| p.is_file())
+            .ok_or("libaio is not installed on this build machine (Oracle Instant Client needs it) — install libaio1t64 (Ubuntu 24.04+) or libaio1")?;
+        // follows the symlink: the real library is copied under Oracle's name
+        std::fs::copy(&found, &libaio).map_err(|e| format!("{}: {e}", found.display()))?;
+        patchelf(&["--set-soname", "libaio.so.1"], &libaio)?;
+        println!("  libaio.so.1 from {}", found.display());
+    }
+    let mut n = 0;
+    for e in std::fs::read_dir(dest).map_err(|e| e.to_string())?.flatten() {
+        let p = e.path();
+        // regular files only: the versioned symlinks point at files patched here
+        if !e.file_type().map(|t| t.is_file()).unwrap_or(false) || !is_elf(&p) {
+            continue;
+        }
+        patchelf(&["--set-rpath", "$ORIGIN"], &p)?;
+        n += 1;
+    }
+    println!("  RPATH=$ORIGIN on {n} ELF files");
+    // must start from its final place with no library path set
+    let out = Command::new(dest.join("expdp"))
+        .arg("help=y")
+        .env_remove("LD_LIBRARY_PATH")
+        .output()
+        .map_err(|e| format!("expdp does not start: {e}"))?;
+    let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    let first = text.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
+    if !first.starts_with("Export:") {
+        return Err(format!("expdp does not start without LD_LIBRARY_PATH: {}", text.trim()));
+    }
+    println!("  expdp: {first}");
+    Ok(())
+}
+
+fn is_elf(p: &Path) -> bool {
+    let mut magic = [0u8; 4];
+    std::fs::File::open(p).and_then(|mut f| f.read_exact(&mut magic)).is_ok() && magic == *b"\x7fELF"
+}
+
+fn patchelf(args: &[&str], file: &Path) -> Res<()> {
+    let out = Command::new("patchelf")
+        .args(args)
+        .arg(file)
+        .output()
+        .map_err(|e| format!("patchelf is needed to bundle Oracle Instant Client on Linux ({e}) — install it (apt install patchelf)"))?;
+    if !out.status.success() {
+        return Err(format!("patchelf {} {}: {}", args.join(" "), file.display(), String::from_utf8_lossy(&out.stderr).trim()));
+    }
     Ok(())
 }
 
