@@ -73,6 +73,18 @@ pub async fn list_indexes(
     })
 }
 
+/// Every index of a schema as the DDL that recreates it (Generate Scripts).
+#[tauri::command]
+pub async fn list_index_ddl(
+    state: State<'_, AppState>,
+    conn_id: String,
+    schema: String,
+) -> Result<Vec<IndexDdl>, AppError> {
+    introspect!(state, conn_id, |driver| async move {
+        driver.lock().await.index_ddl(&schema).await
+    })
+}
+
 #[tauri::command]
 pub async fn list_constraints(
     state: State<'_, AppState>,

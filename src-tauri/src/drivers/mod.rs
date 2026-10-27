@@ -9,6 +9,7 @@ pub mod clickhouse;
 pub mod duckdb;
 pub mod elasticsearch;
 pub mod grid;
+pub mod index_ddl;
 pub mod index_scan;
 pub mod kafka;
 pub mod kafka_acl;
@@ -682,6 +683,21 @@ impl LiveConnection {
             Self::Mongo(d) => d.indexes(schema, table).await,
             Self::Oracle(d) => d.indexes(schema, table).await,
             Self::Duckdb(d) => d.indexes(schema, table).await,
+        }
+    }
+
+    /// Every index of `schema` as the DDL that recreates it (Generate Scripts).
+    /// ClickHouse keeps its data-skipping indexes inside the table definition
+    /// (SHOW CREATE TABLE); the other engines have no indexes to script.
+    pub async fn index_ddl(&mut self, schema: &str) -> Result<Vec<IndexDdl>, QueryError> {
+        match self {
+            Self::Postgres(d) => d.index_ddl(schema).await,
+            Self::MySql(d) => d.index_ddl(schema).await,
+            Self::Mssql(d) => d.index_ddl(schema).await,
+            Self::Sqlite(d) => d.index_ddl(schema).await,
+            Self::Oracle(d) => d.index_ddl(schema).await,
+            Self::Duckdb(d) => d.index_ddl(schema).await,
+            _ => Ok(Vec::new()),
         }
     }
 

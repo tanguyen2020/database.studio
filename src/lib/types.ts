@@ -176,6 +176,17 @@ export interface IndexInfo {
   primary: boolean
 }
 
+/** The DDL that recreates one index (Generate Scripts) — read from the engine's
+ *  catalog. role: primary / constraint → a CREATE TABLE clause; index → a
+ *  complete statement (no trailing ';'); note → a SQL comment (not scriptable). */
+export interface IndexDdl {
+  table: string
+  name: string
+  role: 'primary' | 'constraint' | 'index' | 'note'
+  ddl: string
+  columns: string[]
+}
+
 export interface PartitionInfo {
   name: string
   /** RANGE | LIST | HASH | KEY | EXPRESSION | PARTITION KEY | '' */

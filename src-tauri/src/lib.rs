@@ -277,6 +277,7 @@ pub fn run() {
             commands::schema::list_tables,
             commands::schema::list_columns,
             commands::schema::list_indexes,
+            commands::schema::list_index_ddl,
             commands::schema::list_constraints,
             commands::schema::list_partitions,
             commands::schema::list_routines,

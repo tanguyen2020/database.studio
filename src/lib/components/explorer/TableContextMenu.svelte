@@ -32,6 +32,7 @@
   import { truncateOptions } from '$lib/sql/truncate'
   import { truncateWizard } from '$lib/stores/truncate.svelte'
   import { generateScript, type DbObject, type ScriptMode } from '$lib/sql/scripts'
+  import { tableStructure } from '$lib/sql/table-script'
   import { supportsPartitioning } from '$lib/sql/partitions'
   import { buildExportSelect } from '$lib/export/query'
   import { toSqlInsert } from '$lib/export/rows'
@@ -99,15 +100,21 @@
         dataSql = toSqlInsert(table, res.result.cols.map((c) => c[0]), res.result.rows as Record<string, unknown>[])
       }
     }
+    const st =
+      mode === 'data'
+        ? { createSql: '', indexSql: [], warning: '' }
+        : await tableStructure(connId, system, schema, table, cols)
+    if (st.warning) toasts.error(`Indexes of "${table}" could not be read — the script has no indexes`)
     const obj: DbObject = {
       name: table,
       kind: 'table',
-      createSql: genCreate(system, schema, table, cols),
+      createSql: st.createSql,
+      indexSql: st.indexSql,
       deps: fks.map((f) => f.to_table),
       fkAlters: fks.map((f) => genForeignKey(system, schema, f)),
       dataSql,
     }
-    stmtTab(`${table} · scripts`, `-- ${table} (${mode})\n\n${generateScript([obj], mode)}`)
+    stmtTab(`${table} · scripts`, `-- ${table} (${mode})\n\n${st.warning}${generateScript([obj], mode)}`)
   }
 
   async function copyName(name: string) {

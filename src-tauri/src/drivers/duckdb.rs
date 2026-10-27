@@ -410,6 +410,54 @@ impl DuckDriver {
         .await
     }
 
+    /// Every index of `schema` as the DDL that recreates it (Generate Scripts):
+    /// PRIMARY KEY / UNIQUE constraints as CREATE TABLE clauses (DuckDB backs them
+    /// with indexes it does not list), every CREATE INDEX as DuckDB stored it.
+    pub async fn index_ddl(&self, schema: &str) -> Result<Vec<IndexDdl>, QueryError> {
+        use crate::drivers::index_ddl::{strip_terminator, CONSTRAINT, INDEX, PRIMARY};
+        let schema = schema.to_string();
+        self.with_conn(move |c| {
+            let mut out = query_rows(
+                c,
+                "SELECT table_name, constraint_name, constraint_type, constraint_text, \
+                        array_to_string(constraint_column_names, chr(31)) \
+                 FROM duckdb_constraints() \
+                 WHERE database_name = current_database() AND schema_name = ? \
+                   AND constraint_type IN ('PRIMARY KEY', 'UNIQUE') \
+                 ORDER BY table_name, constraint_type = 'PRIMARY KEY' DESC, constraint_name",
+                &[json!(schema)],
+                |r| {
+                    let kind: String = r.get(2)?;
+                    Ok(IndexDdl {
+                        table: r.get(0)?,
+                        name: r.get(1)?,
+                        role: if kind == "PRIMARY KEY" { PRIMARY } else { CONSTRAINT }.into(),
+                        ddl: r.get(3)?,
+                        columns: split_list(&r.get::<_, String>(4)?),
+                    })
+                },
+            )?;
+            out.extend(query_rows(
+                c,
+                "SELECT table_name, index_name, sql FROM duckdb_indexes() \
+                 WHERE database_name = current_database() AND schema_name = ? AND sql IS NOT NULL \
+                 ORDER BY table_name, index_name",
+                &[json!(schema)],
+                |r| {
+                    Ok(IndexDdl {
+                        table: r.get(0)?,
+                        name: r.get(1)?,
+                        role: INDEX.into(),
+                        ddl: strip_terminator(&r.get::<_, String>(2)?),
+                        columns: Vec::new(),
+                    })
+                },
+            )?);
+            Ok(out)
+        })
+        .await
+    }
+
     pub async fn constraints(&self, schema: &str, table: &str) -> Result<Vec<ConstraintInfo>, QueryError> {
         let (schema, table) = (schema.to_string(), table.to_string());
         self.with_conn(move |c| {

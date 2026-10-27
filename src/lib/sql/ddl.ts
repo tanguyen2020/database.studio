@@ -58,16 +58,36 @@ export function genDelete(system: string, schema: string, table: string, cols: C
   return `DELETE FROM ${t}\nWHERE ${quoteIdent(system, pk.name)} = ${sample(pk.data_type)};`
 }
 
-export function genCreate(system: string, schema: string, table: string, cols: ColumnInfo[]): string {
-  const body = cols
-    .map((c) => {
-      let line = `  ${quoteIdent(system, c.name)} ${c.data_type}`
-      if (!c.nullable) line += ' NOT NULL'
-      if (c.is_pk) line += ' PRIMARY KEY'
-      return line
-    })
-    .join(',\n')
-  return `CREATE TABLE ${target(system, schema, table)} (\n${body}\n);`
+export interface CreateTableOptions {
+  /** The table's PRIMARY KEY as the catalog states it (a table-level clause with
+   *  its real name, key order, CLUSTERED…) — replaces the inline PRIMARY KEY. */
+  primaryKey?: string
+  /** Further table-level clauses: UNIQUE / EXCLUDE constraints. */
+  clauses?: string[]
+}
+
+export function genCreate(
+  system: string,
+  schema: string,
+  table: string,
+  cols: ColumnInfo[],
+  opts: CreateTableOptions = {},
+): string {
+  const pkCols = cols.filter((c) => c.is_pk)
+  // A key over several columns can only be a table-level clause: an inline
+  // PRIMARY KEY on each of them is "multiple primary keys" on every engine.
+  const pk =
+    opts.primaryKey ??
+    (pkCols.length > 1 ? `PRIMARY KEY (${pkCols.map((c) => quoteIdent(system, c.name)).join(', ')})` : undefined)
+  const lines = cols.map((c) => {
+    let line = `  ${quoteIdent(system, c.name)} ${c.data_type}`
+    if (!c.nullable) line += ' NOT NULL'
+    if (c.is_pk && !pk) line += ' PRIMARY KEY'
+    return line
+  })
+  if (pk) lines.push(`  ${pk}`)
+  for (const c of opts.clauses ?? []) lines.push(`  ${c}`)
+  return `CREATE TABLE ${target(system, schema, table)} (\n${lines.join(',\n')}\n);`
 }
 
 /** ALTER TABLE … ADD CONSTRAINT … FOREIGN KEY — dialect-aware, schema-qualified.

@@ -57,6 +57,7 @@
   import { quoteIdent, qualified, selectStarSql } from '$lib/sql/dialect'
   import { genAlterTable, genCreate, genDelete, genDrop, genCreateSchema, genDropDatabase, genDropSchema, genForeignKey, genInsert, genRename, genRenameDatabase, genRenameSchema, genSelect, genTruncate, genUpdate, hasRealSchemas } from '$lib/sql/ddl'
   import { generateScript, type DbObject, type ScriptMode } from '$lib/sql/scripts'
+  import { tableStructure } from '$lib/sql/table-script'
   import { genCreateIndex, genDropIndex, genAlterIndex } from '$lib/sql/indexes'
   import { createTemplate, type CreateKind } from '$lib/sql/create-templates'
   import {
@@ -1163,16 +1164,20 @@
         dataSql = toSqlInsert(table, res.result.cols.map((c) => c[0]), res.result.rows as Record<string, unknown>[])
       }
     }
+    const st =
+      mode === 'data' ? { createSql: '', indexSql: [], warning: '' } : await tableStructure(cid, sys, schema, table, cols)
+    if (st.warning) toasts.error(`Indexes of "${table}" could not be read — the script has no indexes`)
     const obj: DbObject = {
       name: table,
       kind: 'table',
-      createSql: genCreate(sys, schema, table, cols),
+      createSql: st.createSql,
+      indexSql: st.indexSql,
       deps: fks.map((f) => f.to_table),
       fkAlters: fks.map((f) => genForeignKey(sys, schema, f)),
       dataSql,
     }
     const script = generateScript([obj], mode)
-    stmtTab(`${table} · scripts`, `-- ${table} (${mode})\n\n${script}`, dbForSchema(schema, database))
+    stmtTab(`${table} · scripts`, `-- ${table} (${mode})\n\n${st.warning}${script}`, dbForSchema(schema, database))
   }
 
   // "Create <type>…" folder action — open a ready-to-edit CREATE skeleton in a SQL

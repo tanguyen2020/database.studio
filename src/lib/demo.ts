@@ -1136,6 +1136,20 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
         { name: 'students_pkey', method: 'btree', columns: ['id'], unique: true, primary: true },
         { name: 'idx_students_gpa', method: 'btree', columns: ['gpa'], unique: false, primary: false },
       ])
+    case 'list_index_ddl': {
+      // Generate Scripts — the shapes a PostgreSQL catalog returns (pg_get_indexdef /
+      // pg_get_constraintdef), for the demo tables of every schema.
+      if (indexesFail()) throw new Error('permission denied for relation pg_index')
+      const s = String(args?.schema ?? 'public')
+      return ok([
+        { table: 'students', name: 'students_pkey', role: 'primary', ddl: 'CONSTRAINT students_pkey PRIMARY KEY (id)', columns: ['id'] },
+        { table: 'students', name: 'students_email_key', role: 'constraint', ddl: 'CONSTRAINT students_email_key UNIQUE (email)', columns: ['email'] },
+        { table: 'students', name: 'idx_students_gpa', role: 'index', ddl: `CREATE INDEX idx_students_gpa ON ${s}.students USING btree (gpa DESC NULLS LAST)`, columns: ['gpa'] },
+        { table: 'students', name: 'idx_students_name_lower', role: 'index', ddl: `CREATE INDEX idx_students_name_lower ON ${s}.students USING btree (lower((last_name)::text)) WHERE is_active`, columns: [] },
+        { table: 'enrollments', name: 'enrollments_pkey', role: 'primary', ddl: 'CONSTRAINT enrollments_pkey PRIMARY KEY (student_id, course_id)', columns: ['student_id', 'course_id'] },
+        { table: 'enrollments', name: 'idx_enrollments_course', role: 'index', ddl: `CREATE INDEX idx_enrollments_course ON ${s}.enrollments USING btree (course_id) INCLUDE (grade)`, columns: ['course_id'] },
+      ])
+    }
     case 'list_constraints':
       return ok([{ name: 'students_pkey', kind: 'PRIMARY KEY', definition: 'PRIMARY KEY (id)' }])
     case 'list_partitions':

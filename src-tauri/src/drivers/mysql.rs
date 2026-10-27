@@ -454,6 +454,83 @@ impl MySqlDriver {
         Ok(rows.iter().map(|r| ObjectName { kind: text(r, 0), name: text(r, 1) }).collect())
     }
 
+    /// Every index of `schema` as the DDL that recreates it (Generate Scripts), from
+    /// one read of information_schema.STATISTICS — prefix lengths, DESC, functional
+    /// key parts, HASH, comments and (in)visibility included. FULLTEXT / VECTOR
+    /// indexes carry options STATISTICS does not show (a parser, M=…), so those take
+    /// their key line verbatim from SHOW CREATE TABLE.
+    pub async fn index_ddl(&mut self, schema: &str) -> Result<Vec<IndexDdl>, QueryError> {
+        use crate::drivers::index_ddl::{mysql_exact_keys, mysql_index_ddl, mysql_needs_exact, MyStatRow};
+        // optional STATISTICS columns differ by server (MySQL 8 / MariaDB 10.6+)
+        let present: Vec<String> = sqlx::query(
+            "SELECT CONVERT(COLUMN_NAME USING utf8mb4) FROM information_schema.COLUMNS
+              WHERE TABLE_SCHEMA = 'information_schema' AND TABLE_NAME = 'STATISTICS'",
+        )
+        .fetch_all(&mut self.conn)
+        .await
+        .map_err(|e| map_error(self.system, &e))?
+        .iter()
+        .map(|r| text(r, 0).to_ascii_uppercase())
+        .collect();
+        let opt = |col: &str| {
+            if present.iter().any(|c| c == col) {
+                format!("CONVERT({col} USING utf8mb4)")
+            } else {
+                "NULL".to_string()
+            }
+        };
+        let sql = format!(
+            "SELECT CONVERT(TABLE_NAME USING utf8mb4), CONVERT(INDEX_NAME USING utf8mb4),
+                    CAST(NON_UNIQUE AS CHAR), CONVERT(COLUMN_NAME USING utf8mb4),
+                    CAST(SUB_PART AS CHAR), CONVERT(`COLLATION` USING utf8mb4),
+                    CONVERT(INDEX_TYPE USING utf8mb4), CONVERT(INDEX_COMMENT USING utf8mb4),
+                    {}, {}, {}
+               FROM information_schema.STATISTICS
+              WHERE CONVERT(TABLE_SCHEMA USING utf8mb4) = CONVERT(? USING utf8mb4)
+              ORDER BY TABLE_NAME, INDEX_NAME = 'PRIMARY' DESC, INDEX_NAME, SEQ_IN_INDEX",
+            opt("EXPRESSION"),
+            opt("IS_VISIBLE"),
+            opt("IGNORED"),
+        );
+        let rows = sqlx::query(&sql)
+            .bind(schema)
+            .fetch_all(&mut self.conn)
+            .await
+            .map_err(|e| map_error(self.system, &e))?;
+        let stats: Vec<MyStatRow> = rows
+            .iter()
+            .map(|r| MyStatRow {
+                table: text(r, 0),
+                index: text(r, 1),
+                non_unique: text(r, 2).trim() != "0",
+                column: text_opt(r, 3).filter(|s| !s.is_empty()),
+                sub_part: text_opt(r, 4).and_then(|s| s.trim().parse().ok()),
+                collation: text_opt(r, 5),
+                index_type: text(r, 6),
+                comment: text(r, 7),
+                expression: text_opt(r, 8).filter(|s| !s.is_empty()),
+                invisible: text_opt(r, 9).is_some_and(|s| s.eq_ignore_ascii_case("NO")),
+                ignored: text_opt(r, 10).is_some_and(|s| s.eq_ignore_ascii_case("YES")),
+            })
+            .collect();
+        let mut exact = std::collections::HashMap::new();
+        let mut seen = std::collections::HashSet::new();
+        for s in stats.iter().filter(|s| mysql_needs_exact(&s.index_type)) {
+            if !seen.insert(s.table.clone()) {
+                continue;
+            }
+            let q = format!("SHOW CREATE TABLE `{}`.`{}`", schema.replace('`', "``"), s.table.replace('`', "``"));
+            if let Ok(r) = fetch_all(&mut self.conn, &q).await {
+                if let Some(row) = r.first() {
+                    for (name, line) in mysql_exact_keys(&text(row, 1)) {
+                        exact.insert((s.table.clone(), name), line);
+                    }
+                }
+            }
+        }
+        Ok(mysql_index_ddl(schema, &stats, &exact))
+    }
+
     pub async fn triggers(&mut self, schema: &str) -> Result<Vec<TriggerInfo>, QueryError> {
         let rows = sqlx::query(
             // CONVERT both operands to utf8mb4 to avoid the "Illegal mix of collations"

@@ -13,6 +13,7 @@ import type {
   ExecResponse,
   FunctionInfo,
   IndexInfo,
+  IndexDdl,
   PartitionInfo,
   ProfileDraft,
   ProfilePublic,
@@ -1154,6 +1155,10 @@ export const listColumns = (connId: string, schema: string, table: string) =>
 
 export const listIndexes = (connId: string, schema: string, table: string) =>
   invoke<IndexInfo[]>('list_indexes', { connId, schema, table })
+
+/** Every index of a schema as the DDL that recreates it (Generate Scripts). */
+export const listIndexDdl = (connId: string, schema: string) =>
+  invoke<IndexDdl[]>('list_index_ddl', { connId, schema })
 
 export const listConstraints = (connId: string, schema: string, table: string) =>
   invoke<ConstraintInfo[]>('list_constraints', { connId, schema, table })

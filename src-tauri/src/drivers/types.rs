@@ -234,6 +234,23 @@ pub struct IndexInfo {
     pub primary: bool,
 }
 
+/// The exact DDL that recreates one index of a table, read from the engine's own
+/// catalog (Generate Scripts). `role`:
+/// - `primary`    — `ddl` is a table-level clause for CREATE TABLE (`PRIMARY KEY (…)`).
+/// - `constraint` — a UNIQUE / EXCLUDE constraint, also a table-level clause.
+/// - `index`      — `ddl` is a complete statement (no trailing `;`).
+/// - `note`       — an index that cannot be scripted; `ddl` is a SQL comment saying why.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct IndexDdl {
+    pub table: String,
+    pub name: String,
+    pub role: String,
+    pub ddl: String,
+    /// Key columns (plain columns only) — lets CREATE TABLE drop the inline
+    /// `PRIMARY KEY` of the columns a `primary` clause already covers.
+    pub columns: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConstraintInfo {
     pub name: String,

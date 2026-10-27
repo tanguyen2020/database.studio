@@ -593,6 +593,82 @@ impl MssqlDriver {
             .collect())
     }
 
+    /// Every index of `schema` as the DDL that recreates it (Generate Scripts):
+    /// PRIMARY KEY / UNIQUE constraints (with CLUSTERED/NONCLUSTERED), indexes with
+    /// key order, INCLUDE, filters and IGNORE_DUP_KEY, XML, spatial and columnstore.
+    pub async fn index_ddl(&mut self, schema: &str) -> Result<Vec<IndexDdl>, QueryError> {
+        use crate::drivers::index_ddl::{mssql_index_ddl, MsIdxRow};
+        let rows = self
+            .client
+            .query(
+                "SELECT t.name, i.name, CAST(i.index_id AS int), CAST(i.type AS int),
+                        CAST(i.is_unique AS int), CAST(i.is_primary_key AS int),
+                        CAST(i.is_unique_constraint AS int), CAST(i.ignore_dup_key AS int),
+                        i.filter_definition, c.name,
+                        CAST(ISNULL(ic.is_descending_key, 0) AS int), CAST(ISNULL(ic.is_included_column, 0) AS int),
+                        CAST(xi.xml_index_type AS int), px.name, xi.secondary_type_desc,
+                        st.tessellation_scheme,
+                        CAST(st.bounding_box_xmin AS float), CAST(st.bounding_box_ymin AS float),
+                        CAST(st.bounding_box_xmax AS float), CAST(st.bounding_box_ymax AS float),
+                        st.level_1_grid_desc, st.level_2_grid_desc, st.level_3_grid_desc, st.level_4_grid_desc,
+                        CAST(st.cells_per_object AS int)
+                 FROM sys.indexes i
+                 JOIN sys.tables t ON t.object_id = i.object_id
+                 JOIN sys.schemas s ON s.schema_id = t.schema_id
+                 LEFT JOIN sys.index_columns ic ON ic.object_id = i.object_id AND ic.index_id = i.index_id
+                 LEFT JOIN sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
+                 LEFT JOIN sys.xml_indexes xi ON xi.object_id = i.object_id AND xi.index_id = i.index_id
+                 LEFT JOIN sys.indexes px ON px.object_id = i.object_id AND px.index_id = xi.using_xml_index_id
+                 LEFT JOIN sys.spatial_index_tessellations st ON st.object_id = i.object_id AND st.index_id = i.index_id
+                 WHERE s.name = @P1 AND i.type > 0 AND i.is_hypothetical = 0 AND t.is_ms_shipped = 0
+                 ORDER BY t.name, i.index_id, ic.is_included_column, ic.key_ordinal, ic.index_column_id",
+                &[&schema],
+            )
+            .await
+            .map_err(|e| map_error(&e))?
+            .into_first_result()
+            .await
+            .map_err(|e| map_error(&e))?;
+        let s = |r: &tiberius::Row, i: usize| r.get::<&str, _>(i).map(str::to_string);
+        let n = |r: &tiberius::Row, i: usize| r.get::<i32, _>(i);
+        let f = |r: &tiberius::Row, i: usize| r.get::<f64, _>(i);
+        let parsed: Vec<MsIdxRow> = rows
+            .iter()
+            .map(|r| {
+                let bbox = match (f(r, 16), f(r, 17), f(r, 18), f(r, 19)) {
+                    (Some(a), Some(b), Some(c), Some(d)) => Some([a, b, c, d]),
+                    _ => None,
+                };
+                let grids = match (s(r, 20), s(r, 21), s(r, 22), s(r, 23)) {
+                    (Some(a), Some(b), Some(c), Some(d)) => Some([a, b, c, d]),
+                    _ => None,
+                };
+                MsIdxRow {
+                    table: s(r, 0).unwrap_or_default(),
+                    index: s(r, 1).unwrap_or_default(),
+                    index_id: n(r, 2).unwrap_or_default(),
+                    kind: n(r, 3).unwrap_or_default(),
+                    unique: n(r, 4) == Some(1),
+                    primary: n(r, 5) == Some(1),
+                    unique_constraint: n(r, 6) == Some(1),
+                    ignore_dup_key: n(r, 7) == Some(1),
+                    filter: s(r, 8),
+                    column: s(r, 9),
+                    descending: n(r, 10) == Some(1),
+                    included: n(r, 11) == Some(1),
+                    xml_type: n(r, 12),
+                    xml_using: s(r, 13),
+                    xml_for: s(r, 14),
+                    tessellation: s(r, 15),
+                    bbox,
+                    grids,
+                    cells_per_object: n(r, 24),
+                }
+            })
+            .collect();
+        Ok(mssql_index_ddl(schema, &parsed))
+    }
+
     pub async fn triggers(&mut self, schema: &str) -> Result<Vec<TriggerInfo>, QueryError> {
         let rows = self
             .client

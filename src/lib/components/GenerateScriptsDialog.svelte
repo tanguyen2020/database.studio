@@ -18,7 +18,7 @@
   import { toasts } from '$lib/stores/toast.svelte'
   import { genCreate, genForeignKey } from '$lib/sql/ddl'
   import { qualified } from '$lib/sql/dialect'
-  import { generateScript, type DbObject, type ScriptMode } from '$lib/sql/scripts'
+  import { generateScript, indexesByTable, type DbObject, type ScriptMode, type TableIndexes } from '$lib/sql/scripts'
   import { buildExportSelect } from '$lib/export/query'
   import { toSqlInsert, download } from '$lib/export/rows'
   import { mapPool, extraLanes } from '$lib/util/pool'
@@ -578,6 +578,7 @@
     try {
       checkpoint()
       const parts: string[] = []
+      let indexWarning = ''
       // Sequences first (tables may reference them). No round-trip needed.
       if (seqs.length) {
         if (mode !== 'data') {
@@ -592,13 +593,33 @@
       if (tvs.length) {
         const fks = await ipc.listForeignKeys(first, schema).catch(() => [])
         checkpoint()
+        // Every index of the schema in one read: PRIMARY KEY / UNIQUE go into the
+        // CREATE TABLE, the rest follow as CREATE INDEX. A read that fails must not
+        // leave a script that silently lacks them — say so in the script itself.
+        let indexes = new Map<string, TableIndexes>()
+        if (mode !== 'data' && system !== 'clickhouse') {
+          try {
+            indexes = indexesByTable(await ipc.listIndexDdl(first, schema))
+          } catch (e) {
+            indexWarning = `-- WARNING: the indexes of ${schema} could not be read (${String(e).replace(/\s+/g, ' ')}).\n-- This script creates the tables WITHOUT their indexes.\n\n`
+            toasts.error(`Indexes could not be read — the script has no indexes: ${e}`)
+          }
+          checkpoint()
+        }
         const tableNames = tvs.filter((o) => o.kind === 'table').map((o) => o.name)
         const scriptOne = async (o: ObjRef, cid: string): Promise<DbObject> => {
           if (o.kind === 'view') {
             const def = await ipc.objectDefinition(cid, schema, 'view', o.name).catch(() => null)
             return { name: o.name, kind: 'view', createSql: def ?? `-- VIEW ${o.name}: definition unavailable`, deps: tableNames }
           }
+          // ClickHouse: the server's own CREATE TABLE (engine, ORDER BY, data-skipping
+          // indexes, projections) — a column list alone is not a ClickHouse table.
+          const chDdl =
+            system === 'clickhouse' && mode !== 'data'
+              ? await ipc.objectDefinition(cid, schema, 'table', o.name).catch(() => null)
+              : null
           const cols = await ipc.listColumns(cid, schema, o.name)
+          const ix = indexes.get(o.name)
           const tableFks = fks.filter((f) => f.from_table === o.name && picked.has(`table:${f.to_table}`))
           let dataSql: string | undefined
           if (mode !== 'structure') {
@@ -611,7 +632,10 @@
           return {
             name: o.name,
             kind: 'table',
-            createSql: genCreate(system, schema, o.name, cols),
+            createSql: chDdl
+              ? chDdl.trimEnd().replace(/;?$/, ';')
+              : genCreate(system, schema, o.name, cols, { primaryKey: ix?.primaryKey, clauses: ix?.clauses }),
+            indexSql: ix?.statements,
             deps: tableFks.map((f) => f.to_table),
             fkAlters: tableFks.map((f) => genForeignKey(system, schema, f)),
             dataSql,
@@ -652,7 +676,7 @@
         if (kept.length) parts.push('-- Routines & Triggers\n' + kept.join('\n\n'))
       }
 
-      const header = `-- Generated scripts for ${schema} (${mode}) — ${chosen.length} object(s)\n\n`
+      const header = `-- Generated scripts for ${schema} (${mode}) — ${chosen.length} object(s)\n\n${indexWarning}`
       const content = header + parts.filter(Boolean).join('\n\n')
       checkpoint() // last chance — once the file is written there is nothing to stop
       writingFile = true // the file is going out: Stop can no longer promise "no file written"

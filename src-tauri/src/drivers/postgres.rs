@@ -526,6 +526,50 @@ impl PgDriver {
         Ok(rows.iter().map(|r| ObjectName { kind: r.get(0), name: r.get(1) }).collect())
     }
 
+    /// Every index of every table of `schema` as the DDL that recreates it
+    /// (Generate Scripts). The server writes the text itself: PRIMARY KEY / UNIQUE /
+    /// EXCLUDE constraints via pg_get_constraintdef (a CREATE TABLE clause), every
+    /// other index via pg_get_indexdef — method, expressions, opclasses, collations,
+    /// DESC/NULLS, INCLUDE, WHERE and WITH (…) storage parameters included.
+    pub async fn index_ddl(&mut self, schema: &str) -> Result<Vec<IndexDdl>, QueryError> {
+        let rows = sqlx::query(
+            "SELECT t.relname::text,
+                    i.relname::text,
+                    CASE WHEN c.contype = 'p' THEN 'primary'
+                         WHEN c.contype IS NOT NULL THEN 'constraint' ELSE 'index' END,
+                    CASE WHEN c.oid IS NOT NULL
+                         THEN 'CONSTRAINT ' || quote_ident(c.conname) || ' ' || pg_catalog.pg_get_constraintdef(c.oid)
+                         ELSE pg_catalog.pg_get_indexdef(ix.indexrelid) END,
+                    ARRAY(SELECT a.attname::text
+                            FROM unnest(ix.indkey::int2[]) WITH ORDINALITY AS k(attnum, ord)
+                            JOIN pg_catalog.pg_attribute a ON a.attrelid = t.oid AND a.attnum = k.attnum
+                           WHERE k.ord <= ix.indnatts
+                           ORDER BY k.ord)
+               FROM pg_catalog.pg_index ix
+               JOIN pg_catalog.pg_class i ON i.oid = ix.indexrelid
+               JOIN pg_catalog.pg_class t ON t.oid = ix.indrelid
+               JOIN pg_catalog.pg_namespace n ON n.oid = t.relnamespace
+               LEFT JOIN pg_catalog.pg_constraint c
+                      ON c.conindid = ix.indexrelid AND c.conrelid = t.oid AND c.contype IN ('p', 'u', 'x')
+              WHERE n.nspname = $1 AND t.relkind IN ('r', 'p')
+              ORDER BY t.relname, (c.contype = 'p') DESC NULLS LAST, (c.oid IS NULL), i.relname",
+        )
+        .bind(schema)
+        .fetch_all(&mut self.conn)
+        .await
+        .map_err(|e| map_error("postgres", &e))?;
+        Ok(rows
+            .iter()
+            .map(|r| IndexDdl {
+                table: r.get(0),
+                name: r.get(1),
+                role: r.get(2),
+                ddl: r.get(3),
+                columns: r.try_get::<Vec<String>, _>(4).unwrap_or_default(),
+            })
+            .collect())
+    }
+
     pub async fn triggers(&mut self, schema: &str) -> Result<Vec<TriggerInfo>, QueryError> {
         let rows = sqlx::query(
             "SELECT t.tgname, c.relname,

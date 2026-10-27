@@ -394,6 +394,77 @@ impl SqliteDriver {
         .await
     }
 
+    /// Every index of `schema` as the DDL that recreates it (Generate Scripts).
+    /// CREATE INDEX keeps its own text in sqlite_master; the automatic indexes of a
+    /// PRIMARY KEY / UNIQUE constraint have none, so they become table clauses
+    /// (key order, DESC and COLLATE from index_xinfo).
+    pub async fn index_ddl(&self, schema: &str) -> Result<Vec<IndexDdl>, QueryError> {
+        use crate::drivers::index_ddl::{sqlite_index_ddl, LiteIndex, LiteKeyCol};
+        let schema = schema.to_string();
+        self.with_conn(move |c| {
+            let qs = quote_ident(&schema, QuoteStyle::DoubleQuote);
+            let master = format!("{qs}.sqlite_master");
+            let err = |e: rusqlite::Error| map_rusqlite_error(&e);
+            let tables: Vec<String> = c
+                .prepare(&format!("SELECT name FROM {master} WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name"))
+                .map_err(err)?
+                .query_map([], |r| r.get::<_, String>(0))
+                .map_err(err)?
+                .collect::<Result<_, _>>()
+                .map_err(err)?;
+            let mut out = Vec::new();
+            for t in tables {
+                let list = format!("PRAGMA {qs}.index_list({})", quote_ident(&t, QuoteStyle::DoubleQuote));
+                // index_list: seq, name, unique, origin, partial
+                let idxs: Vec<(String, String)> = c
+                    .prepare(&list)
+                    .map_err(err)?
+                    .query_map([], |r| Ok((r.get::<_, String>(1)?, r.get::<_, String>(3)?)))
+                    .map_err(err)?
+                    .collect::<Result<_, _>>()
+                    .map_err(err)?;
+                let mut group = Vec::new();
+                for (name, origin) in idxs {
+                    let xinfo = format!("PRAGMA {qs}.index_xinfo({})", quote_ident(&name, QuoteStyle::DoubleQuote));
+                    // index_xinfo: seqno, cid, name, desc, coll, key
+                    let cols: Vec<LiteKeyCol> = c
+                        .prepare(&xinfo)
+                        .map_err(err)?
+                        .query_map([], |r| {
+                            Ok((
+                                r.get::<_, i64>(5)? == 1,
+                                LiteKeyCol {
+                                    name: r.get::<_, Option<String>>(2)?,
+                                    desc: r.get::<_, i64>(3)? == 1,
+                                    collation: r.get::<_, Option<String>>(4)?,
+                                },
+                            ))
+                        })
+                        .map_err(err)?
+                        .filter_map(|r| r.ok())
+                        .filter(|(key, _)| *key)
+                        .map(|(_, col)| col)
+                        .collect();
+                    let sql: Option<String> = c
+                        .query_row(&format!("SELECT sql FROM {master} WHERE type = 'index' AND name = ?1"), [&name], |r| r.get(0))
+                        .ok()
+                        .flatten();
+                    group.push(LiteIndex { table: t.clone(), index: name, origin, sql, cols });
+                }
+                // PRIMARY KEY first, then UNIQUE clauses, then CREATE INDEX statements —
+                // by name (index_list lists the newest first, an order that would flip
+                // every time the script is run)
+                group.sort_by(|a, b| {
+                    let rank = |o: &str| match o { "pk" => 0, "u" => 1, _ => 2 };
+                    rank(&a.origin).cmp(&rank(&b.origin)).then_with(|| a.index.cmp(&b.index))
+                });
+                out.extend(sqlite_index_ddl(&group));
+            }
+            Ok(out)
+        })
+        .await
+    }
+
     pub async fn foreign_keys(&self, schema: &str) -> Result<Vec<ForeignKey>, QueryError> {
         let schema = schema.to_string();
         self.with_conn(move |c| {

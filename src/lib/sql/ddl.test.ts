@@ -82,6 +82,28 @@ describe('genCreate', () => {
         '  "created_at" timestamptz\n);',
     )
   })
+
+  it('a key over several columns is one table-level PRIMARY KEY, not one per column', () => {
+    const two = [col('a', 'int', { is_pk: true, nullable: false }), col('b', 'int', { is_pk: true, nullable: false })]
+    expect(genCreate('mssql', 'dbo', 't', two)).toBe(
+      'CREATE TABLE [dbo].[t] (\n  [a] int NOT NULL,\n  [b] int NOT NULL,\n  PRIMARY KEY ([a], [b])\n);',
+    )
+  })
+
+  it('the catalog PRIMARY KEY and UNIQUE clauses replace the inline key', () => {
+    const sql = genCreate('postgres', 'public', 'users', cols, {
+      primaryKey: 'CONSTRAINT users_pk PRIMARY KEY (id) INCLUDE (name)',
+      clauses: ['CONSTRAINT users_name_key UNIQUE NULLS NOT DISTINCT (name)'],
+    })
+    expect(sql).toBe(
+      'CREATE TABLE "public"."users" (\n' +
+        '  "id" int4 NOT NULL,\n' +
+        '  "name" varchar(255) NOT NULL,\n' +
+        '  "created_at" timestamptz,\n' +
+        '  CONSTRAINT users_pk PRIMARY KEY (id) INCLUDE (name),\n' +
+        '  CONSTRAINT users_name_key UNIQUE NULLS NOT DISTINCT (name)\n);',
+    )
+  })
 })
 
 describe('genRename / genTruncate / genDrop', () => {

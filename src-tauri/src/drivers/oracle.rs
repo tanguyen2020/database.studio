@@ -335,6 +335,93 @@ impl OracleDriver {
         Ok(out)
     }
 
+    /// Every index of `schema` as the DDL that recreates it (Generate Scripts).
+    /// PRIMARY KEY / UNIQUE constraints become CREATE TABLE clauses; every other
+    /// index comes from DBMS_METADATA (bitmap, function-based, reverse, partitioned,
+    /// domain…) with the segment attributes (storage, tablespace) left out so the
+    /// script runs on any database.
+    pub async fn index_ddl(&mut self, schema: &str) -> Result<Vec<IndexDdl>, QueryError> {
+        use crate::drivers::index_ddl::{CONSTRAINT, INDEX, PRIMARY};
+        let o = lit(schema);
+        let tables = format!("SELECT table_name FROM all_tables WHERE owner = {o} AND dropped = 'NO'");
+        let cons = self
+            .query(&format!(
+                "SELECT ac.table_name AS tname, ac.constraint_name AS cname, ac.constraint_type AS ctype, \
+                        ac.generated AS gen, ac.deferrable AS dfr, ac.deferred AS dfd, acc.column_name AS col \
+                 FROM all_constraints ac \
+                 JOIN all_cons_columns acc ON acc.owner = ac.owner AND acc.constraint_name = ac.constraint_name \
+                 WHERE ac.owner = {o} AND ac.constraint_type IN ('P','U') AND ac.table_name IN ({tables}) \
+                 ORDER BY ac.table_name, ac.constraint_type, ac.constraint_name, acc.position"
+            ))
+            .await?;
+        let q = |s: &str| format!("\"{}\"", s.replace('"', "\"\""));
+        // (entry, clause head, clause tail): the column list goes between the two
+        let mut acc: Vec<(IndexDdl, String, String)> = Vec::new();
+        for r in &cons.rows {
+            let (table, name, col) = (jstr(r, "TNAME"), jstr(r, "CNAME"), jstr(r, "COL"));
+            if let Some((last, _, _)) = acc.last_mut() {
+                if last.table == table && last.name == name {
+                    last.columns.push(col);
+                    continue;
+                }
+            }
+            let primary = jstr(r, "CTYPE") == "P";
+            let mut head = String::new();
+            if jstr(r, "GEN") != "GENERATED NAME" {
+                head = format!("CONSTRAINT {} ", q(&name));
+            }
+            head.push_str(if primary { "PRIMARY KEY" } else { "UNIQUE" });
+            let tail = if jstr(r, "DFR") == "DEFERRABLE" {
+                format!(" DEFERRABLE INITIALLY {}", jstr(r, "DFD"))
+            } else {
+                String::new()
+            };
+            let role = if primary { PRIMARY } else { CONSTRAINT };
+            acc.push((IndexDdl { table, name, role: role.into(), ddl: String::new(), columns: vec![col] }, head, tail));
+        }
+        let mut out: Vec<IndexDdl> = acc
+            .into_iter()
+            .map(|(mut d, head, tail)| {
+                let list = d.columns.iter().map(|c| q(c)).collect::<Vec<_>>().join(", ");
+                d.ddl = format!("{head} ({list}){tail}");
+                d
+            })
+            .collect();
+        // storage / tablespace would tie the script to this database
+        self.exec(
+            "BEGIN DBMS_METADATA.SET_TRANSFORM_PARAM(DBMS_METADATA.SESSION_TRANSFORM, 'SEGMENT_ATTRIBUTES', FALSE); \
+             DBMS_METADATA.SET_TRANSFORM_PARAM(DBMS_METADATA.SESSION_TRANSFORM, 'SQLTERMINATOR', FALSE); END;",
+        )
+        .await?;
+        let idx = self
+            .query(&format!(
+                "SELECT i.table_name AS tname, i.index_name AS iname, \
+                        DBMS_METADATA.GET_DDL('INDEX', i.index_name, i.owner) AS ddl \
+                 FROM all_indexes i \
+                 WHERE i.table_owner = {o} AND i.table_name IN ({tables}) \
+                   AND i.index_type NOT IN ('LOB', 'IOT - TOP', 'CLUSTER') \
+                   AND NOT EXISTS (SELECT 1 FROM all_constraints c \
+                                    WHERE c.owner = i.table_owner AND c.table_name = i.table_name \
+                                      AND c.constraint_type IN ('P','U') \
+                                      AND c.index_owner = i.owner AND c.index_name = i.index_name) \
+                 ORDER BY i.table_name, i.index_name"
+            ))
+            .await;
+        let _ = self
+            .exec("BEGIN DBMS_METADATA.SET_TRANSFORM_PARAM(DBMS_METADATA.SESSION_TRANSFORM, 'DEFAULT'); END;")
+            .await;
+        for r in &idx?.rows {
+            out.push(IndexDdl {
+                table: jstr(r, "TNAME"),
+                name: jstr(r, "INAME"),
+                role: INDEX.into(),
+                ddl: jstr(r, "DDL").trim().trim_end_matches(';').trim_end().to_string(),
+                columns: Vec::new(),
+            });
+        }
+        Ok(out)
+    }
+
     pub async fn constraints(&mut self, schema: &str, table: &str) -> Result<Vec<ConstraintInfo>, QueryError> {
         let (o, t) = (lit(schema), lit(table));
         let res = self
