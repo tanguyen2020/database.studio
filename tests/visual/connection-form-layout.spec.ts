@@ -61,21 +61,39 @@ test('per-engine credential rows keep only the fields that engine shows', async 
   await expect(dialog.locator('.cm-label', { hasText: /^User$/ })).toHaveCount(0)
   await dialog.getByText('Close', { exact: true }).click()
 
-  // MSSQL: Windows auth hides user/password → database stands alone, auth picker above it
+  // MSSQL: the auth picker leads the credentials row; Windows auth hides user/password
   dialog = await openForm(page, 'SQL Server')
-  const [db] = await sameRow(dialog, [/^Database$/, /^User$/, /^Password/])
-  const auth = await fieldBox(dialog, 'Authentication')
-  expect(auth.y).toBeLessThan(db.y)
+  await sameRow(dialog, ['Authentication', /^Database$/, /^User$/, /^Password/])
+  if (process.env.SHOT_DIR) await dialog.screenshot({ path: `${process.env.SHOT_DIR}/form-mssql.png` })
   await dialog.locator('.cm-label', { hasText: 'Authentication' }).locator('xpath=..').locator('select').selectOption('windows')
   await expect(dialog.locator('.cm-label', { hasText: /^User$/ })).toHaveCount(0)
   await expect(dialog.locator('.cm-label', { hasText: /^Password/ })).toHaveCount(0)
+  await sameRow(dialog, ['Authentication', /^Database$/])
   await expect(dialog.getByText(/Integrated Security/)).toBeVisible()
   await dialog.getByText('Close', { exact: true }).click()
 
-  // Kafka: no database field; SASL block stays above the user/password row
+  // Kafka: no database field; SASL · User · Password on one row
   dialog = await openForm(page, 'Kafka')
   await expect(dialog.locator('.cm-label', { hasText: /^Database$/ })).toHaveCount(0)
-  await sameRow(dialog, [/^User$/, /^Password/])
+  await sameRow(dialog, ['Authentication (SASL)', /^User$/, /^Password/])
+  await dialog.getByText('Close', { exact: true }).click()
+
+  // Elasticsearch: Authentication · User · Password
+  dialog = await openForm(page, 'Elasticsearch')
+  await sameRow(dialog, ['Authentication', /^User$/, /^Password/])
+})
+
+test('the form is wide enough that no field is squeezed', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 })
+  const dialog = await openForm(page, 'SQL Server')
+  expect((await dialog.boundingBox())!.width).toBeGreaterThanOrEqual(1000)
+  // four credential fields: each still gets a comfortable width
+  for (const b of await sameRow(dialog, ['Authentication', /^Database$/, /^User$/, /^Password/])) expect(b.width).toBeGreaterThan(200)
+  // on a narrow window the form still fits inside it
+  await page.setViewportSize({ width: 900, height: 800 })
+  const narrow = (await dialog.boundingBox())!
+  expect(narrow.x).toBeGreaterThanOrEqual(0)
+  expect(narrow.x + narrow.width).toBeLessThanOrEqual(900)
 })
 
 test('typed values still bind after the move', async ({ page }) => {

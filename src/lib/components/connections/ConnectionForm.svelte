@@ -139,7 +139,8 @@
   const passLabel = $derived(esAuth === 'apikey' ? 'API key' : esAuth === 'bearer' ? 'Bearer token' : 'Password')
   const sshMode = $derived(draft?.ssh.auth === 'key' ? 'key' : 'password')
   // the Credentials section only appears when this engine asks for something in it
-  const showCreds = $derived(!isNats && !isKafka && !isDuckdb ? true : authShowUser || authShowPass)
+  // Kafka always shows the section: its SASL picker leads the Credentials row
+  const showCreds = $derived(!isNats && !isDuckdb ? true : authShowUser || authShowPass)
   const subtitle = $derived(
     isFileDb
       ? `${meta.label} · embedded, no server needed`
@@ -433,7 +434,7 @@
                  Kafka: Host (IP) + Port like the other systems — the backend joins
                  them into `host:port`; a full bootstrap list (host:port,host:port)
                  typed in Host is still honored (used verbatim, Port ignored). -->
-            <div style="grid-column:1/3;display:grid;grid-template-columns:2fr 1fr;gap:var(--px-14)">
+            <div style="grid-column:1/3;display:grid;grid-template-columns:minmax(0,1fr) var(--px-200);gap:var(--px-14)">
               <div>
                 <div class="cm-label">{hostLabel}</div>
                 {#if isFileDb}
@@ -477,24 +478,15 @@
             </div>
 
             {#if isKafka}
-              <!-- Kafka SASL mechanism (tái dùng field mssql_auth làm auth mode) -->
-              <div style="grid-column:1/3">
-                <div class="cm-label">Authentication (SASL)</div>
-                <select class="cm-input" bind:value={draft.mssql_auth}>
-                  <option value="">None (PLAINTEXT)</option>
-                  <option value="PLAIN">SASL/PLAIN</option>
-                  <option value="SCRAM-SHA-256">SASL/SCRAM-SHA-256</option>
-                  <option value="SCRAM-SHA-512">SASL/SCRAM-SHA-512</option>
-                </select>
-              </div>
+              <!-- Kafka SASL lives on the Credentials row (next to User · Password) -->
               {#if draftIsRedpanda}
                 <!-- Redpanda Admin API (SPEC-REDPANDA.md): health, brokers, cluster config, users, roles -->
-                <div style="grid-column:1/3">
+                <div>
                   <div class="cm-label">Admin API URL <span class="cm-opt">(optional — empty uses {redpandaDefault(9644)})</span></div>
                   <input class="cm-input mono" bind:value={draft.admin_url} placeholder={redpandaDefault(9644)} aria-label="Admin API URL" />
                 </div>
               {/if}
-              <div style="grid-column:1/3">
+              <div style={draftIsRedpanda ? '' : 'grid-column:1/3'}>
                 <div class="cm-label">Schema Registry URL <span class="cm-opt">{draftIsRedpanda ? `(optional — empty uses Redpanda's built-in ${redpandaDefault(8081)})` : '(optional)'}</span></div>
                 <input class="cm-input mono" bind:value={draft.schema_registry_url} placeholder={draftIsRedpanda ? redpandaDefault(8081) : 'http://localhost:8081'} />
               </div>
@@ -577,41 +569,44 @@
               </div>
             {/if}
 
-            {#if isElastic}
-              <div style="grid-column:1/3">
-                <div class="cm-label">Authentication</div>
-                <select class="cm-input" value={esAuth} onchange={(e) => draft && (draft.mssql_auth = e.currentTarget.value)} aria-label="{draftIsOpenSearch ? 'OpenSearch' : 'Elasticsearch'} authentication">
-                  <option value="basic">Basic — user &amp; password</option>
-                  {#if !draftIsOpenSearch}<option value="apikey">API key</option>{/if}
-                  <option value="bearer">{draftIsOpenSearch ? 'Bearer token (JWT)' : 'Bearer token'}</option>
-                  <option value="none">None (security disabled)</option>
-                </select>
-              </div>
-            {/if}
-
-            {#if isMssql}
-              <!-- port dòng 2208-2211 + Azure AD Service Principal (T31) -->
-              <div style="grid-column:1/3">
-                <div class="cm-label">Authentication</div>
-                <select class="cm-input" bind:value={draft.mssql_auth}>
-                  <option value="sql">SQL Server Authentication</option>
-                  <option value="windows">Windows Authentication</option>
-                  <option value="aad-sp">Azure AD (Service Principal)</option>
-                </select>
-                {#if draft.mssql_auth === 'aad-sp'}
-                  <div class="cm-help">
-                    User = <span class="mono">clientId@tenantId</span>, Password = client secret. A token is fetched from Azure AD (login.microsoftonline.com) at connect.
-                  </div>
-                {/if}
-              </div>
-            {/if}
-
-            <!-- credentials row: [Connect by (Oracle)] · Database · User · Password —
-                 one row, as many equal columns as fields this engine shows. Kept after
-                 the engine-specific blocks (MSSQL auth, Kafka SASL…) that decide
-                 whether User / Password appear at all. -->
+            <!-- credentials row: [Authentication (SQL Server · Kafka SASL · Elasticsearch)
+                 | Connect by (Oracle)] · Database · User · Password — one row, as many
+                 equal columns as fields this engine shows. The auth picker leads the row
+                 because it decides whether User / Password appear at all. -->
             {#if showCreds}<div class="cm-sec">Credentials</div>{/if}
             <div class="cm-cred-row">
+              {#if isMssql}
+                <!-- port dòng 2208-2211 + Azure AD Service Principal (T31) -->
+                <div>
+                  <div class="cm-label">Authentication</div>
+                  <select class="cm-input" bind:value={draft.mssql_auth}>
+                    <option value="sql">SQL Server Authentication</option>
+                    <option value="windows">Windows Authentication</option>
+                    <option value="aad-sp">Azure AD (Service Principal)</option>
+                  </select>
+                </div>
+              {:else if isKafka}
+                <!-- Kafka SASL mechanism (tái dùng field mssql_auth làm auth mode) -->
+                <div>
+                  <div class="cm-label">Authentication (SASL)</div>
+                  <select class="cm-input" bind:value={draft.mssql_auth}>
+                    <option value="">None (PLAINTEXT)</option>
+                    <option value="PLAIN">SASL/PLAIN</option>
+                    <option value="SCRAM-SHA-256">SASL/SCRAM-SHA-256</option>
+                    <option value="SCRAM-SHA-512">SASL/SCRAM-SHA-512</option>
+                  </select>
+                </div>
+              {:else if isElastic}
+                <div>
+                  <div class="cm-label">Authentication</div>
+                  <select class="cm-input" value={esAuth} onchange={(e) => draft && (draft.mssql_auth = e.currentTarget.value)} aria-label="{draftIsOpenSearch ? 'OpenSearch' : 'Elasticsearch'} authentication">
+                    <option value="basic">Basic — user &amp; password</option>
+                    {#if !draftIsOpenSearch}<option value="apikey">API key</option>{/if}
+                    <option value="bearer">{draftIsOpenSearch ? 'Bearer token (JWT)' : 'Bearer token'}</option>
+                    <option value="none">None (security disabled)</option>
+                  </select>
+                </div>
+              {/if}
               {#if isOracle}
                 <!-- Oracle connect kind (reuses mssql_auth): Service Name vs SID. -->
                 <div>
@@ -676,6 +671,11 @@
               {/if}
             </div>
 
+            {#if isMssql && draft.mssql_auth === 'aad-sp'}
+              <div class="cm-note">
+                User = <span class="mono">clientId@tenantId</span>, Password = client secret. A token is fetched from Azure AD (login.microsoftonline.com) at connect.
+              </div>
+            {/if}
             {#if isRabbit}
               <!-- RabbitMQ is browsed through its Management HTTP API: say which port
                    that is, since the AMQP port (5672) is the one people know. -->
@@ -933,7 +933,9 @@
   /* The panel sizes to its content (no fixed height); past 90vh only the body
      scrolls, header and footer stay put. */
   .cm-panel {
-    width: var(--px-840);
+    /* 1040px: wide enough for Authentication · Database · User · Password on
+       one row (SQL Server, Oracle) without squeezing any field */
+    width: calc(var(--px-520) * 2);
     max-width: 94vw;
     max-height: 90vh;
     display: flex;
@@ -1039,6 +1041,8 @@
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: var(--px-12) var(--px-14);
+    /* two fields side by side line up on their inputs even when a label wraps */
+    align-items: end;
   }
   /* section caption: a quiet heading with a hairline, so the form reads as
      General → Server → Credentials → Security instead of one wall of boxes */
@@ -1085,12 +1089,6 @@
   .cm-lock {
     color: var(--sacc-green);
     font-weight: 500;
-  }
-  .cm-help {
-    margin-top: var(--px-6);
-    font-size: var(--px-12);
-    color: var(--muted);
-    line-height: 1.45;
   }
   .cm-input {
     width: 100%;

@@ -168,7 +168,8 @@
 
 <style>
   .pk {
-    width: min(var(--px-740), 94vw);
+    /* 1200px: four cards a row, every description in full */
+    width: min(calc(var(--px-600) * 2), 94vw);
     max-height: 88vh;
     display: flex;
     flex-direction: column;
@@ -263,7 +264,8 @@
   }
   .pk-grid {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    /* four columns at full width, fewer on a narrow window */
+    grid-template-columns: repeat(auto-fill, minmax(min(var(--px-240), 100%), 1fr));
     gap: var(--px-10);
   }
   /* a card per engine: lifts toward you on hover, with its own accent */

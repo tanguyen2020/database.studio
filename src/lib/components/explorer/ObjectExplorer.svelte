@@ -2012,7 +2012,7 @@
 
   <!-- filter — finds databases and objects by name (schema-tree systems) -->
   {#if selected?.connected && ['postgres', 'mysql', 'mariadb', 'mssql', 'sqlite', 'clickhouse', 'oracle', 'duckdb'].includes(selected.system)}
-    <div style="flex:none;padding:0 var(--px-8) var(--px-6)">
+    <div class="tree-search" class:embedded style="flex:none">
       <label class="ds-search sm" style="display:flex;width:100%">
         <Icon name="search" size={12} />
         <input
@@ -3755,5 +3755,21 @@ ${tree.replication}` })}
   }
   .xbtn.off:hover {
     background: transparent;
+  }
+  /* search field above the tree. In the one sidebar it belongs to the
+     connection above it: a clear gap under the connection row, aligned with
+     the tree rows (not wider than them), and a little quieter. */
+  .tree-search {
+    padding: 0 var(--px-8) var(--px-6);
+  }
+  .tree-search.embedded {
+    padding: var(--px-8) var(--px-6) var(--px-6) var(--px-6);
+  }
+  .tree-search.embedded .ds-search {
+    height: var(--px-26);
+    border-color: var(--border);
+  }
+  .tree-search.embedded .ds-search:focus-within {
+    border-color: var(--primary);
   }
 </style>

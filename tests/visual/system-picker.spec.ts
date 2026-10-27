@@ -72,3 +72,32 @@ test('new connection picker: cards lift on hover, search narrows and Enter picks
   await expect(page.getByText('Choose database type')).toHaveCount(0)
   await expect(page.getByRole('dialog').getByText('New connection', { exact: true })).toBeVisible()
 })
+
+// The picker is wide enough for four cards a row with every description in full
+// (the old 740px grid cut "open-source SQL…", "no ZooKeep…").
+test('new connection picker: wide enough that no description is cut off', async ({ page }) => {
+  await blockRemoteFonts(page)
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto(APP_URL)
+  await page.waitForSelector('#app > *', { timeout: 15_000 })
+  await page.getByTitle('New connection').first().click()
+  const dialog = page.getByRole('dialog', { name: 'New Connection' })
+  await expect(dialog).toBeVisible()
+  expect((await dialog.boundingBox())!.width).toBeGreaterThanOrEqual(1150)
+
+  // four cards per row
+  const tops = await dialog.locator('.pk-grid').first().locator('.picker-card').evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().top)))
+  expect(tops.filter((t) => t === tops[0]).length).toBe(4)
+
+  const cut = await dialog.locator('.pk-desc').evaluateAll((els) =>
+    els.filter((e) => e.scrollHeight > e.clientHeight + 1).map((e) => e.textContent),
+  )
+  expect(cut, `descriptions cut off: ${cut.join(' | ')}`).toEqual([])
+  if (process.env.SHOT_DIR) await dialog.screenshot({ path: `${process.env.SHOT_DIR}/picker.png` })
+
+  // a narrow window still fits the picker, with fewer columns
+  await page.setViewportSize({ width: 800, height: 800 })
+  const narrow = (await dialog.boundingBox())!
+  expect(narrow.x).toBeGreaterThanOrEqual(0)
+  expect(narrow.x + narrow.width).toBeLessThanOrEqual(800)
+})
