@@ -32,6 +32,8 @@
     accent?: string
     /** editable grid khi result đến từ 1 bảng đã biết (Table Viewer) */
     editTarget?: EditTarget
+    /** why the result on screen cannot be edited (Query Editor) — shown as a chip */
+    readOnlyReason?: string
     /** connection id — để Export wizard (custom) biết hệ khi cần */
     connId?: string | null
     /** system of the running tab — enables numeric-column coloring (relational). */
@@ -56,6 +58,7 @@
     exec,
     accent = 'var(--primary)',
     editTarget,
+    readOnlyReason,
     connId,
     system,
     active = false,
@@ -339,6 +342,9 @@
         {/each}
       </div>
       <span style="font-size:var(--px-11_5);color:var(--muted)">{summary}</span>
+      {#if readOnlyReason}
+        <span class="rp-ro" role="note" title={readOnlyReason} aria-label={`Read-only: ${readOnlyReason}`}><Icon name="lock" size={12} />Read-only</span>
+      {/if}
       {#if activeResult?.cqlNextPage}
         <span
           onclick={() => exec && onLoadMore?.(exec.activeSub)}
@@ -496,6 +502,19 @@
     border-radius: var(--px-8);
     padding: 0 var(--px-6);
     font-variant-numeric: tabular-nums;
+  }
+  .rp-ro {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--px-4);
+    font-size: var(--px-11);
+    color: var(--text2);
+    background: var(--panel);
+    border: var(--px-1) solid var(--border);
+    border-radius: var(--px-10);
+    padding: var(--px-1) var(--px-8);
+    cursor: help;
+    white-space: nowrap;
   }
   .rp-count.bad {
     color: var(--hex-fff);

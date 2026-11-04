@@ -822,3 +822,125 @@ async fn mongo_user_manager_end_to_end() {
     let users = admin.um_list_users().await.expect("list users");
     assert!(!users.rows.iter().any(|r| r["user"] == json!("app")), "app gone");
 }
+
+// Editing a binData / sub-document / date… cell in the grid sends the value back as
+// Extended JSON. It must reach MongoDB as the SAME BSON type (a UUID stays a UUID),
+// a UUID `_id` must find its document, a document that is gone must be reported
+// (not "0 changed"), and a broken wrapper must be refused with nothing written.
+#[tokio::test]
+async fn mongo_grid_edits_keep_bson_types_and_find_uuid_ids() {
+    use mongodb::bson::{spec::BinarySubtype, Binary, Bson, DateTime, Regex, Timestamp};
+    let (_c, port) = start_mongo().await;
+    let deadline = Instant::now() + Duration::from_secs(180);
+    let drv = loop {
+        match MongoDriver::connect(&params(port)).await {
+            Ok(d) => break d,
+            Err(e) => {
+                assert!(Instant::now() < deadline, "mongo chưa sẵn sàng: {}", e.message);
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+        }
+    };
+    let uuid = |b: u8| Bson::Binary(Binary { subtype: BinarySubtype::Uuid, bytes: vec![b; 16] });
+    let client = Client::with_uri_str(format!("mongodb://localhost:{port}/")).await.unwrap();
+    let people = client.database("appdb").collection::<Document>("people");
+    people
+        .insert_many(vec![
+            doc! {
+                "_id": uuid(1),
+                "userId": uuid(9),
+                "profile": { "theme": "dark" },
+                "at": DateTime::from_millis(1_700_000_000_000),
+                "ts": Bson::Timestamp(Timestamp { time: 1_700_000_000, increment: 7 }),
+                "re": Bson::RegularExpression(Regex { pattern: "^a".into(), options: "i".into() }),
+                "big": 5_000_000_000i64,
+            },
+            doc! { "_id": uuid(2), "userId": uuid(8) },
+        ])
+        .await
+        .unwrap();
+    let raw = |id: Bson| {
+        let people = people.clone();
+        async move { people.find_one(doc! { "_id": id }).await.unwrap() }
+    };
+    let before = raw(uuid(1)).await.expect("seeded");
+
+    // the grid reads documents through the query path — exactly these JSON values
+    let read = match drv.exec_mongo("db.people.find({})", None, None).await.unwrap().outcome {
+        StatementOutcome::Rows { result } => result,
+        other => panic!("expected Rows, got {other:?}"),
+    };
+    let row = read.rows.iter().find(|r| r["userId"]["$binary"]["base64"] == "CQkJCQkJCQkJCQkJCQkJCQ==").expect("row 1").clone();
+    let col = |name: &str, value: serde_json::Value| Col { name: name.into(), value, col_type: None };
+    let sch = || Some("appdb".to_string());
+
+    // 1) writing every value back unchanged keeps every BSON type (round-trip)
+    let n = drv
+        .apply_grid(&[GridChange::Update {
+            schema: sch(),
+            table: "people".into(),
+            pk: vec![col("_id", row["_id"].clone())],
+            set: ["userId", "profile", "at", "ts", "re"].iter().map(|k| col(k, row[*k].clone())).collect(),
+        }])
+        .await
+        .expect("a UUID _id must match its document");
+    assert_eq!(n, 0, "nothing changed, nothing modified — but the document WAS matched");
+    let after = raw(uuid(1)).await.unwrap();
+    for k in ["userId", "profile", "at", "ts", "re", "big"] {
+        assert_eq!(after.get(k), before.get(k), "{k} kept its value and BSON type");
+    }
+
+    // 2) a new UUID and a sub-document holding one are written as real types
+    let n = drv
+        .apply_grid(&[GridChange::Update {
+            schema: sch(),
+            table: "people".into(),
+            pk: vec![col("_id", row["_id"].clone())],
+            set: vec![
+                col("userId", json!({ "$uuid": "0b0b0b0b-0b0b-0b0b-0b0b-0b0b0b0b0b0b" })),
+                col("profile", json!({ "theme": "light", "owner": { "$binary": { "base64": "AQEBAQEBAQEBAQEBAQEBAQ==", "subType": "04" } } })),
+                col("at", json!({ "$date": "2030-01-02T03:04:05Z" })),
+            ],
+        }])
+        .await
+        .unwrap();
+    assert_eq!(n, 1);
+    let after = raw(uuid(1)).await.unwrap();
+    assert_eq!(after.get("userId"), Some(&uuid(11)), "userId is a UUID, not a sub-document");
+    let profile = after.get_document("profile").unwrap();
+    assert_eq!(profile.get_str("theme").unwrap(), "light");
+    assert_eq!(profile.get("owner"), Some(&uuid(1)), "a UUID inside a sub-document stays a UUID");
+    assert_eq!(after.get_datetime("at").unwrap().timestamp_millis(), 1_893_553_445_000);
+
+    // 3) a broken wrapper is refused — nothing written
+    let err = drv
+        .apply_grid(&[GridChange::Update {
+            schema: sch(),
+            table: "people".into(),
+            pk: vec![col("_id", row["_id"].clone())],
+            set: vec![col("userId", json!({ "$binary": { "base64": "not base64!!", "subType": "04" } }))],
+        }])
+        .await
+        .expect_err("broken $binary must be refused");
+    assert!(err.message.contains("userId") && err.message.contains("Extended JSON"), "{}", err.message);
+    assert_eq!(raw(uuid(1)).await.unwrap().get("userId"), Some(&uuid(11)), "the stored value is untouched");
+
+    // 4) delete by a UUID _id, then a change to the deleted document is reported
+    let other = read.rows.iter().find(|r| r["userId"]["$binary"]["base64"] == "CAgICAgICAgICAgICAgICA==").expect("row 2").clone();
+    let n = drv
+        .apply_grid(&[GridChange::Delete { schema: sch(), table: "people".into(), pk: vec![col("_id", other["_id"].clone())] }])
+        .await
+        .unwrap();
+    assert_eq!(n, 1, "delete by UUID _id removed the document");
+    assert!(raw(uuid(2)).await.is_none());
+    let err = drv
+        .apply_grid(&[GridChange::Update {
+            schema: sch(),
+            table: "people".into(),
+            pk: vec![col("_id", other["_id"].clone())],
+            set: vec![col("userId", json!(null))],
+        }])
+        .await
+        .expect_err("a document that is gone must be reported");
+    assert!(err.message.contains("No document matched"), "{}", err.message);
+}

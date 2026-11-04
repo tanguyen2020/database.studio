@@ -108,15 +108,36 @@
   }
 
   const focusOnMount = (node: HTMLElement) => node.focus()
+  // The payload area takes the room the pane HAS: the pane's height minus the
+  // dialog's own chrome (header, facts, toolbar, footer). A fixed cap (460px), or
+  // one sized from the window, ran past the pane on small windows, so the end of a
+  // long document was cut off with no way to scroll to it.
+  let backdrop = $state<HTMLElement | null>(null)
+  let paneH = $state(0)
+  let dialogH = $state(0)
+  let slotH = $state(0)
+  let padY = $state(0)
+  $effect(() => {
+    void paneH
+    if (!backdrop) return
+    const cs = getComputedStyle(backdrop)
+    padY = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom)
+  })
+  const codeMax = $derived.by(() => {
+    if (!paneH || !slotH) return 460
+    const chrome = Math.max(0, dialogH - slotH)
+    return Math.max(120, Math.floor(paneH - padY - chrome - 2))
+  })
 </script>
 
-<div role="presentation" class="pd-backdrop">
+<div role="presentation" class="pd-backdrop" bind:this={backdrop} bind:clientHeight={paneH}>
   <div
     role="dialog"
     aria-modal="true"
     aria-label={ariaLabel ?? title}
     tabindex="-1"
     class="pd"
+    bind:offsetHeight={dialogH}
     use:focusOnMount
     onkeydown={(e) => {
       if (e.key === 'Escape') {
@@ -210,18 +231,18 @@
 
     <!-- payload -->
     {#if view === 'tree' && canTree}
-      <div class="pd-code pd-tree">
+      <div class="pd-code pd-tree" bind:offsetHeight={slotH} style="max-height:{codeMax + 2}px;min-height:{Math.min(180, codeMax)}px">
         <JsonTree bind:this={tree} value={parsed} onCopy={copyText} />
       </div>
     {:else}
-    <div class="pd-code">
+    <div class="pd-code" bind:offsetHeight={slotH}>
       <CodeView
         value={shown}
         language={info.isJson && view !== 'hex' ? DS_JSON : 'plaintext'}
         readOnly
         height="auto"
-        maxHeight={460}
-        minHeight={180}
+        maxHeight={codeMax}
+        minHeight={Math.min(180, codeMax)}
         wrap={view === 'hex' ? false : wrap}
         lineNumbers={view !== 'hex'}
         ariaLabel="Payload"
@@ -242,10 +263,13 @@
 </div>
 
 <style>
+  /* Over the whole window, like the Result Grid's JSON dialog: inside the pane it
+     was boxed into the (often short) message list it was opened from — barely
+     more than half of a full-HD window. A hidden keep-alive tab hides it with its pane. */
   .pd-backdrop {
-    position: absolute;
+    position: fixed;
     inset: 0;
-    z-index: 50;
+    z-index: 58;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -253,7 +277,7 @@
     background: var(--rgba-0-0-0-_5);
   }
   .pd {
-    width: min(var(--px-840), 100%);
+    width: min(calc(var(--px-640) * 2), 100%);
     max-height: 100%;
     display: flex;
     flex-direction: column;
@@ -497,8 +521,6 @@
   .pd-code.pd-tree {
     display: block;
     overflow: auto;
-    max-height: var(--px-460);
-    min-height: var(--px-180);
     background: var(--surface);
   }
   .pd-code {

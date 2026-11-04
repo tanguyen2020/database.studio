@@ -6,6 +6,8 @@
   import SqlEditor from '$lib/components/editor/SqlEditor.svelte'
   import SqliteFileHeader from './SqliteFileHeader.svelte'
   import ResultPanel from '$lib/components/results/ResultPanel.svelte'
+  import type { EditTarget } from '$lib/components/results/ResultGrid.svelte'
+  import { editableSource, matchResultColumns, supportsResultEditing } from '$lib/sql/editable-result'
   import SystemBadge from '$lib/components/SystemBadge.svelte'
   import SystemIcon from '$lib/components/SystemIcon.svelte'
   import { brandKey, brandMeta, isScylla } from '$lib/brand'
@@ -370,6 +372,91 @@
     if (schemas && !schemas.some((s) => s.name === selectedSchema)) return dbDefaultSchema
     return selectedSchema
   })
+
+  // ---- editable query results ----------------------------------------------------
+  // A result can be edited in the grid when it is a plain SELECT from one table and
+  // carries that table's primary key (sql/editable-result). Checked for the result
+  // tab on screen: parse the statement, then read the table's columns on the
+  // connection the statement ran on (right database / search_path). Anything else
+  // stays read-only and the result toolbar says why. $state.raw: `result` is kept
+  // by identity, to tell which result tab a verdict belongs to.
+  let resultEdit = $state.raw<{ result: object; target?: EditTarget; reason?: string } | null>(null)
+  let editCheckGen = 0
+
+  /** Schema an unqualified table resolves to — used only to READ its columns. The
+   *  change itself stays unqualified and runs on the same session as the SELECT. */
+  function introspectSchema(): string | null {
+    switch (tab.systemType) {
+      case 'sqlite':
+        return 'main'
+      case 'mysql':
+      case 'mariadb':
+      case 'clickhouse':
+        return currentDb || dbDefaultSchema || profile?.database || null
+      case 'postgres':
+        return selectedSchema || dbDefaultSchema || 'public'
+      case 'duckdb':
+        return selectedSchema || dbDefaultSchema || 'main'
+      case 'mssql':
+        return dbDefaultSchema || 'dbo'
+      default:
+        return dbDefaultSchema || null
+    }
+  }
+
+  async function checkResultEditable(gen: number, subIndex: number, sql: string, result: { cols: [string, string][] }, cid: string) {
+    const system = tab.systemType
+    const fail = (reason: string) => {
+      if (gen === editCheckGen) resultEdit = { result, reason }
+    }
+    const src = editableSource(sql, system)
+    if (!src.ok) return fail(src.reason)
+    const schema = src.source.schema ?? introspectSchema()
+    if (!schema) return fail('The schema of the table is not known, so this result cannot be edited.')
+    let cols: { name: string; is_pk: boolean }[]
+    try {
+      cols = await ipc.listColumns(cid, schema, src.source.table)
+    } catch (e) {
+      return fail(`The table could not be read (${e}), so this result cannot be edited.`)
+    }
+    if (gen !== editCheckGen) return
+    const m = matchResultColumns(
+      result.cols.map((c) => c[0]),
+      cols,
+      system,
+    )
+    if (!m.ok) return fail(m.reason)
+    resultEdit = {
+      result,
+      target: {
+        connId: cid,
+        system,
+        schema: src.source.schema,
+        table: src.source.table,
+        pkCols: m.pkCols,
+        onApplied: () => void results.rereadResult(tab.id, subIndex),
+      },
+    }
+  }
+
+  $effect(() => {
+    const e = exec
+    const idx = e?.activeSub ?? -1
+    const sub = e && idx >= 0 ? e.subResults[idx] : undefined
+    const result = sub?.kind === 'rows' ? sub.result : undefined
+    const sql = sub?.statement.sql
+    const cid = e?.connId
+    const gen = ++editCheckGen
+    if (!e || e.running || !result || !sql || !cid || !supportsResultEditing(tab.systemType)) {
+      resultEdit = null
+      return
+    }
+    untrack(() => void checkResultEditable(gen, idx, sql, result, cid))
+  })
+
+  const shownResult = $derived(exec && exec.activeSub >= 0 ? exec.subResults[exec.activeSub]?.result : undefined)
+  const resultEditTarget = $derived(resultEdit && resultEdit.result === shownResult ? resultEdit.target : undefined)
+  const resultReadOnly = $derived(resultEdit && resultEdit.result === shownResult ? resultEdit.reason : undefined)
 
   // ---- server function catalog (list_functions) --------------------------------
   // The live server's full function list (PG/SQLite/ClickHouse: built-ins +
@@ -1153,6 +1240,8 @@
       accent={systemMeta(tab.systemType).accent}
       onJump={jump}
       onLoadMore={(idx) => results.fetchMoreCql(tab.id, idx)}
+      editTarget={resultEditTarget}
+      readOnlyReason={resultReadOnly}
       {explain}
       capability={explainCap}
       onExplainActual={explainSetActual}

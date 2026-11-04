@@ -35,10 +35,26 @@ export function isJsonDocument(text: string): boolean {
 /** 'json' → write a parsed document · 'text' → write the text · 'none' → view only. */
 export type JsonCellMode = 'json' | 'text' | 'none'
 
-export function jsonCellMode(type: string | undefined | null, value: unknown): JsonCellMode {
+/** MongoDB column types whose values the grid shows as JSON: a sub-document, an
+ *  array, or a BSON type written as Extended JSON ({"$binary": …}, {"$oid": …}). */
+const MONGO_JSON_TYPES = new Set(['object', 'array', 'binData', 'objectId', 'date', 'decimal', 'regex', 'timestamp', 'javascript'])
+
+export function jsonCellMode(type: string | undefined | null, value: unknown, system?: string): JsonCellMode {
   if (isJsonType(type)) return 'json'
+  // MongoDB: the value goes back as Extended JSON, which the driver turns into the
+  // real BSON type again (a UUID stays a UUID). A string/number cell keeps the
+  // one-line editor — only a value the grid SHOWS as JSON opens the JSON editor.
+  if (system === 'mongodb') {
+    if (typeof value === 'object' && value !== null) return 'json'
+    if ((value === null || value === undefined) && MONGO_JSON_TYPES.has(type ?? '')) return 'json'
+  }
   if (typeof value === 'string' && isJsonDocument(value)) return 'text'
   return 'none'
+}
+
+/** MongoDB keeps a value's BSON type through its Extended JSON wrapper. */
+export function isExtendedJsonEngine(system?: string): boolean {
+  return system === 'mongodb'
 }
 
 /** Show the `{ }` badge: a decoded document, or any non-null JSON column. */

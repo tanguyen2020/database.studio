@@ -208,3 +208,30 @@ test('a JSON payload opens as a Tree: keys, typed values, collapse / expand, cop
   await dialog.getByRole('button', { name: 'Tree', exact: true }).click()
   await expect(tree).toBeVisible()
 })
+
+// The viewer is for READING a document: it takes most of the workspace, and its
+// code area grows with the window — yet never spills out of the pane or hides
+// its own footer on a small window.
+for (const vp of [
+  { width: 1920, height: 1080 },
+  { width: 1280, height: 720 },
+]) {
+  test(`payload viewer is wide and tall enough to read, and fits the pane (${vp.width}×${vp.height})`, async ({ page }) => {
+    await page.setViewportSize(vp)
+    await openNatsPayload(page, '?bigPayload=120')
+    const g = await page.evaluate(() => {
+      const r = (sel: string) => document.querySelector(sel)!.getBoundingClientRect()
+      return { pd: r('.pd'), pane: r('.pd-backdrop'), slot: r('.pd-code'), code: r('.pd-code .cv-box'), foot: r('.pd-foot') }
+    })
+    // wider than the old 840px cap whenever the pane has the room
+    if (g.pane.width > 1100) expect(g.pd.width).toBeGreaterThan(1000)
+    // taller than the old 460px cap on a big window
+    if (vp.height >= 1000) expect(g.code.height).toBeGreaterThan(560)
+    // never outside the pane, never clipped, footer always reachable
+    expect(g.pd.bottom).toBeLessThanOrEqual(g.pane.bottom + 1)
+    expect(g.code.bottom).toBeLessThanOrEqual(g.slot.bottom + 1)
+    expect(g.foot.bottom).toBeLessThanOrEqual(vp.height)
+    await expect(page.getByRole('dialog').getByRole('button', { name: 'Close', exact: true })).toBeInViewport()
+    await page.screenshot({ path: `test-results/payload-${vp.width}.png` })
+  })
+}

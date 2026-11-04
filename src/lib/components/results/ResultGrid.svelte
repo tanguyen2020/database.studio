@@ -32,6 +32,7 @@
   import {
     formatJson,
     hasJsonBadge,
+    isExtendedJsonEngine,
     jsonCellMode,
     minifyJson,
     parseEditorText,
@@ -51,6 +52,10 @@
     /** cột PK (rỗng → dùng toàn bộ cột cũ làm điều kiện WHERE) */
     pkCols: string[]
     onApplied?: () => void
+    /** the source pages rows itself (Open Data, Mongo, Cassandra viewers): show
+     *  every fetched row and no client-side pager. Query Editor results leave it
+     *  unset — they keep the pager like a read-only result. */
+    serverPaged?: boolean
   }
 
   interface Props {
@@ -95,7 +100,7 @@
   }
 
   function modeOf(row: number, col: string, insert?: number): JsonCellMode {
-    return editable ? jsonCellMode(colTypes[col], cellValue(row, col, insert)) : 'none'
+    return editable ? jsonCellMode(colTypes[col], cellValue(row, col, insert), editTarget?.system) : 'none'
   }
 
   /** Open the JSON modal. `seed` comes from type-to-replace so the keystroke is
@@ -705,7 +710,10 @@ Original: ${was.isNull ? 'NULL' : was.text}`
   const PAGE_SIZES = [100, 200, 500, 1000, ALL_ROWS]
   let pageSize = $state(200)
   let page = $state(0)
-  const win = $derived(pageWindow(rowCount, pageSize, page))
+  // A viewer that pages on the server already sized this page; cutting it again
+  // here (with the pager hidden) used to leave rows 201+ of a 500-row page unreachable.
+  const clientPaging = $derived(!editTarget?.serverPaged)
+  const win = $derived(pageWindow(rowCount, clientPaging ? pageSize : ALL_ROWS, page))
   const paged = $derived(win.paged)
   const pageCount = $derived(win.pageCount)
   const pageOffset = $derived(win.offset)
@@ -1284,7 +1292,7 @@ Original: ${was.isNull ? 'NULL' : was.text}`
               {#if isEditing}
                 <!-- inline edit — port dòng 437-439 -->
                 <input
-                  class="mono"
+                  class="mono rg-edit"
                   value={editingCell?.seed ?? (cell.isNull ? '' : cell.text)}
                   use:focusEditor
                   style="width:100%;border:none;outline:none;background:var(--raised);color:var(--text);font-size:var(--px-12);padding:var(--px-5) var(--px-12);font-family:inherit;{numericCols.has(col) ? 'text-align:right' : ''}"
@@ -1348,7 +1356,7 @@ Original: ${was.isNull ? 'NULL' : was.text}`
               >
                 {#if isEditing}
                   <input
-                    class="mono"
+                    class="mono rg-edit"
                     value={ins[col] == null ? '' : String(ins[col])}
                     use:focusEditor
                     style="width:100%;border:none;outline:none;background:var(--raised);color:var(--text);font-size:var(--px-12);padding:var(--px-5) var(--px-12);font-family:inherit"
@@ -1391,9 +1399,10 @@ Original: ${was.isNull ? 'NULL' : was.text}`
     <div style="padding:var(--px-12);font-size:var(--px-12);color:var(--muted)">0 rows</div>
   {/if}
 </div>
-{#if !editable && rowCount > 0}
-  <!-- pager (AUDIT item 1) + Group By (T27) -->
+{#if clientPaging && rowCount > 0}
+  <!-- pager (AUDIT item 1) + Group By (T27; read-only grids — a grouped view has no editable rows) -->
   <div class="rg-foot">
+    {#if !editable}
     <span
       class="ds-tbtn"
       role="button"
@@ -1433,6 +1442,7 @@ Original: ${was.isNull ? 'NULL' : was.text}`
           <span class="ds-tbtn primary" role="button" tabindex="0" aria-disabled={!groupBy.length} onclick={applyGroup} onkeydown={(e) => e.key === 'Enter' && applyGroup()}>Apply</span>
         </div>
       </div>
+    {/if}
     {/if}
     <span class="ds-meta ds-num" style="margin-left:var(--px-4)">Rows <b>{(pageOffset + 1).toLocaleString()}–{(pageOffset + pageRowCount).toLocaleString()}</b> of {rowCount.toLocaleString()}</span>
     <label class="ds-field" style="margin-left:auto">Page size
@@ -1596,7 +1606,7 @@ Original: ${was.isNull ? 'NULL' : was.text}`
             {:else if empty}
               <span style="color:var(--muted)">Empty — saves NULL</span>
             {:else}
-              <span style="color:var(--success)">Valid JSON{m.mode === 'text' ? ' — this column stores it as text' : ''}</span>
+              <span style="color:var(--success)">Valid JSON{m.mode === 'text' ? ' — this column stores it as text' : isExtendedJsonEngine(editTarget?.system) ? ' — Extended JSON: keep $binary, $oid, $date… to keep the BSON type' : ''}</span>
             {/if}
           </div>
         {:else}
@@ -1740,6 +1750,15 @@ Original: ${was.isNull ? 'NULL' : was.text}`
     overflow: hidden;
     text-overflow: ellipsis;
     min-width: 0;
+  }
+  /* the cell being edited: a clear frame, and its selected text in the grid's solid
+     selection colour — the app-wide 26% tint vanished on the dark --raised field */
+  .rg-edit {
+    box-shadow: inset 0 0 0 var(--px-2) var(--primary);
+  }
+  .rg-edit::selection {
+    background: var(--grid-select);
+    color: var(--hex-fff);
   }
   /* The grid is the most scrolled surface in the app: the global pill
      scrollbar (theme.css) is too thin to find and grab here.

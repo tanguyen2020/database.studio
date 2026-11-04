@@ -60,10 +60,12 @@
 
   // Editing is enabled for every relational engine, including ClickHouse — the grid
   // routes CH edits to "Generate mutation" (async ALTER … UPDATE/DELETE) instead of
-  // an OLTP apply. Only offered on an unfiltered view (PK targeting is unambiguous).
+  // an OLTP apply. A filtered view edits too: every change targets its row by the
+  // row's own key values, which a filter does not change. Changing the filter
+  // reloads the rows, and the grid drops pending edits on new data (it says so).
   const editTarget = $derived<EditTarget | undefined>(
-    profile && tab.connectionId && filters.length === 0
-      ? { connId: tab.connectionId, system: profile.system, schema, table, pkCols, onApplied: () => void load() }
+    profile && tab.connectionId
+      ? { connId: tab.connectionId, system: profile.system, schema, table, pkCols, onApplied: () => void load(), serverPaged: true }
       : undefined,
   )
 

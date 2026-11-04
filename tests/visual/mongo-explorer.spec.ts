@@ -376,3 +376,58 @@ test('mongo UI: query editor suggests MongoDB methods and operators', async ({ p
 
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
+
+test('mongo UI: binData and sub-document cells edit as Extended JSON on the JSON form, Execute writes them', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(String(e)))
+  await openMongo(page)
+  await coll(page, 'students').click({ button: 'right' })
+  await page.waitForTimeout(250)
+  await page.getByText('Open Documents', { exact: true }).first().click()
+  await expect(page.getByText('Ann').first()).toBeVisible({ timeout: 10_000 })
+
+  const cell = (row: number, col: number) => page.locator('.grid-row').nth(row).locator('td:not(:first-child)').nth(col)
+  const typeInEditor = async (text: string) => {
+    await page.locator('[role="dialog"] .view-lines').first().click()
+    await page.keyboard.press('Control+A')
+    await page.keyboard.press('Delete')
+    await page.keyboard.type(text)
+  }
+
+  // a UUID (binData) opens the EDITOR — not the read-only viewer
+  await cell(0, 3).dblclick()
+  const dlg = page.getByRole('dialog', { name: 'Edit JSON cell' })
+  await expect(dlg).toBeVisible()
+  await expect(dlg.getByText(/row 1 · binData/)).toBeVisible()
+  await expect(dlg.getByText(/Read-only/)).toHaveCount(0)
+  await expect(dlg.getByText(/Extended JSON: keep \$binary/)).toBeVisible()
+  await typeInEditor('{"$uuid":"00010203-0405-0607-0809-0a0b0c0d0e0f"}')
+  await dlg.getByRole('button', { name: 'Save' }).click()
+  await expect(dlg).toBeHidden()
+
+  // a sub-document too
+  await cell(0, 4).dblclick()
+  await expect(dlg).toBeVisible()
+  await typeInEditor('{"theme":"light","lang":"vi"}')
+  await dlg.getByRole('button', { name: 'Save' }).click()
+
+  // Save only queues the change: nothing written until Execute
+  await expect(page.getByText(/2 unsaved changes/)).toBeVisible()
+  expect(await page.evaluate(() => (window as unknown as { __ipcCalls?: Record<string, number> }).__ipcCalls?.apply_grid_changes ?? 0)).toBe(0)
+
+  await page.getByRole('button', { name: 'Execute', exact: true }).click()
+  await expect(page.getByText(/2 unsaved changes/)).toBeHidden()
+  const changes = await page.evaluate(
+    () => (window as unknown as { __ipcGridChanges?: Array<{ kind: string; pk: { name: string; value: unknown }[]; set: { name: string; value: unknown }[] }> }).__ipcGridChanges,
+  )
+  expect(changes).toHaveLength(1) // both edits are on row 1 → one update
+  expect(changes![0].kind).toBe('update')
+  expect(changes![0].pk).toEqual([expect.objectContaining({ name: '_id', value: { $oid: '507f1f77bcf86cd799439011' } })])
+  expect(changes![0].set).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ name: 'userId', value: { $uuid: '00010203-0405-0607-0809-0a0b0c0d0e0f' } }),
+      expect.objectContaining({ name: 'profile', value: { theme: 'light', lang: 'vi' } }),
+    ]),
+  )
+  expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
+})

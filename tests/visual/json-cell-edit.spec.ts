@@ -103,6 +103,49 @@ test('json cell: double-click opens the JSON editor, validates, and saves as a p
   expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
 })
 
+test('json cell: a filtered Open Data view still edits, and the edit targets the filtered row', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(String(e)))
+  await blockRemoteFonts(page)
+  await openStudentsViewer(page)
+
+  // filter to id = 2 and apply
+  await page.getByTitle('Filter the rows of this table').click()
+  await page.getByText('Add condition', { exact: true }).click()
+  await page.getByLabel('Column').first().selectOption('id')
+  await page.getByLabel('Value').first().fill('2')
+  await page.getByText('Apply filter', { exact: true }).click()
+  await expect(page.locator('.grid-row')).toHaveCount(1)
+  await expect(page.getByText('(filtered)')).toBeVisible()
+
+  // the grid stays editable: the toolbar edit actions are there, and a jsonb cell
+  // opens the EDITOR (not the read-only viewer)
+  await expect(page.getByRole('button', { name: 'Insert row', exact: true }).first()).toBeVisible()
+  const configCell = cell(page, 0, 3)
+  await expect(configCell).toContainText('light')
+  await configCell.dblclick()
+  const dlg = page.getByRole('dialog', { name: 'Edit JSON cell' })
+  await expect(dlg).toBeVisible()
+  await setJson(page, '{"theme":"contrast"}')
+  await dlg.getByRole('button', { name: 'Save' }).click()
+  await expect(dlg).toBeHidden()
+  await expect(configCell).toContainText('contrast')
+  await expect(page.getByText(/1 unsaved change\b/)).toBeVisible()
+
+  // the change targets the filtered row by its key (id = 2), not row 1 of the table
+  await page.getByText('Preview diff', { exact: true }).click()
+  await expect(page.getByText(/UPDATE students/)).toBeVisible()
+  const changes = await page.evaluate(
+    () => (window as unknown as { __ipcGridChanges?: Array<{ kind: string; pk: { name: string; value: unknown }[]; set: { name: string; value: unknown }[] }> }).__ipcGridChanges,
+  )
+  expect(changes).toHaveLength(1)
+  expect(changes![0].kind).toBe('update')
+  expect(changes![0].pk).toEqual([expect.objectContaining({ name: 'id', value: 2 })])
+  expect(changes![0].set).toEqual([expect.objectContaining({ name: 'config', value: { theme: 'contrast' } })])
+
+  expect(errors, `page errors: ${errors.join('\n')}`).toEqual([])
+})
+
 test('json cell: NULL cells, text columns and read-only grids', async ({ page }) => {
   const errors: string[] = []
   page.on('pageerror', (e) => errors.push(String(e)))

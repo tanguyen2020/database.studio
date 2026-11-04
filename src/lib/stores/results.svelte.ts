@@ -510,6 +510,32 @@ class ResultsStore {
     }
   }
 
+  /** Re-run ONE result's statement on the connection it ran on and replace that
+   *  result — after its rows were edited from the grid, so the grid shows what the
+   *  table now holds. The rest of the run (other results, Messages) is untouched. */
+  async rereadResult(tabId: string, subIndex: number): Promise<void> {
+    const exec = this.byTab[tabId]
+    const sub = exec?.subResults[subIndex]
+    if (!exec || exec.running || !sub || sub.kind !== 'rows' || !sub.result) return
+    const sql = sub.statement.sql
+    try {
+      const t0 = performance.now()
+      const res = await ipc.execStatement(exec.connId, sql)
+      if (!res.ok || !res.result) {
+        toasts.error(`Saved, but reading the result again failed: ${res.error?.message ?? 'no rows returned'}`)
+        return
+      }
+      // the run may have been replaced while this was in flight
+      const live = this.byTab[tabId]?.subResults[subIndex]
+      if (!live || live.statement.sql !== sql) return
+      live.result = { ...res.result, rows: Object.freeze(res.result.rows) as Record<string, unknown>[] }
+      live.durationMs = res.duration_ms ?? Math.round(performance.now() - t0)
+      live.label = `#${live.index} ${live.table ?? 'result'} · ${res.result.total.toLocaleString()} rows`
+    } catch (e) {
+      toasts.error(`Saved, but reading the result again failed: ${e}`)
+    }
+  }
+
   async cancel(tabId: string, connId?: string) {
     const exec = this.byTab[tabId]
     if (!exec?.running) return

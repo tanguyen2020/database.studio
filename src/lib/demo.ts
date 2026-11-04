@@ -503,6 +503,12 @@ function bigFnsSize(): number {
   return bigFnsN
 }
 
+/** Rows of the demo `profiles` table — an editable Query Editor result. */
+const demoProfiles: { id: number; display_name: string; settings: unknown }[] = [
+  { id: 1, display_name: 'An', settings: { theme: 'dark', alerts: true } },
+  { id: 2, display_name: 'Binh', settings: { theme: 'light', alerts: false } },
+]
+
 export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   // Test observability (demo/browser only): count IPC calls per command so e2e can
   // assert that actions like Refresh actually re-hit the backend. No effect in Tauri.
@@ -843,6 +849,12 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
           { name: 'title', data_type: 'varchar(120)', nullable: false, default: null, is_pk: false, is_fk: false },
           { name: 'credits', data_type: 'int4', nullable: false, default: null, is_pk: false, is_fk: false },
           { name: 'department', data_type: 'varchar(60)', nullable: true, default: null, is_pk: false, is_fk: false },
+        ])
+      if (colTable === 'profiles')
+        return ok([
+          { name: 'id', data_type: 'int4', nullable: false, default: null, is_pk: true, is_fk: false },
+          { name: 'display_name', data_type: 'varchar(80)', nullable: false, default: null, is_pk: false, is_fk: false },
+          { name: 'settings', data_type: 'jsonb', nullable: true, default: null, is_pk: false, is_fk: false },
         ])
       if (compareDrift(args) && colTable === 'students')
         return ok([
@@ -1365,8 +1377,21 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
         }))
         return ok({ ok: true, result: { cols, rows, total: n }, duration_ms: 12 })
       }
+      // An EDITABLE query result: `profiles` has a primary key and its columns are
+      // known (list_columns), so a plain SELECT from it can be edited in the grid.
+      // Stateful — apply_grid_changes writes here, so re-reading shows the change.
+      if (/^\s*select\b[\s\S]*\bfrom\s+profiles\b/i.test(stmtSql)) {
+        const all = demoProfiles.map((r) => ({ ...r }))
+        const sel = stmtSql.match(/^\s*select\s+([\s\S]*?)\s+from\s/i)?.[1].trim() ?? '*'
+        const names = sel === '*' ? ['id', 'display_name', 'settings'] : sel.split(',').map((s) => s.trim())
+        const types: Record<string, string> = { id: 'int4', display_name: 'varchar', settings: 'jsonb' }
+        const cols = names.map((n) => [n, types[n] ?? 'text'] as [string, string])
+        const rows = all.map((r) => Object.fromEntries(names.map((n) => [n, (r as Record<string, unknown>)[n] ?? null])))
+        return ok({ ok: true, result: { cols, rows, total: rows.length }, duration_ms: 6 })
+      }
       // A read-only result carrying a JSON column: the grid must offer the JSON
-      // VIEWER there (no Save) — editing needs the Table Viewer's edit target.
+      // VIEWER there (no Save) — `payload` is not a column the demo table reports,
+      // so the result does not map back to a table and stays read-only.
       if (/json_demo/i.test(stmtSql)) {
         return ok({
           ok: true,
@@ -1483,10 +1508,23 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
       return ok(null)
     case 'preview_grid_changes': {
       const changes = (args?.changes as Array<{ kind: string; table: string }>) ?? []
+      // test seam: the exact changes the grid built, so a spec can assert WHICH row
+      // an edit targets (its key values), not just that an UPDATE exists.
+      if (typeof window !== 'undefined') (window as unknown as { __ipcGridChanges?: unknown }).__ipcGridChanges = changes
       return ok(changes.map((c) => `-- ${c.kind.toUpperCase()} ${c.table} (demo preview)`))
     }
-    case 'apply_grid_changes':
-      return ok(((args?.changes as unknown[]) ?? []).length)
+    case 'apply_grid_changes': {
+      const changes = (args?.changes as Array<{ kind: string; table: string; pk?: { name: string; value: unknown }[]; set?: { name: string; value: unknown }[] }>) ?? []
+      if (typeof window !== 'undefined') (window as unknown as { __ipcGridChanges?: unknown }).__ipcGridChanges = changes
+      // `profiles` (editable query result demo) keeps its writes
+      for (const c of changes) {
+        if (c.table !== 'profiles' || c.kind !== 'update') continue
+        const id = c.pk?.find((p) => p.name === 'id')?.value
+        const row = demoProfiles.find((r) => r.id === Number(id))
+        if (row) for (const s of c.set ?? []) (row as Record<string, unknown>)[s.name] = s.value
+      }
+      return ok(changes.length)
+    }
     case 'exec_filtered': {
       // Table Data Viewer (editable grid). Carries the two shapes a JSON cell can
       // arrive in, so the JSON editor is exercised on the real path: a decoded
@@ -1500,16 +1538,37 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
       ]
       // A table with no rows still reports its columns (see emptyTableMode).
       if (emptyTableMode()) return ok({ ok: true, result: { cols: viewerCols, rows: [], total: 0 }, duration_ms: 4 })
+      // `?viewerRows=N`: a big table, served one page (LIMIT/OFFSET) at a time
+      const bigN = bigParam('viewerRows')
+      if (bigN) {
+        const limit = Number(args?.limit ?? 100)
+        const offset = Number(args?.offset ?? 0)
+        const rows = Array.from({ length: Math.max(0, Math.min(limit, bigN - offset)) }, (_, k) => ({
+          id: offset + k + 1,
+          first_name: `Student ${offset + k + 1}`,
+          gpa: 3,
+          config: null,
+          prefs_text: null,
+        }))
+        return ok({ ok: true, result: { cols: viewerCols, rows, total: rows.length }, duration_ms: 8 })
+      }
+      const allRows: Record<string, unknown>[] = [
+        { id: 1, first_name: 'An', gpa: 3.9, config: { theme: 'dark', tags: ['a', 'b'] }, prefs_text: '{"lang":"vi"}' },
+        { id: 2, first_name: 'Binh', gpa: 3.7, config: { theme: 'light', tags: [] }, prefs_text: '{"lang":"en"}' },
+        { id: 3, first_name: 'Chi', gpa: null, config: null, prefs_text: null },
+      ]
+      // `=` conditions filter like a server would, so the filtered view is real.
+      const conds = ((args?.filters as Array<{ col: string; op: string; value?: unknown }>) ?? []).filter((f) => f.op === '=')
+      const match = (r: Record<string, unknown>, f: { col: string; value?: unknown }) => String(r[f.col] ?? '') === String(f.value ?? '')
+      const rows = conds.length
+        ? allRows.filter((r) => (args?.combinatorOr ? conds.some((f) => match(r, f)) : conds.every((f) => match(r, f))))
+        : allRows
       return ok({
         ok: true,
         result: {
           cols: viewerCols,
-          rows: [
-            { id: 1, first_name: 'An', gpa: 3.9, config: { theme: 'dark', tags: ['a', 'b'] }, prefs_text: '{"lang":"vi"}' },
-            { id: 2, first_name: 'Binh', gpa: 3.7, config: { theme: 'light', tags: [] }, prefs_text: '{"lang":"en"}' },
-            { id: 3, first_name: 'Chi', gpa: null, config: null, prefs_text: null },
-          ],
-          total: 3,
+          rows,
+          total: rows.length,
         },
         duration_ms: 12,
       })
@@ -1600,7 +1659,10 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
       const msg = (seq: number) => ({
         seq,
         subject: known ? subjectOf(seq) : subj,
-        payload: `{"id":${1000 + seq / SPACING - 1}}`,
+        // `?bigPayload=N`: a document with N fields — a payload taller than the viewer
+        payload: bigParam('bigPayload')
+          ? JSON.stringify(Object.fromEntries([['id', 1000 + seq / SPACING - 1], ...Array.from({ length: bigParam('bigPayload') }, (_, i) => [`field_${i}`, `value number ${i} of a long demo document`])]))
+          : `{"id":${1000 + seq / SPACING - 1}}`,
         time: new Date(base + seq * 1000).toISOString(),
         key: `msg-${1000 + seq / SPACING - 1}`,
       })
@@ -2282,10 +2344,18 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
       return ok({
         ok: true,
         result: {
-          cols: [['_id', 'objectId'], ['name', 'string'], ['age', 'int']],
+          // userId = a UUID (binData subtype 04) and profile = a sub-document: both
+          // reach the grid as JSON and are edited as Extended JSON
+          cols: [['_id', 'objectId'], ['name', 'string'], ['age', 'int'], ['userId', 'binData'], ['profile', 'object']],
           rows: [
-            { _id: { $oid: '507f1f77bcf86cd799439011' }, name: 'Ann', age: 30 },
-            { _id: { $oid: '507f1f77bcf86cd799439012' }, name: 'Bob', age: 25 },
+            {
+              _id: { $oid: '507f1f77bcf86cd799439011' },
+              name: 'Ann',
+              age: 30,
+              userId: { $binary: { base64: 'FMJmFTxSSFSJnmSUZXNk9g==', subType: '04' } },
+              profile: { theme: 'dark' },
+            },
+            { _id: { $oid: '507f1f77bcf86cd799439012' }, name: 'Bob', age: 25, userId: null, profile: null },
           ],
           total: 2,
         },

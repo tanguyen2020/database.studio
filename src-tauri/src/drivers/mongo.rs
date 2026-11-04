@@ -572,6 +572,17 @@ fn json_to_bson(v: &Value) -> Bson {
         Value::String(s) => Bson::String(s.clone()),
         Value::Array(a) => Bson::Array(a.iter().map(json_to_bson).collect()),
         Value::Object(m) => {
+            // Every Extended JSON v2 wrapper the grid shows ($binary, $uuid,
+            // $timestamp, $regularExpression, $numberLong, $minKey…) goes back to its
+            // real BSON type — a UUID `_id` edited in the grid stays a UUID, and a
+            // filter on it matches. Plain sub-documents fall through below.
+            if m.keys().any(|k| is_extjson_key(k)) {
+                if let Ok(b) = Bson::try_from(m.clone()) {
+                    if !matches!(b, Bson::Document(_)) {
+                        return b;
+                    }
+                }
+            }
             if m.len() == 1 {
                 if let Some(Value::String(hex)) = m.get("$oid") {
                     if let Ok(oid) = mongodb::bson::oid::ObjectId::parse_str(hex) {
@@ -596,6 +607,60 @@ fn json_to_bson(v: &Value) -> Bson {
             Bson::Document(doc)
         }
     }
+}
+
+/// Keys that mark an object as a MongoDB Extended JSON v2 value wrapper.
+const EXTJSON_KEYS: &[&str] = &[
+    "$oid", "$symbol", "$regularExpression", "$numberInt", "$numberLong", "$numberDouble",
+    "$numberDecimal", "$binary", "$uuid", "$code", "$timestamp", "$date", "$minKey", "$maxKey",
+    "$dbPointer", "$undefined",
+];
+
+fn is_extjson_key(k: &str) -> bool {
+    EXTJSON_KEYS.contains(&k)
+}
+
+/// A value edited in the grid that names an Extended JSON type but cannot be read
+/// as one (bad base64, a malformed `$date`…). Writing it anyway would store a
+/// sub-document with a `$binary` key instead of the type — so the edit is refused.
+fn extjson_problem(v: &Value) -> Option<String> {
+    match v {
+        Value::Array(a) => a.iter().find_map(extjson_problem),
+        Value::Object(m) => {
+            if let Some(k) = m.keys().find(|k| is_extjson_key(k)) {
+                return match Bson::try_from(m.clone()) {
+                    Err(e) => Some(format!("{k}: {e}")),
+                    Ok(Bson::Document(_)) => Some(format!("{k} is not valid Extended JSON")),
+                    Ok(_) => None,
+                };
+            }
+            m.values().find_map(extjson_problem)
+        }
+        _ => None,
+    }
+}
+
+/// `json_to_bson` for a value a person typed in the grid: refuse a broken
+/// Extended JSON wrapper instead of silently writing it as a sub-document.
+fn grid_value(col: &grid::Col) -> Result<Bson, QueryError> {
+    if let Some(why) = extjson_problem(&col.value) {
+        return Err(perr(format!("{}: the value is not valid MongoDB Extended JSON ({why}). Nothing was written for it.", col.name)));
+    }
+    Ok(json_to_bson(&col.value))
+}
+
+/// An update/delete from the grid that matched no document. Changes are applied
+/// one at a time (no transaction), so say how many earlier ones did go through.
+fn not_found(pk: &[grid::Col], applied: u64) -> QueryError {
+    let key = pk
+        .iter()
+        .map(|c| format!("{} = {}", c.name, serde_json::to_string(&c.value).unwrap_or_default()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let earlier = if applied > 0 { format!(" {applied} earlier change(s) were applied.") } else { String::new() };
+    perr(format!(
+        "No document matched {key} — it was changed or deleted since it was read. Refresh and try again.{earlier}"
+    ))
 }
 
 /// Human-readable mongosh preview of a pending grid change (dialog only — Apply
@@ -1235,7 +1300,7 @@ impl MongoDriver {
                 grid::GridChange::Insert { schema, table, values } => {
                     let mut doc = Document::new();
                     for c in values {
-                        doc.insert(c.name.clone(), json_to_bson(&c.value));
+                        doc.insert(c.name.clone(), grid_value(c)?);
                     }
                     let res = self
                         .client
@@ -1249,11 +1314,11 @@ impl MongoDriver {
                 grid::GridChange::Update { schema, table, pk, set } => {
                     let mut filter = Document::new();
                     for c in pk {
-                        filter.insert(c.name.clone(), json_to_bson(&c.value));
+                        filter.insert(c.name.clone(), grid_value(c)?);
                     }
                     let mut set_doc = Document::new();
                     for c in set {
-                        set_doc.insert(c.name.clone(), json_to_bson(&c.value));
+                        set_doc.insert(c.name.clone(), grid_value(c)?);
                     }
                     let res = self
                         .client
@@ -1265,12 +1330,17 @@ impl MongoDriver {
                         .await
                         .map_err(exec_err)?;
                     check_write_errors(&res)?;
+                    // matched nothing ⇒ the document is gone, or its _id did not come
+                    // back as the same value — say so instead of "0 changed"
+                    if res.get_i32("n").unwrap_or(0) <= 0 {
+                        return Err(not_found(pk, applied));
+                    }
                     applied += res.get_i32("nModified").unwrap_or(0).max(0) as u64;
                 }
                 grid::GridChange::Delete { schema, table, pk } => {
                     let mut filter = Document::new();
                     for c in pk {
-                        filter.insert(c.name.clone(), json_to_bson(&c.value));
+                        filter.insert(c.name.clone(), grid_value(c)?);
                     }
                     let res = self
                         .client
@@ -1282,7 +1352,11 @@ impl MongoDriver {
                         .await
                         .map_err(exec_err)?;
                     check_write_errors(&res)?;
-                    applied += res.get_i32("n").unwrap_or(0).max(0) as u64;
+                    let n = res.get_i32("n").unwrap_or(0);
+                    if n <= 0 {
+                        return Err(not_found(pk, applied));
+                    }
+                    applied += n as u64;
                 }
             }
         }
@@ -1947,6 +2021,57 @@ mod tests {
         }
         // plain integer → Int64 (Mongo compares numeric types cross-width)
         assert!(matches!(json_to_bson(&json!(100)), Bson::Int64(100)));
+    }
+
+    #[test]
+    fn every_value_the_grid_shows_writes_back_as_the_same_bson_type() {
+        use mongodb::bson::{spec::BinarySubtype, Binary, Regex, Timestamp};
+        let uuid = Binary { subtype: BinarySubtype::Uuid, bytes: (0u8..16).collect() };
+        let originals = vec![
+            Bson::Binary(uuid.clone()),
+            Bson::Binary(Binary { subtype: BinarySubtype::Generic, bytes: vec![0, 255, 7] }),
+            Bson::Timestamp(Timestamp { time: 1_700_000_000, increment: 3 }),
+            Bson::RegularExpression(Regex { pattern: "^a.*z$".into(), options: "i".into() }),
+            Bson::Decimal128("12.50".parse().unwrap()),
+            Bson::MinKey,
+            Bson::MaxKey,
+            Bson::JavaScriptCode("function () { return 1 }".into()),
+            Bson::DateTime(mongodb::bson::DateTime::from_millis(1_700_000_000_123)),
+            Bson::ObjectId(mongodb::bson::oid::ObjectId::parse_str("507f1f77bcf86cd799439011").unwrap()),
+        ];
+        for b in originals {
+            assert_eq!(json_to_bson(&bson_to_json(&b)), b, "round-trip of {b:?}");
+        }
+        // nested: a sub-document holding a UUID keeps the sub-document AND the UUID
+        let nested = Bson::Document(doc! { "owner": Bson::Binary(uuid.clone()), "tags": ["a"] });
+        match json_to_bson(&bson_to_json(&nested)) {
+            Bson::Document(d) => {
+                assert_eq!(d.get("owner"), Some(&Bson::Binary(uuid.clone())));
+                assert_eq!(d.get("tags"), Some(&Bson::Array(vec![Bson::String("a".into())])));
+            }
+            other => panic!("expected a document, got {other:?}"),
+        }
+        // the shapes people type by hand are read too
+        assert_eq!(json_to_bson(&json!({ "$numberLong": "42" })), Bson::Int64(42));
+        assert_eq!(json_to_bson(&json!({ "$numberInt": "7" })), Bson::Int32(7));
+        assert_eq!(
+            json_to_bson(&json!({ "$uuid": "00010203-0405-0607-0809-0a0b0c0d0e0f" })),
+            Bson::Binary(uuid)
+        );
+        // a plain sub-document with ordinary keys stays a sub-document
+        assert!(matches!(json_to_bson(&json!({ "theme": "dark" })), Bson::Document(_)));
+    }
+
+    #[test]
+    fn a_broken_extended_json_value_is_refused_not_written_as_a_sub_document() {
+        use crate::drivers::grid::Col;
+        let col = |v: Value| Col { name: "userId".into(), value: v, col_type: None };
+        let bad = grid_value(&col(json!({ "$binary": { "base64": "not base64!!", "subType": "04" } })));
+        let err = bad.expect_err("bad base64 must be refused");
+        assert!(err.message.contains("userId") && err.message.contains("Extended JSON"), "{}", err.message);
+        assert!(grid_value(&col(json!({ "nested": { "$date": "not a date" } }))).is_err());
+        assert!(grid_value(&col(json!({ "$binary": { "base64": "AAEC", "subType": "00" } }))).is_ok());
+        assert!(grid_value(&col(json!({ "theme": "dark" }))).is_ok());
     }
 
     #[test]

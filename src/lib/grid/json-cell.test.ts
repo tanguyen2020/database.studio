@@ -39,6 +39,21 @@ describe('jsonCellMode', () => {
     expect(jsonCellMode('text[]', ['a', 'b'])).toBe('none') // a pg array is not JSON
     expect(jsonCellMode('varchar', null)).toBe('none')
   })
+  it('MongoDB: every value shown as JSON edits as Extended JSON', () => {
+    const uuid = { $binary: { base64: 'FMJmFTxSSFSJnmSUZXNk9g==', subType: '04' } }
+    expect(jsonCellMode('binData', uuid, 'mongodb')).toBe('json')
+    expect(jsonCellMode('object', { theme: 'dark' }, 'mongodb')).toBe('json')
+    expect(jsonCellMode('array', ['a', 'b'], 'mongodb')).toBe('json')
+    expect(jsonCellMode('objectId', { $oid: '507f1f77bcf86cd799439011' }, 'mongodb')).toBe('json')
+    // a NULL in such a column can receive one
+    expect(jsonCellMode('date', null, 'mongodb')).toBe('json')
+    // strings and numbers keep the one-line editor
+    expect(jsonCellMode('string', 'An', 'mongodb')).toBe('none')
+    expect(jsonCellMode('long', 5, 'mongodb')).toBe('none')
+    expect(jsonCellMode('string', null, 'mongodb')).toBe('none')
+    // other engines are unchanged: a pg array is still not JSON
+    expect(jsonCellMode('text[]', ['a', 'b'], 'postgres')).toBe('none')
+  })
 })
 
 describe('hasJsonBadge', () => {

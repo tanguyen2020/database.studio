@@ -52,6 +52,7 @@
           table: collection,
           pkCols: ['_id'],
           onApplied: () => void load(),
+          serverPaged: true,
         }
       : undefined,
   )

@@ -37,7 +37,7 @@
   // through applyGridChanges/previewGridChanges → Cassandra arms (CQL by full PK).
   const editTarget = $derived<EditTarget | undefined>(
     profile && tab.connectionId && pkCols.length > 0
-      ? { connId: tab.connectionId, system: 'cassandra', schema: keyspace, table, pkCols, onApplied: () => void load() }
+      ? { connId: tab.connectionId, system: 'cassandra', schema: keyspace, table, pkCols, onApplied: () => void load(), serverPaged: true }
       : undefined,
   )
 

@@ -234,6 +234,14 @@
     fitHeight()
   })
 
+  // a host that sizes the box from the room it has (the payload viewer) changes
+  // the bounds after mount — refit, or the first guess sticks
+  $effect(() => {
+    void maxHeight
+    void minHeight
+    fitHeight()
+  })
+
   export function focus() {
     editor?.focus()
   }
