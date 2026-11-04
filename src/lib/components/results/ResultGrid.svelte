@@ -1,5 +1,6 @@
 <script lang="ts">
   import Icon, { type IconName } from '$lib/components/Icon.svelte'
+  import { kbd } from '$lib/keys/label'
   import Chevron from '$lib/components/Chevron.svelte'
   // Read-only virtualized result grid (TanStack table-core + virtual-core):
   // zebra rows, sticky header, row-number gutter, NULL badge, datetime in
@@ -18,7 +19,7 @@
     type VirtualItem,
   } from '@tanstack/virtual-core'
   import { untrack, tick, onDestroy, onMount } from 'svelte'
-  import { pageWindow, ALL_ROWS } from '$lib/grid/paging'
+  import { pageWindow, ALL_ROWS, clampPageSize } from '$lib/grid/paging'
   import { sampleRows, columnWidths, clipForMeasure } from '$lib/grid/col-widths'
   import { buildGroups, type AggFn, type GroupNode } from '$lib/grid/groupby'
   import { save as saveFileDialog } from '@tauri-apps/plugin-dialog'
@@ -42,6 +43,8 @@
   import CodeView from '$lib/components/editor/CodeView.svelte'
   import { DS_JSON } from '$lib/editor/monarch'
   import type { QueryResultSet } from '$lib/types'
+  import { settings } from '$lib/stores/settings.svelte'
+  import { formatDateTime, isDateTimeType } from '$lib/format/datetime'
 
   /** Bật editable grid khi mở từ Table Data Viewer (biết schema/table/pk). */
   export interface EditTarget {
@@ -156,8 +159,8 @@
   function editedTitle(now: { text: string; isNull: boolean }, original: unknown, col: string): string {
     const was = display(original, col)
     return `Edited — not saved yet
-New: ${now.isNull ? 'NULL' : now.text}
-Original: ${was.isNull ? 'NULL' : was.text}`
+New: ${now.isNull ? nullLabel : now.text}
+Original: ${was.isNull ? nullLabel : was.text}`
   }
 
   // A NEW result set invalidates every pending grid change: they are keyed by row
@@ -167,14 +170,21 @@ Original: ${was.isNull ? 'NULL' : was.text}`
   // The panel reuses this component across runs, so clear the buffer whenever the
   // result object identity changes, and say so if anything was actually dropped.
   let lastData: QueryResultSet | null = null
+  // The same result read again after its edits were saved (same columns): keep the
+  // page and the widths the user set — snapping back to page 1 after editing a row
+  // on page 5 lost their place.
+  const shapeOf = (d: QueryResultSet) => d.cols.map((c) => `${c[0]}:${c[1]}`).join('|')
+  const sameView = (d: QueryResultSet, prev: QueryResultSet | null) => !!d.keepView && !!prev && shapeOf(d) === shapeOf(prev)
+  let keepPage = false
   $effect(() => {
     const d = data
     untrack(() => {
       if (d === lastData) return
       const dropped = lastData !== null && pendingCount > 0
+      keepPage = sameView(d, lastData)
       lastData = d
       discard()
-      colW = null
+      if (!keepPage) colW = null
       if (dropped) toasts.show('Pending grid changes were discarded — the result was refreshed.')
     })
   })
@@ -606,7 +616,7 @@ Original: ${was.isNull ? 'NULL' : was.text}`
     const badgeFont = `400 ${10 * s}px ${fam}`
     const jsonFont = `700 ${9 * s}px ${fam}`
     const pad = 24 * s + 1 // cell padding left+right + the column's right border
-    const nullW = textWidth('NULL', badgeFont) + 12 * s
+    const nullW = textWidth(nullLabel, badgeFont) + 12 * s
     const jsonW = textWidth('{ }', jsonFont) + 10 * s + 6 * s
     const rows = sampleRows(data.rows.length)
     const widths = columnWidths(
@@ -707,8 +717,10 @@ Original: ${was.isNull ? 'NULL' : was.text}`
   // Row indices stay ABSOLUTE (ri = pageOffset + vi.index) so edits/selection
   // keep working. Table Viewer paginates server-side; this covers query results.
   // ALL_ROWS = every fetched row on one page (virtualised → still cheap).
-  const PAGE_SIZES = [100, 200, 500, 1000, ALL_ROWS]
-  let pageSize = $state(200)
+  // Settings → Query → Default page size (a custom value joins the list)
+  const preferredPageSize = untrack(() => clampPageSize(settings.value.defaultPageSize))
+  const PAGE_SIZES = [...new Set([100, 200, 500, 1000, preferredPageSize])].sort((a, b) => a - b).concat(ALL_ROWS)
+  let pageSize = $state(preferredPageSize)
   let page = $state(0)
   // A viewer that pages on the server already sized this page; cutting it again
   // here (with the pager hidden) used to leave rows 201+ of a 500-row page unreachable.
@@ -719,11 +731,18 @@ Original: ${was.isNull ? 'NULL' : was.text}`
   const pageOffset = $derived(win.offset)
   const pageRowCount = $derived(win.count)
   const onLastPage = $derived(win.last)
-  // Reset to page 0 whenever a new result set arrives or the page size changes.
+  // Reset to page 0 whenever a new result set arrives or the page size changes —
+  // except the same result read back after saving edits (keepPage, set above).
+  // svelte-ignore state_referenced_locally
+  let lastPageSize = pageSize
   $effect(() => {
     void data
-    void pageSize
-    untrack(() => (page = 0))
+    const ps = pageSize
+    untrack(() => {
+      if (ps === lastPageSize && keepPage) return
+      lastPageSize = ps
+      page = 0
+    })
   })
 
   $effect(() => {
@@ -805,19 +824,17 @@ Original: ${was.isNull ? 'NULL' : was.text}`
   }
   const groupRows = $derived(groupResult ? flattenGroups(groupResult.groups) : [])
 
-  const isDatetimeType = (type: string) =>
-    /timestamp|datetime|timestamptz/i.test(type)
+  // Settings → Data: how NULL and dates/timestamps are SHOWN. Display only — an
+  // edit starts from the raw value (rawText), and copy/export use the raw value.
+  const nullLabel = $derived(settings.value.nullText || 'NULL')
+  const dtDisplay = $derived({ format: settings.value.datetimeFormat, timezone: settings.value.timezone })
 
   function display(value: unknown, colName: string): { text: string; isNull: boolean } {
-    if (value === null || value === undefined) return { text: 'NULL', isNull: true }
+    if (value === null || value === undefined) return { text: nullLabel, isNull: true }
     if (typeof value === 'object') return { text: JSON.stringify(value), isNull: false }
-    const type = colTypes[colName] ?? ''
-    if (isDatetimeType(type) && typeof value === 'string') {
-      const d = new Date(value)
-      if (!Number.isNaN(d.getTime())) {
-        // local timezone display (UTC toggle → Phase 2)
-        return { text: d.toLocaleString(), isNull: false }
-      }
+    if (typeof value === 'string' && isDateTimeType(colTypes[colName])) {
+      const shown = formatDateTime(value, dtDisplay)
+      if (shown !== null) return { text: shown, isNull: false }
     }
     return { text: String(value), isNull: false }
   }
@@ -1016,7 +1033,6 @@ Original: ${was.isNull ? 'NULL' : was.text}`
   }
 
   // ---- right-click copy menu -----------------------------------------------
-  const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform)
   let ctxMenu = $state<{ x: number; y: number; row: number; col: string } | null>(null)
 
   // Position the context menu fully inside the viewport. The menu's height varies
@@ -1293,7 +1309,7 @@ Original: ${was.isNull ? 'NULL' : was.text}`
                 <!-- inline edit — port dòng 437-439 -->
                 <input
                   class="mono rg-edit"
-                  value={editingCell?.seed ?? (cell.isNull ? '' : cell.text)}
+                  value={editingCell?.seed ?? rawText(rawVal)}
                   use:focusEditor
                   style="width:100%;border:none;outline:none;background:var(--raised);color:var(--text);font-size:var(--px-12);padding:var(--px-5) var(--px-12);font-family:inherit;{numericCols.has(col) ? 'text-align:right' : ''}"
                   onpaste={(e) => onCellPaste(e, col, ri)}
@@ -1313,7 +1329,7 @@ Original: ${was.isNull ? 'NULL' : was.text}`
               {:else}
                 <div style="padding:var(--px-5) var(--px-12);display:flex;align-items:center;gap:var(--px-6);{numericCols.has(col) ? 'justify-content:flex-end' : ''}">
                   {#if cell.isNull}
-                    <span style="font-size:var(--px-10);color:var(--muted);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-3);padding:0 var(--px-5)">NULL</span>
+                    <span style="font-size:var(--px-10);color:var(--muted);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-3);padding:0 var(--px-5)">{nullLabel}</span>
                   {:else if cell.text === ''}
                     <span style="font-size:var(--px-10);color:var(--muted);opacity:.6">''</span>
                   {:else}
@@ -1481,11 +1497,11 @@ Original: ${was.isNull ? 'NULL' : was.text}`
         {#if hint}<span class="ds-mi-hint"><kbd>{hint}</kbd></span>{/if}
       </div>
     {/snippet}
-    {@render item('Copy cell', () => copyCell(m.row, m.col), 'copy', isMac ? '⌘C' : 'Ctrl+C')}
+    {@render item('Copy cell', () => copyCell(m.row, m.col), 'copy', kbd('Ctrl+C'))}
     {@render item('Copy row', () => copyRowTsv(m.row), 'rows')}
     {@render item('Copy column', () => copyColumn(m.col), 'columns')}
     {#if editable}
-      {@render item('Paste', () => { clickCell(m.row, m.col); void pasteFromClipboard() }, 'paste', isMac ? '⌘V' : 'Ctrl+V')}
+      {@render item('Paste', () => { clickCell(m.row, m.col); void pasteFromClipboard() }, 'paste', kbd('Ctrl+V'))}
     {/if}
     {#if modeOf(m.row, m.col) !== 'none'}
       {@render item('Edit as JSON…', () => { ctxMenu = null; openJsonCell(m.row, m.col) }, 'edit')}
@@ -1626,7 +1642,7 @@ Original: ${was.isNull ? 'NULL' : was.text}`
       </div>
       <div style="display:flex;gap:var(--px-9);padding:var(--px-14) var(--px-20);border-top:var(--px-1) solid var(--border);background:var(--panel)">
         {#if editing}
-          <span style="font-size:var(--px-11);color:var(--muted);align-self:center">Ctrl+Enter saves · Esc cancels</span>
+          <span style="font-size:var(--px-11);color:var(--muted);align-self:center">{kbd('Ctrl+Enter saves · Esc cancels')}</span>
           <span class="eg-btn" style="margin-left:auto" role="button" tabindex="0"
             onclick={() => (jsonCell = null)}
             onkeydown={(e) => e.key === 'Enter' && (jsonCell = null)}>Cancel</span>

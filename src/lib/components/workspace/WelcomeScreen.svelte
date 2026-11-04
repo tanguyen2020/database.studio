@@ -5,6 +5,7 @@
   // state, a one-click query), a quick-start column and the engines it works with.
   import AppLogo from '$lib/components/AppLogo.svelte'
   import Icon from '$lib/components/Icon.svelte'
+  import { kbd } from '$lib/keys/label'
   import SystemIcon from '$lib/components/SystemIcon.svelte'
   import { brandKey, brandMeta } from '$lib/brand'
   import { connections } from '$lib/stores/connections.svelte'
@@ -87,7 +88,7 @@
           </button>
         {/if}
         <button class="wl-btn ghost" onclick={() => (palette.open = true)} title="Tables, connections and commands">
-          <Icon name="search" size={15} />Search everything<kbd>Ctrl+P</kbd>
+          <Icon name="search" size={15} />Search everything<kbd>{kbd('Ctrl+P')}</kbd>
         </button>
       </div>
       {#if hasConnections}
@@ -156,7 +157,7 @@
           <h2>Keyboard shortcuts</h2>
           <div class="wl-keys">
             {#each SHORTCUTS as [k, label] (k)}
-              <div class="wl-key"><span>{label}</span><kbd>{k}</kbd></div>
+              <div class="wl-key"><span>{label}</span><kbd>{kbd(k)}</kbd></div>
             {/each}
           </div>
         </div>

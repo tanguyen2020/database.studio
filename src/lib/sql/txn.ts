@@ -25,7 +25,7 @@ function head(sql: string): string {
   return s.toUpperCase()
 }
 
-/** DDL that implicitly commits the open transaction (MySQL/MariaDB/Oracle/MSSQL). */
+/** DDL that implicitly commits the open transaction (MySQL/MariaDB/Oracle). */
 function isImplicitCommitDdl(h: string): boolean {
   return /^(CREATE|ALTER|DROP|TRUNCATE|RENAME)\b/.test(h)
 }
@@ -58,11 +58,14 @@ export function txnEffect(sql: string, system: string): TxnEffect {
     if (/^ROLLBACK\s+(TO|WORK\s+TO)\b/.test(h)) return null
     return 'end'
   }
-  // PG/SQLite: END [TRANSACTION] is COMMIT.
+  // PG/SQLite: END [TRANSACTION] is COMMIT; PG/DuckDB: ABORT is ROLLBACK.
   if (/^END\s*(TRANSACTION|WORK)?\s*;?\s*$/.test(h)) return 'end'
+  if ((system === 'postgres' || system === 'duckdb') && /^ABORT\b/.test(h)) return 'end'
 
-  // Engines without transactional DDL close the transaction on any DDL.
-  if ((system === 'mysql' || system === 'mariadb' || system === 'mssql') && isImplicitCommitDdl(h)) {
+  // MySQL/MariaDB commit the open transaction on DDL — except for TEMPORARY
+  // tables. SQL Server DDL is transactional (a CREATE TABLE inside BEGIN TRAN is
+  // rolled back with it), so it never ends the transaction there.
+  if ((system === 'mysql' || system === 'mariadb') && isImplicitCommitDdl(h) && !/^(CREATE|DROP)\s+TEMPORARY\b/.test(h)) {
     return 'end'
   }
   return null

@@ -8,6 +8,8 @@
   import SystemBadge from '$lib/components/SystemBadge.svelte'
   import { mongoExec } from '$lib/ipc'
   import { connections } from '$lib/stores/connections.svelte'
+  import { settings } from '$lib/stores/settings.svelte'
+  import { clampPageSize } from '$lib/grid/paging'
   import { systemMeta } from '$lib/systems'
   import { exportWizard } from '$lib/stores/export.svelte'
   import { toasts } from '$lib/stores/toast.svelte'
@@ -33,9 +35,10 @@
   // Page-based pagination (skip/limit) — consistent with the relational Table Viewer:
   // a total from countDocuments(filter) drives Page X of Y + first/prev/next/last.
   let page = $state(0)
-  let pageSize = $state(100)
+  let pageSize = $state(clampPageSize(settings.value.defaultPageSize))
   let totalRecords = $state<number | null>(null)
-  const PAGE_SIZES = [100, 200, 500, 1000]
+  // Settings → Query → Default page size (a custom value joins the list)
+  const PAGE_SIZES = [...new Set([100, 200, 500, 1000, clampPageSize(settings.value.defaultPageSize)])].sort((a, b) => a - b)
   const totalPages = $derived(
     totalRecords != null ? Math.max(1, Math.ceil(totalRecords / pageSize)) : null,
   )

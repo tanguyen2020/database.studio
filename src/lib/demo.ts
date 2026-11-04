@@ -504,9 +504,9 @@ function bigFnsSize(): number {
 }
 
 /** Rows of the demo `profiles` table — an editable Query Editor result. */
-const demoProfiles: { id: number; display_name: string; settings: unknown }[] = [
-  { id: 1, display_name: 'An', settings: { theme: 'dark', alerts: true } },
-  { id: 2, display_name: 'Binh', settings: { theme: 'light', alerts: false } },
+const demoProfiles: { id: number; display_name: string; settings: unknown; last_login: string | null }[] = [
+  { id: 1, display_name: 'An', settings: { theme: 'dark', alerts: true }, last_login: '2026-06-30T10:23:14+00:00' },
+  { id: 2, display_name: 'Binh', settings: { theme: 'light', alerts: false }, last_login: null },
 ]
 
 export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
@@ -855,6 +855,7 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
           { name: 'id', data_type: 'int4', nullable: false, default: null, is_pk: true, is_fk: false },
           { name: 'display_name', data_type: 'varchar(80)', nullable: false, default: null, is_pk: false, is_fk: false },
           { name: 'settings', data_type: 'jsonb', nullable: true, default: null, is_pk: false, is_fk: false },
+          { name: 'last_login', data_type: 'timestamptz', nullable: true, default: null, is_pk: false, is_fk: false },
         ])
       if (compareDrift(args) && colTable === 'students')
         return ok([
@@ -1383,8 +1384,8 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
       if (/^\s*select\b[\s\S]*\bfrom\s+profiles\b/i.test(stmtSql)) {
         const all = demoProfiles.map((r) => ({ ...r }))
         const sel = stmtSql.match(/^\s*select\s+([\s\S]*?)\s+from\s/i)?.[1].trim() ?? '*'
-        const names = sel === '*' ? ['id', 'display_name', 'settings'] : sel.split(',').map((s) => s.trim())
-        const types: Record<string, string> = { id: 'int4', display_name: 'varchar', settings: 'jsonb' }
+        const names = sel === '*' ? ['id', 'display_name', 'settings', 'last_login'] : sel.split(',').map((s) => s.trim())
+        const types: Record<string, string> = { id: 'int4', display_name: 'varchar', settings: 'jsonb', last_login: 'timestamptz' }
         const cols = names.map((n) => [n, types[n] ?? 'text'] as [string, string])
         const rows = all.map((r) => Object.fromEntries(names.map((n) => [n, (r as Record<string, unknown>)[n] ?? null])))
         return ok({ ok: true, result: { cols, rows, total: rows.length }, duration_ms: 6 })

@@ -1,5 +1,6 @@
 <script lang="ts">
   import Icon from '$lib/components/Icon.svelte'
+  import { kbd } from '$lib/keys/label'
   import { armCollapse, treeOut } from '$lib/ui/tree-motion'
   import { IS_TAURI } from '$lib/demo'
   import Chevron from '$lib/components/Chevron.svelte'
@@ -723,13 +724,13 @@
   >
     <span
       style="font-size:var(--px-10_5);font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)"
-      title="Ctrl+Shift+B focus list · ↑/↓ move · Enter open · F2 edit · Delete remove · ←/→ collapse/expand&#10;Ctrl+Shift+N new · Ctrl+Shift+K filter · Ctrl+Shift+O connect/disconnect"
+      title={kbd('Ctrl+Shift+B focus list · ↑/↓ move · Enter open · F2 edit · Delete remove · ←/→ collapse/expand\nCtrl+Shift+N new · Ctrl+Shift+K filter · Ctrl+Shift+O connect/disconnect')}
     >Connections</span>
   </div>
 
   <!-- toolbar — dòng 77-87 -->
   <div style="flex:none;display:flex;align-items:center;gap:var(--px-1);padding:0 var(--px-8) var(--px-7);color:var(--text2)">
-    <span class="tbtn" onclick={() => (ui.pickerOpen = true)} onkeydown={(e) => e.key === 'Enter' && (ui.pickerOpen = true)} role="button" tabindex="0" title="New connection (Ctrl+Shift+N)" style="cursor:pointer">
+    <span class="tbtn" onclick={() => (ui.pickerOpen = true)} onkeydown={(e) => e.key === 'Enter' && (ui.pickerOpen = true)} role="button" tabindex="0" title={kbd('New connection (Ctrl+Shift+N)')} style="cursor:pointer">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
     </span>
     <span class="tbtn" onclick={() => selConn && (ui.formProfile = { ...selConn })} onkeydown={(e) => e.key === 'Enter' && selConn && (ui.formProfile = { ...selConn })} role="button" tabindex="0" title="Properties / Edit connection" style="cursor:{selConn ? 'pointer' : 'not-allowed'};opacity:{selConn ? 1 : 0.35}">
@@ -763,7 +764,7 @@
     <span class="tbtn" onclick={() => selRel && tabs.openSchemaCompare(selConn?.id ?? null)} onkeydown={(e) => e.key === 'Enter' && selRel && tabs.openSchemaCompare(selConn?.id ?? null)} role="button" tabindex="0" title="Compare schemas" style="cursor:{selRel ? 'pointer' : 'not-allowed'};opacity:{selRel ? 1 : 0.35}">
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 8h13l-3-3M5 8l3 3"></path><path d="M19 16H6l3 3M19 16l-3-3"></path></svg>
     </span>
-    <span class="tbtn" onclick={toggleFilter} onkeydown={(e) => e.key === 'Enter' && toggleFilter()} role="button" tabindex="0" title="Filter connections (Ctrl+Shift+K)" style="cursor:pointer;background:{filterOpen ? 'var(--hover)' : 'transparent'}">
+    <span class="tbtn" onclick={toggleFilter} onkeydown={(e) => e.key === 'Enter' && toggleFilter()} role="button" tabindex="0" title={kbd('Filter connections (Ctrl+Shift+K)')} style="cursor:pointer;background:{filterOpen ? 'var(--hover)' : 'transparent'}">
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4h18l-7 8v6l-4 2v-8z"></path></svg>
     </span>
   </div>

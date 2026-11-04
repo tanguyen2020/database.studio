@@ -1,6 +1,7 @@
 // UI-level state: dialogs, theme, panel sizes (persisted via app_state).
 
 import * as ipc from '$lib/ipc'
+import { syncNativeTheme } from '$lib/ui/native-theme'
 import type { ProfileDraft, ProfilePublic } from '$lib/types'
 
 /** Sidebar layout: where the Connections panel sits relative to the Explorer.
@@ -148,6 +149,7 @@ class UiStore {
       /* private mode / storage disabled — app_state still persists */
     }
     void ipc.setAppState('theme', theme)
+    syncNativeTheme(theme)
   }
 
   private applyFontScale() {
@@ -190,6 +192,7 @@ class UiStore {
       }
       if (stored === 'light' || stored === 'dark') {
         this.theme = stored
+        syncNativeTheme(stored)
       }
       if (groupMode === 'type' || groupMode === 'folder') {
         this.connGroupMode = groupMode

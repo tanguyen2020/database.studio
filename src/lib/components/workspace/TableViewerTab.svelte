@@ -8,6 +8,8 @@
   import SystemBadge from '$lib/components/SystemBadge.svelte'
   import { execFiltered, execStatement, listColumns, type FilterCond, type SortSpec } from '$lib/ipc'
   import { connections } from '$lib/stores/connections.svelte'
+  import { settings } from '$lib/stores/settings.svelte'
+  import { clampPageSize } from '$lib/grid/paging'
   import { systemMeta } from '$lib/systems'
   import { quoteIdent, qualified } from '$lib/sql/dialect'
   import type { QueryError, QueryResultSet, TabState } from '$lib/types'
@@ -38,7 +40,9 @@
   let error = $state<QueryError | null>(null)
   let loading = $state(false)
   let durationMs = $state(0)
-  let pageSize = $state(100)
+  // Settings → Query → Default page size (a custom value joins the list)
+  const PAGE_SIZES = [...new Set([100, 200, 500, 1000, clampPageSize(settings.value.defaultPageSize)])].sort((a, b) => a - b)
+  let pageSize = $state(clampPageSize(settings.value.defaultPageSize))
   let page = $state(0)
   let pkCols = $state<string[]>([])
   let columnNames = $state<string[]>([])
@@ -288,10 +292,7 @@
           bind:value={pageSize}
           onchange={() => { page = 0; void load() }}
         >
-          <option value={100}>100</option>
-          <option value={200}>200</option>
-          <option value={500}>500</option>
-          <option value={1000}>1000</option>
+          {#each PAGE_SIZES as n (n)}<option value={n}>{n}</option>{/each}
         </select>
       </label>
       <span class="ds-meta ds-num">

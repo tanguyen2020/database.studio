@@ -2,6 +2,8 @@
   // Settings / Preferences (Phase 6 · T3) — Ctrl+, mở. Sections Appearance/Editor/
   // Query/Data/Kafka/Shortcuts. Lưu vào SQLite (app_state) on-change. Reset defaults.
   import { settings } from '$lib/stores/settings.svelte'
+  import { kbd } from '$lib/keys/label'
+  import { DATETIME_PRESETS } from '$lib/format/datetime'
   import { ui } from '$lib/stores/ui.svelte'
   import { updater } from '$lib/stores/updater.svelte'
   import { IS_TAURI } from '$lib/demo'
@@ -72,7 +74,10 @@
             <label class="set-row">Continue on error <input type="checkbox" bind:checked={s.continueOnError} onchange={save} /></label>
             <label class="set-row">Long-running warning (ms) <input type="number" min="1000" bind:value={s.longRunningWarnMs} onchange={save} class="set-inp" /></label>
           {:else if active === 'Data'}
-            <label class="set-row">Datetime format <input bind:value={s.datetimeFormat} onchange={save} class="set-inp" style="width:var(--px-170)" /></label>
+            <label class="set-row" title="How result grids show dates and timestamps. Pick a preset or type a pattern (yyyy MM dd HH hh mm ss SSS a XXX). Display only — edits, copies and exports keep the server's value.">Datetime format <input bind:value={s.datetimeFormat} onchange={save} class="set-inp" style="width:var(--px-170)" list="ds-datetime-presets" /></label>
+            <datalist id="ds-datetime-presets">
+              {#each DATETIME_PRESETS as p (p)}<option value={p}></option>{/each}
+            </datalist>
             <label class="set-row">Timezone
               <select bind:value={s.timezone} onchange={save} class="set-inp"><option value="local">Local</option><option value="utc">UTC</option></select>
             </label>
@@ -115,7 +120,7 @@
             <table style="border-collapse:collapse;font-size:var(--px-12);width:100%">
               <tbody>
                 {#each shortcuts as [key, act] (key)}
-                  <tr><td style="padding:var(--px-4) var(--px-10);color:var(--text2)"><span class="mono" style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-4);padding:var(--px-1) var(--px-6)">{key}</span></td><td style="padding:var(--px-4) var(--px-10);color:var(--muted)">{act}</td></tr>
+                  <tr><td style="padding:var(--px-4) var(--px-10);color:var(--text2)"><span class="mono" style="background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-4);padding:var(--px-1) var(--px-6)">{kbd(key)}</span></td><td style="padding:var(--px-4) var(--px-10);color:var(--muted)">{act}</td></tr>
                 {/each}
               </tbody>
             </table>

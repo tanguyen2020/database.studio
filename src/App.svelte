@@ -1,5 +1,6 @@
 <script lang="ts">
   import WelcomeScreen from '$lib/components/workspace/WelcomeScreen.svelte'
+  import { HISTORY_KEY } from '$lib/keys/label'
   // App shell:
   //  TitleBar → [Sidebar: ConnectionList / ObjectExplorer] | [TabBar → Workspace] → StatusBar
   // Global keyboard shortcuts + layout resizers (all sizes persisted).
@@ -161,7 +162,8 @@
     } else if (e.key === ',') {
       e.preventDefault()
       settings.show()
-    } else if (key === 'h') {
+    } else if (key === HISTORY_KEY) {
+      // ⌘H is Hide on a Mac (system menu) → Query History is ⌘Y there, like Safari
       e.preventDefault()
       tabs.openUtilityTab('history', 'Query History')
     } else if ((key === 't' || key === 'n') && !e.shiftKey) {

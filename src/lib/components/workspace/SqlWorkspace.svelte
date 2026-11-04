@@ -1,5 +1,6 @@
 <script lang="ts">
   import Icon from '$lib/components/Icon.svelte'
+  import { kbd } from '$lib/keys/label'
   // SQL editor workspace for one tab: toolbar (connection dropdown + Run/Cancel)
   // + the Monaco editor + resizable split + result panel. Run is selection-aware (F5),
   // Ctrl+Enter runs the statement at the cursor.
@@ -40,7 +41,7 @@
   import type { Diagnostic } from '@codemirror/lint'
   import type { Completion, CompletionSource } from '@codemirror/autocomplete'
   import type { SQLNamespace } from '@codemirror/lang-sql'
-  import { untrack, onMount } from 'svelte'
+  import { untrack } from 'svelte'
 
   interface Props {
     tab: TabState
@@ -141,7 +142,17 @@
     }
   }
 
+  let dbPickerKey = $state(0)
   function pickDatabase(db: string) {
+    if (db === currentDb) return
+    // Switching database reopens this tab's connection, which rolls back an open
+    // transaction on the server. Make the user finish it first — otherwise the
+    // badge stays and a later Commit "succeeds" on a fresh session, committing nothing.
+    if (runConnId && results.inTransaction(runConnId)) {
+      toasts.error('This tab has an open transaction — Commit or Roll back before switching database.')
+      dbPickerKey++
+      return
+    }
     tab.state.database = db
     tab.state.schema = '' // the new database has its own schemas — reset the pick
     tabs.schedulePersist()
@@ -196,8 +207,11 @@
       // MSSQL has no session default-schema SET, so this is PG/DuckDB only.
       return await ipc.openTabConnection(tab.connectionId, tab.id, db, sessionInit())
     } catch (e) {
-      toasts.error(`Cannot open a connection for this tab: ${e}`)
-      return tab.connectionId
+      // Do NOT fall back to the base connection: it points at the profile's own
+      // database / default schema, not the one picked in the toolbar — a DELETE
+      // meant for "staging" would run on the base database instead.
+      toasts.error(`Cannot open a connection for this tab, so nothing was run: ${e}`)
+      return null
     }
   }
 
@@ -229,7 +243,7 @@
    *  for relational systems when the batch contains a destructive statement. */
   function confirmDangerous(statements: { sql: string }[]): Promise<boolean> {
     if (!RELATIONAL.includes(tab.systemType)) return Promise.resolve(true)
-    const items = dangerousStatements(statements)
+    const items = dangerousStatements(statements, tab.systemType)
     if (items.length === 0) return Promise.resolve(true)
     return new Promise<boolean>((resolve) => {
       dangerPrompt = { items, resolve }
@@ -548,7 +562,7 @@
     const cid = acConnId
     if (!cid) return null
     const doc = ctx.state.doc.toString()
-    const stmt = statementAtOffset(doc, ctx.pos)
+    const stmt = statementAtOffset(doc, ctx.pos, tab.systemType)
     const refs = parseTableRefs(stmt?.sql ?? doc)
 
     // Case 1 — after `alias.` / `table.` → that one table's columns.
@@ -684,7 +698,7 @@
     // schema linter mis-flags them (misleading red squiggles), so skip lint here.
     if (tab.systemType === 'mongodb') return []
     const backend = await lintSql(tab.systemType, doc)
-    return [...toCmDiagnostics(doc, backend), ...schemaLints(doc, knownTables)]
+    return [...toCmDiagnostics(doc, backend), ...schemaLints(doc, knownTables, tab.systemType)]
   }
 
   function onChange(doc: string) {
@@ -751,9 +765,18 @@
     untrack(() => results.clearTxn(cid))
   })
 
+  // The Monaco editor inside SqlEditor is created only after Monaco has loaded —
+  // later than this component (and the SqlEditor component) mounts. Focus and
+  // auto-run wait for it: run() before that read an empty document ("No
+  // statement to run") and focus() did nothing.
+  let editorReady = $state(false)
+
   // Focus the editor when a Query tab opens (e.g. Ctrl/Cmd+N) so you can type
-  // immediately. Parent onMount runs after the child editor's view is created.
-  onMount(() => {
+  // immediately.
+  let focusedOnce = false
+  $effect(() => {
+    if (!editorReady || focusedOnce) return
+    focusedOnce = true
     requestAnimationFrame(() => editor?.focus())
   })
 
@@ -762,7 +785,7 @@
   // result grid shows the routine's output.
   let autoRan = false
   $effect(() => {
-    if (autoRan || !editor || !tab.state.autoRun) return
+    if (autoRan || !editorReady || !editor || !tab.state.autoRun) return
     autoRan = true
     tab.state.autoRun = false
     untrack(() => void run())
@@ -772,7 +795,7 @@
     if (!editor || !tab.connectionId) return
     editor.clearErrors()
     const doc = editor.getDoc()
-    const stmt = statementAtOffset(doc, editor.getCursorOffset())
+    const stmt = statementAtOffset(doc, editor.getCursorOffset(), tab.systemType)
     if (!stmt) return
     if (!ensureConnected()) return
     if (!(await confirmDangerous([stmt]))) return
@@ -863,7 +886,7 @@
   async function doExplain() {
     if (!editor || !tab.connectionId) return
     const doc = editor.getDoc()
-    const stmt = statementAtOffset(doc, editor.getCursorOffset())
+    const stmt = statementAtOffset(doc, editor.getCursorOffset(), tab.systemType)
     if (!stmt) return
     // Default to Actual on engines that support EXPLAIN ANALYZE (PG/MariaDB/MySQL/
     // MSSQL); engines without an actual mode fall back to estimated. DML + actual is
@@ -1079,6 +1102,9 @@
     {#if showDbPicker && profile?.connected}
       <div style="display:flex;align-items:center;gap:var(--px-6)">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" style="flex:none;color:var(--muted)"><ellipse cx="12" cy="5" rx="8" ry="3"></ellipse><path d="M4 5v14c0 1.66 3.58 3 8 3s8-1.34 8-3V5"></path><path d="M4 12c0 1.66 3.58 3 8 3s8-1.34 8-3"></path></svg>
+        <!-- re-created when a pick is refused, so it shows the database the tab
+             actually uses (the combobox keeps the text it was given otherwise) -->
+        {#key dbPickerKey}
         <SearchSelect
           value={currentDb || null}
           options={dbOptions}
@@ -1087,6 +1113,7 @@
           legible
           onChange={(v) => v && pickDatabase(v)}
         />
+        {/key}
       </div>
     {/if}
 
@@ -1113,7 +1140,7 @@
         onkeydown={(e) => e.key === 'Enter' && cancel()}
         role="button"
         tabindex="0"
-        title="Cancel (Ctrl+F5 / Esc)"
+        title={kbd('Cancel (Ctrl+F5 / Esc)')}
         class="ds-danger" style="display:flex;align-items:center;gap:var(--px-7);border-radius:var(--px-7);padding:var(--px-5) var(--px-13);cursor:pointer;font-weight:600;font-size:var(--px-12)"
       >
         <span>■</span><span>{exec.cancelling ? 'Cancelling…' : 'Cancel'}</span><span
@@ -1167,11 +1194,11 @@
     <!-- Format (Ctrl+Shift+F) + Explain (Ctrl+Shift+E, text — visual plan Phase 5) -->
     <!-- Format uses sql-formatter → corrupts mongosh; hide it for MongoDB tabs. -->
     {#if tab.systemType !== 'mongodb'}
-      <div class="wk-tbtn" onclick={doFormat} onkeydown={(e) => e.key === 'Enter' && doFormat()} role="button" tabindex="0" title="Format SQL (Ctrl+Shift+F)">
+      <div class="wk-tbtn" onclick={doFormat} onkeydown={(e) => e.key === 'Enter' && doFormat()} role="button" tabindex="0" title={kbd('Format SQL (Ctrl+Shift+F)')}>
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><line x1="4" y1="6" x2="20" y2="6"></line><line x1="4" y1="12" x2="14" y2="12"></line><line x1="4" y1="18" x2="18" y2="18"></line></svg>Format
       </div>
     {/if}
-    <div class="wk-tbtn" onclick={doExplain} onkeydown={(e) => e.key === 'Enter' && doExplain()} role="button" tabindex="0" title="Explain (Ctrl+Shift+E) — visual query plan">
+    <div class="wk-tbtn" onclick={doExplain} onkeydown={(e) => e.key === 'Enter' && doExplain()} role="button" tabindex="0" title={kbd('Explain (Ctrl+Shift+E) — visual query plan')}>
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="20" x2="6" y2="13"></line><line x1="12" y1="20" x2="12" y2="8"></line><line x1="18" y1="20" x2="18" y2="11"></line></svg>Explain
     </div>
     {#if tab.systemType === 'cassandra'}
@@ -1216,6 +1243,7 @@
       onFormat={doFormat}
       onExplain={doExplain}
       onSaveSnippet={saveSnippet}
+      onReady={() => (editorReady = true)}
     />
   </div>
 

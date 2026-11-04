@@ -12,12 +12,15 @@ import App from './App.svelte'
 import { IS_TAURI } from '$lib/demo'
 import { installNativeMenuGuard } from '$lib/ui/native-menu'
 import { installWebViewKeyGuard } from '$lib/ui/webview-keys'
+import { syncNativeTheme } from '$lib/ui/native-theme'
 
 // Apply the persisted theme BEFORE first paint (no flash). localStorage is
 // synchronous and survives restart in both the desktop WebView and the browser,
 // so the chosen Light/Dark shows immediately; the ui store later reconciles with
 // the backend app_state. Dark is the default when nothing was saved.
 document.documentElement.classList.toggle('dark', localStorage.getItem('theme') !== 'light')
+// …and the native window (dropdown lists, title bar) to match — see native-theme.ts
+syncNativeTheme(localStorage.getItem('theme') === 'light' ? 'light' : 'dark')
 
 // Desktop only: kill the WebView's browser page menu (Back/Refresh/Save as/Print/…)
 // so right-click shows the app's own menus. The browser build (demo + Playwright)

@@ -3,6 +3,7 @@
   // fuzzy search mọi action (connections/tabs/open tabs/explorer/settings);
   // điều hướng ↑↓ Enter, Esc đóng, nhóm theo category, gợi ý gần đây.
   import { palette, fuzzyScore } from '$lib/stores/palette.svelte'
+  import { IS_MAC, kbd } from '$lib/keys/label'
   import { connections } from '$lib/stores/connections.svelte'
   import { tabs } from '$lib/stores/tabs.svelte'
   import { opensWorkspace } from '$lib/stream/workspace-systems'
@@ -60,9 +61,9 @@
       })
     }
     // Tab actions
-    out.push({ id: 'tab:new', icon: '+', iconColor: '#5b7cff', label: 'New SQL Editor tab', hint: 'Ctrl+T', category: 'Tabs', run: () => tabs.openSqlTab({}) })
-    out.push({ id: 'tab:close', icon: '×', iconColor: '#e06c75', label: 'Close current tab', hint: 'Ctrl+W', category: 'Tabs', run: () => tabs.closeActive() })
-    out.push({ id: 'tab:history', icon: '⟲', iconColor: '#56b6c2', label: 'Open Query History', hint: 'Ctrl+H', category: 'Tabs', run: () => tabs.openUtilityTab('history', 'Query History') })
+    out.push({ id: 'tab:new', icon: '+', iconColor: '#5b7cff', label: 'New SQL Editor tab', hint: kbd('Ctrl+T'), category: 'Tabs', run: () => tabs.openSqlTab({}) })
+    out.push({ id: 'tab:close', icon: '×', iconColor: '#e06c75', label: 'Close current tab', hint: kbd('Ctrl+W'), category: 'Tabs', run: () => tabs.closeActive() })
+    out.push({ id: 'tab:history', icon: '⟲', iconColor: '#56b6c2', label: 'Open Query History', hint: kbd(IS_MAC ? 'Ctrl+Y' : 'Ctrl+H'), category: 'Tabs', run: () => tabs.openUtilityTab('history', 'Query History') })
     out.push({ id: 'tab:saved', icon: '★', iconColor: '#e8c547', label: 'Open Saved Queries', hint: '', category: 'Tabs', run: () => tabs.openUtilityTab('saved', 'Saved Queries') })
     // Open tabs → jump
     for (const t of tabs.tabs) {
@@ -99,7 +100,7 @@
     out.push({ id: 'tool:compare', icon: '⇄', iconColor: '#56b6c2', label: 'Compare schemas…', hint: '', category: 'Tools', run: () => tabs.openSchemaCompare(connections.selectedId) })
     // Settings
     out.push({ id: 'set:theme', icon: '☾', iconColor: '#e8c547', label: 'Toggle theme (dark / light)', hint: '', category: 'Settings', run: () => ui.toggleTheme() })
-    out.push({ id: 'set:open', icon: '⚙', iconColor: '#e8923a', label: 'Open Settings', hint: 'Ctrl+,', category: 'Settings', run: () => settings.show() })
+    out.push({ id: 'set:open', icon: '⚙', iconColor: '#e8923a', label: 'Open Settings', hint: kbd('Ctrl+,'), category: 'Settings', run: () => settings.show() })
     return out
   })
 

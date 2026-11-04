@@ -36,10 +36,18 @@ describe('txnEffect', () => {
     expect(txnEffect('INSERT INTO t VALUES (1)', 'mssql')).toBeNull()
   })
 
-  it('DDL implicitly commits on MySQL/MariaDB/MSSQL but not on PostgreSQL', () => {
+  it('DDL implicitly commits on MySQL/MariaDB but not on PostgreSQL or SQL Server', () => {
     expect(txnEffect('CREATE TABLE t (id int)', 'mysql')).toBe('end')
     expect(txnEffect('DROP TABLE t', 'mariadb')).toBe('end')
-    expect(txnEffect('ALTER TABLE t ADD c int', 'mssql')).toBe('end')
+    // MySQL does NOT commit for TEMPORARY tables
+    expect(txnEffect('CREATE TEMPORARY TABLE t (id int)', 'mysql')).toBeNull()
+    expect(txnEffect('DROP TEMPORARY TABLE t', 'mariadb')).toBeNull()
+    // SQL Server DDL is transactional — it is rolled back with the transaction
+    expect(txnEffect('ALTER TABLE t ADD c int', 'mssql')).toBeNull()
+    expect(txnEffect('CREATE TABLE t (id int)', 'mssql')).toBeNull()
+    // PostgreSQL / DuckDB: ABORT ends the transaction like ROLLBACK
+    expect(txnEffect('ABORT', 'postgres')).toBe('end')
+    expect(txnEffect('ABORT', 'duckdb')).toBe('end')
     // PostgreSQL has transactional DDL — a CREATE inside a transaction stays in it.
     expect(txnEffect('CREATE TABLE t (id int)', 'postgres')).toBeNull()
     expect(txnEffect('CREATE TABLE t (id int)', 'sqlite')).toBeNull()

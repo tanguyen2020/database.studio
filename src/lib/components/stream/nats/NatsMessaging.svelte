@@ -4,6 +4,7 @@
   // The section stays mounted while you look at other sections, so listening goes on;
   // closing the tab stops it.
   import { onDestroy, onMount } from 'svelte'
+  import { kbd } from '$lib/keys/label'
   import * as ipc from '$lib/ipc'
   import Icon from '$lib/components/Icon.svelte'
   import PayloadPreview from '$lib/components/viewer/PayloadPreview.svelte'
@@ -223,7 +224,7 @@
       </label>
     {/if}
     <div class="nm-actions">
-      <span class="nm-meta">Ctrl+Enter</span>
+      <span class="nm-meta">{kbd('Ctrl+Enter')}</span>
       <button type="button" class="cfm-btn primary" onclick={send} disabled={!!sendHint || sending}>{sending ? (mode === 'publish' ? 'Publishing…' : 'Waiting for reply…') : mode === 'publish' ? 'Publish' : 'Send request'}</button>
     </div>
     {#if sendError}<div class="nm-error" role="alert">{sendError}</div>{/if}

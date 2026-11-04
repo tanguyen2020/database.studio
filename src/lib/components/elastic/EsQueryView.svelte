@@ -4,6 +4,7 @@
   // (Ctrl+Enter), results in the app's result grid (sort / copy / export), SQL cursor
   // paging ("Load more"), "Translate to Query DSL" (Elasticsearch) or "Explain" (OpenSearch).
   import { onMount, untrack } from 'svelte'
+  import { kbd } from '$lib/keys/label'
   import '$lib/elastic/es.css'
   import * as ipc from '$lib/ipc'
   import type { QueryResultSet, TabState } from '$lib/types'
@@ -178,7 +179,7 @@
         {#if running}<span class="es-spin"><EsIcon name="refresh" size={13} /></span>{:else}<EsIcon name="play" size={13} />{/if}
         {running ? 'Running…' : 'Run query'}
       </button>
-      <span class="es-help" style="margin:0">Ctrl+Enter</span>
+      <span class="es-help" style="margin:0">{kbd('Ctrl+Enter')}</span>
       {#if product.os}
         <button class="eg-btn" onclick={translate} disabled={!text.trim()} title="Show how {product.name} will run this {LANGUAGE_LABEL[language]} query"><EsIcon name="json" size={13} /> Explain</button>
       {:else if language === 'sql'}

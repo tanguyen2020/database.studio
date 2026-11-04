@@ -3,6 +3,7 @@
   // custom table nodes, FK edges, auto-layout, zoom/pan/minimap, toggle columns,
   // export PNG/SVG/Mermaid. Toolbar port dòng 1257-1276.
   import '@xyflow/svelte/dist/style.css'
+  import { kbd } from '$lib/keys/label'
   import { untrack } from 'svelte'
   import { SvelteFlow, Background, BackgroundVariant, Controls, MiniMap, ConnectionLineType, type Node, type Edge } from '@xyflow/svelte'
   import Dagre from '@dagrejs/dagre'
@@ -373,7 +374,7 @@
       bind:this={searchEl}
       bind:value={search}
       oninput={applySearch}
-      placeholder="Find table (Ctrl+F)…"
+      placeholder={kbd('Find table (Ctrl+F)…')}
       aria-label="Find table"
       style="width:var(--px-150);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-3) var(--px-8);color:var(--text);font-size:var(--px-11)"
     />

@@ -1,5 +1,6 @@
 <script lang="ts">
   import Icon from '$lib/components/Icon.svelte'
+  import { kbd } from '$lib/keys/label'
   // Tab bar — port 1:1 từ Database Studio.dc.html dòng 174-189:
   // bar 40px nền --header; tab = icon hệ 15px + (connName 9px / title 12px 600),
   // underline 2px accent khi active, opacity .62 khi inactive, dirty ● màu accent,
@@ -177,7 +178,7 @@
               }}
               role="button"
               tabindex="0"
-              title="Close (Ctrl+W)"
+              title={kbd('Close (Ctrl+W)')}
               class="tab-close"
               style="flex:none;width:var(--px-18);height:var(--px-18);display:flex;align-items:center;justify-content:center;border-radius:var(--px-4)"
             ><Icon name="close" size={12} /></span>
@@ -224,7 +225,7 @@
     onkeydown={(e) => e.key === 'Enter' && tabs.openSqlTab({ pane })}
     role="button"
     tabindex="0"
-    title="New SQL tab (Ctrl+T)"
+    title={kbd('New SQL tab (Ctrl+T)')}
     class="tb-ctl"
     style="display:flex;align-items:center;padding:0 var(--px-10);cursor:pointer;color:var(--muted)"
   ><Icon name="plus" size={15} /></div>

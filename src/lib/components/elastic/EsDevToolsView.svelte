@@ -3,6 +3,7 @@
   // and the Analyzer — each a small form over one REST endpoint, with the result
   // rendered for reading (timing tree, extracted fields, script result, tokens).
   import '$lib/elastic/es.css'
+  import { kbd } from '$lib/keys/label'
   import * as ipc from '$lib/ipc'
   import type { TabState } from '$lib/types'
   import CodeView from '$lib/components/editor/CodeView.svelte'
@@ -218,7 +219,7 @@
             <CodeView value={plScript} language="javascript" height="auto" minHeight={180} maxHeight={360} onChange={(t) => (plScript = t)} onSubmit={painless} ariaLabel="Painless script" />
             <div class="es-toolbar" style="margin-top:var(--px-8)">
               <button class="eg-btn primary" onclick={painless} disabled={busy} aria-busy={busy}><EsIcon name="play" size={13} /> Run</button>
-              <span class="es-help" style="margin:0">Ctrl+Enter</span>
+              <span class="es-help" style="margin:0">{kbd('Ctrl+Enter')}</span>
             </div>
           </div>
           <div style="min-width:0;display:flex;flex-direction:column;gap:var(--px-10)">

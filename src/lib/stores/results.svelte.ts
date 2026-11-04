@@ -6,10 +6,11 @@ import { isConnectionLost, lostReason } from '$lib/connection/lost'
 import * as ipc from '$lib/ipc'
 import type { SplitStatement } from '$lib/sql/statements'
 import { supportsTxn, txnEffect } from '$lib/sql/txn'
-import type { QueryError, QueryResultSet } from '$lib/types'
+import type { ExecResponse, QueryError, QueryResultSet } from '$lib/types'
 import { failureToast, successToast } from '$lib/results/run-summary'
 import { mapErrorToDocument } from '$lib/sql/errors'
 import { connections, baseConnId as baseOf } from './connections.svelte'
+import { settings } from './settings.svelte'
 import { toasts } from './toast.svelte'
 
 export interface SubResult {
@@ -87,6 +88,56 @@ export interface TabExecution {
   /** how many statements this run was given — the ones never reached (stop at the
    *  first error / cancel) are reported as "not run" instead of silently missing */
   total?: number
+}
+
+/** How long to wait for row chunks still in flight after the command returned. */
+const CHUNK_SETTLE_MS = 30_000
+
+/**
+ * Run one statement on the chunked path and return it with EVERY row attached.
+ *
+ * A large result arrives in chunks over a Tauri channel. A chunk above 8 KB (all
+ * of them: 2,000 rows) is delivered through a separate async fetch that is NOT
+ * ordered with the command's own reply — so the reply can land first. Attaching
+ * (and freezing) the rows at that moment silently dropped the last chunks: the
+ * grid, Export and JSON showed fewer rows than the "N rows" label said. Wait for
+ * the count the backend reported; if the rows never all arrive, say so.
+ */
+export async function execStreamed(
+  connId: string,
+  sql: string,
+  index: number | undefined,
+  onReceived?: (n: number) => void,
+): Promise<ExecResponse> {
+  const streamed: Record<string, unknown>[] = []
+  let want = Infinity
+  let settle: (() => void) | null = null
+  const response = await ipc.execStatementStream(connId, sql, index, (chunk) => {
+    for (const row of chunk.rows) streamed.push(row)
+    onReceived?.(chunk.received)
+    if (streamed.length >= want) settle?.()
+  })
+  if (!response.streamed || !response.result) return response
+  want = response.result.total
+  if (streamed.length < want) {
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, CHUNK_SETTLE_MS)
+      settle = () => {
+        clearTimeout(timer)
+        resolve()
+      }
+    })
+  }
+  if (streamed.length < want) {
+    const message = `Only ${streamed.length.toLocaleString()} of ${want.toLocaleString()} rows reached the app. Run the query again.`
+    return {
+      ok: false,
+      duration_ms: response.duration_ms,
+      error: { system: '', statement_index: index, message, severity: 'error', raw: message },
+    }
+  }
+  response.result.rows = streamed
+  return response
 }
 
 /** Table name heuristic for the sub-tab label (`#N orders · X rows`). */
@@ -206,6 +257,14 @@ class ResultsStore {
       toasts.error(`Connection "${profile.name}" is closed. Please open the connection again.`)
       return
     }
+    // One run per tab. A second F5 / Ctrl+Enter while a script is still running
+    // used to start a second loop on the same connection: the first one kept
+    // sending its statements unseen (INSERTs applied twice) and could no longer
+    // be cancelled.
+    if (this.byTab[tabId]?.running) {
+      toasts.show('A query is already running in this tab — wait for it to finish or press Cancel.', { system: profile.system })
+      return
+    }
 
     const seed: TabExecution = {
       running: true,
@@ -226,6 +285,10 @@ class ResultsStore {
     // activeSub, running) must go through the proxy to trigger reactivity.
     // Mutating the raw `seed` object would bypass the proxy → view never updates.
     const exec = this.byTab[tabId] as TabExecution
+    // This run is still the tab's run: closing the tab (cancelAndClear) removes it.
+    // A run that is no longer live stops quietly — it must not report errors,
+    // mark the connection lost or touch transaction state for a tab that is gone.
+    const live = () => this.byTab[tabId] === exec
 
     const isCassandra = profile.system === 'cassandra'
     const isMongo = profile.system === 'mongodb'
@@ -261,11 +324,32 @@ class ResultsStore {
       }
       lastFlush = performance.now()
     }
-
-    for (let i = 0; i < statements.length; i++) {
+    // A buffered outcome reaches the screen within one flush interval even while
+    // the NEXT statement is still running — otherwise `SELECT 1; <10-minute query>`
+    // showed nothing for #1 until #2 finished.
+    let flushTimer: ReturnType<typeof setTimeout> | null = null
+    const scheduleFlush = () => {
+      if (flushTimer || (!buf.subs.length && !buf.msgs.length)) return
       // the longer the list already on screen, the costlier each redraw — space
       // the redraws out as it grows (100 ms → ~0.5 s at 2,000 statements)
-      if (performance.now() - lastFlush >= FLUSH_MS + exec.messages.length * 0.2) flush()
+      const wait = Math.max(0, FLUSH_MS + exec.messages.length * 0.2 - (performance.now() - lastFlush))
+      flushTimer = setTimeout(() => {
+        flushTimer = null
+        if (live()) flush()
+      }, wait)
+    }
+    const continueOnError = settings.value.continueOnError
+    let firstFailure: { index: number; error: QueryError; line?: number } | null = null
+
+    for (let i = 0; i < statements.length; i++) {
+      if (!live()) break
+      // Cancel pressed while no statement was in flight (between two statements)
+      // has nothing to abort on the server — honour it here, before the next one.
+      if (exec.cancelling) {
+        exec.cancelled = true
+        toasts.show('Query cancelled', { system: profile.system })
+        break
+      }
       const stmt = statements[i]
       const index = i + 1
       let response
@@ -284,13 +368,14 @@ class ResultsStore {
             result: c.result as QueryResultSet | undefined,
             affected: undefined,
             duration_ms: c.duration_ms,
+            // keep the backend's whole error: its code (CANCELLED / CONNECTION_LOST),
+            // position, hint and raw driver text
             error: c.error
               ? ({
-                  system: 'cassandra',
+                  ...c.error,
+                  system: c.error.system || 'cassandra',
                   statement_index: c.error.statement_index ?? index,
-                  message: c.error.message,
-                  severity: 'error',
-                  raw: c.error.detail ?? c.error.message,
+                  raw: c.error.raw || c.error.message,
                 } satisfies QueryError)
               : undefined,
           }
@@ -317,15 +402,13 @@ class ResultsStore {
           // blocked by one huge payload — that block is what froze every other tab
           // and made the Cancel button unclickable. Rows are accumulated in a
           // plain array (never a $state proxy) and attached to the response.
-          const streamed: Record<string, unknown>[] = []
           exec.receivedRows = 0
-          response = await ipc.execStatementStream(connId, stmt.sql, index, (chunk) => {
-            for (const row of chunk.rows) streamed.push(row)
-            exec.receivedRows = chunk.received
+          response = await execStreamed(connId, stmt.sql, index, (n) => {
+            if (live()) exec.receivedRows = n
           })
-          if (response.streamed && response.result) response.result.rows = streamed
         }
       } catch (e) {
+        if (!live()) break
         // IPC/infra-level failure (not a QueryError) — a command that rejected
         // before the statement ran ("not connected: …") also means the
         // connection is gone, so it gets the same Reconnect treatment.
@@ -359,6 +442,9 @@ class ResultsStore {
         break
       }
 
+      // the tab was closed (or the run replaced) while this statement ran
+      if (!live()) break
+      if (response.error && !response.error.system) response.error.system = profile.system
       buf.totalMs += response.duration_ms
 
       // Track whether this statement left the connection inside a transaction —
@@ -468,20 +554,40 @@ class ResultsStore {
         buf.active = MESSAGES_TAB
         if (err.code === 'CANCELLED') {
           exec.cancelled = true
+          // a statement cancelled in flight poisons the session; the next run
+          // reconnects, so any transaction it was in is gone
+          delete this.txnOpen[connId]
           toasts.show('Query cancelled', { system: profile.system })
-        } else {
-          if (isConnectionLost(err)) this.noteConnectionLost(connId, err)
-          const line = err.position ? mapErrorToDocument(stmt, err).line : undefined
-          toasts.error(failureToast({ ok: false, index, error: err }, statements.length, line), profile.system)
+          break
         }
+        const lost = isConnectionLost(err)
+        if (lost) this.noteConnectionLost(connId, err)
+        const line = err.position ? mapErrorToDocument(stmt, err).line : undefined
+        // Settings → Continue on error: run the rest of the script and report
+        // the failures at the end. A lost connection still stops the run.
+        if (continueOnError && !lost) {
+          firstFailure ??= { index, error: err, line }
+          scheduleFlush()
+          continue
+        }
+        toasts.error(failureToast({ ok: false, index, error: err }, statements.length, line), profile.system)
         break // sequential execution stops at the failing statement
       }
+      scheduleFlush()
     }
 
+    if (flushTimer) clearTimeout(flushTimer)
+    // a closed tab's run reports nothing (its state is already gone)
+    if (!live()) return
     flush()
     exec.running = false
     exec.cancelling = false
-    if (!exec.cancelled && exec.subResults.every((s) => s.kind !== 'error')) {
+    if (firstFailure) exec.activeSub = MESSAGES_TAB
+    if (firstFailure && !exec.cancelled) {
+      const failed = exec.messages.filter((m) => m.kind === 'error').length
+      const lead = failureToast({ ok: false, index: firstFailure.index, error: firstFailure.error }, statements.length, firstFailure.line)
+      toasts.error(failed > 1 ? `${failed} statements failed — ${lead}` : lead, profile.system)
+    } else if (!exec.cancelled && exec.subResults.every((s) => s.kind !== 'error')) {
       toasts.success(successToast(exec.messages, exec.totalMs), profile.system)
     }
   }
@@ -520,7 +626,8 @@ class ResultsStore {
     const sql = sub.statement.sql
     try {
       const t0 = performance.now()
-      const res = await ipc.execStatement(exec.connId, sql)
+      // same chunked path as Run: a big result must not come back as one payload
+      const res = await execStreamed(exec.connId, sql, sub.index)
       if (!res.ok || !res.result) {
         toasts.error(`Saved, but reading the result again failed: ${res.error?.message ?? 'no rows returned'}`)
         return
@@ -528,7 +635,7 @@ class ResultsStore {
       // the run may have been replaced while this was in flight
       const live = this.byTab[tabId]?.subResults[subIndex]
       if (!live || live.statement.sql !== sql) return
-      live.result = { ...res.result, rows: Object.freeze(res.result.rows) as Record<string, unknown>[] }
+      live.result = { ...res.result, rows: Object.freeze(res.result.rows) as Record<string, unknown>[], keepView: true }
       live.durationMs = res.duration_ms ?? Math.round(performance.now() - t0)
       live.label = `#${live.index} ${live.table ?? 'result'} · ${res.result.total.toLocaleString()} rows`
     } catch (e) {

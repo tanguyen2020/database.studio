@@ -6,6 +6,7 @@
 // leg of the release build while x86_64 happened to stay under the limit.
 #![recursion_limit = "512"]
 
+pub mod app_menu;
 pub mod commands;
 pub mod connections;
 pub mod drivers;
@@ -22,7 +23,7 @@ use crate::storage::Storage;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    app_menu::with_platform_menu(tauri::Builder::default())
         .plugin(tauri_plugin_dialog::init())
         // In-app updates: the frontend checks GitHub Releases on start-up, and the
         // user installs from a prompt (see src/lib/update.ts). `process` provides the

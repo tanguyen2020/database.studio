@@ -29,3 +29,9 @@ export function pageWindow(rowCount: number, pageSize: number, page: number): Pa
   const count = paged ? Math.max(0, Math.min(size, rowCount - offset)) : rowCount
   return { paged, pageCount, page: clamped, offset, count, last: !paged || clamped >= pageCount - 1 }
 }
+
+/** Settings → Default page size, kept to a sane range (the field allows 10–10,000). */
+export function clampPageSize(n: unknown, fallback = 100): number {
+  const v = typeof n === 'number' && Number.isFinite(n) ? Math.round(n) : fallback
+  return Math.min(10_000, Math.max(10, v))
+}

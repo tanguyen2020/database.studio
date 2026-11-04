@@ -4,6 +4,7 @@
   // or the button) runs dialect-correct DDL: a full CREATE for a new table, or
   // ALTER/CREATE for the objects added to an existing one (see sql/table-designer).
   import { tick, untrack, onDestroy } from 'svelte'
+  import { kbd } from '$lib/keys/label'
   import * as ipc from '$lib/ipc'
   import { connections } from '$lib/stores/connections.svelte'
   import { explorer } from '$lib/stores/explorer.svelte'
@@ -530,7 +531,7 @@
       <span onclick={() => (mode = 'scripts')} onkeydown={(e) => e.key === 'Enter' && (mode = 'scripts')} role="button" tabindex="0" class:on={mode === 'scripts'}>Scripts</span>
     </div>
     {#if execMsg}<span class="td-saved">{execMsg}</span>{/if}
-    <span onclick={save} onkeydown={(e) => e.key === 'Enter' && save()} role="button" tabindex="0" title="Save (Ctrl/Cmd+S)" class="cfm-btn primary">Save</span>
+    <span onclick={save} onkeydown={(e) => e.key === 'Enter' && save()} role="button" tabindex="0" title={kbd('Save (Ctrl/Cmd+S)')} class="cfm-btn primary">Save</span>
   </div>
 
   {#if mode === 'table'}
@@ -831,7 +832,7 @@
       {/if}
       <!-- syntax-coloured DDL preview (keywords / strings / comments) for readability -->
       <CodeView
-        value={ddlText || '-- add a column or object, then Save (Ctrl/Cmd+S)'}
+        value={ddlText || kbd('-- add a column or object, then Save (Ctrl/Cmd+S)')}
         language={editorLanguageId(system)}
         readOnly
         height="100%"

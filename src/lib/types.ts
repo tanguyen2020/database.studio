@@ -88,6 +88,9 @@ export interface QueryResultSet {
   cols: ColumnDef[]
   rows: Record<string, unknown>[]
   total: number
+  /** frontend only: the SAME result read again (after saving grid edits) — the
+   *  grid keeps its page and column widths instead of starting over */
+  keepView?: boolean
 }
 
 export interface ErrorPosition {

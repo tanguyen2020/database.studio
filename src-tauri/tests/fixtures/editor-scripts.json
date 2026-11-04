@@ -1,0 +1,164 @@
+{
+  "cases": [
+    {
+      "system": "postgres",
+      "name": "a backslash before the closing quote does not hide the next statement",
+      "script": "CREATE TABLE pg_logs (p text);\nINSERT INTO pg_logs VALUES ('C:\\'), ('x');\nSELECT 'C:\\';\nDELETE FROM pg_logs WHERE p = 'x';",
+      "checks": [
+        {
+          "sql": "SELECT count(*) FROM pg_logs",
+          "expect": "1"
+        },
+        {
+          "sql": "SELECT p FROM pg_logs",
+          "expect": "C:\\"
+        }
+      ],
+      "statements": [
+        "CREATE TABLE pg_logs (p text)",
+        "INSERT INTO pg_logs VALUES ('C:\\'), ('x')",
+        "SELECT 'C:\\'",
+        "DELETE FROM pg_logs WHERE p = 'x'"
+      ],
+      "dangerous": []
+    },
+    {
+      "system": "postgres",
+      "name": "nested comments, dollar-quoted bodies and E-strings",
+      "script": "/* setup /* nested */ still a comment; */ CREATE FUNCTION f_one() RETURNS int AS $$ BEGIN RETURN 1; END $$ LANGUAGE plpgsql;\nCREATE TABLE pg_e (s text);\nINSERT INTO pg_e VALUES (E'it\\'s');\n-- trailing note",
+      "checks": [
+        {
+          "sql": "SELECT f_one()",
+          "expect": "1"
+        },
+        {
+          "sql": "SELECT s FROM pg_e",
+          "expect": "it's"
+        }
+      ],
+      "statements": [
+        "/* setup /* nested */ still a comment; */ CREATE FUNCTION f_one() RETURNS int AS $$ BEGIN RETURN 1; END $$ LANGUAGE plpgsql",
+        "CREATE TABLE pg_e (s text)",
+        "INSERT INTO pg_e VALUES (E'it\\'s')"
+      ],
+      "dangerous": []
+    },
+    {
+      "system": "postgres",
+      "name": "a DELETE inside a CTE is flagged",
+      "script": "CREATE TABLE pg_d (id int);\nINSERT INTO pg_d VALUES (1), (2);\nWITH gone AS (DELETE FROM pg_d RETURNING *) SELECT count(*) FROM gone;",
+      "checks": [
+        {
+          "sql": "SELECT count(*) FROM pg_d",
+          "expect": "0"
+        }
+      ],
+      "dangerous": [
+        2
+      ],
+      "statements": [
+        "CREATE TABLE pg_d (id int)",
+        "INSERT INTO pg_d VALUES (1), (2)",
+        "WITH gone AS (DELETE FROM pg_d RETURNING *) SELECT count(*) FROM gone"
+      ]
+    },
+    {
+      "system": "mysql",
+      "name": "DELIMITER, CASE inside a procedure, # comments and backslash escapes",
+      "script": "CREATE TABLE my_t (a int);\nDELIMITER $$\nCREATE PROCEDURE p_case(IN x INT) BEGIN\n  DECLARE v INT;\n  SET v = CASE WHEN x > 0 THEN 1 ELSE 2 END;\n  CASE v WHEN 1 THEN INSERT INTO my_t VALUES (10); ELSE INSERT INTO my_t VALUES (20); END CASE;\nEND$$\nDELIMITER ;\n# it's a comment with an apostrophe\nCALL p_case(5);\nINSERT INTO my_t VALUES (CHAR_LENGTH('a\\'b'));\nINSERT INTO my_t VALUES (CHAR_LENGTH(REPLACE('x\\\\y', '\\\\', '/')));",
+      "checks": [
+        {
+          "sql": "SELECT GROUP_CONCAT(a ORDER BY a) FROM my_t",
+          "expect": "3,3,10"
+        }
+      ],
+      "statements": [
+        "CREATE TABLE my_t (a int)",
+        "CREATE PROCEDURE p_case(IN x INT) BEGIN\n  DECLARE v INT;\n  SET v = CASE WHEN x > 0 THEN 1 ELSE 2 END;\n  CASE v WHEN 1 THEN INSERT INTO my_t VALUES (10); ELSE INSERT INTO my_t VALUES (20); END CASE;\nEND",
+        "# it's a comment with an apostrophe\nCALL p_case(5)",
+        "INSERT INTO my_t VALUES (CHAR_LENGTH('a\\'b'))",
+        "INSERT INTO my_t VALUES (CHAR_LENGTH(REPLACE('x\\\\y', '\\\\', '/')))"
+      ],
+      "dangerous": []
+    },
+    {
+      "system": "mysql",
+      "name": "a CASE expression inside a routine body without DELIMITER",
+      "script": "CREATE TABLE my_c (a int);\nCREATE PROCEDURE p_inline() BEGIN INSERT INTO my_c VALUES (CASE WHEN 1 THEN 7 ELSE 8 END); END;\nCALL p_inline();",
+      "checks": [
+        {
+          "sql": "SELECT a FROM my_c",
+          "expect": "7"
+        }
+      ],
+      "statements": [
+        "CREATE TABLE my_c (a int)",
+        "CREATE PROCEDURE p_inline() BEGIN INSERT INTO my_c VALUES (CASE WHEN 1 THEN 7 ELSE 8 END); END",
+        "CALL p_inline()"
+      ],
+      "dangerous": []
+    },
+    {
+      "system": "mssql",
+      "name": "BEGIN TRAN inside a procedure does not swallow the DELETE after it",
+      "script": "CREATE TABLE audit_log (id int);\nINSERT INTO audit_log VALUES (1), (2);\nGO\nCREATE PROCEDURE p_tran AS BEGIN BEGIN TRAN; UPDATE audit_log SET id = id; COMMIT; END;\nDELETE FROM audit_log WHERE id = 1;",
+      "checks": [
+        {
+          "sql": "SELECT COUNT(*) FROM audit_log",
+          "expect": "1"
+        },
+        {
+          "sql": "SELECT CASE WHEN OBJECT_DEFINITION(OBJECT_ID('p_tran')) LIKE '%audit_log WHERE%' THEN 'leaked' ELSE 'clean' END",
+          "expect": "clean"
+        }
+      ],
+      "statements": [
+        "CREATE TABLE audit_log (id int)",
+        "INSERT INTO audit_log VALUES (1), (2)",
+        "CREATE PROCEDURE p_tran AS BEGIN BEGIN TRAN; UPDATE audit_log SET id = id; COMMIT; END",
+        "DELETE FROM audit_log WHERE id = 1"
+      ],
+      "dangerous": []
+    },
+    {
+      "system": "mssql",
+      "name": "IF … BEGIN … END is one statement and GO separates batches",
+      "script": "CREATE TABLE ms_t (a int)\nGO\nIF 1 = 1 BEGIN INSERT INTO ms_t VALUES (1); INSERT INTO ms_t VALUES (2); END\nGO\nINSERT INTO ms_t VALUES (3)",
+      "checks": [
+        {
+          "sql": "SELECT COUNT(*) FROM ms_t",
+          "expect": "3"
+        }
+      ],
+      "statements": [
+        "CREATE TABLE ms_t (a int)",
+        "IF 1 = 1 BEGIN INSERT INTO ms_t VALUES (1); INSERT INTO ms_t VALUES (2); END",
+        "INSERT INTO ms_t VALUES (3)"
+      ],
+      "dangerous": []
+    },
+    {
+      "system": "oracle",
+      "name": "a PL/SQL block with a leading comment, and a column named TYPE",
+      "script": "-- create the table from PL/SQL\nBEGIN\n  EXECUTE IMMEDIATE 'CREATE TABLE ora_t (id NUMBER, type VARCHAR2(10))';\nEND;\n/\nINSERT INTO ora_t VALUES (1, 'a');\nINSERT INTO ora_t VALUES (2, 'b');\nCREATE TABLE ora_u (id NUMBER, type VARCHAR2(10));\nINSERT INTO ora_u VALUES (1, 'x');",
+      "checks": [
+        {
+          "sql": "SELECT COUNT(*) FROM ora_t",
+          "expect": "2"
+        },
+        {
+          "sql": "SELECT COUNT(*) FROM ora_u",
+          "expect": "1"
+        }
+      ],
+      "statements": [
+        "-- create the table from PL/SQL\nBEGIN\n  EXECUTE IMMEDIATE 'CREATE TABLE ora_t (id NUMBER, type VARCHAR2(10))';\nEND;",
+        "INSERT INTO ora_t VALUES (1, 'a')",
+        "INSERT INTO ora_t VALUES (2, 'b')",
+        "CREATE TABLE ora_u (id NUMBER, type VARCHAR2(10))",
+        "INSERT INTO ora_u VALUES (1, 'x')"
+      ],
+      "dangerous": []
+    }
+  ]
+}

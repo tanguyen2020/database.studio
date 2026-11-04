@@ -195,6 +195,100 @@ body {
   background: color-mix(in srgb, var(--muted) 60%, transparent);
   background-clip: padding-box;
 }
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* Native form controls follow the app theme on every engine.
+ * WebKit (Linux webkit2gtk, macOS WKWebView) paints <select>, checkboxes,
+ * number spinners, date pickers and the <select> popup with the OS look
+ * unless the page declares its scheme — without this they stayed white in
+ * dark mode. WebView2 on Windows honours the CSS background, which hid it. */
+:root {
+  color-scheme: light;
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23646c7b' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+:root.dark {
+  color-scheme: dark;
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23868d9c' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+:where(input[type='range'], progress) {
+  accent-color: var(--primary);
+}
+
+/* Checkboxes and radios are drawn by the app too: WebKit ports ignore
+ * accent-color / color-scheme on them and left a bright white square in dark
+ * mode. Zero specificity (:where) so a component's own size, margin or switch
+ * styling (.um-switch) still wins; they stay real inputs for a11y and tests. */
+:where(input[type='checkbox']:not(.um-switch), input[type='radio']) {
+  -webkit-appearance: none;
+  appearance: none;
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  vertical-align: middle;
+  border: 1px solid var(--border2);
+  border-radius: 4px;
+  background-color: var(--raised);
+  background-repeat: no-repeat;
+  background-position: center;
+  cursor: pointer;
+}
+:where(input[type='radio']) {
+  border-radius: 50%;
+}
+:where(input[type='checkbox']:not(.um-switch), input[type='radio']):hover:not(:disabled) {
+  border-color: var(--primary);
+}
+:where(input[type='checkbox']:not(.um-switch)):checked {
+  border-color: var(--primary);
+  background-color: var(--primary);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 6.2l2.3 2.3 4.7-4.9' fill='none' stroke='%23fff' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-size: 10px 10px;
+}
+:where(input[type='checkbox']:not(.um-switch)):indeterminate {
+  border-color: var(--primary);
+  background-color: var(--primary);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M3 6h6' stroke='%23fff' stroke-width='1.8' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-size: 10px 10px;
+}
+:where(input[type='radio']):checked {
+  border-color: var(--primary);
+  background-color: var(--raised);
+  background-image: radial-gradient(circle, var(--primary) 0 3.5px, transparent 4px);
+}
+:where(input[type='checkbox']:not(.um-switch), input[type='radio']):disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* <select> is drawn by the app, so it looks the same on Windows, macOS and
+ * Linux: WebKit ignores a CSS background on the native control. Element-level
+ * so every class/inline style still sets its own colours, border and padding;
+ * only the chevron and its room are forced (an inline `background:` shorthand
+ * would otherwise wipe the chevron). */
+select:not([multiple]):not([size]) {
+  -webkit-appearance: none;
+  appearance: none;
+  background-color: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background-image: var(--select-chevron) !important;
+  background-repeat: no-repeat !important;
+  background-position: right 8px center !important;
+  background-size: 10px 6px !important;
+  padding-right: 24px !important;
+  text-overflow: ellipsis;
+}
+/* The dropdown list itself (GTK / macOS menus read these). */
+option,
+optgroup {
+  background-color: var(--surface);
+  color: var(--text);
+}
 
 @media (prefers-reduced-motion: reduce) {
   :where(button, [role='button'], [role='treeitem'], [role='tab']) {

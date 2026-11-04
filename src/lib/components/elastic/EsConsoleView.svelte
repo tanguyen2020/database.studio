@@ -4,6 +4,7 @@
   // every request it touches, one after another. Auto-indent, copy as cURL,
   // variables (${name}), history — the whole REST API is reachable from here.
   import { onMount, untrack } from 'svelte'
+  import { kbd } from '$lib/keys/label'
   import '$lib/elastic/es.css'
   import type * as monaco from 'monaco-editor'
   import * as ipc from '$lib/ipc'
@@ -38,7 +39,7 @@
   const st = untrack(() => tab.state as { text?: string; seed?: string; vars?: { name: string; value: string }[] })
 
   const DEFAULT_TEXT = `# Welcome to the Dev Tools console.
-# Run the request at the caret with ▶ or Ctrl+Enter. Select several to run them in order.
+# Run the request at the caret with ▶ or ${kbd('Ctrl+Enter')}. Select several to run them in order.
 
 GET _cluster/health
 
@@ -321,11 +322,11 @@ GET /_search
 <div class="es-page" data-testid="es-console">
   <div class="esc-bar">
     <span class="esc-title"><EsAppIcon name="console" size={20} /> Console</span>
-    <button class="eg-btn primary" onclick={runAtCaret} disabled={running} aria-busy={running} title="Run the request at the caret (Ctrl+Enter)">
+    <button class="eg-btn primary" onclick={runAtCaret} disabled={running} aria-busy={running} title={kbd('Run the request at the caret (Ctrl+Enter)')}>
       {#if running}<span class="es-spin"><EsIcon name="refresh" size={13} /></span>{:else}<EsIcon name="play" size={13} />{/if}
       {running ? 'Running…' : 'Send request'}
     </button>
-    <button class="eg-btn" onclick={autoIndent} title="Auto indent (Ctrl+I)"><EsIcon name="json" size={13} /> Auto indent</button>
+    <button class="eg-btn" onclick={autoIndent} title={kbd('Auto indent (Ctrl+I)')}><EsIcon name="json" size={13} /> Auto indent</button>
     <button class="eg-btn" onclick={copyCurl} title="Copy the request as a cURL command"><EsIcon name="curl" size={13} /> Copy as cURL</button>
     <span style="margin-left:auto;display:flex;gap:var(--px-6)">
       <button class="eg-btn" class:primary={panel === 'vars'} onclick={() => (panel = panel === 'vars' ? 'none' : 'vars')}>Variables{vars.length ? ` (${vars.length})` : ''}</button>
@@ -403,7 +404,7 @@ GET /_search
         {#if output}
           <CodeView value={output} language={DS_JSON} readOnly height="100%" ariaLabel="Console response" />
         {:else}
-          <div class="es-empty"><div class="es-empty-title">Send a request</div>Press ▶ next to a request or Ctrl+Enter.</div>
+          <div class="es-empty"><div class="es-empty-title">Send a request</div>Press ▶ next to a request or {kbd('Ctrl+Enter')}.</div>
         {/if}
       </div>
     </div>

@@ -69,7 +69,8 @@ test('result views stay responsive with 1,000,000 rows', async ({ page }) => {
   await reset(page)
   let t0 = Date.now()
   await page.getByRole('button', { name: 'Run' }).first().click()
-  const gridSummary = page.getByText(/Rows 1–200 of 1,000,000/)
+  // first page = Settings → Query → Default page size (100)
+  const gridSummary = page.getByText(/Rows 1–100 of 1,000,000/)
   await expect(gridSummary).toBeVisible({ timeout: 60_000 })
   results.load = { wall: Date.now() - t0, maxTask: await maxTask(page) }
 

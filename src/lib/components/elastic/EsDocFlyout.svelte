@@ -3,6 +3,7 @@
   // filter-for / filter-out / toggle-column per field, and editing — replace the
   // document, or create a new one (id optional). Delete asks for confirmation.
   import '$lib/elastic/es.css'
+  import { kbd } from '$lib/keys/label'
   import { focusOnMount } from '$lib/elastic/actions'
   import CodeView from '$lib/components/editor/CodeView.svelte'
   import { DS_JSON } from '$lib/editor/monarch'
@@ -116,7 +117,7 @@
         {#if !parsed.ok}
           <div class="es-error-text">Invalid JSON — {parsed.error}</div>
         {:else}
-          <div class="es-help">{isNew ? 'Indexed with ?refresh=wait_for so it shows up in the next search.' : 'Saving replaces the whole document (PUT _doc). Ctrl+Enter saves.'}</div>
+          <div class="es-help">{isNew ? 'Indexed with ?refresh=wait_for so it shows up in the next search.' : kbd('Saving replaces the whole document (PUT _doc). Ctrl+Enter saves.')}</div>
         {/if}
         {#if error}<div class="es-callout danger" role="alert" style="margin-top:var(--px-10)">{error}</div>{/if}
       {:else if hit}

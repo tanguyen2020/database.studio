@@ -687,7 +687,8 @@ export const kafkaSrSchema = (connId: string, subject: string, version: number) 
 export interface CqlExecResponse {
   ok: boolean
   result?: { cols: [string, string][]; rows: Record<string, unknown>[]; total: number }
-  error?: { message: string; detail?: string; statement_index?: number }
+  /** the backend's full QueryError (code, position, hint, raw) */
+  error?: QueryError
   duration_ms: number
   next_page?: string
   warnings: string[]

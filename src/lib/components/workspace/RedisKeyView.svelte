@@ -1,5 +1,6 @@
 <script lang="ts">
   import Icon from '$lib/components/Icon.svelte'
+  import { kbd } from '$lib/keys/label'
   // Redis key details — the side panel of the Redis Browser workspace
   // (SPEC-REDIS-BROWSER.md X1: a key never gets a tab of its own). Shows the value per
   // type with View JSON + Copy on each value; a Text value is edited in place, every
@@ -493,7 +494,7 @@
         {/if}
         {#if itemForm.error}<div class="rk-err" role="alert">{itemForm.error}</div>{/if}
         <div style="display:flex;gap:var(--px-8);justify-content:flex-end;align-items:center">
-          <span style="margin-right:auto;font-size:var(--px-11_5);color:var(--muted)">Ctrl+Enter saves</span>
+          <span style="margin-right:auto;font-size:var(--px-11_5);color:var(--muted)">{kbd('Ctrl+Enter saves')}</span>
           <button type="button" class="cfm-btn" onclick={() => (itemForm = null)} disabled={itemForm.busy}>Cancel</button>
           <button type="button" class="cfm-btn primary" onclick={saveItem} disabled={itemForm.busy}>{itemForm.busy ? 'Saving…' : 'Save'}</button>
         </div>

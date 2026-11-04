@@ -136,6 +136,9 @@
     onFormat?: () => void
     onExplain?: () => void
     onSaveSnippet?: () => void
+    /** the Monaco editor exists (it is created after Monaco loads — later than
+     *  this component mounts). Focus / auto-run must wait for it. */
+    onReady?: () => void
   }
 
   let {
@@ -154,6 +157,7 @@
     onFormat,
     onExplain,
     onSaveSnippet,
+    onReady,
   }: Props = $props()
 
   let container = $state<HTMLDivElement | null>(null)
@@ -552,9 +556,16 @@
         editor.onKeyDown((e: monaco.IKeyboardEvent) => {
           if (e.keyCode !== m.KeyCode.Escape) return
           completionDismissed = true // don't let a late load re-open the popup
-          onCancel?.()
           // no preventDefault: Escape must still close the suggest/find widget
         }),
+      )
+      // Escape cancels a running query only when it is not closing something of
+      // the editor's own: dismissing a suggestion or the find box mid-script used
+      // to cancel the script as well.
+      editor.addCommand(
+        m.KeyCode.Escape,
+        () => onCancel?.(),
+        '!suggestWidgetVisible && !findWidgetVisible && !parameterHintsVisible && !renameInputVisible && !editorHasMultipleSelections',
       )
 
       // Run/format bindings. `addAction` keeps them scoped to this editor instance,
@@ -570,6 +581,7 @@
       for (const [id, label, keybindings, run] of actions) {
         editor.addAction({ id, label, keybindings, run })
       }
+      onReady?.()
     }
 
     return () => {

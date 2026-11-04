@@ -3,6 +3,7 @@
   // (Pretty/Compact, Wrap, Copy, Search). Colorize theo jsonColorize (dòng 3935):
   // key #61afef, string #98c379, number #d19a66, null #e06c75.
   import { toasts } from '$lib/stores/toast.svelte'
+  import { kbd } from '$lib/keys/label'
   import type { QueryResultSet } from '$lib/types'
 
   interface Props {
@@ -70,7 +71,7 @@
         <input class="mono" bind:value={search} placeholder="Search…" style="border:none;background:transparent;color:var(--text);font-size:var(--px-11_5);outline:none;width:var(--px-130)" />
       </div>
     {:else}
-      <span style="color:var(--muted);font-size:var(--px-11)" title="Syntax highlighting is off for large results so the JSON tab stays fast — use your browser's find (Ctrl+F) to search.">Highlighting off (large result)</span>
+      <span style="color:var(--muted);font-size:var(--px-11)" title={kbd("Syntax highlighting is off for large results so the JSON tab stays fast — use your browser's find (Ctrl+F) to search.")}>Highlighting off (large result)</span>
     {/if}
     {#if capped}
       <span style="color:var(--warn);font-size:var(--px-11)" title="Export to get all rows as JSON.">Showing first {ROW_CAP.toLocaleString()} of {data.rows.length.toLocaleString()} rows</span>

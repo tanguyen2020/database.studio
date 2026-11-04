@@ -3,6 +3,7 @@
   // dòng 1165-1186. Header + danh sách snippet (📄 tên + badge hệ). Click → mở
   // SQL tab với snippet đó. Ctrl+S ở editor lưu snippet mới (xem SqlWorkspace).
   import * as ipc from '$lib/ipc'
+  import { kbd } from '$lib/keys/label'
   import type { Snippet } from '$lib/ipc'
   import { systemMeta } from '$lib/systems'
   import { connections } from '$lib/stores/connections.svelte'
@@ -33,7 +34,7 @@
   <!-- header — dòng 1167-1170 -->
   <div style="flex:none;display:flex;align-items:center;gap:var(--px-12);padding:var(--px-10) var(--px-14);border-bottom:var(--px-1) solid var(--border);background:var(--surface)">
     <span style="font-weight:700;font-size:var(--px-13)">Saved Queries</span>
-    <span style="font-size:var(--px-11);color:var(--muted)">Ctrl+S saves the current editor</span>
+    <span style="font-size:var(--px-11);color:var(--muted)">{kbd('Ctrl+S saves the current editor')}</span>
   </div>
   <!-- list — dòng 1171-1184 -->
   <div style="flex:1;overflow:auto;min-height:0;padding:var(--px-8) 0">
@@ -64,7 +65,7 @@
       </div>
     {:else}
       <div style="padding:var(--px-16);font-size:var(--px-12);color:var(--muted)">
-        No snippets yet. Press Ctrl+S in the SQL editor to save one.
+        No snippets yet. Press {kbd('Ctrl+S')} in the SQL editor to save one.
       </div>
     {/each}
   </div>

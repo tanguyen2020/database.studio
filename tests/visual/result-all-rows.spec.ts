@@ -22,7 +22,8 @@ test('result grid: Page size "All" shows every fetched row on one page', async (
   await page.keyboard.type('SELECT * FROM perf_rows_5000')
   await page.getByRole('button', { name: 'Run' }).first().click()
 
-  await expect(page.getByText(/Rows 1–200 of 5,000/).first()).toBeVisible({ timeout: 15_000 })
+  // first page = Settings → Query → Default page size (100)
+  await expect(page.getByText(/Rows 1–100 of 5,000/).first()).toBeVisible({ timeout: 15_000 })
   const size = page.locator('select').filter({ has: page.locator('option', { hasText: 'All (5,000)' }) }).first()
   await expect(size).toBeVisible()
   // the old ceiling is still an option, and is no longer the maximum

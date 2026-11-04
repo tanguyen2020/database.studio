@@ -67,7 +67,7 @@
         nextPage = res.next_page ?? null
         for (const w of res.warnings ?? []) toasts.show(w, { system: 'cassandra' })
       } else if (res.error) {
-        error = { system: 'cassandra', message: res.error.message, severity: 'error', raw: res.error.detail ?? res.error.message }
+        error = { ...res.error, system: res.error.system || 'cassandra', raw: res.error.raw || res.error.message }
         data = null
       }
     } catch (e) {

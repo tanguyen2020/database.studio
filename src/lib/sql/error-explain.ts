@@ -64,7 +64,9 @@ const RULES: Rule[] = [
     summary: 'The statement was stopped before it finished.',
     hint: 'Nothing after the cancelled statement was run. Run it again when you are ready.',
     codes: ['CANCELLED', '57014', 'ORA-01013'],
-    match: /\b(cancell?ed|canceling statement|interrupted)\b/i,
+    // whole phrases only: a constraint on a column named `cancelled`
+    // ("NOT NULL constraint failed: orders.cancelled") is not a cancel
+    match: /\b((query|statement|operation|request|execution) (was |has been )?cancell?ed|cancell?ing statement|interrupted!?\s*$|^interrupt\b)/i,
   },
   {
     category: 'connection',

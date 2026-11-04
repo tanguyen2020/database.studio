@@ -5,7 +5,7 @@
 import type { Diagnostic } from '@codemirror/lint'
 import { invoke } from '@tauri-apps/api/core'
 import { IS_TAURI } from '$lib/demo'
-import { lineColToOffset } from './statements'
+import { lexRules, lineColToOffset, maskCommentsAndStrings } from './statements'
 
 export interface LintDiagnosticIpc {
   severity: 'error' | 'warning' | 'info'
@@ -44,20 +44,40 @@ export function toCmDiagnostics(doc: string, lints: LintDiagnosticIpc[]): Diagno
  * không có trong schema cache → squiggle vàng + gợi ý fuzzy. Advisory —
  * cache có thể cũ nên chỉ warning, không error.
  */
-export function schemaLints(doc: string, knownTables: string[]): Diagnostic[] {
+export function schemaLints(doc: string, knownTables: string[], system?: string): Diagnostic[] {
   if (knownTables.length === 0) return []
   const known = new Set(knownTables.map((t) => t.toLowerCase()))
   const out: Diagnostic[] = []
+  // Comments and string literals blanked out (same length, so offsets still point
+  // at the editor text): `-- copied from archive` or `'loaded into staging'` are
+  // not table references.
+  const text = maskCommentsAndStrings(doc, lexRules(system))
+  // CTE names are tables for the rest of the statement.
+  for (const c of text.matchAll(/(?:\bWITH\s+(?:RECURSIVE\s+)?|,\s*)("[^"]+"|`[^`]+`|\[[^\]]+\]|[\w$]+)\s*(?:\([^()]*\)\s*)?AS\s*(?:NOT\s+)?(?:MATERIALIZED\s+)?\(/gi)) {
+    known.add(c[1].replace(/^["`\[]|["`\]]$/g, '').toLowerCase())
+  }
   // One fuzzy search per DISTINCT unknown name. Without this, a long script that
   // references the same missing table 500 times ran 500 full scans of the schema
   // (500 × every known table) on every lint pass — the same "rescan per item"
   // shape that made the statement splitter quadratic.
   const suggestFor = new Map<string, string | null>()
-  const re = /\b(?:FROM|JOIN|UPDATE|INTO)\s+((?:"[^"]+"|`[^`]+`|\[[^\]]+\]|[\w$.]+))/gi
-  for (const m of doc.matchAll(re)) {
-    const raw = m[1]
+  const re = /\b(FROM|JOIN|UPDATE|INTO)\s+((?:"[^"]+"|`[^`]+`|\[[^\]]+\]|[\w$.]+))/gi
+  for (const m of text.matchAll(re)) {
+    const kw = m[1].toUpperCase()
+    const raw = m[2]
     // bỏ qua subquery / định danh có schema prefix phức tạp
     if (raw.startsWith('(')) continue
+    const before = text.slice(Math.max(0, (m.index ?? 0) - 200), m.index ?? 0)
+    const prevWord = (/([A-Za-z_]+)\s*$/.exec(before)?.[1] ?? '').toUpperCase()
+    // FROM inside EXTRACT(YEAR FROM d) / TRIM(BOTH ' ' FROM s) / SUBSTRING(s FROM 2)
+    if (kw === 'FROM' && /\b(EXTRACT|TRIM|SUBSTRING|SUBSTR|OVERLAY|POSITION)\s*\([^()]*$/i.test(before)) continue
+    if (kw === 'FROM' && prevWord === 'DISTINCT') continue // IS DISTINCT FROM x
+    // UPDATE as a clause, not a table: ON DUPLICATE KEY UPDATE, DO UPDATE SET,
+    // FOR UPDATE, ON UPDATE CASCADE, trigger events (BEFORE UPDATE ON t)
+    if (kw === 'UPDATE' && ['DO', 'KEY', 'FOR', 'ON', 'BEFORE', 'AFTER', 'OF', 'OR', 'INSTEAD', 'GRANT'].includes(prevWord)) continue
+    // INTO names a table only after INSERT / REPLACE / MERGE (SELECT … INTO is a
+    // variable or a table being created)
+    if (kw === 'INTO' && !/\b(INSERT|REPLACE|MERGE)(\s+(IGNORE|LOW_PRIORITY|HIGH_PRIORITY|DELAYED|OR\s+\w+))*\s*$/i.test(before)) continue
     const bare = raw.replace(/^["`\[]|["`\]]$/g, '')
     const name = (bare.split('.').pop() ?? bare).toLowerCase()
     if (known.has(name)) continue

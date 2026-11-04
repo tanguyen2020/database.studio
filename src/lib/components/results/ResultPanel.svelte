@@ -1,5 +1,6 @@
 <script lang="ts">
   import Icon, { type IconName } from '$lib/components/Icon.svelte'
+  import { kbd } from '$lib/keys/label'
   // Result panel — port 1:1 từ Database Studio.dc.html:
   //  - sub-tab strip (dòng 332-340 + logic 4967-4987): #N mono bold muted,
   //    icon › khi active / ≣ Messages, underline 2px accent, statusColor ✓/✗
@@ -320,7 +321,7 @@
         onkeydown={(e) => e.key === 'Enter' && onHide?.()}
         role="button"
         tabindex="0"
-        title="Hide Result panel (Ctrl+J)"
+        title={kbd('Hide Result panel (Ctrl+J)')}
         aria-label="Hide Result panel"
         style="margin-left:auto;flex:none;display:flex;align-items:center;justify-content:center;width:var(--px-22);height:var(--px-22);margin-right:var(--px-8);border-radius:var(--px-5);cursor:pointer;color:var(--muted);font-size:var(--px-15);line-height:1"
       >×</span>

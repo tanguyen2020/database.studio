@@ -805,15 +805,41 @@ fn prepare_statement(sql: &str) -> String {
     t.trim_end_matches(';').trim_end().to_string()
 }
 
+/// The statement without leading whitespace and comments — what it starts with.
+fn strip_leading_comments(sql: &str) -> &str {
+    let mut s = sql.trim_start();
+    loop {
+        if let Some(rest) = s.strip_prefix("--") {
+            s = rest.find('\n').map(|i| &rest[i + 1..]).unwrap_or("").trim_start();
+        } else if let Some(rest) = s.strip_prefix("/*") {
+            s = rest.find("*/").map(|i| &rest[i + 2..]).unwrap_or("").trim_start();
+        } else {
+            return s;
+        }
+    }
+}
+
+/// A PL/SQL unit, whose trailing `END;` must be kept. Judged from the HEAD of the
+/// statement, after any leading comment: a comment before `BEGIN` used to hide the
+/// block (its `;` was cut → PLS-00103), and `CREATE TABLE t (type …)` was taken for
+/// a CREATE TYPE because the word appeared anywhere.
 fn is_plsql(sql: &str) -> bool {
-    let up = sql.trim_start().to_uppercase();
-    if up.starts_with("BEGIN") || up.starts_with("DECLARE") {
-        return true;
+    let up = strip_leading_comments(sql).to_uppercase();
+    let words: Vec<&str> = up.split(|c: char| c.is_whitespace() || c == '(').filter(|w| !w.is_empty()).collect();
+    match words.first().copied() {
+        Some("BEGIN") | Some("DECLARE") => true,
+        Some("CREATE") => {
+            let mut i = 1;
+            if words.get(1) == Some(&"OR") && words.get(2) == Some(&"REPLACE") {
+                i = 3;
+            }
+            if matches!(words.get(i).copied(), Some("EDITIONABLE") | Some("NONEDITIONABLE")) {
+                i += 1;
+            }
+            matches!(words.get(i).copied(), Some("PROCEDURE") | Some("FUNCTION") | Some("PACKAGE") | Some("TRIGGER") | Some("TYPE"))
+        }
+        _ => false,
     }
-    if up.starts_with("CREATE") {
-        return ["PROCEDURE", "FUNCTION", "PACKAGE", "TRIGGER", "TYPE"].iter().any(|kw| up.contains(kw));
-    }
-    false
 }
 
 #[cfg(test)]
@@ -827,6 +853,16 @@ mod tests {
         assert!(is_plsql("CREATE OR REPLACE PROCEDURE p AS BEGIN NULL; END;"));
         assert!(!is_plsql("SELECT 1 FROM dual"));
         assert!(!is_plsql("CREATE TABLE t (id NUMBER)"));
+        // a leading comment does not hide the block
+        assert!(is_plsql("-- fix\nBEGIN NULL; END;"));
+        assert!(is_plsql("/* note */ DECLARE v NUMBER; BEGIN NULL; END;"));
+        assert_eq!(prepare_statement("-- fix\nBEGIN NULL; END;"), "-- fix\nBEGIN NULL; END;");
+        // a column named TYPE is not a CREATE TYPE
+        assert!(!is_plsql("CREATE TABLE t (id NUMBER, type VARCHAR2(10))"));
+        assert_eq!(prepare_statement("CREATE TABLE t (id NUMBER, type VARCHAR2(10));"), "CREATE TABLE t (id NUMBER, type VARCHAR2(10))");
+        assert!(is_plsql("CREATE OR REPLACE EDITIONABLE PACKAGE BODY p AS END;"));
+        assert!(is_plsql("create type t_obj as object (a number);"));
+        assert!(!is_plsql("BEGINNING_TABLE"));
     }
 
     #[test]
