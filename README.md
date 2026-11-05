@@ -1,181 +1,183 @@
 # Database Studio
 
-Ứng dụng desktop để làm việc với nhiều loại cơ sở dữ liệu và hệ thống streaming trong cùng một cửa sổ: duyệt schema, viết và chạy query, sửa dữ liệu, so sánh schema, phân quyền user, backup/restore, xem message của Kafka/NATS/RabbitMQ, duyệt key Redis…
+A desktop client for working with many databases and streaming systems in one window. You can browse schemas, write and run queries, edit data, compare schemas, manage users and privileges, back up and restore, read messages from Kafka, NATS and RabbitMQ, and browse Redis keys.
 
-Xây dựng bằng **Tauri 2** (backend Rust) và **Svelte 5** (frontend), chạy trên Windows, Linux và macOS.
+Built with **Tauri 2** (Rust backend) and **Svelte 5** (frontend). Runs on Windows, Linux and macOS.
 
-> **Trạng thái:** beta (`0.1.0-beta.x`). Dùng được hằng ngày, nhưng vẫn có thể còn lỗi. Bản macOS chưa được ký.
+> **Status:** beta (`0.1.0-beta.x`). It is usable day to day, but expect rough edges. The macOS build is not signed.
 
 ---
 
-## Hệ thống hỗ trợ
+## Supported systems
 
-| Nhóm | Engine |
+| Category | Engines |
 |---|---|
-| Quan hệ | PostgreSQL · MySQL · MariaDB · SQL Server · Oracle · SQLite · DuckDB · ClickHouse |
+| Relational | PostgreSQL · MySQL · MariaDB · SQL Server · Oracle · SQLite · DuckDB · ClickHouse |
 | Document / wide-column | MongoDB · FerretDB · Amazon DocumentDB · Cassandra · ScyllaDB |
-| Tìm kiếm | Elasticsearch · OpenSearch |
+| Search | Elasticsearch · OpenSearch |
 | Cache | Redis · Valkey |
 | Streaming | Kafka · Redpanda · NATS (JetStream) · RabbitMQ |
 
-ScyllaDB, FerretDB, DocumentDB, Valkey, OpenSearch và Redpanda dùng chung driver với engine gốc (Cassandra, MongoDB, Redis, Elasticsearch, Kafka). App tự nhận ra loại server khi bạn bấm **Test connection**.
+ScyllaDB, FerretDB, DocumentDB, Valkey, OpenSearch and Redpanda reuse the driver of their parent engine (Cassandra, MongoDB, Redis, Elasticsearch and Kafka respectively). The app detects which server it is talking to when you click **Test connection**.
 
 ---
 
-## Cài đặt (người dùng)
+## Install
 
-1. Vào trang **[Releases](../../releases)** của repo và tải bản cài cho máy:
-   - **Windows:** file `.exe` (NSIS)
-   - **Ubuntu / Debian:** file `.deb` hoặc `.AppImage`. Xem thêm [INSTALL-UBUNTU.md](INSTALL-UBUNTU.md)
-   - **macOS:** file `.dmg` (bản universal)
-2. **macOS:** vì app chưa được ký, lần mở đầu tiên cần chạy:
+1. Open the repository's **[Releases](../../releases)** page and download the installer for your platform:
+   - **Windows:** the `.exe` (NSIS) installer
+   - **Ubuntu / Debian:** the `.deb` or the `.AppImage`. See also [INSTALL-UBUNTU.md](INSTALL-UBUNTU.md).
+   - **macOS:** the universal `.dmg`
+2. **macOS only:** the app is unsigned, so run this once before the first launch:
    ```bash
    xattr -cr "/Applications/Database Studio.app"
    ```
-3. **Tự cập nhật:** khi có bản mới, app tự hỏi lúc khởi động (hoặc vào **Settings → Updates → Check for updates**). Trên Linux chỉ bản AppImage tự cập nhật được, bản `.deb` phải cài lại bằng tay.
+3. **Updates:** the app checks for a new version at startup. You can also check by hand in **Settings → Updates → Check for updates**. On Linux, only the AppImage updates itself; reinstall the `.deb` by hand.
 
-Bản cài đã kèm sẵn các công cụ dùng cho Backup & Restore (`pg_dump`, `mariadb-dump`, `mongodump`, Oracle Data Pump…), nên bạn không cần cài thêm gì.
+The installer ships the client tools that Backup & Restore uses (`pg_dump`, `mariadb-dump`, `mongodump`, Oracle Data Pump and so on), so there is nothing else to install.
 
 ---
 
-## Hướng dẫn sử dụng nhanh
+## Quick guide
 
-### Kết nối
-- Bấm **New connection** (hoặc `Ctrl+Shift+N`), chọn engine, điền host, port, user và password, rồi bấm **Test connection** → **Connect**.
-- Có hỗ trợ **SSH tunnel** (password hoặc private key) và **SSL/TLS**.
-- Có thể gắn nhãn môi trường **PROD / STG / DEV / LOCAL** cho connection. Với connection PROD, app yêu cầu xác nhận trước những thao tác nguy hiểm.
+### Connecting
+- Click **New connection** (`Ctrl+Shift+N`), pick an engine, and fill in host, port, user and password. Then click **Test connection** and **Connect**.
+- **SSH tunnels** (password or private key) and **SSL/TLS** are supported.
+- You can tag a connection as **PROD / STG / DEV / LOCAL**. On PROD connections the app asks for confirmation before dangerous statements.
 
 ### Explorer
-- Double-click database/schema để mở ra. Double-click tên database để mở tab **Objects** (danh sách bảng kèm số dòng và dung lượng).
-- Chuột phải lên từng mục để thấy các thao tác: Open Data, New Query, Design Table, Generate Scripts, Import/Export, Backup & Restore, Drop/Rename…
-- Nút ở thanh tiêu đề cho phép đổi bố cục: **Connections | Explorer** (2 panel) hoặc **One sidebar** (cây nằm ngay dưới từng connection).
+- Double-click a database or schema to expand it. Double-clicking a database name also opens the **Objects** tab, which lists its tables with row counts and sizes.
+- Right-click any node for its actions: Open Data, New Query, Design Table, Generate Scripts, Import/Export, Backup & Restore, Drop/Rename, and more.
+- Use the layout buttons in the title bar to switch between **Connections | Explorer** (two panels) and **One sidebar** (each connection's tree opens right under it).
 
-### Query Editor
-| Phím | Tác dụng |
+### Query editor
+| Key | Action |
 |---|---|
-| `F5` | Chạy toàn bộ script |
-| `Ctrl+Enter` | Chạy câu lệnh tại con trỏ |
-| `Ctrl+Shift+E` | Explain (xem query plan) |
-| `Ctrl+Shift+F` | Định dạng SQL |
-| `Ctrl+Space` | Gợi ý bảng / cột / hàm |
-| `Ctrl+S` | Lưu ra file `.sql` |
-| `Esc` | Huỷ query đang chạy |
+| `F5` | Run the whole script |
+| `Ctrl+Enter` | Run the statement at the cursor |
+| `Ctrl+Shift+E` | Explain (query plan) |
+| `Ctrl+Shift+F` | Format SQL |
+| `Ctrl+Space` | Suggest tables, columns and functions |
+| `Ctrl+S` | Save to a `.sql` file |
+| `Esc` | Cancel the running query |
 
-- Mỗi tab dùng một connection riêng, nên một query chạy lâu không làm treo các tab khác.
-- Script có nhiều câu: chỉ câu trả về dữ liệu mới mở tab kết quả. INSERT/UPDATE/DELETE/DDL được gom vào tab **Messages**.
-- Kết quả của câu `SELECT` từ một bảng có khoá chính thì sửa được ngay trên lưới.
+On macOS, use `⌘` in place of `Ctrl`.
 
-### Lưới dữ liệu (Open Data / Result Grid)
-- Double-click ô để sửa, chọn dòng ở cột `#` để xoá, rồi bấm **Execute** để lưu (**Preview diff** để xem trước câu lệnh). Chưa bấm Execute thì chưa có gì được ghi.
-- Chuột phải lên lưới để copy dưới dạng CSV, JSON, SQL INSERT/UPDATE, Markdown, XML.
-- **Export** ra CSV (UTF-8 có BOM), JSON, SQL, XML, Excel (`.xlsx`).
+- Each tab runs on its own connection, so a long query in one tab does not block the others.
+- In a multi-statement script, only statements that return rows get a result tab. INSERT/UPDATE/DELETE and DDL are collected in the **Messages** tab.
+- The result of a `SELECT` from a single table that has a primary key can be edited in place.
 
-### Công cụ khác
-- **Table Designer**: các tab Fields, Indexes, Foreign Keys, Uniques, Checks, Triggers, Partitioning.
-- **Schema Compare**: so sánh 2 database, xem từng khác biệt, sinh script đồng bộ rồi áp vào target.
-- **ER Diagram**: vẽ quan hệ giữa các bảng, kéo thả để tạo foreign key, xuất SVG/PNG.
-- **Users & Privileges**: tạo user/role và phân quyền theo đúng mô hình của từng engine.
-- **Backup & Restore**: có trong menu chuột phải của mọi database. Có thanh tiến trình và nút Stop.
-- **Streaming** (Kafka · NATS · RabbitMQ · Redis): chọn connection là mở workspace riêng với Overview, danh sách topic/stream/queue/key, xem và gửi message, consumer group, cấu hình.
-- **Command Palette** (`Ctrl+P`): tìm nhanh connection, bảng, lệnh.
+### Data grid (Open Data and query results)
+- Double-click a cell to edit it, or select rows in the `#` column to delete them. Nothing is written until you click **Execute**; **Preview diff** shows the statements first.
+- Right-click the grid to copy as CSV, JSON, SQL INSERT/UPDATE, Markdown or XML.
+- **Export** to CSV (UTF-8 with BOM), JSON, SQL, XML or Excel (`.xlsx`).
+
+### Other tools
+- **Table Designer:** Fields, Indexes, Foreign Keys, Uniques, Checks, Triggers and Partitioning tabs.
+- **Schema Compare:** compares two databases, shows each difference, generates a sync script and applies it to the target.
+- **ER Diagram:** shows table relationships. Drag between columns to create a foreign key; export to SVG or PNG.
+- **Users & Privileges:** create users and roles and grant access, following each engine's own permission model.
+- **Backup & Restore:** in the right-click menu of every database, with a progress window and a Stop button.
+- **Streaming** (Kafka · NATS · RabbitMQ · Redis): selecting the connection opens a dedicated workspace with an overview, the list of topics, streams, queues or keys, message viewing and publishing, consumer groups and configuration.
+- **Command Palette** (`Ctrl+P`): jump to connections, tables and commands.
 
 ---
 
-## Chạy từ mã nguồn (developer)
+## Running from source
 
-### Yêu cầu
-| Công cụ | Ghi chú |
+### Prerequisites
+| Tool | Notes |
 |---|---|
 | **Node.js 20+** | |
-| **Rust** (stable, cài qua [rustup](https://rustup.rs)) | |
-| **CMake** | Cần để build `librdkafka` (Kafka). Trên Windows, CMake có sẵn trong Visual Studio 2022. |
-| **Windows** | Visual Studio 2022 Build Tools với workload "Desktop development with C++" |
+| **Rust** (stable, via [rustup](https://rustup.rs)) | |
+| **CMake** | Needed to build `librdkafka` (Kafka). On Windows it ships with Visual Studio 2022. |
+| **Windows** | Visual Studio 2022 Build Tools with the "Desktop development with C++" workload |
 | **Ubuntu** | `sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev libcurl4-openssl-dev build-essential file patchelf` |
 | **macOS** | Xcode Command Line Tools (`xcode-select --install`) |
 
-> **Lần build Rust đầu tiên mất khoảng 20–30 phút**, vì phải biên dịch DuckDB (C++) và librdkafka. Những lần sau chỉ mất vài phút.
+> **The first Rust build takes about 20–30 minutes** because it compiles DuckDB (C++) and librdkafka. Later builds take a few minutes.
 
-### Chạy app desktop
+### Desktop app
 ```bash
 npm install
-npm run tauri dev        # chạy từ thư mục gốc của repo
+npm run tauri dev        # run from the repository root
 ```
 
-### Chạy giao diện trong trình duyệt (không cần Rust)
+### UI only, in a browser (no Rust needed)
 ```bash
 npm install
-npm run dev              # mở http://localhost:5173
+npm run dev              # open http://localhost:5173
 ```
-Trong trình duyệt, app chạy ở **chế độ demo**: mọi lệnh backend được giả lập bởi `src/lib/demo.ts`, có sẵn dữ liệu mẫu. Chế độ này tiện để sửa giao diện nhanh, và cũng là chế độ mà các test Vitest/Playwright chạy.
+In a browser the app runs in **demo mode**: every backend call is answered by `src/lib/demo.ts`, which comes with sample data. This is the quickest way to work on the UI, and it is also the mode the Vitest and Playwright tests run in.
 
-### Windows: PATH cho cargo
-Nếu dùng Git Bash, `cargo` và CMake có thể không có trong PATH:
+### Windows: cargo on PATH
+In Git Bash, `cargo` and CMake may not be on `PATH`:
 ```bash
 export PATH="$PATH:$HOME/.cargo/bin:/c/Program Files/Microsoft Visual Studio/2022/Community/Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin"
 ```
 
-### Công cụ backup đóng gói (tuỳ chọn)
-Bản cài kèm sẵn `pg_dump`, `mariadb-dump`, `mongodump`, Oracle Instant Client… Khi chạy từ source, nếu muốn có các công cụ này:
+### Bundled backup tools (optional)
+Installers include `pg_dump`, `mariadb-dump`, `mongodump`, the Oracle Instant Client and similar tools. To get them when running from source:
 ```bash
-npm run tools:fetch      # tải, kiểm SHA-256 và giải nén vào src-tauri/resources/
+npm run tools:fetch      # downloads, verifies SHA-256 and unpacks into src-tauri/resources/
 ```
-Không chạy bước này thì Backup & Restore sẽ dùng công cụ đã cài sẵn trên máy (nếu có).
+Without this step, Backup & Restore uses whatever client tools are installed on your machine.
 
 ---
 
-## Kiểm tra trước khi commit
+## Checks before committing
 
 ```bash
-npm run check            # svelte-check + tsc — phải 0 lỗi / 0 cảnh báo
-npx vitest run           # unit test frontend
-npx playwright test      # test giao diện (tự khởi động vite)
-npm run tokens:check     # không cho dùng màu/spacing viết cứng trong component
+npm run check            # svelte-check + tsc — must report 0 errors / 0 warnings
+npx vitest run           # frontend unit tests
+npx playwright test      # UI tests (starts Vite automatically)
+npm run tokens:check     # rejects hard-coded colors and spacing in components
 ```
 
-Test phía Rust:
+Rust tests:
 ```bash
 cd src-tauri
-cargo test --lib                                   # unit test (không cần database)
-cargo test --test drivers_integration <tên_test>   # integration — cần Docker
+cargo test --lib                                   # unit tests (no database needed)
+cargo test --test drivers_integration <test_name>  # integration tests — needs Docker
 ```
-Integration test dùng **testcontainers** để chạy database thật trong Docker. Container Cassandra, SQL Server và ClickHouse khởi động chậm (1–3 phút). Test Oracle cần Oracle Instant Client.
+Integration tests use **testcontainers** to run real databases in Docker. Cassandra, SQL Server and ClickHouse containers are slow to start (1–3 minutes). Oracle tests need the Oracle Instant Client.
 
 ---
 
-## Cấu trúc dự án
+## Project layout
 
 ```
-src/                      Frontend Svelte 5
-  lib/ipc.ts              Cửa ngõ gọi backend (Tauri thật, hoặc demo trong trình duyệt)
-  lib/demo.ts             Backend giả lập cho trình duyệt và test
+src/                      Svelte 5 frontend
+  lib/ipc.ts              Single entry point to the backend (real Tauri, or demo in a browser)
+  lib/demo.ts             Mock backend for the browser and the tests
   lib/stores/             State (runes): connections, tabs, results, explorer, ui…
-  lib/components/         Giao diện: explorer, workspace, dialog, grid…
-  lib/sql/                Logic thuần: tách câu lệnh, sinh DDL, autocomplete…
-src-tauri/                Backend Rust
-  src/drivers/            Một module cho mỗi engine, gom trong enum LiveConnection (mod.rs)
-  src/commands/           Các #[tauri::command] (phải đăng ký trong lib.rs)
-  src/connections/        Registry connection, SSH tunnel, huỷ query, keepalive
-  src/storage/            SQLite nội bộ: profile connection (mật khẩu mã hoá AES-256-GCM), tab, lịch sử
-  tests/                  Integration test với database thật
-tests/visual/             Playwright e2e
-tools/fetch-dump-tools/   Công cụ tải client tools đóng gói khi build
-spec/                     Prototype thiết kế giao diện (nguồn chuẩn cho UI)
+  lib/components/         UI: explorer, workspaces, dialogs, grid…
+  lib/sql/                Pure logic: statement splitting, DDL generation, autocomplete…
+src-tauri/                Rust backend
+  src/drivers/            One module per engine, unified in the LiveConnection enum (mod.rs)
+  src/commands/           #[tauri::command] handlers (must be registered in lib.rs)
+  src/connections/        Connection registry, SSH tunnels, query cancellation, keepalive
+  src/storage/            Internal SQLite: connection profiles (passwords AES-256-GCM encrypted), tabs, history
+  tests/                  Integration tests against real databases
+tests/visual/             Playwright end-to-end tests
+tools/fetch-dump-tools/   Build-time fetcher for the bundled client tools
+spec/                     UI design prototype (the source of truth for the UI)
 ```
 
-Một vài quy ước quan trọng:
-- **Thêm command backend mới** thì phải đăng ký trong `invoke_handler!` (`src-tauri/src/lib.rs`), **và** thêm case tương ứng trong `src/lib/demo.ts`, nếu không thì test trình duyệt sẽ hỏng.
-- **Thêm engine mới** gồm: module mới trong `drivers/`, variant mới trong `LiveConnection`, và arm mới trong mọi `match` của `drivers/mod.rs`.
-- **Giao diện** lấy màu và spacing từ token (`src/lib/tokens.css`, `src/lib/theme.css`), không viết hex cứng trong component.
+A few conventions that matter:
+- **A new backend command** must be registered in `invoke_handler!` (`src-tauri/src/lib.rs`) **and** get a matching case in `src/lib/demo.ts`, or the browser-based tests break.
+- **A new engine** needs a module in `drivers/`, a `LiveConnection` variant, and an arm in every `match` in `drivers/mod.rs`.
+- **UI colors and spacing** come from tokens (`src/lib/tokens.css`, `src/lib/theme.css`). Do not hard-code hex values in components.
 
-Tài liệu chi tiết hơn: [CLAUDE.md](CLAUDE.md) (kiến trúc + nhật ký từng đợt thay đổi), các file `SPEC-*.md` (đặc tả từng tính năng), [SPEC-INDEX.md](SPEC-INDEX.md).
+More detail: [CLAUDE.md](CLAUDE.md) (architecture and a log of past changes, mostly in Vietnamese), the `SPEC-*.md` files (one per feature), and [SPEC-INDEX.md](SPEC-INDEX.md).
 
 ---
 
-## Phát hành bản mới
+## Releasing
 
 ```bash
-npm run beta:bump                      # tăng số beta trong package.json + tauri.conf.json
+npm run beta:bump                      # bumps the beta number in package.json and tauri.conf.json
 git commit -am "chore: bump v0.1.0-beta.N"
 git tag v0.1.0-beta.N && git push --follow-tags
 ```
-Đẩy tag `v*` sẽ chạy workflow [build-beta.yml](.github/workflows/build-beta.yml): build cho Windows, Ubuntu và macOS, tạo GitHub Release, ký bản cập nhật và sinh `latest.json` cho auto-update. Repo cần secret **`TAURI_SIGNING_PRIVATE_KEY`**, thiếu secret này thì build sẽ fail.
+Pushing a `v*` tag runs [build-beta.yml](.github/workflows/build-beta.yml). It builds for Windows, Ubuntu and macOS, creates a GitHub Release, signs the update artifacts and generates the `latest.json` manifest used by auto-update. The repository needs the **`TAURI_SIGNING_PRIVATE_KEY`** secret; without it the build fails.
