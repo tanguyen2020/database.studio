@@ -6,6 +6,20 @@ Built with **Tauri 2** (Rust backend) and **Svelte 5** (frontend). Runs on Windo
 
 > **Status:** beta (`0.1.0-beta.x`). It is usable day to day, but expect rough edges. The macOS build is not signed.
 
+![Query editor with the Explorer tree and a result grid](docs/screenshots/query-editor-dark.png)
+
+---
+
+## Screenshots
+
+| | |
+|---|---|
+| ![Query editor in the light theme](docs/screenshots/query-editor-light.png) <br> **Query editor** (light theme) | ![ER diagram](docs/screenshots/er-diagram.png) <br> **ER diagram** |
+| ![Schema compare](docs/screenshots/schema-compare.png) <br> **Schema Compare** — differences and the sync script | ![Kafka workspace](docs/screenshots/kafka.png) <br> **Kafka workspace** — topics and messages |
+| ![Redis browser](docs/screenshots/redis.png) <br> **Redis browser** — keys and value editor | |
+
+The screenshots use the app's built-in demo data (see [UI only, in a browser](#ui-only-in-a-browser-no-rust-needed)).
+
 ---
 
 ## Supported systems
