@@ -54,6 +54,8 @@
   import { duckAttach, duckExport, duckImport } from '$lib/stores/duckdb.svelte'
   import * as chops from '$lib/sql/chops'
   import { toasts } from '$lib/stores/toast.svelte'
+  import { renameWizard } from '$lib/stores/rename.svelte'
+  import { systemMeta } from '$lib/systems'
   import { quoteIdent, qualified, selectStarSql } from '$lib/sql/dialect'
   import { genAlterTable, genCreate, genDelete, genDrop, genCreateSchema, genDropDatabase, genDropSchema, genForeignKey, genInsert, genRename, genRenameDatabase, genRenameSchema, genSelect, genTruncate, genUpdate, hasRealSchemas } from '$lib/sql/ddl'
   import { generateScript, type DbObject, type ScriptMode } from '$lib/sql/scripts'
@@ -1226,76 +1228,63 @@
   // The same popup renames a DATABASE or a SCHEMA — `kind` picks the statement and
   // the wording, `cid` is the connection it runs on (a foreign-database subtree
   // renames its schema through the sub-connection of that database).
-  let renameState = $state<{
-    kind: 'database' | 'schema'
-    db: string
-    cid: string
-    to: string
-    running: boolean
-    error: string | null
-  } | null>(null)
-  /** statement for a target name (empty target → the `<name>_new` placeholder) */
-  function renameStmt(to?: string): string {
-    const st = renameState
-    if (!st || !selected) return ''
-    return st.kind === 'schema'
-      ? genRenameSchema(selected.system, st.db, to)
-      : genRenameDatabase(selected.system, st.db, to)
-  }
-  const renameSupported = $derived(!!renameState && !!selected && !renameStmt().trimStart().startsWith('--'))
-  const renameTarget = $derived(renameState?.to.trim() ?? '')
-  const renameSql = $derived(renameState && selected ? renameStmt(renameTarget || `${renameState.db}_new`) : '')
-  /** Confirm stays disabled until the name is usable: non-empty, different from the
-   *  current one, and not already taken — by another database on this server, or by
-   *  another schema in the database this schema lives in. */
-  const renameTaken = $derived.by(() => {
-    const st = renameState
-    if (!st || !renameTarget) return false
-    const taken = st.kind === 'schema'
-      ? (explorer.cache[st.cid]?.schemas ?? []).map((x) => x.name)
-      : (cache?.databases ?? []).map((d) => d.name)
-    return taken.some((n) => n.toLowerCase() === renameTarget.toLowerCase())
-  })
-  const canRename = $derived(
-    renameSupported && !!renameTarget && renameTarget !== renameState?.db && !renameTaken && !renameState?.running,
-  )
-
+  // Rename database / schema / routine — all go through the shared Rename popup
+  // (RenameDialog): it checks the name, shows the statement, runs it and keeps a
+  // server refusal on screen. Engines that cannot rename get an explanation and
+  // "Open in SQL tab" instead.
   function renameDatabase(dbName: string) {
-    if (!selected || !dbName) return
-    renameState = { kind: 'database', db: dbName, cid: selected.id, to: dbName, running: false, error: null }
-  }
-
-  /** Rename a SCHEMA — PG/MSSQL/Oracle, where a schema is its own object. */
-  function renameSchema(schema: string, cid = selected?.id) {
-    if (!selected || !schema || !cid) return
-    renameState = { kind: 'schema', db: schema, cid, to: schema, running: false, error: null }
-  }
-
-  async function runRename() {
-    const st = renameState
     const s = selected
-    if (!st || !s || !canRename) return
-    const to = st.to.trim()
-    const sql = renameStmt(to)
-    renameState = { ...st, running: true, error: null }
-    try {
-      // A DATABASE rename needs our own sessions on it closed first (PG/MSSQL
-      // refuse otherwise). A schema lives inside the connected database, so its
-      // statement just runs on the connection that owns it.
-      if (st.kind === 'database') await closeOurSessionsTo(s.id, st.db)
-      const r = await ipc.execStatement(st.cid, sql)
-      if (r.error) {
-        renameState = { ...st, running: false, error: r.error.message }
-        return
-      }
-      renameState = null
-      toasts.success(`${st.kind === 'schema' ? 'Schema' : 'Database'} "${st.db}" renamed to "${to}"`, s.system)
-      explorer.invalidate(st.cid)
-      if (st.cid === s.id) await refreshConnection()
-      else await explorer.refresh(st.cid, { kind: 'connection' })
-    } catch (e) {
-      renameState = { ...st, running: false, error: String(e) }
-    }
+    if (!s || !dbName) return
+    const engine = systemMeta(s.system).label
+    const taken = [...(cache?.databases ?? []).map((d) => d.name), ...(cache?.schemas ?? []).map((x) => x.name)]
+    renameWizard.open({
+      kind: 'database',
+      system: s.system,
+      name: dbName,
+      where: s.name && s.name !== engine ? `${engine} · ${s.name}` : engine,
+      taken,
+      takenScope: 'on this server',
+      note: 'Its schemas, tables and data stay as they are. Connections, scripts and application settings that use the old name have to be updated.',
+      build: (to) => genRenameDatabase(s.system, dbName, to),
+      run: async (sql) => {
+        // PG/MSSQL refuse to rename a database that still has sessions — close ours first.
+        await closeOurSessionsTo(s.id, dbName)
+        const r = await ipc.execStatement(s.id, sql)
+        if (r.error) return r.error.message
+        explorer.invalidate(s.id)
+        await refreshConnection()
+        return null
+      },
+      openInTab: (sql) => stmtTab(`Rename database ${dbName}`, sql),
+    })
+  }
+
+  /** Rename a SCHEMA — PG/MSSQL/Oracle, where a schema is its own object. A schema in
+   *  another database renames through that database's sub-connection (`cid`). */
+  function renameSchema(schema: string, cid = selected?.id) {
+    const s = selected
+    if (!s || !schema || !cid) return
+    const engine = systemMeta(s.system).label
+    const db = cid === s.id ? (cache?.databases?.find((d) => d.current)?.name ?? s.database) : cid.split('::')[1]
+    renameWizard.open({
+      kind: 'schema',
+      system: s.system,
+      name: schema,
+      where: db ? `${db} · ${engine}` : engine,
+      taken: (explorer.cache[cid]?.schemas ?? []).map((x) => x.name),
+      takenScope: 'in this database',
+      note: 'The tables and other objects inside it stay as they are. search_path settings, views and application SQL that use the old name have to be updated.',
+      build: (to) => genRenameSchema(s.system, schema, to),
+      run: async (sql) => {
+        const r = await ipc.execStatement(cid, sql)
+        if (r.error) return r.error.message
+        explorer.invalidate(cid)
+        if (cid === s.id) await refreshConnection()
+        else await explorer.refresh(cid, { kind: 'connection' })
+        return null
+      },
+      openInTab: (sql) => stmtTab(`Rename schema ${schema}`, sql, undefined, cid),
+    })
   }
 
   // ---- New schema ---------------------------------------------------------
@@ -1401,16 +1390,6 @@
 
   /** Engines that cannot rename in one statement keep the explanation available:
    *  park it in a SQL tab so the steps can be edited and run by hand. */
-  function openRenameInTab() {
-    const st = renameState
-    renameState = null
-    if (!st || !selected) return
-    const sql = st.kind === 'schema'
-      ? genRenameSchema(selected.system, st.db)
-      : genRenameDatabase(selected.system, st.db)
-    stmtTab(`Rename ${st.kind} ${st.db}`, sql)
-  }
-
   async function runDropSchema() {
     const st = dropSchemaState
     const s = selected
@@ -1540,11 +1519,26 @@
     if (selected) execRoutineWizard.show(selected.id, schemaName, r, dbForSchema(schemaName))
   }
   function renameRoutine(schemaName: string, r: RoutineInfo) {
-    if (!selected) return
-    const newName = window.prompt(`Rename ${r.name} to:`, r.name)
-    if (!newName || newName === r.name) return
-    const sql = genRenameRoutine(selected.system, schemaName, r.kind, r.name, newName, r.params.map((p) => p.data_type))
-    stmtTab(`Rename ${r.name}`, sql)
+    const s = selected
+    if (!s) return
+    const cid = s.id
+    renameWizard.open({
+      kind: r.kind === 'procedure' ? 'procedure' : 'function',
+      system: s.system,
+      name: r.name,
+      where: `${schemaName} · ${systemMeta(s.system).label}`,
+      // no "taken" check: PostgreSQL allows another routine with the same name and
+      // different arguments, so only the server can tell whether the name is free
+      note: 'Code, views and triggers that call it by the old name have to be updated.',
+      build: (to) => genRenameRoutine(s.system, schemaName, r.kind, r.name, to, r.params.map((p) => p.data_type)),
+      run: async (sql) => {
+        const res = await ipc.execStatement(cid, sql)
+        if (res.error) return res.error.message
+        await explorer.refresh(cid, { kind: 'schema', schema: schemaName })
+        return null
+      },
+      openInTab: (sql) => stmtTab(`Rename ${r.name}`, sql),
+    })
   }
 
   function routineLabel(r: RoutineInfo): string {
@@ -3400,86 +3394,6 @@ ${tree.replication}` })}
   </div>
   {/if}
 </div>
-
-{#if renameState}
-  {@const rnKind = renameState.kind === 'schema' ? 'schema' : 'database'}
-  <!-- Rename database/schema: backdrop click does NOT close (rule chung for form
-       popups); the input takes focus on open so the user can type straight away. -->
-  <div
-    onkeydown={(e) => {
-      if (e.key === 'Escape') renameState = null
-      if (e.key === 'Enter' && canRename) void runRename()
-    }}
-    role="presentation"
-    style="position:fixed;inset:0;background:var(--rgba-0-0-0-_5);display:flex;align-items:center;justify-content:center;z-index:90"
-  >
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label={`Rename ${rnKind}`}
-      tabindex="-1"
-      style="background:var(--surface);border:var(--px-1) solid var(--border2);border-radius:var(--px-14);padding:var(--px-18);min-width:var(--px-340);max-width:var(--px-480);box-shadow:0 var(--px-24) var(--px-60) var(--rgba-0-0-0-_55)"
-    >
-      <div style="font-size:var(--px-14);font-weight:600;color:var(--text);margin-bottom:var(--px-8)">Rename {rnKind}</div>
-      {#if renameSupported}
-        <div style="font-size:var(--px-12_5);color:var(--text2);line-height:1.45;margin-bottom:var(--px-12)">
-          Rename <span class="mono" style="color:var(--text)">{renameState.db}</span>
-          {renameState.kind === 'schema' ? 'in this database' : 'on this server'}. Objects inside it are untouched;
-          anything referring to it by name ({renameState.kind === 'schema' ? 'search_path, views, application SQL' : 'connections, scripts'}) has to be updated.
-        </div>
-        <label for="rn-db" style="display:block;font-size:var(--px-11);color:var(--muted);margin-bottom:var(--px-4)">New name</label>
-        <input
-          id="rn-db"
-          class="mono"
-          use:autofocus
-          bind:value={renameState.to}
-          disabled={renameState.running}
-          spellcheck="false"
-          autocomplete="off"
-          style="width:100%;box-sizing:border-box;font-size:var(--px-12_5);padding:var(--px-6) var(--px-8);border-radius:var(--px-6);background:var(--raised);border:var(--px-1) solid var(--border2);color:var(--text)"
-        />
-        {#if renameTaken}
-          <div style="font-size:var(--px-11_5);color:var(--error);margin-top:var(--px-6)">A {rnKind} named “{renameTarget}” already exists {renameState.kind === 'schema' ? 'in this database' : 'on this server'}.</div>
-        {/if}
-        <div
-          class="mono"
-          style="font-size:var(--px-11_5);color:var(--text);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-8);margin:var(--px-12) 0;white-space:pre-wrap;word-break:break-word"
-        >{renameSql}</div>
-      {:else}
-        <div
-          class="mono"
-          style="font-size:var(--px-11_5);color:var(--text2);background:var(--panel);border:var(--px-1) solid var(--border);border-radius:var(--px-6);padding:var(--px-8);margin-bottom:var(--px-12);white-space:pre-wrap;word-break:break-word"
-        >{renameSql}</div>
-      {/if}
-      {#if renameState.error}
-        <div style="font-size:var(--px-11_5);color:var(--error);margin-bottom:var(--px-12);white-space:pre-wrap">{renameState.error}</div>
-      {/if}
-      <div style="display:flex;gap:var(--px-8);justify-content:flex-end">
-        <span onclick={() => (renameState = null)} onkeydown={(e) => e.key === 'Enter' && (renameState = null)} role="button" tabindex="0" class="cfm-btn">Cancel</span>
-        {#if renameSupported}
-          <span
-            onclick={() => void runRename()}
-            onkeydown={(e) => e.key === 'Enter' && void runRename()}
-            role="button"
-            tabindex="0"
-            aria-disabled={!canRename}
-            aria-busy={renameState.running}
-            class="cfm-btn primary"
-            style={canRename ? '' : 'opacity:.5;pointer-events:none'}
-          >{renameState.running ? 'Renaming…' : 'Confirm'}</span>
-        {:else}
-          <span
-            onclick={() => openRenameInTab()}
-            onkeydown={(e) => e.key === 'Enter' && openRenameInTab()}
-            role="button"
-            tabindex="0"
-            class="cfm-btn"
-          >Open in SQL tab</span>
-        {/if}
-      </div>
-    </div>
-  </div>
-{/if}
 
 {#if newSchemaState}
   <!-- New schema: backdrop click does NOT close (rule chung for form popups); the

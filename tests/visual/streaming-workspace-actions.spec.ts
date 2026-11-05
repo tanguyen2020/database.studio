@@ -101,13 +101,18 @@ test('nats: Add subject… publishes on a new subject; the grid ＋ Add prefills
   expect(errors, errors.join('\n')).toEqual([])
 })
 
-test('nats: Remove subject and Delete stream are separate confirms; a deleted stream stays gone', async ({ page }) => {
+test('nats: Delete subject and Delete stream are separate confirms; a deleted stream stays gone', async ({ page }) => {
   const errors = await boot(page)
   const { ws, grid } = await openOrders(page)
 
-  // Remove orders.eu… — its own confirm; it never talks about dropping the stream
-  await ws.getByRole('button', { name: /^Remove orders\.eu/ }).click()
-  const sub = page.getByRole('alertdialog', { name: 'Remove subject' })
+  // Delete subject… is a real button (not a link) — its own confirm, which never
+  // talks about dropping the stream
+  const delSubj = ws.getByRole('button', { name: 'Delete subject…' })
+  await expect(delSubj).toBeEnabled()
+  expect(await delSubj.evaluate((el) => el.tagName)).toBe('BUTTON')
+  await delSubj.click()
+  const sub = page.getByRole('alertdialog', { name: 'Delete subject' })
+  await expect(sub).toContainText('Delete orders.eu from ORDERS')
   await expect(sub).toContainText('The stream and its other subjects stay')
   await expect(sub.getByText(/Delete ORDERS/)).toHaveCount(0)
   await sub.getByRole('button', { name: 'Cancel' }).click()
@@ -161,5 +166,44 @@ test('nats: subject messages show Subject and Key columns; a payload opens as a 
   await expect.poll(() => previewText(page, 'Payload'), { timeout: 10_000 }).toContain('"id":')
   await dialog.getByText('Close', { exact: true }).click()
   await expect(page.getByRole('dialog')).toHaveCount(0)
+  expect(errors, errors.join('\n')).toEqual([])
+})
+
+test('nats: right-click a subject or stream in the tree to delete it', async ({ page }) => {
+  const errors = await boot(page)
+  const { ws, grid } = await openOrders(page)
+  const subjectRow = (name: string) => grid.locator('tbody tr[data-kind="subject"]').filter({ hasText: name })
+  const streamRow = (name: string) => grid.locator('tbody tr[data-kind="stream"]').filter({ hasText: name })
+
+  // subject menu: View messages · Copy subject · Delete subject… · Delete stream ORDERS…
+  await subjectRow('orders.us').click({ button: 'right' })
+  await expect(page.getByRole('menuitem', { name: 'View messages' })).toBeVisible()
+  await expect(page.getByRole('menuitem', { name: 'Delete stream ORDERS…' })).toBeVisible()
+  await page.getByRole('menuitem', { name: 'Delete subject…' }).click()
+  const sub = page.getByRole('alertdialog', { name: 'Delete subject' })
+  await expect(sub).toContainText('Delete orders.us from ORDERS')
+  await sub.getByRole('button', { name: 'Delete subject', exact: true }).click()
+  await expect(sub).toHaveCount(0)
+  await expect(subjectRow('orders.us')).toHaveCount(0)
+  await expect(subjectRow('orders.eu')).toBeVisible()
+
+  // ORDERS now has one subject: deleting it is refused up front, both in the menu
+  // and on the button in the detail pane (a stream needs a subject)
+  await subjectRow('orders.eu').click({ button: 'right' })
+  await expect(page.getByRole('menuitem', { name: 'Delete subject…' })).toHaveAttribute('data-disabled', '')
+  await page.keyboard.press('Escape')
+  await expect(ws.getByRole('button', { name: 'Delete subject…' })).toBeDisabled()
+  await expect(ws.getByRole('button', { name: 'Delete subject…' })).toHaveAttribute('title', /delete the stream instead/)
+
+  // stream menu: Delete stream…
+  await streamRow('INBOX').click({ button: 'right' })
+  await expect(page.getByRole('menuitem', { name: 'Clear all messages…' })).toBeVisible()
+  await page.getByRole('menuitem', { name: 'Delete stream…' }).click()
+  const del = page.getByRole('alertdialog', { name: 'Delete stream' })
+  await expect(del).toContainText('Delete INBOX with its')
+  await del.getByRole('button', { name: 'Delete stream', exact: true }).click()
+  await expect(del).toHaveCount(0)
+  await expect(streamRow('INBOX')).toHaveCount(0)
+  await expect(streamRow('ORDERS')).toBeVisible()
   expect(errors, errors.join('\n')).toEqual([])
 })

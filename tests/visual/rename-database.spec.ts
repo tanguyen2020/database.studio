@@ -16,7 +16,7 @@ async function boot(page: Page) {
   await page.waitForTimeout(300)
 }
 
-test('rename a database: popup, focused input, Confirm runs the ALTER', async ({ page }) => {
+test('rename a database: popup, focused input, Rename runs the ALTER', async ({ page }) => {
   const errors: string[] = []
   page.on('pageerror', (e) => errors.push(String(e)))
   await boot(page)
@@ -35,7 +35,7 @@ test('rename a database: popup, focused input, Confirm runs the ALTER', async ({
   const dialog = page.getByRole('dialog', { name: 'Rename database' })
   await expect(dialog).toBeVisible()
   await expect(page.getByRole('tab', { name: /Rename database/ })).toHaveCount(0)
-  const input = dialog.locator('#rn-db')
+  const input = dialog.locator('#rn-name')
   await expect(input).toBeFocused()
   await expect(input).toHaveValue('analytics')
 
@@ -43,16 +43,16 @@ test('rename a database: popup, focused input, Confirm runs the ALTER', async ({
   await page.mouse.click(8, 8)
   await expect(dialog).toBeVisible()
 
-  // the same name cannot be confirmed; an existing one is refused by name
-  await expect(dialog.getByRole('button', { name: 'Confirm' })).toHaveAttribute('aria-disabled', 'true')
+  // the same name cannot be renamed; an existing one is refused by name
+  await expect(dialog.getByRole('button', { name: 'Rename', exact: true })).toHaveAttribute('aria-disabled', 'true')
   await input.fill('postgres')
   await expect(dialog).toContainText('already exists on this server')
-  await expect(dialog.getByRole('button', { name: 'Confirm' })).toHaveAttribute('aria-disabled', 'true')
+  await expect(dialog.getByRole('button', { name: 'Rename', exact: true })).toHaveAttribute('aria-disabled', 'true')
 
-  // a free name shows the exact statement and enables Confirm
+  // a free name shows the exact statement and enables Rename
   await input.fill('analytics_2026')
   await expect(dialog).toContainText('ALTER DATABASE "analytics" RENAME TO "analytics_2026";')
-  const confirm = dialog.getByRole('button', { name: 'Confirm' })
+  const confirm = dialog.getByRole('button', { name: 'Rename', exact: true })
   await expect(confirm).toHaveAttribute('aria-disabled', 'false')
   await confirm.click()
   await page.waitForTimeout(1400)
@@ -80,7 +80,7 @@ test('Cancel changes nothing, and engines without a rename only offer the SQL ta
   await page.waitForTimeout(200)
   await page.getByRole('menuitem', { name: 'Rename…' }).click()
   await page.waitForTimeout(300)
-  await page.getByRole('dialog').locator('#rn-db').fill('nope')
+  await page.getByRole('dialog').locator('#rn-name').fill('nope')
   await page.getByRole('dialog').getByRole('button', { name: 'Cancel' }).click()
   await expect(page.getByRole('dialog')).toHaveCount(0)
   expect((await calls(page)).exec_statement ?? 0).toBe(0)
@@ -94,7 +94,7 @@ test('Cancel changes nothing, and engines without a rename only offer the SQL ta
   await page.waitForTimeout(300)
   const dialog = page.getByRole('dialog', { name: 'Rename database' })
   await expect(dialog).toContainText('cannot rename a database directly')
-  await expect(dialog.getByRole('button', { name: 'Confirm' })).toHaveCount(0)
+  await expect(dialog.getByRole('button', { name: 'Rename', exact: true })).toHaveCount(0)
   await dialog.getByRole('button', { name: 'Open in SQL tab' }).click()
   await page.waitForTimeout(400)
   await expect(page.getByRole('tab', { name: /Rename database public/ }).first()).toBeVisible()

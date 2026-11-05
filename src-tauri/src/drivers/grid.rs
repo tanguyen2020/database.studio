@@ -3,6 +3,8 @@
 //! trị thật (KHÔNG nối chuỗi param vào SQL — DO NOT của spec). `preview_sql`
 //! chỉ render literal để HIỂN THỊ trong dialog diff, không dùng để chạy.
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -298,6 +300,81 @@ pub struct SortSpec {
     pub desc: bool,
 }
 
+/// A column's type as PostgreSQL's catalog reports it, for the filter builder.
+///
+/// Filter values arrive from a text box and are bound as `text`. PostgreSQL does
+/// not convert a typed `text` parameter on its own, so `uuid_col = $1` fails with
+/// "operator does not exist: uuid = text" (and the same for integer, numeric,
+/// date, enum… columns). The filter casts the parameter to the column's own type
+/// (`$1::uuid`), which is exactly how a literal in hand-written SQL is read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PgColType {
+    /// `format_type(atttypid, NULL)` — already quoted/qualified by the server.
+    pub cast: String,
+    /// string category (text, varchar, char, name, citext…): LIKE needs no cast.
+    pub is_text: bool,
+    /// plain `json` has no `=` operator; it is compared as jsonb.
+    pub is_json: bool,
+}
+
+/// Catalog query for the column types of one table (params: [schema,] table).
+pub fn pg_column_types_query(schema: &Option<String>) -> &'static str {
+    match schema {
+        Some(s) if !s.is_empty() => concat!(
+            "SELECT a.attname::text AS name, format_type(a.atttypid, NULL) AS ty, ",
+            "(t.typcategory = 'S') AS is_text, (a.atttypid = 'json'::regtype) AS is_json ",
+            "FROM pg_attribute a JOIN pg_type t ON t.oid = a.atttypid ",
+            "JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace n ON n.oid = c.relnamespace ",
+            "WHERE n.nspname = $1::text AND c.relname = $2::text AND a.attnum > 0 AND NOT a.attisdropped"
+        ),
+        _ => concat!(
+            "SELECT a.attname::text AS name, format_type(a.atttypid, NULL) AS ty, ",
+            "(t.typcategory = 'S') AS is_text, (a.atttypid = 'json'::regtype) AS is_json ",
+            "FROM pg_attribute a JOIN pg_type t ON t.oid = a.atttypid ",
+            "JOIN pg_class c ON c.oid = a.attrelid ",
+            "WHERE c.relname = $1::text AND pg_table_is_visible(c.oid) AND a.attnum > 0 AND NOT a.attisdropped"
+        ),
+    }
+}
+
+/// Rows of [`pg_column_types_query`] → column name → type.
+pub fn parse_pg_column_types(rows: &[Value]) -> HashMap<String, PgColType> {
+    let mut out = HashMap::new();
+    for r in rows {
+        let (Some(name), Some(ty)) = (r.get("name").and_then(Value::as_str), r.get("ty").and_then(Value::as_str)) else {
+            continue;
+        };
+        if !is_catalog_type(ty) {
+            continue;
+        }
+        let flag = |k: &str| r.get(k).and_then(Value::as_bool).unwrap_or(false);
+        out.insert(
+            name.to_string(),
+            PgColType { cast: ty.to_string(), is_text: flag("is_text"), is_json: flag("is_json") },
+        );
+    }
+    out
+}
+
+/// `format_type` output is produced by the server (identifiers already quoted),
+/// so it is used as a cast target as-is — only rejected when it is not a single
+/// well-formed type expression (control chars, a statement separator outside
+/// quotes, unbalanced quotes).
+fn is_catalog_type(t: &str) -> bool {
+    if t.is_empty() || t.len() > 256 || t.chars().any(|c| c.is_control()) {
+        return false;
+    }
+    let mut in_quote = false;
+    for c in t.chars() {
+        match c {
+            '"' => in_quote = !in_quote,
+            ';' if !in_quote => return false,
+            _ => {}
+        }
+    }
+    !in_quote
+}
+
 /// Build `SELECT * FROM t [WHERE ...] [ORDER BY ...] LIMIT ? OFFSET ?`.
 /// Filter values bind tham số; LIMIT/OFFSET nội suy số nguyên an toàn.
 pub fn build_select(
@@ -309,6 +386,23 @@ pub fn build_select(
     sorts: &[SortSpec],
     limit: u32,
     offset: u32,
+) -> BoundStatement {
+    build_select_typed(system, schema, table, filters, combinator_or, sorts, limit, offset, &HashMap::new())
+}
+
+/// [`build_select`] with the PostgreSQL column types of the table, so each
+/// filter parameter is cast to its column's type. Other engines ignore `types`.
+#[allow(clippy::too_many_arguments)]
+pub fn build_select_typed(
+    system: &str,
+    schema: &Option<String>,
+    table: &str,
+    filters: &[FilterCond],
+    combinator_or: bool,
+    sorts: &[SortSpec],
+    limit: u32,
+    offset: u32,
+    types: &HashMap<String, PgColType>,
 ) -> BoundStatement {
     let ph = Placeholder::of(system);
     let q = quote_style(system);
@@ -329,7 +423,17 @@ pub fn build_select(
                     n += 1;
                     params.push(f.value.clone());
                     let real_op = if op == "LIKE" { "LIKE" } else { &f.op };
-                    Some(format!("{ident} {real_op} {}", ph.render(n)))
+                    let param = ph.render(n);
+                    let typed = if system == "postgres" { types.get(&f.col) } else { None };
+                    Some(match typed {
+                        // LIKE matches text: compare the column's text form
+                        // (uuid, integer, date…), never cast the pattern.
+                        Some(t) if real_op == "LIKE" && !t.is_text => format!("{ident}::text LIKE {param}"),
+                        Some(_) if real_op == "LIKE" => format!("{ident} LIKE {param}"),
+                        Some(t) if t.is_json => format!("{ident}::jsonb {real_op} {param}::jsonb"),
+                        Some(t) => format!("{ident} {real_op} {param}::{}", t.cast),
+                        None => format!("{ident} {real_op} {param}"),
+                    })
                 }
                 _ => None, // toán tử lạ → bỏ (không nối chuỗi bừa)
             }
@@ -561,6 +665,81 @@ mod tests {
             r#"SELECT * FROM "public"."students" WHERE "status" = $1 AND "gpa" > $2 ORDER BY "gpa" DESC LIMIT 100 OFFSET 200"#
         );
         assert_eq!(b.params, vec![json!("active"), json!(3.0)]);
+    }
+
+    fn pg_types() -> HashMap<String, PgColType> {
+        parse_pg_column_types(&[
+            json!({"name": "id", "ty": "uuid", "is_text": false, "is_json": false}),
+            json!({"name": "n", "ty": "integer", "is_text": false, "is_json": false}),
+            json!({"name": "name", "ty": "character varying", "is_text": true, "is_json": false}),
+            json!({"name": "doc", "ty": "json", "is_text": false, "is_json": true}),
+            json!({"name": "mood", "ty": "\"My Schema\".\"Mood\"", "is_text": false, "is_json": false}),
+            json!({"name": "bad", "ty": "uuid; DROP TABLE t", "is_text": false, "is_json": false}),
+            json!({"name": "bad2", "ty": "\"x", "is_text": false, "is_json": false}),
+        ])
+    }
+
+    #[test]
+    fn pg_filter_casts_each_param_to_its_column_type() {
+        let types = pg_types();
+        let f = |col: &str, op: &str, v: Value| FilterCond { col: col.into(), op: op.into(), value: v };
+        let b = build_select_typed(
+            "postgres",
+            &Some("public".into()),
+            "t",
+            &[
+                f("id", "=", json!("01a0bff2-e8bc-720b-b670-408f05dae245")),
+                f("n", ">=", json!("5")),
+                f("name", "LIKE", json!("An%")),
+                f("id", "LIKE", json!("01a0%")),
+                f("doc", "=", json!("{\"a\":1}")),
+                f("mood", "=", json!("happy")),
+                f("bad", "=", json!("x")),
+                f("unknown", "=", json!("x")),
+                f("id", "IS NULL", json!(null)),
+            ],
+            false,
+            &[],
+            100,
+            0,
+            &types,
+        );
+        assert_eq!(
+            b.sql,
+            concat!(
+                r#"SELECT * FROM "public"."t" WHERE "id" = $1::uuid AND "n" >= $2::integer"#,
+                r#" AND "name" LIKE $3 AND "id"::text LIKE $4 AND "doc"::jsonb = $5::jsonb"#,
+                r#" AND "mood" = $6::"My Schema"."Mood" AND "bad" = $7 AND "unknown" = $8"#,
+                r#" AND "id" IS NULL LIMIT 100 OFFSET 0"#
+            )
+        );
+        assert_eq!(b.params.len(), 8);
+    }
+
+    #[test]
+    fn catalog_types_that_are_not_one_type_expression_are_dropped() {
+        let types = pg_types();
+        assert!(types.contains_key("mood"));
+        assert!(!types.contains_key("bad"), "a ';' outside quotes is never used as a cast");
+        assert!(!types.contains_key("bad2"), "unbalanced quotes are never used as a cast");
+    }
+
+    #[test]
+    fn column_types_are_ignored_outside_postgres() {
+        let b = build_select_typed(
+            "mysql",
+            &Some("app".into()),
+            "t",
+            &[FilterCond { col: "id".into(), op: "=".into(), value: json!("x") }],
+            false,
+            &[],
+            10,
+            0,
+            &pg_types(),
+        );
+        assert_eq!(b.sql, "SELECT * FROM `app`.`t` WHERE `id` = ? LIMIT 10 OFFSET 0");
+        assert_eq!(pg_column_types_query(&None).matches('$').count(), 1);
+        assert_eq!(pg_column_types_query(&Some("s".into())).matches('$').count(), 2);
     }
 
     #[test]

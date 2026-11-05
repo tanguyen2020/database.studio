@@ -16,6 +16,7 @@ export type ErrorCategory =
   | 'missing-table'
   | 'missing-column'
   | 'missing-function'
+  | 'type-mismatch'
   | 'missing-database'
   | 'already-exists'
   | 'permission'
@@ -165,6 +166,13 @@ const RULES: Rule[] = [
     match: /\b(relation .* does not exist|no such table|table .* (does not exist|doesn't exist|not found)|unknown table|invalid object name|Table with name .* does not exist|UNKNOWN_TABLE)\b/i,
   },
   {
+    category: 'type-mismatch',
+    title: 'Values of different types compared',
+    summary: 'The two sides of a comparison have different types and the engine will not convert one to the other (for example a uuid column compared with text).',
+    hint: "Cast the value to the column's type, e.g. WHERE id = '…'::uuid.",
+    match: /\b(operator does not exist|no operator matches|operator is not unique)\b/i,
+  },
+  {
     category: 'missing-function',
     title: 'Function not found',
     summary: 'The function does not exist, or no version of it accepts these argument types.',
@@ -248,8 +256,9 @@ export function explainQueryError(err: QueryError): ErrorExplanation {
   const code = normCode(err.code, `${err.message} ${err.raw ?? ''}`)
   let rule = code ? RULE_BY_CODE.get(code) : undefined
   // A code we do not know, or a code shared by several meanings (MySQL 42000 =
-  // syntax OR access): let a clear message pattern decide.
-  if (!rule || code === '42000') {
+  // syntax OR access; PostgreSQL 42883 = missing function OR missing operator):
+  // let a clear message pattern decide.
+  if (!rule || code === '42000' || code === '42883') {
     const byMsg = RULES.find((r) => r.match?.test(message))
     if (byMsg) rule = byMsg
   }

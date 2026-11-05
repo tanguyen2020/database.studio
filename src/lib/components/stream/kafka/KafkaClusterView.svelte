@@ -559,7 +559,7 @@
         {#if focusTopic && focusRow}
           <div class="kc-detail">
             <div class="kc-detail-head">
-              <span class="kc-detail-title mono">{focusTopic.name}</span>
+              <span class="kc-detail-title mono ds-copyable">{focusTopic.name}</span>
               <button type="button" class="cfm-btn kc-head-btn" onclick={() => (partitionsFor = { topic: focusTopic.name, current: focusTopic.partitions.length })}>Edit partitions…</button>
               <button type="button" class="cfm-btn ds-danger-outline kc-head-btn" onclick={() => { deleteTopicError = null; deleteTopicFor = focusTopic.name }}>Delete topic…</button>
               <button type="button" class="kc-close" onclick={() => select(null)} aria-label="Close details" title="Close details">×</button>
@@ -674,7 +674,7 @@
           {@const behind = (focusGroupLag ?? []).reduce((s, l) => s + Math.max(0, l.lag), 0)}
           <div class="kc-detail">
             <div class="kc-detail-head">
-              <span class="kc-detail-title mono">{focusGroup.name}</span>
+              <span class="kc-detail-title mono ds-copyable">{focusGroup.name}</span>
               <span class="kc-state {st.tone}">{st.label}</span>
               <button type="button" class="kc-close" onclick={() => select(null)} aria-label="Close details" title="Close details">×</button>
             </div>

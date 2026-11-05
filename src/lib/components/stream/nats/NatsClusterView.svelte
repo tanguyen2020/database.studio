@@ -30,6 +30,8 @@
   import { parseSeq, peekErrorText, seqRangeHint } from '$lib/stream/nats-peek'
   import Icon from '$lib/components/Icon.svelte'
   import Chevron from '$lib/components/Chevron.svelte'
+  import SharedContextMenu from '$lib/components/ui/context-menu/SharedContextMenu.svelte'
+  import * as ContextMenu from '$lib/components/ui/context-menu'
   import { sortRows, type SortState } from '$lib/stream/table'
   import { arrangeTree, streamNodes, subjectKey, type TreeNode } from '$lib/stream/nats-tree'
   import { compactCount, exactUtc, formatBytes, fullCount, plural, relativeTime } from '$lib/stream/humanize'
@@ -283,7 +285,7 @@
   })
 
   // dangerous actions (rule U8): the dialog states the consequence with real numbers
-  type Danger = { kind: 'purge' | 'delete' | 'consumer' | 'subject'; title: string; body: string; button: string; target: string }
+  type Danger = { kind: 'purge' | 'delete' | 'consumer' | 'subject'; title: string; body: string; button: string; target: string; stream?: string }
   let danger = $state<Danger | null>(null)
   let dangerBusy = $state(false)
   let dangerError = $state<string | null>(null)
@@ -302,12 +304,29 @@
     danger = { kind: 'consumer', title: 'Delete consumer', target: c.name, body: `Delete consumer ${c.name} from ${focusStream.name}? Its read position is lost${c.waiting ? ` (${plural(c.waiting, 'message')} it had not read yet stay in the stream)` : ''}. An application using it will get errors. This cannot be undone.`, button: 'Delete consumer' }
   }
 
-  // Remove one subject from the stream (kept from the old explorer tree): the
-  // stream and its other subjects stay; the server refuses the last subject.
-  function askRemoveSubject(s: string) {
-    if (!focusStream) return
+  // Delete one subject from a stream: the stream and its other subjects stay. A
+  // stream needs at least one subject, so the last one cannot be deleted — delete
+  // the stream instead (the button says so).
+  function askDeleteSubject(stream: string, s: string) {
     dangerError = null
-    danger = { kind: 'subject', title: 'Remove subject', target: s, body: `Remove ${s} from ${focusStream.name}? Its stored messages are cleared, and new messages published on ${s} are no longer kept by this stream. The stream and its other subjects stay. This cannot be undone.`, button: 'Remove subject' }
+    danger = { kind: 'subject', title: 'Delete subject', target: s, stream, body: `Delete ${s} from ${stream}? Its stored messages are cleared, and new messages published on ${s} are no longer kept by this stream. The stream and its other subjects stay. This cannot be undone.`, button: 'Delete subject' }
+  }
+  const LAST_SUBJECT = 'A stream needs at least one subject — delete the stream instead'
+
+  // Right-click on a stream or subject in the tree: one shared menu for the list.
+  let treeMenu = $state<SharedContextMenu | null>(null)
+  let ctxNode = $state<Node | null>(null)
+  function openTreeMenu(n: Node, e: MouseEvent) {
+    ctxNode = n
+    treeMenu?.open(e, nodeMenu)
+  }
+  async function copyText(text: string) {
+    try {
+      await navigator.clipboard.writeText(text)
+      toasts.success(`Copied ${text}`)
+    } catch {
+      /* clipboard unavailable — the name can be highlighted and copied */
+    }
   }
 
   async function runDanger() {
@@ -324,10 +343,10 @@
         await ipc.natsJsDeleteStream(connId, d.target) // verifies on the server
         toasts.success(`Deleted stream ${d.target}`)
         select(null)
-      } else if (d.kind === 'subject' && focusStream) {
-        await ipc.natsJsRemoveSubject(connId, focusStream.name, d.target)
-        toasts.success(`Removed ${d.target} from ${focusStream.name}`)
-        if (ws.subject === d.target) tabs.patchState(tab.id, { subject: undefined })
+      } else if (d.kind === 'subject' && d.stream) {
+        await ipc.natsJsRemoveSubject(connId, d.stream, d.target)
+        toasts.success(`Deleted subject ${d.target} from ${d.stream}`)
+        if (ws.focus === d.stream && ws.subject === d.target) tabs.patchState(tab.id, { subject: undefined })
       } else if (focusStream) {
         await ipc.natsJsDeleteConsumer(connId, focusStream.name, d.target)
         toasts.success(`Deleted consumer ${d.target}`)
@@ -394,6 +413,38 @@
     return Number.isFinite(t) ? exactUtc(t) : ''
   }
 </script>
+
+<!-- right-click menu of the Streams tree (one for the whole list) -->
+{#snippet nodeMenu()}
+  {#if ctxNode}
+    {@const n = ctxNode}
+    {@const stream = n.row}
+    <ContextMenu.Content class="w-56">
+      {#if n.kind === 'subject' && n.subject}
+        {@const subj = n.subject}
+        {@const last = stream.subjects.length <= 1}
+        <ContextMenu.Item onclick={() => pickNode(n)}>View messages</ContextMenu.Item>
+        <ContextMenu.Item onclick={() => void copyText(subj)}>Copy subject</ContextMenu.Item>
+        <ContextMenu.Separator />
+        <ContextMenu.Item
+          variant="destructive"
+          disabled={last}
+          title={last ? LAST_SUBJECT : undefined}
+          onclick={() => askDeleteSubject(stream.name, subj)}
+        >Delete subject…</ContextMenu.Item>
+        <ContextMenu.Item variant="destructive" onclick={() => askDelete(stream)}>Delete stream {stream.name}…</ContextMenu.Item>
+      {:else}
+        <ContextMenu.Item onclick={() => select(stream.name)}>Open</ContextMenu.Item>
+        <ContextMenu.Item onclick={() => natsAddWizard.show(connId, stream.name, '', true)}>Add subject…</ContextMenu.Item>
+        <ContextMenu.Item onclick={() => void copyText(stream.name)}>Copy name</ContextMenu.Item>
+        <ContextMenu.Separator />
+        <ContextMenu.Item variant="destructive" disabled={stream.messages === 0} onclick={() => askPurge(stream)}>Clear all messages…</ContextMenu.Item>
+        <ContextMenu.Item variant="destructive" onclick={() => askDelete(stream)}>Delete stream…</ContextMenu.Item>
+      {/if}
+    </ContextMenu.Content>
+  {/if}
+{/snippet}
+<SharedContextMenu bind:this={treeMenu} />
 
 <StreamShell
   system="nats"
@@ -518,6 +569,7 @@
             rowExpanded={(n) => (n.kind === 'stream' && n.childCount ? n.expanded : undefined)}
             rowKind={(n) => n.kind}
             onToggle={toggleNode}
+            onContextMenu={openTreeMenu}
             filterPlaceholder="Filter streams and subjects…"
             initialSort={{ key: 'name', dir: 'asc' }}
             loading={!!cache?.loading}
@@ -541,7 +593,7 @@
             {#snippet cell(n, c)}
               {@const r = n.row}
               {#if n.kind === 'subject'}
-                {#if c.key === 'name'}<span class="nc-tree-sub"><span class="mono nc-subj nc-fit" title={n.subject}>{n.subject}</span></span>
+                {#if c.key === 'name'}<span class="nc-tree-sub"><span class="mono nc-subj nc-fit ds-copyable" title={n.subject}>{n.subject}</span></span>
                 {:else if c.key === 'messages'}
                   {@const v = subjCounts[countKey(r.name, r.messages, n.subject)]}
                   {#if typeof v === 'number'}<span class="ds-num nc-num" data-subject-count={n.subject} title="{fullCount(v)} messages on {n.subject}">{compactCount(v)}</span>
@@ -571,7 +623,7 @@
             {@const ret = retentionWords(focusStream.retention)}
             <div class="nc-detail">
               <div class="nc-detail-head">
-                <span class="nc-detail-title mono">{focusStream.name}</span>
+                <span class="nc-detail-title mono ds-copyable">{focusStream.name}</span>
                 <button type="button" class="nc-close" onclick={() => select(null)} aria-label="Close details" title="Close details">×</button>
               </div>
               {#if focusStream.description}<p class="nc-desc">{focusStream.description}</p>{/if}
@@ -594,7 +646,7 @@
                 </form>
                 <span class="nc-flex"></span>
                 <button type="button" class="cfm-btn ds-danger-outline" onclick={() => askPurge(focusRow)} disabled={focusRow.messages === 0} title={focusRow.messages === 0 ? 'The stream holds no messages' : undefined}>Clear all messages…</button>
-                <button type="button" class="cfm-btn ds-danger-outline" onclick={() => askDelete(focusRow)}>Delete stream…</button>
+                <button type="button" class="cfm-btn ds-danger-outline nc-icon-btn" onclick={() => askDelete(focusRow)}><Icon name="trash" size={13} />Delete stream…</button>
               </div>
               {#if peekError}<div class="nc-error nc-peek-error" role="alert">{peekError}</div>{/if}
               <div class="nc-subtabs" role="tablist" aria-label="Stream details">
@@ -605,8 +657,15 @@
               {#if sub === 'subjects'}
                 <div class="nc-subjects">
                   {#if focusSubject}<span class="nc-subject-label">Messages on <span class="mono" data-nats-current-subject>{focusSubject}</span>{#if focusRow.subjects.length > 1}<span class="nc-dim">{' · '}pick another subject in the list</span>{/if}</span>{/if}
-                  {#if focusSubject && focusRow.subjects.length > 1}
-                    <button type="button" class="nc-link nc-danger-link nc-remove-subj" onclick={() => focusSubject && askRemoveSubject(focusSubject)}>Remove <span class="mono">{focusSubject}</span>…</button>
+                  {#if focusSubject}
+                    {@const last = focusRow.subjects.length <= 1}
+                    <button
+                      type="button"
+                      class="cfm-btn ds-danger-outline nc-icon-btn nc-del-subj"
+                      disabled={last}
+                      title={last ? LAST_SUBJECT : `Delete ${focusSubject} from ${focusStream.name}`}
+                      onclick={() => focusSubject && askDeleteSubject(focusStream.name, focusSubject)}
+                    ><Icon name="trash" size={13} />Delete subject…</button>
                   {/if}
                 </div>
                 {#if subjectTab}
@@ -1013,8 +1072,13 @@
     align-items: center;
     gap: var(--px-8);
   }
-  .nc-remove-subj {
+  .nc-del-subj {
     margin-left: auto;
+  }
+  .nc-icon-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--px-6);
   }
   .nc-peek {
     display: inline-flex;

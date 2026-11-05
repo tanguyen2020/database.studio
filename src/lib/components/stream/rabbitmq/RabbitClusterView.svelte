@@ -634,7 +634,7 @@
         {#if focusConn}
           <div class="rw-detail" data-testid="connection-detail">
             <div class="rw-detail-head">
-              <span class="rw-detail-title">{clientLabel(focusConn)}</span>
+              <span class="rw-detail-title ds-copyable">{clientLabel(focusConn)}</span>
               <button type="button" class="rw-close" onclick={() => select(null)} aria-label="Close details" title="Close details">×</button>
             </div>
             <div class="rw-facts">

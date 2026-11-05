@@ -557,7 +557,7 @@
                 {@const st = stateOf(m) ?? 'unknown'}
                 <td style="padding:var(--px-5) var(--px-12)"><span class="ds-state {stateClass(st)}" data-state={st}>{STATE_LABEL[st]}</span></td>
               {/if}
-              <td class="mono" style="font-size:var(--px-12);padding:var(--px-7) var(--px-12);color:{cellColor(m.seq, 'var(--tbl-subject)')};white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title={m.subject}>{m.subject}</td>
+              <td class="mono ds-copyable" style="font-size:var(--px-12);padding:var(--px-7) var(--px-12);color:{cellColor(m.seq, 'var(--tbl-subject)')};white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title={m.subject}>{m.subject}</td>
               {#if hasKey}
                 <td style="padding:var(--px-6) var(--px-12);max-width:var(--px-200)"><span class="ds-key" class:none={!m.key} style="color:{cellColor(m.seq, m.key ? 'var(--text2)' : 'var(--muted)')}" title={m.key}>{m.key || '—'}</span></td>
               {/if}

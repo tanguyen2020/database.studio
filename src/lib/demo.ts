@@ -251,6 +251,12 @@ const demoDroppedSchemas = new Set<string>()
 const demoRenamedSchemas = new Map<string, string>()
 /** …and schemas created through New Schema, so the tree really gains them. */
 const demoCreatedSchemas = new Set<string>()
+/** Tables / routines renamed through the Rename popup this session (last name
+ *  part, old → new) — the tree must show the new name when it re-reads. */
+const demoRenamedObjects = new Map<string, string>()
+function demoObjectState<T extends { name: string }>(xs: T[]): T[] {
+  return xs.map((x) => (demoRenamedObjects.has(x.name) ? { ...x, name: demoRenamedObjects.get(x.name) as string } : x))
+}
 function demoSchemaState<T extends { name: string }>(xs: T[]): T[] {
   const kept = xs
     .filter((x) => !demoDroppedSchemas.has(x.name))
@@ -797,7 +803,7 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
           { name: 'report_daily', kind: 'table', row_estimate: 90, locked: false, engine: 'MergeTree', data_length: 8192 },
           { name: 'report_monthly', kind: 'table', row_estimate: 12, locked: false, engine: 'MergeTree', data_length: 4096 },
         ])
-      return ok(driftTables(args, [
+      return ok(demoObjectState(driftTables(args, [
         { name: 'students', kind: 'table', row_estimate: 3842, locked: false, engine: 'MergeTree', data_length: 1114112 },
         { name: 'courses', kind: 'table', row_estimate: 214, locked: false, engine: 'ReplacingMergeTree', data_length: 65536 },
         { name: 'enrollments', kind: 'table', row_estimate: 12480, locked: false, engine: 'MergeTree', data_length: 3686400, is_partitioned: true },
@@ -815,7 +821,7 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
         ...(extraName('__demoExtraTable')
           ? [{ name: extraName('__demoExtraTable'), kind: 'table', row_estimate: 1, locked: false, engine: 'MergeTree', data_length: 8192 }]
           : []),
-      ]))
+      ])))
     }
     case 'list_columns': {
       // perf-gate seam: 30 columns for every synthetic table
@@ -1241,6 +1247,17 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
       if (crScM) {
         demoCreatedSchemas.add(demoIdent(crScM[1]))
         return ok({ ok: true, duration_ms: 6 })
+      }
+      // Table / routine rename from the Rename popup — recorded (last name part), so
+      // the tree shows the new name on reload. PG/DuckDB/SQLite/Oracle: ALTER TABLE …
+      // RENAME TO; MySQL/CH: RENAME TABLE a TO b; PG routines: ALTER FUNCTION f(args).
+      const lastIdent = (q: string) => demoIdent((q.match(/"(?:[^"]|"")*"|`[^`]*`|\[[^\]]*\]|[^."`[\]\s]+/g) ?? [q]).pop() ?? q)
+      const renObjM =
+        stmtSql.match(/^\s*ALTER\s+(?:TABLE|FUNCTION|PROCEDURE)\s+(.+?)(?:\([^)]*\))?\s+RENAME\s+TO\s+(.+?);?\s*$/i) ??
+        stmtSql.match(/^\s*RENAME\s+TABLE\s+(.+?)\s+TO\s+(.+?);?\s*$/i)
+      if (renObjM) {
+        demoRenamedObjects.set(lastIdent(renObjM[1]), lastIdent(renObjM[2]))
+        return ok({ ok: true, duration_ms: 8 })
       }
       // ALTER SCHEMA … RENAME TO — recorded, so the tree shows the new name.
       const renScM = stmtSql.match(/^\s*ALTER\s+SCHEMA\s+(\S+)\s+RENAME\s+TO\s+(\S+)/i)

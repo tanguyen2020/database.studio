@@ -22,8 +22,12 @@ export function genRenameRoutine(
       const args = paramTypes.join(', ')
       return `ALTER ${kw} ${qualified(system, schema, oldName)}(${args}) RENAME TO ${quoteIdent(system, newName)};`
     }
-    case 'mssql':
-      return `EXEC sp_rename '${schema}.${oldName}', '${newName}';`
+    case 'mssql': {
+      // sp_rename takes string literals: double any quote, and bracket the old
+      // name so a schema/name with a dot or space still points at one object.
+      const lit = (v: string) => v.replaceAll("'", "''")
+      return `EXEC sp_rename N'${lit(`${quoteIdent(system, schema)}.${quoteIdent(system, oldName)}`)}', N'${lit(newName)}';`
+    }
     case 'mysql':
     case 'mariadb':
       return `-- ${system} cannot rename a routine in place — drop and recreate ${oldName} as ${newName}.`

@@ -3,8 +3,12 @@
 
 use tauri::State;
 
+use serde_json::Value;
+
 use crate::drivers::grid::{self, FilterCond, GridChange, SortSpec};
-use crate::drivers::types::ExecResponse;
+use crate::drivers::types::{ExecResponse, StatementOutcome};
+use crate::error::QueryError;
+use crate::drivers::LiveConnection;
 use crate::error::AppError;
 use crate::state::AppState;
 
@@ -69,11 +73,11 @@ pub async fn exec_filtered(
             .with_driver(&conn_id, move |driver| async move { driver.lock().await.exec(&sql).await })
             .await?
     } else {
-        let stmt = grid::build_select(&system, &schema, &table, &filters, combinator_or, &sorts, limit, offset);
         state
             .registry
             .with_driver(&conn_id, move |driver| async move {
-                driver.lock().await.exec_params(&stmt.sql, &stmt.params).await
+                let mut d = driver.lock().await;
+                run_filtered(&mut d, &system, &schema, &table, &filters, combinator_or, &sorts, limit, offset).await
             })
             .await?
     };
@@ -82,6 +86,43 @@ pub async fn exec_filtered(
         Ok(o) => ExecResponse::from_outcome(o, duration_ms),
         Err(qe) => ExecResponse::from_error(qe, duration_ms),
     })
+}
+
+/// The parameterized Table Data Viewer SELECT on one connection (every engine but
+/// ClickHouse). PostgreSQL binds what a person typed as `text` and does not
+/// compare text with uuid/integer/date/enum… columns on its own, so it first reads
+/// the table's column types (one catalog query, only when a filter carries a
+/// value) and casts each parameter to its column's type.
+#[allow(clippy::too_many_arguments)]
+pub async fn run_filtered(
+    d: &mut LiveConnection,
+    system: &str,
+    schema: &Option<String>,
+    table: &str,
+    filters: &[FilterCond],
+    combinator_or: bool,
+    sorts: &[SortSpec],
+    limit: u32,
+    offset: u32,
+) -> Result<StatementOutcome, QueryError> {
+    let needs_types = system == "postgres"
+        && filters.iter().any(|f| !matches!(f.op.to_uppercase().as_str(), "IS NULL" | "IS NOT NULL"));
+    let types = if needs_types {
+        let mut params = Vec::new();
+        if let Some(s) = schema.as_ref().filter(|s| !s.is_empty()) {
+            params.push(Value::String(s.clone()));
+        }
+        params.push(Value::String(table.to_string()));
+        // A failed lookup only loses the casts — the filter still runs as before.
+        match d.exec_params(grid::pg_column_types_query(schema), &params).await {
+            Ok(StatementOutcome::Rows { result }) => grid::parse_pg_column_types(&result.rows),
+            _ => Default::default(),
+        }
+    } else {
+        Default::default()
+    };
+    let stmt = grid::build_select_typed(system, schema, table, filters, combinator_or, sorts, limit, offset, &types);
+    d.exec_params(&stmt.sql, &stmt.params).await
 }
 
 /// Apply pending changes trong 1 transaction (rollback nếu lỗi). Trả tổng số dòng bị ảnh hưởng.

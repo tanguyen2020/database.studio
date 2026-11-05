@@ -1118,7 +1118,7 @@ fn map_error(system: &str, e: &sqlx::Error) -> QueryError {
             let raw = db.to_string();
             let code = db.code().map(|c| c.to_string());
             let mut qe = QueryError::new(system, db.message().to_string(), raw);
-            qe.hint = code.as_deref().and_then(hint_for_sqlstate);
+            qe.hint = code.as_deref().and_then(|c| hint_for_sqlstate(c, db.message()));
             qe.code = code;
             qe
         }
@@ -1141,11 +1141,16 @@ fn map_exec_error(system: &str, sql: &str, e: &sqlx::Error) -> QueryError {
     qe
 }
 
-fn hint_for_sqlstate(code: &str) -> Option<String> {
+fn hint_for_sqlstate(code: &str, message: &str) -> Option<String> {
     let hint = match code {
         "42P01" => "Table does not exist. Check the current schema or the table name.",
         "42703" => "Column does not exist. Check the column name or alias.",
         "42601" => "SQL syntax error.",
+        // 42883 covers both a missing function and a missing operator; the
+        // operator case is a type mismatch ("uuid = text"), not a missing function.
+        "42883" if message.starts_with("operator does not exist") => {
+            "The two sides have different types. Cast the value to the column's type, e.g. '…'::uuid."
+        }
         "42883" => "Function does not exist or has the wrong argument types.",
         "28P01" => "Wrong password or the user cannot log in.",
         "3D000" => "Database does not exist.",

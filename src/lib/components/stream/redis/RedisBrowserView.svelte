@@ -4,6 +4,7 @@
   // Workbench (command console), Pub/Sub, Slow commands and Server info, on the
   // shared stream shell. Numbers come from INFO / SCAN / SLOWLOG; nothing invented.
   import { untrack } from 'svelte'
+  import { endsTextDrag, notePointerDown } from '$lib/ui/text-selection'
   import * as ipc from '$lib/ipc'
   import type { TabState } from '$lib/types'
   import { connections } from '$lib/stores/connections.svelte'
@@ -534,11 +535,12 @@
                     aria-selected="false"
                     tabindex="0"
                     style="padding-left:calc(var(--px-10) + {r.depth} * var(--px-16))"
-                    onclick={() => toggleFolder(r.path)}
+                    onpointerdown={notePointerDown}
+                    onclick={(e) => !endsTextDrag(e, e.currentTarget) && toggleFolder(r.path)}
                     onkeydown={(e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), toggleFolder(r.path))}
                   >
                     <span class="rb-chev"><Chevron open={r.expanded} size={11} /></span>
-                    <span class="mono rb-seg-name">{r.segment}</span>
+                    <span class="mono rb-seg-name ds-copyable">{r.segment}</span>
                     <span class="rb-folder-count">{plural(r.count, 'key')}</span>
                     <button
                       type="button"
@@ -564,11 +566,12 @@
                     tabindex="0"
                     title={r.path}
                     style="padding-left:calc(var(--px-10) + {r.depth} * var(--px-16) + var(--px-16))"
-                    onclick={() => select(r.path)}
+                    onpointerdown={notePointerDown}
+                    onclick={(e) => !endsTextDrag(e, e.currentTarget) && select(r.path)}
                     onkeydown={(e) => e.key === 'Enter' && select(r.path)}
                   >
                     <span class="rb-type" style="--tc:{typeColor(k?.key_type)}" title={typeHelp(k?.key_type)}>{typeLabel(k?.key_type)}</span>
-                    <span class="mono rb-seg-name">{r.segment}</span>
+                    <span class="mono rb-seg-name ds-copyable">{r.segment}</span>
                     <span class="rb-ttl {ex.tone}" title={ex.title}>{ex.text}</span>
                     <span class="ds-num rb-size">{m?.bytes != null ? formatBytes(m.bytes) : '—'}</span>
                   </div>

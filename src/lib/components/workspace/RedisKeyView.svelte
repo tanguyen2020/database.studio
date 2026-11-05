@@ -307,7 +307,7 @@
     <div class="rk-head rk-panel">
       <div class="rk-title rk-title-row">
         {#if v}<span class="rk-type" style="--tc:{typeColor(v.key_type)}" title={typeHelp(v.key_type)}>{typeLabel(v.key_type)}</span>{/if}
-        <span class="rk-name mono" title={key}>{key}</span>
+        <span class="rk-name mono ds-copyable" title={key}>{key}</span>
         {#if onClose}<button type="button" class="rk-close" onclick={onClose} aria-label="Close details" title="Close details">×</button>{/if}
       </div>
       {#if v}

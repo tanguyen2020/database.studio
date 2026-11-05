@@ -150,7 +150,7 @@
 <div class="ds-ws" class:rx-embedded={embedded} data-rabbit-exchange={exchangeLabel(name)}>
   <div class="rx-ehead">
     <div class="rx-etitle">
-      <span class="rx-ename mono" title={exchangeLabel(name)}>{exchangeLabel(name)}</span>
+      <span class="rx-ename mono ds-copyable" title={exchangeLabel(name)}>{exchangeLabel(name)}</span>
       {#if onClose}<button type="button" class="rx-close" onclick={onClose} aria-label="Close details" title="Close details">×</button>{/if}
     </div>
     <div class="rx-chips">

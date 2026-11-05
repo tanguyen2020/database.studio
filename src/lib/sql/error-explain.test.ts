@@ -43,6 +43,15 @@ describe('explainQueryError', () => {
     expect(explainQueryError(err('mysql', "SELECT command denied to user 'u'@'%' for table 'x'", '42000')).category).toBe('permission')
   })
 
+  it('tells a PostgreSQL type mismatch (42883 operator) from a missing function (42883 function)', () => {
+    const op = explainQueryError(err('postgres', 'operator does not exist: uuid = text', '42883'))
+    expect(op.category).toBe('type-mismatch')
+    expect(op.title).toBe('Values of different types compared')
+    expect(explainQueryError(err('postgres', 'function nope(integer) does not exist', '42883')).category).toBe('missing-function')
+    // a 42883 whose message says neither still lands on the code's rule
+    expect(explainQueryError(err('postgres', 'something else', '42883')).category).toBe('missing-function')
+  })
+
   it('keeps the driver hint, otherwise gives a generic one; unknown errors stay honest', () => {
     expect(explainQueryError(err('postgres', 'x', '42P01', { hint: 'Driver hint' })).hint).toBe('Driver hint')
     expect(explainQueryError(err('postgres', 'relation "x" does not exist', '42P01')).hint).toMatch(/schema/)

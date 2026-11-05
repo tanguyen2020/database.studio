@@ -70,6 +70,7 @@
   import AddPartitionDialog from '$lib/components/AddPartitionDialog.svelte'
   import TruncateDialog from '$lib/components/TruncateDialog.svelte'
   import NewDatabaseDialog from '$lib/components/NewDatabaseDialog.svelte'
+  import RenameDialog from '$lib/components/RenameDialog.svelte'
   import UpdateDialog from '$lib/components/UpdateDialog.svelte'
   import { updater } from '$lib/stores/updater.svelte'
   import DesignDocumentDialog from '$lib/components/DesignDocumentDialog.svelte'
@@ -556,6 +557,7 @@
 <DuckAttachDialog />
 <TruncateDialog />
 <NewDatabaseDialog />
+<RenameDialog />
 <UpdateDialog />
 <DesignDocumentDialog />
 <NatsAddMessageDialog />

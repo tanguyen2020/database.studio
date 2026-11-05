@@ -23,6 +23,7 @@
   import type { Snippet } from 'svelte'
   import { untrack } from 'svelte'
   import Icon from '$lib/components/Icon.svelte'
+  import { endsTextDrag, notePointerDown } from '$lib/ui/text-selection'
   import { filterRows, isZeroText, moveSelection, nextSort, sortRows, virtualWindow, type SortState } from '$lib/stream/table'
 
   // Number cells that show only a zero get data-zero, so empty rows recede and the
@@ -64,6 +65,8 @@
     selected?: string | null
     onSelect?: (row: T) => void
     onOpen?: (row: T) => void
+    /** right-click on a row (e.g. open a shared context menu for it) */
+    onContextMenu?: (row: T, e: MouseEvent) => void
     filterText?: (row: T) => string
     filterPlaceholder?: string
     initialSort?: SortState | null
@@ -102,6 +105,7 @@
     selected = null,
     onSelect,
     onOpen,
+    onContextMenu,
     filterText,
     filterPlaceholder = 'Filter…',
     initialSort = null,
@@ -266,8 +270,10 @@
               class:group={!!rowLevel && rowLevel(row) === 0}
               class:child={!!rowLevel && rowLevel(row) > 0}
               style="height:{rowHeight}px"
-              onclick={() => onSelect?.(row)}
+              onpointerdown={notePointerDown}
+              onclick={(e) => !endsTextDrag(e, e.currentTarget) && onSelect?.(row)}
               ondblclick={() => onOpen?.(row)}
+              oncontextmenu={(e) => onContextMenu?.(row, e)}
             >
               {#each columns as c (c.key)}
                 <td class:right={c.align === 'right'} use:markZero={c.align === 'right'}>{@render cell(row, c)}</td>

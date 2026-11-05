@@ -299,7 +299,7 @@
   <!-- header -->
   <div class="rq-ehead">
     <div class="rq-etitle">
-      <span class="rq-ename mono" title={name}>{name}</span>
+      <span class="rq-ename mono ds-copyable" title={name}>{name}</span>
       {#if onClose}<button type="button" class="rq-close" onclick={onClose} aria-label="Close details" title="Close details">×</button>{/if}
     </div>
     <div class="rq-chips">

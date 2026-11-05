@@ -698,6 +698,21 @@ tr:hover .ds-name {
 tr[aria-selected='true'] .ds-name {
   font-weight: 600;
 }
+/* Names in the Cache & Streaming workspaces (topic, queue, exchange, stream,
+   subject, key…) can be highlighted and copied — the app chrome is user-select:none.
+   A drag that selects text does not also click the row (ui/text-selection.ts). */
+.ds-name:not(button),
+.ds-copyable {
+  -webkit-user-select: text;
+  user-select: text;
+  cursor: text;
+}
+.ds-name:not(button)::selection,
+.ds-copyable::selection {
+  background: color-mix(in srgb, var(--primary) 32%, transparent);
+  color: var(--text);
+}
+
 .ds-meta {
   font-size: 12px;
   color: var(--muted);

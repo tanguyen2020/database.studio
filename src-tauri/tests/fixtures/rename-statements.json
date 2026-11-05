@@ -1,0 +1,141 @@
+{
+  "cases": [
+    {
+      "system": "postgres",
+      "name": "table, schema and function with spaces and quotes",
+      "setup": [
+        "CREATE SCHEMA \"My App\"",
+        "CREATE TABLE \"My App\".\"order items\" (id int PRIMARY KEY)",
+        "INSERT INTO \"My App\".\"order items\" VALUES (1)",
+        "CREATE FUNCTION \"My App\".\"f old\"(x int) RETURNS int LANGUAGE sql AS $$ SELECT x + 1 $$",
+        "CREATE SCHEMA \"spare\""
+      ],
+      "statements": [
+        "ALTER TABLE \"My App\".\"order items\" RENAME TO \"it's \"\"new\"\"\";",
+        "ALTER FUNCTION \"My App\".\"f old\"(integer) RENAME TO \"f new\";",
+        "ALTER SCHEMA \"spare\" RENAME TO \"spare 2\";"
+      ],
+      "checks": [
+        {
+          "sql": "SELECT COUNT(*) FROM \"My App\".\"it's \"\"new\"\"\"",
+          "expect": "1"
+        },
+        {
+          "sql": "SELECT COUNT(*) FROM pg_tables WHERE tablename = 'order items'",
+          "expect": "0"
+        },
+        {
+          "sql": "SELECT \"My App\".\"f new\"(1)",
+          "expect": "2"
+        },
+        {
+          "sql": "SELECT COUNT(*) FROM pg_namespace WHERE nspname = 'spare 2'",
+          "expect": "1"
+        }
+      ]
+    },
+    {
+      "system": "mysql",
+      "name": "table stays in its own database (not the session default)",
+      "setup": [
+        "CREATE DATABASE app",
+        "CREATE TABLE app.`order items` (id int PRIMARY KEY)",
+        "INSERT INTO app.`order items` VALUES (1)"
+      ],
+      "statements": [
+        "RENAME TABLE `app`.`order items` TO `app`.`it's new`;"
+      ],
+      "checks": [
+        {
+          "sql": "SELECT COUNT(*) FROM app.`it's new`",
+          "expect": "1"
+        },
+        {
+          "sql": "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'testdb'",
+          "expect": "0"
+        }
+      ]
+    },
+    {
+      "system": "mssql",
+      "name": "table and procedure in a schema with a space, names with quotes",
+      "setup": [
+        "CREATE SCHEMA [My App]",
+        "CREATE TABLE [My App].[order items] (id int PRIMARY KEY)",
+        "INSERT INTO [My App].[order items] VALUES (1)",
+        "CREATE PROCEDURE [My App].[p old] AS SELECT 7"
+      ],
+      "statements": [
+        "EXEC sp_rename N'[My App].[order items]', N'it''s new';",
+        "EXEC sp_rename N'[My App].[p old]', N'p''s new';"
+      ],
+      "checks": [
+        {
+          "sql": "SELECT COUNT(*) FROM [My App].[it's new]",
+          "expect": "1"
+        },
+        {
+          "sql": "SELECT COUNT(*) FROM sys.procedures WHERE name = 'p''s new'",
+          "expect": "1"
+        },
+        {
+          "sql": "SELECT COUNT(*) FROM sys.tables WHERE name = 'order items'",
+          "expect": "0"
+        }
+      ]
+    },
+    {
+      "system": "sqlite",
+      "name": "table",
+      "setup": [
+        "CREATE TABLE \"order items\" (id int PRIMARY KEY)",
+        "INSERT INTO \"order items\" VALUES (1)"
+      ],
+      "statements": [
+        "ALTER TABLE \"order items\" RENAME TO \"it's new\";"
+      ],
+      "checks": [
+        {
+          "sql": "SELECT COUNT(*) FROM \"it's new\"",
+          "expect": "1"
+        }
+      ]
+    },
+    {
+      "system": "duckdb",
+      "name": "table in a schema with a space",
+      "setup": [
+        "CREATE SCHEMA \"My App\"",
+        "CREATE TABLE \"My App\".\"order items\" (id int)",
+        "INSERT INTO \"My App\".\"order items\" VALUES (1)"
+      ],
+      "statements": [
+        "ALTER TABLE \"My App\".\"order items\" RENAME TO \"it's new\";"
+      ],
+      "checks": [
+        {
+          "sql": "SELECT COUNT(*) FROM \"My App\".\"it's new\"",
+          "expect": "1"
+        }
+      ]
+    },
+    {
+      "system": "clickhouse",
+      "name": "table stays in its database",
+      "setup": [
+        "CREATE DATABASE app",
+        "CREATE TABLE app.`order items` (id UInt32) ENGINE = MergeTree ORDER BY id",
+        "INSERT INTO app.`order items` VALUES (1)"
+      ],
+      "statements": [
+        "RENAME TABLE `app`.`order items` TO `app`.`it's new`;"
+      ],
+      "checks": [
+        {
+          "sql": "SELECT count() FROM app.`it's new`",
+          "expect": "1"
+        }
+      ]
+    }
+  ]
+}

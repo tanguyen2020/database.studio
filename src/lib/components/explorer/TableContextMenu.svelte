@@ -25,11 +25,13 @@
     genDrop,
     genForeignKey,
     genInsert,
-    genRename,
     genSelect,
     genUpdate,
   } from '$lib/sql/ddl'
   import { truncateOptions } from '$lib/sql/truncate'
+  import { genRenameTable } from '$lib/sql/rename'
+  import { renameWizard } from '$lib/stores/rename.svelte'
+  import { systemMeta } from '$lib/systems'
   import { truncateWizard } from '$lib/stores/truncate.svelte'
   import { generateScript, type DbObject, type ScriptMode } from '$lib/sql/scripts'
   import { tableStructure } from '$lib/sql/table-script'
@@ -132,6 +134,31 @@
     toasts.success('Copied DDL')
   }
 
+  /** Rename popup: new name checked against the tables already in this schema,
+   *  runs on this connection, then the schema (and the caller's view) re-read. */
+  function rename() {
+    const engine = systemMeta(system).label
+    const place = database && database !== schema ? `${database}.${schema}` : schema
+    renameWizard.open({
+      kind: 'table',
+      system,
+      name: table,
+      where: system === 'sqlite' ? engine : `${place} · ${engine}`,
+      taken: (explorer.cache[connId]?.bySchema[schema]?.tables ?? []).map((t) => t.name),
+      takenScope: system === 'sqlite' ? 'in this database' : `in ${schema}`,
+      note: 'Its data, indexes and constraints move with it. Views, procedures and application code that use the old name have to be updated.',
+      build: (to) => genRenameTable(system, schema, table, to),
+      run: async (sql) => {
+        const r = await ipc.execStatement(connId, sql)
+        if (r.error) return r.error.message
+        await explorer.refresh(connId, { kind: 'schema', schema })
+        if (onRefresh) onRefresh()
+        return null
+      },
+      openInTab: (sql) => stmtTab(`Rename ${table}`, sql),
+    })
+  }
+
   function doRefresh() {
     if (onRefresh) onRefresh()
     else explorer.refresh(connId, { kind: 'table', schema, table })
@@ -206,7 +233,7 @@
   {/if}
   <ContextMenu.Separator />
   <ContextMenu.Item onclick={() => copyWizard.show(connId, schema, table)}>Copy to…</ContextMenu.Item>
-  <ContextMenu.Item onclick={() => stmtTab(`Rename ${table}`, genRename(system, schema, table))}>Rename…</ContextMenu.Item>
+  <ContextMenu.Item onclick={rename}>Rename…</ContextMenu.Item>
   <ContextMenu.Item onclick={() => copyName(table)}>Copy Name</ContextMenu.Item>
   <ContextMenu.Item onclick={() => copyName(`${quoteIdent(system, schema)}.${quoteIdent(system, table)}`)}>Copy Qualified Name</ContextMenu.Item>
   <ContextMenu.Separator />

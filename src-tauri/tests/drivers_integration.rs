@@ -9681,3 +9681,268 @@ async fn kafka_workspace_settings_time_seek_and_group_delete() {
     let _ = live.join();
     eprintln!("CHK group delete OK");
 }
+
+/// Open Data filters on PostgreSQL: the value a person types is bound as `text`,
+/// and PostgreSQL will not compare `text` with uuid/integer/date/enum… columns
+/// ("operator does not exist: uuid = text"). Runs the exact command path
+/// (`run_filtered`) against a real server for every common column type.
+#[tokio::test]
+async fn pg_open_data_filters_cast_values_to_the_column_type() {
+    use database_studio_lib::commands::grid::run_filtered;
+    use database_studio_lib::drivers::grid::{build_select, FilterCond};
+    use database_studio_lib::drivers::LiveConnection;
+    use serde_json::json;
+
+    let (_c, port) = start_pg().await;
+    let params = PgConnParams {
+        host: "localhost".into(),
+        port,
+        database: "testdb".into(),
+        user: "postgres".into(),
+        password: PASS.into(),
+        ssl: false,
+        ssl_ca: String::new(),
+        ssl_cert: String::new(),
+        ssl_key: String::new(),
+    };
+    let mut pg = retry("postgres", || PgDriver::connect(&params)).await;
+    for sql in [
+        r#"CREATE SCHEMA "My App""#,
+        r#"CREATE TYPE "My App"."Mood" AS ENUM ('happy', 'sad')"#,
+        r#"CREATE TABLE "My App".attendance (
+             id uuid PRIMARY KEY, class_schedule_id uuid, n int, amount numeric(10,2),
+             born date, at timestamptz, ok boolean, mood "My App"."Mood",
+             doc json, docb jsonb, name varchar(50), tags text[])"#,
+        r#"INSERT INTO "My App".attendance VALUES
+             ('11111111-1111-4111-8111-111111111111', '01a0bff2-e8bc-720b-b670-408f05dae245', 1, 10.50,
+              '1999-05-01', '2026-01-01 10:00+00', true,  'happy', '{"a":1}', '{"a":1}', 'An',    '{x,y}'),
+             ('22222222-2222-4222-8222-222222222222', '01a0bff2-e8bc-720b-b670-408f05dae245', 2, 20.00,
+              '2001-05-01', '2026-01-02 10:00+00', false, 'sad',   '{"a":2}', '{"a":2}', 'Binh',  '{y}'),
+             ('33333333-3333-4333-8333-333333333333', '99999999-e8bc-720b-b670-408f05dae245', 12, 30.00,
+              '2002-05-01', '2026-01-03 10:00+00', true,  'sad',   '{"a":3}', '{"a":3}', 'Andrew', '{z}')"#,
+        "CREATE TABLE public.plain (id uuid PRIMARY KEY, n int)",
+        "INSERT INTO public.plain VALUES ('44444444-4444-4444-8444-444444444444', 7)",
+    ] {
+        pg.exec(sql).await.unwrap_or_else(|e| panic!("{sql}: {e:?}"));
+    }
+    let mut drv = LiveConnection::Postgres(pg);
+    let schema = Some("My App".to_string());
+    let f = |col: &str, op: &str, v: serde_json::Value| FilterCond { col: col.into(), op: op.into(), value: v };
+
+    // The bug, reproduced on the untyped statement the viewer used to send.
+    let old = build_select("postgres", &schema, "attendance", &[f("class_schedule_id", "=", json!("01a0bff2-e8bc-720b-b670-408f05dae245"))], false, &[], 100, 0);
+    let err = drv.exec_params(&old.sql, &old.params).await.expect_err("untyped filter must fail");
+    assert!(err.message.contains("operator does not exist: uuid = text"), "{}", err.message);
+    assert!(err.hint.as_deref().unwrap_or("").contains("different types"), "hint names a type mismatch: {:?}", err.hint);
+
+    let cases: Vec<(&str, FilterCond, Vec<&str>)> = vec![
+        ("uuid =", f("class_schedule_id", "=", json!("01a0bff2-e8bc-720b-b670-408f05dae245")), vec!["An", "Binh"]),
+        ("uuid !=", f("class_schedule_id", "!=", json!("01a0bff2-e8bc-720b-b670-408f05dae245")), vec!["Andrew"]),
+        ("uuid LIKE", f("class_schedule_id", "LIKE", json!("9999%")), vec!["Andrew"]),
+        ("int >= text", f("n", ">=", json!("2")), vec!["Binh", "Andrew"]),
+        ("int as number", f("n", "=", json!(12)), vec!["Andrew"]),
+        ("int LIKE", f("n", "LIKE", json!("1%")), vec!["An", "Andrew"]),
+        ("numeric", f("amount", "=", json!("10.5")), vec!["An"]),
+        ("date", f("born", "<", json!("2000-01-01")), vec!["An"]),
+        ("timestamptz", f("at", ">", json!("2026-01-01 12:00+00")), vec!["Binh", "Andrew"]),
+        ("boolean", f("ok", "=", json!("true")), vec!["An", "Andrew"]),
+        ("enum in quoted schema", f("mood", "=", json!("sad")), vec!["Binh", "Andrew"]),
+        ("json", f("doc", "=", json!("{\"a\": 1}")), vec!["An"]),
+        ("jsonb", f("docb", "=", json!("{\"a\": 2}")), vec!["Binh"]),
+        ("varchar LIKE", f("name", "LIKE", json!("An%")), vec!["An", "Andrew"]),
+        ("varchar =", f("name", "=", json!("Binh")), vec!["Binh"]),
+        ("text[]", f("tags", "=", json!("{y}")), vec!["Binh"]),
+    ];
+    for (label, cond, want) in cases {
+        let out = run_filtered(&mut drv, "postgres", &schema, "attendance", &[cond], false, &[], 100, 0)
+            .await
+            .unwrap_or_else(|e| panic!("{label}: {}", e.message));
+        let StatementOutcome::Rows { result } = out else { panic!("{label}: expected rows") };
+        let mut got: Vec<&str> = result.rows.iter().filter_map(|r| r.get("name").and_then(|v| v.as_str())).collect();
+        let mut want = want;
+        got.sort_unstable();
+        want.sort_unstable();
+        assert_eq!(got, want, "{label}");
+    }
+
+    // AND of several typed filters + IS NULL, and a bad value is the server's clear error.
+    let both = run_filtered(
+        &mut drv,
+        "postgres",
+        &schema,
+        "attendance",
+        &[f("class_schedule_id", "=", json!("01a0bff2-e8bc-720b-b670-408f05dae245")), f("n", ">", json!("1")), f("doc", "IS NOT NULL", json!(null))],
+        false,
+        &[],
+        100,
+        0,
+    )
+    .await
+    .unwrap();
+    let StatementOutcome::Rows { result } = both else { panic!() };
+    assert_eq!(result.rows.len(), 1);
+    let bad = run_filtered(&mut drv, "postgres", &schema, "attendance", &[f("id", "=", json!("abc"))], false, &[], 100, 0)
+        .await
+        .expect_err("not a uuid");
+    assert!(bad.message.contains("invalid input syntax for type uuid"), "{}", bad.message);
+
+    // No schema: the table resolves through search_path, like the SELECT does.
+    let out = run_filtered(&mut drv, "postgres", &None, "plain", &[f("id", "=", json!("44444444-4444-4444-8444-444444444444"))], false, &[], 100, 0)
+        .await
+        .unwrap();
+    let StatementOutcome::Rows { result } = out else { panic!() };
+    assert_eq!(result.rows.len(), 1);
+}
+
+// ---------------------------------------------------------------------------
+// Rename popup — runs EXACTLY the statements the frontend builds
+// (src/lib/sql/rename.test.ts writes tests/fixtures/rename-statements.json):
+// setup → rename statements → checks, on a real server per engine. Names carry
+// spaces and quotes so a quoting slip fails here, and MySQL/ClickHouse prove the
+// table stays in its own database rather than moving to the session's default.
+// ---------------------------------------------------------------------------
+
+fn rename_cases(system: &str) -> Vec<serde_json::Value> {
+    let fx: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/rename-statements.json")).expect("rename fixture");
+    fx["cases"].as_array().unwrap().iter().filter(|c| c["system"] == system).cloned().collect()
+}
+
+fn first_cell_text(out: StatementOutcome) -> String {
+    let StatementOutcome::Rows { result } = out else { panic!("expected rows") };
+    let row = result.rows.first().expect("a row");
+    let v = row.as_object().and_then(|o| o.values().next()).cloned().unwrap_or_default();
+    match v {
+        serde_json::Value::String(s) => s,
+        other => other.to_string(),
+    }
+}
+
+async fn run_rename_cases(drv: &mut database_studio_lib::drivers::LiveConnection, system: &str) {
+    let cases = rename_cases(system);
+    assert!(!cases.is_empty(), "fixture has cases for {system}");
+    for c in cases {
+        let name = c["name"].as_str().unwrap();
+        for k in ["setup", "statements"] {
+            for sql in c[k].as_array().unwrap() {
+                let sql = sql.as_str().unwrap();
+                drv.exec(sql).await.unwrap_or_else(|e| panic!("{system} · {name} · {k}: {sql}\n{}", e.message));
+            }
+        }
+        for chk in c["checks"].as_array().unwrap() {
+            let sql = chk["sql"].as_str().unwrap();
+            let out = drv.exec(sql).await.unwrap_or_else(|e| panic!("{system} · {name} · check {sql}\n{}", e.message));
+            assert_eq!(first_cell_text(out), chk["expect"].as_str().unwrap(), "{system} · {name} · {sql}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn rename_statements_run_on_postgres_sqlite_duckdb() {
+    use database_studio_lib::connections::profile::SqliteMode;
+    use database_studio_lib::drivers::duckdb::{DuckConnParams, DuckDriver};
+    use database_studio_lib::drivers::LiveConnection;
+
+    let (_c, port) = start_pg().await;
+    let params = PgConnParams {
+        host: "localhost".into(),
+        port,
+        database: "testdb".into(),
+        user: "postgres".into(),
+        password: PASS.into(),
+        ssl: false,
+        ssl_ca: String::new(),
+        ssl_cert: String::new(),
+        ssl_key: String::new(),
+    };
+    let mut pg = LiveConnection::Postgres(retry("postgres", || PgDriver::connect(&params)).await);
+    run_rename_cases(&mut pg, "postgres").await;
+
+    let mut lite = LiveConnection::Sqlite(
+        SqliteDriver::connect(&SqliteConnParams { path: String::new(), mode: SqliteMode::InMemory }).await.unwrap(),
+    );
+    run_rename_cases(&mut lite, "sqlite").await;
+
+    let mut duck = LiveConnection::Duckdb(
+        DuckDriver::connect(&DuckConnParams {
+            path: String::new(),
+            mode: SqliteMode::InMemory,
+            database: String::new(),
+            owner: "rename-test".into(),
+        })
+        .await
+        .unwrap(),
+    );
+    run_rename_cases(&mut duck, "duckdb").await;
+}
+
+#[tokio::test]
+async fn rename_statements_run_on_mysql_and_clickhouse() {
+    use database_studio_lib::drivers::LiveConnection;
+
+    let c = GenericImage::new("mysql", "8")
+        .with_exposed_port(3306.tcp())
+        .with_env_var("MYSQL_ROOT_PASSWORD", PASS)
+        .with_env_var("MYSQL_DATABASE", "testdb")
+        .start()
+        .await
+        .expect("start mysql container");
+    let port = c.get_host_port_ipv4(3306).await.unwrap();
+    let params = MySqlConnParams {
+        host: "localhost".into(),
+        port,
+        database: "testdb".into(),
+        user: "root".into(),
+        password: PASS.into(),
+        ssl: false,
+        ssl_ca: String::new(),
+        ssl_cert: String::new(),
+        ssl_key: String::new(),
+    };
+    let mut my = LiveConnection::MySql(retry("mysql", || MySqlDriver::connect(&params, "mysql")).await);
+    run_rename_cases(&mut my, "mysql").await;
+
+    let ch = GenericImage::new("clickhouse/clickhouse-server", "24.8")
+        .with_exposed_port(8123.tcp())
+        .with_env_var("CLICKHOUSE_PASSWORD", PASS)
+        .start()
+        .await
+        .expect("start clickhouse container");
+    let port = ch.get_host_port_ipv4(8123).await.unwrap();
+    let params = ChConnParams {
+        host: "localhost".into(),
+        port,
+        database: "default".into(),
+        user: "default".into(),
+        password: PASS.into(),
+        ssl: false,
+    };
+    let mut chd = LiveConnection::Clickhouse(retry("clickhouse", || ChDriver::connect(&params)).await);
+    run_rename_cases(&mut chd, "clickhouse").await;
+}
+
+#[tokio::test]
+async fn rename_statements_run_on_mssql() {
+    use database_studio_lib::drivers::LiveConnection;
+
+    let c = GenericImage::new("mcr.microsoft.com/mssql/server", "2022-latest")
+        .with_exposed_port(1433.tcp())
+        .with_env_var("ACCEPT_EULA", "Y")
+        .with_env_var("MSSQL_SA_PASSWORD", MSSQL_PASS)
+        .start()
+        .await
+        .expect("start mssql container");
+    let port = c.get_host_port_ipv4(1433).await.unwrap();
+    let params = MssqlConnParams {
+        host: "localhost".into(),
+        port,
+        database: "".into(),
+        user: "sa".into(),
+        password: MSSQL_PASS.into(),
+        ssl: false,
+        ssl_ca: String::new(),
+        auth: "sql".into(),
+    };
+    let mut ms = LiveConnection::Mssql(retry("mssql", || MssqlDriver::connect(&params)).await);
+    run_rename_cases(&mut ms, "mssql").await;
+}

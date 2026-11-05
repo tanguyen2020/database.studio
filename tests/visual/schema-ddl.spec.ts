@@ -31,11 +31,11 @@ test('schema node: Rename Schema runs ALTER SCHEMA and the tree shows the new na
   await expect(dialog).toBeVisible()
   // the popup is the place it happens — no SQL tab parked for the user to run
   await expect(page.getByRole('tab', { name: /Rename schema/ })).toHaveCount(0)
-  const input = dialog.locator('input#rn-db')
+  const input = dialog.locator('input#rn-name')
   await expect(input).toBeFocused()
 
-  // same name → Confirm stays disabled
-  await expect(dialog.getByRole('button', { name: 'Confirm' })).toHaveAttribute('aria-disabled', 'true')
+  // same name → Rename stays disabled
+  await expect(dialog.getByRole('button', { name: 'Rename', exact: true })).toHaveAttribute('aria-disabled', 'true')
 
   await input.fill('app_v2')
   await expect(dialog.getByText('ALTER SCHEMA "public" RENAME TO "app_v2";')).toBeVisible()
@@ -44,7 +44,7 @@ test('schema node: Rename Schema runs ALTER SCHEMA and the tree shows the new na
   await page.mouse.click(8, 8)
   await expect(dialog).toBeVisible()
 
-  await dialog.getByRole('button', { name: 'Confirm' }).click()
+  await dialog.getByRole('button', { name: 'Rename', exact: true }).click()
   await expect(dialog).toBeHidden({ timeout: 10_000 })
   const sql = await page.evaluate(() => (window as unknown as { __ipcLastSql?: string }).__ipcLastSql)
   expect(sql).toBe('ALTER SCHEMA "public" RENAME TO "app_v2";')
@@ -114,7 +114,7 @@ test('MSSQL: a schema cannot be renamed in place, and DROP SCHEMA has no CASCADE
   await page.getByRole('menuitem', { name: 'Rename Schema…' }).click()
   const rn = page.getByRole('dialog', { name: 'Rename schema' })
   await expect(rn.getByText(/MSSQL cannot rename a schema/)).toBeVisible()
-  await expect(rn.getByRole('button', { name: 'Confirm' })).toHaveCount(0)
+  await expect(rn.getByRole('button', { name: 'Rename', exact: true })).toHaveCount(0)
   // the steps are still available to run by hand
   await rn.getByRole('button', { name: 'Open in SQL tab' }).click()
   await expect(page.getByRole('tab', { name: /Rename schema public/ }).first()).toBeVisible()

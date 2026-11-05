@@ -11,7 +11,7 @@ describe('genRenameRoutine', () => {
     )
   })
   it('MSSQL uses sp_rename', () => {
-    expect(genRenameRoutine('mssql', 'dbo', 'procedure', 'p', 'q')).toBe(`EXEC sp_rename 'dbo.p', 'q';`)
+    expect(genRenameRoutine('mssql', 'dbo', 'procedure', 'p', 'q')).toBe(`EXEC sp_rename N'[dbo].[p]', N'q';`)
   })
   it('MySQL/MariaDB → explanatory note (no in-place rename)', () => {
     expect(genRenameRoutine('mysql', 'app', 'procedure', 'p', 'q')).toContain('cannot rename')

@@ -129,7 +129,7 @@ test('rename database from the current-db header context menu', async ({ page })
   // a popup with the new name focused, showing the exact ALTER it will run
   const dialog = page.getByRole('dialog', { name: 'Rename database' })
   await expect(dialog).toBeVisible()
-  await expect(dialog.locator('#rn-db')).toBeFocused()
+  await expect(dialog.locator('#rn-name')).toBeFocused()
   await expect(dialog).toContainText('ALTER DATABASE')
   await dialog.getByRole('button', { name: 'Cancel' }).click()
 
