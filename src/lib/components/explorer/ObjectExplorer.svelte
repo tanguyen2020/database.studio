@@ -3090,6 +3090,7 @@ ${tree.replication}` })}
                     <ContextMenu.Item onclick={() => createObject('trigger', fsch.name, db.name)}>Create Trigger…</ContextMenu.Item>
                   {/if}
                   <ContextMenu.Item onclick={() => sub && scriptsWizard.show(sub, fsch.name)}>Generate Scripts…</ContextMenu.Item>
+                  <ContextMenu.Item onclick={() => sub && transferWizard.show(sub, fsch.name)}>Transfer Data To…</ContextMenu.Item>
                   <ContextMenu.Separator />
                   {#if selected && hasRealSchemas(selected.system)}
                     <ContextMenu.Item onclick={() => sub && newSchema(sub, db.name)}>New Schema…</ContextMenu.Item>
