@@ -41,3 +41,19 @@ pub async fn reveal_path(path: String) -> Result<(), AppError> {
     };
     spawned.map(|_| ()).map_err(|e| AppError::Other(format!("Could not open the folder: {e}")))
 }
+
+/// Read a small UTF-8 text file the user picked in an Open dialog (Import
+/// Connections). Refuses anything over 20 MB — a connections file is a few KB.
+#[tauri::command]
+pub async fn read_text_file(path: String) -> Result<String, AppError> {
+    let meta = tokio::fs::metadata(&path)
+        .await
+        .map_err(|e| AppError::Other(format!("Cannot open '{path}': {e}")))?;
+    if meta.len() > 20 * 1024 * 1024 {
+        return Err(AppError::Other(format!("'{path}' is too large to be a connections file")));
+    }
+    let bytes = tokio::fs::read(&path)
+        .await
+        .map_err(|e| AppError::Other(format!("Cannot read '{path}': {e}")))?;
+    String::from_utf8(bytes).map_err(|_| AppError::Other(format!("'{path}' is not a text file")))
+}

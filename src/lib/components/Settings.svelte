@@ -7,11 +7,12 @@
   import { ui } from '$lib/stores/ui.svelte'
   import { updater } from '$lib/stores/updater.svelte'
   import { IS_TAURI } from '$lib/demo'
+  import McpSettings from './McpSettings.svelte'
 
   // Injected by Vite from package.json — the version the updater compares against.
   const APP_VERSION = __APP_VERSION__
 
-  const sections = ['Appearance', 'Editor', 'Query', 'Data', 'Kafka', 'Connections', 'Updates', 'Shortcuts'] as const
+  const sections = ['Appearance', 'Editor', 'Query', 'Data', 'Kafka', 'Connections', 'MCP', 'Updates', 'Shortcuts'] as const
   let active = $state<(typeof sections)[number]>('Appearance')
 
   const s = $derived(settings.value)
@@ -92,6 +93,8 @@
             <label class="set-row">Acquire timeout (s) <input type="number" min="1" max="300" bind:value={s.poolAcquireSecs} onchange={save} class="set-inp" /></label>
             <label class="set-row">Connect retry attempts <input type="number" min="1" max="10" bind:value={s.connectRetryAttempts} onchange={save} class="set-inp" /></label>
             <label class="set-row">Retry backoff base (ms) <input type="number" min="10" max="60000" bind:value={s.connectRetryBackoffMs} onchange={save} class="set-inp" /></label>
+          {:else if active === 'MCP'}
+            <McpSettings />
           {:else if active === 'Updates'}
             <div class="set-row">
               <span>Current version <span class="mono" style="color:var(--text)">{APP_VERSION}</span></span>

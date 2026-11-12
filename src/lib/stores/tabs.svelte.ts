@@ -459,6 +459,41 @@ class TabsStore {
     return tab
   }
 
+  /** Data Compare — row-level diff of two tables (singleton tab). Optional
+   *  preset of the source table from the Explorer. */
+  openDataCompare(
+    srcConnId: string | null,
+    opts?: { srcSchema?: string; srcTable?: string },
+  ): TabState {
+    const existing = this.tabs.find((t) => t.contentType === 'data-compare')
+    const state = {
+      srcConn: srcConnId,
+      srcSchema: opts?.srcSchema ?? '',
+      srcTable: opts?.srcTable ?? '',
+      presetTick: ((existing?.state as { presetTick?: number })?.presetTick ?? 0) + 1,
+    }
+    if (existing) {
+      existing.state = state
+      this.activeTabId = existing.id
+      return existing
+    }
+    const tab: TabState = {
+      id: uuid(),
+      connectionId: srcConnId,
+      connectionName: '',
+      systemType: 'orphan',
+      contentType: 'data-compare',
+      title: 'Data Compare',
+      isPinned: false,
+      isDirty: false,
+      state,
+    }
+    this.tabs.push(tab)
+    this.activeTabId = tab.id
+    this.schedulePersist()
+    return tab
+  }
+
   /** Mở tab ER Diagram cho một schema (singleton per conn+schema). */
   openErDiagram(connectionId: string, schema: string, opts?: { blank?: boolean }): TabState {
     // A blank diagram starts with no tables (included: []) so the user can drag

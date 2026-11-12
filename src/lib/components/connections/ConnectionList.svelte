@@ -25,6 +25,7 @@
   import { duckAttach, duckImport } from '$lib/stores/duckdb.svelte'
   import { toasts } from '$lib/stores/toast.svelte'
   import { ui } from '$lib/stores/ui.svelte'
+  import { connTransfer } from '$lib/stores/connTransfer.svelte'
   import type { ProfilePublic } from '$lib/types'
   import ObjectExplorer from '$lib/components/explorer/ObjectExplorer.svelte'
   import { opensWorkspace } from '$lib/stream/workspace-systems'
@@ -312,8 +313,6 @@
   // ---- Section 8: grouping mode + import/export + quick connect ----
   const folders = $derived(groupByFolder(filtered, SYSTEM_ORDER))
 
-  let fileInput = $state<HTMLInputElement | null>(null)
-
   // ---- toolbar Refresh -------------------------------------------------------
   // "Refresh" means: really reopen the connection. A long-lived session can be
   // holding an old catalog snapshot (and its cached tree), so re-reading the
@@ -347,37 +346,6 @@
     } finally {
       resyncing = false
       refreshingId = null
-    }
-  }
-
-  function exportConnections() {
-    if (connections.profiles.filter((p) => !p.ephemeral).length === 0) {
-      toasts.show('No connections to export')
-      return
-    }
-    const blob = new Blob([connections.exportPayload()], { type: 'application/json' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = 'database-studio-connections.json'
-    a.click()
-    URL.revokeObjectURL(url)
-    toasts.success('Exported connections (without passwords)')
-  }
-
-  async function onImportFile(e: Event) {
-    const input = e.currentTarget as HTMLInputElement
-    const file = input.files?.[0]
-    input.value = ''
-    if (!file) return
-    try {
-      const parsed = JSON.parse(await file.text())
-      const list = Array.isArray(parsed) ? parsed : parsed?.profiles
-      if (!Array.isArray(list)) throw new Error('Invalid JSON structure')
-      const n = await connections.importProfiles(list)
-      toasts.success(`Imported ${n} connection(s)`)
-    } catch (err) {
-      toasts.error(`Import failed: ${err}`)
     }
   }
 
@@ -537,15 +505,6 @@
   })
 </script>
 
-<!-- hidden picker cho Import Connections (JSON) -->
-<input
-  bind:this={fileInput}
-  type="file"
-  accept="application/json,.json"
-  onchange={onImportFile}
-  style="display:none"
-/>
-
 <!-- connection row — dùng chung cho cả 2 chế độ nhóm (theo hệ / theo folder) -->
 {#snippet connRow(p: ProfilePublic)}
   <ContextMenu.Root>
@@ -680,6 +639,9 @@
       {/if}
       <ContextMenu.Item onclick={() => testConn(p)}>Test Connection</ContextMenu.Item>
       <ContextMenu.Item onclick={() => copyConnString(p)}>Copy Connection String</ContextMenu.Item>
+      {#if !p.ephemeral}
+        <ContextMenu.Item onclick={() => connTransfer.openExport([p.id])}>Export Connection…</ContextMenu.Item>
+      {/if}
       {#if isRelational(p.system)}
         <ContextMenu.Separator />
         <ContextMenu.Item onclick={() => tabs.openSchemaCompare(p.id)}>Compare Schemas…</ContextMenu.Item>
@@ -764,6 +726,12 @@
     <span class="tbtn" onclick={() => selRel && tabs.openSchemaCompare(selConn?.id ?? null)} onkeydown={(e) => e.key === 'Enter' && selRel && tabs.openSchemaCompare(selConn?.id ?? null)} role="button" tabindex="0" title="Compare schemas" style="cursor:{selRel ? 'pointer' : 'not-allowed'};opacity:{selRel ? 1 : 0.35}">
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 8h13l-3-3M5 8l3 3"></path><path d="M19 16H6l3 3M19 16l-3-3"></path></svg>
     </span>
+    <span class="tbtn" onclick={() => connTransfer.openImport()} onkeydown={(e) => e.key === 'Enter' && connTransfer.openImport()} role="button" tabindex="0" aria-label="Import connections" title="Import connections — from a file exported by Database Studio" style="cursor:pointer">
+      <Icon name="download" size={15} />
+    </span>
+    <span class="tbtn" onclick={() => connTransfer.openExport()} onkeydown={(e) => e.key === 'Enter' && connTransfer.openExport()} role="button" tabindex="0" aria-label="Export connections" title="Export connections — to move them to another computer or share them, passwords included if you want" style="cursor:pointer">
+      <Icon name="upload" size={15} />
+    </span>
     <span class="tbtn" onclick={toggleFilter} onkeydown={(e) => e.key === 'Enter' && toggleFilter()} role="button" tabindex="0" title={kbd('Filter connections (Ctrl+Shift+K)')} style="cursor:pointer;background:{filterOpen ? 'var(--hover)' : 'transparent'}">
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4h18l-7 8v6l-4 2v-8z"></path></svg>
     </span>
@@ -821,8 +789,8 @@
         <ContextMenu.Separator />
         <ContextMenu.Item onclick={quickConnect}>Quick Connect…</ContextMenu.Item>
         <ContextMenu.Separator />
-        <ContextMenu.Item onclick={() => fileInput?.click()}>Import Connections…</ContextMenu.Item>
-        <ContextMenu.Item onclick={exportConnections}>Export Connections…</ContextMenu.Item>
+        <ContextMenu.Item onclick={() => connTransfer.openImport()}>Import Connections…</ContextMenu.Item>
+        <ContextMenu.Item onclick={() => connTransfer.openExport()}>Export Connections…</ContextMenu.Item>
       </ContextMenu.Content>
     </ContextMenu.Root>
     {#if myDbOpen}

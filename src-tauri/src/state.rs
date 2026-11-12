@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -6,6 +6,55 @@ use tokio::task::AbortHandle;
 
 use crate::connections::registry::Registry;
 use crate::storage::Storage;
+
+/// Runtime state for the MCP server (the in-app HTTP endpoint for AI agents):
+/// the running listener, pending Allow/Deny approvals, and "Allow for session"
+/// grants. All off until the user enables MCP in Settings.
+#[derive(Default)]
+pub struct McpRuntime {
+    /// (abort handle, bound port) when the server is running.
+    server: Mutex<Option<(AbortHandle, u16)>>,
+    /// Pending approval requests: request id → resolver the awaiting tool call holds.
+    approvals: Mutex<HashMap<String, tokio::sync::oneshot::Sender<bool>>>,
+    /// Connection ids the user allowed writes for, for this app session only.
+    session_write: Mutex<HashSet<String>>,
+}
+
+impl McpRuntime {
+    pub fn set_server(&self, handle: AbortHandle, port: u16) {
+        if let Some((old, _)) = self.server.lock().unwrap().replace((handle, port)) {
+            old.abort();
+        }
+    }
+    pub fn stop_server(&self) {
+        if let Some((h, _)) = self.server.lock().unwrap().take() {
+            h.abort();
+        }
+    }
+    pub fn running_port(&self) -> Option<u16> {
+        self.server.lock().unwrap().as_ref().map(|(_, p)| *p)
+    }
+    pub fn register_approval(&self, id: String, tx: tokio::sync::oneshot::Sender<bool>) {
+        self.approvals.lock().unwrap().insert(id, tx);
+    }
+    pub fn resolve_approval(&self, id: &str, allow: bool) -> bool {
+        if let Some(tx) = self.approvals.lock().unwrap().remove(id) {
+            let _ = tx.send(allow);
+            true
+        } else {
+            false
+        }
+    }
+    pub fn allow_session_write(&self, conn: String) {
+        self.session_write.lock().unwrap().insert(conn);
+    }
+    pub fn has_session_write(&self, conn: &str) -> bool {
+        self.session_write.lock().unwrap().contains(conn)
+    }
+    pub fn clear_session(&self) {
+        self.session_write.lock().unwrap().clear();
+    }
+}
 
 /// Các task pub/sub Redis đang chạy (1 subscription / connection). Subscribe mới
 /// hủy cái cũ; unsubscribe / disconnect hủy task.
@@ -104,4 +153,5 @@ pub struct AppState {
     pub kafka_stops: KafkaStops,
     pub test_cancels: TestCancels,
     pub export_cancels: ExportCancels,
+    pub mcp: McpRuntime,
 }

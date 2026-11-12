@@ -1,13 +1,11 @@
 // Connection profiles + live connection state (Svelte 5 runes store).
 
 import * as ipc from '$lib/ipc'
-import type { ConnectionProfile, ProfileDraft, ProfilePublic, SystemType } from '$lib/types'
+import type { ProfileDraft, ProfilePublic, SystemType } from '$lib/types'
 import { toasts } from './toast.svelte'
 import { explorer } from './explorer.svelte'
 import { connectionChanged } from '$lib/connection/changes'
 
-/** Runtime-only fields stripped when exporting a profile to JSON. */
-const RUNTIME_KEYS = ['has_password', 'connected', 'latency_ms', 'ephemeral'] as const
 
 /** The base profile id inside any derived connection id: strips a per-tab suffix
  *  (`#tab-…`, item 6) then a per-database suffix (`::db`, attach_database). A base
@@ -177,27 +175,22 @@ class ConnectionsStore {
     }
   }
 
-  /** Serialize saved (non-ephemeral) profiles to JSON — never includes secrets. */
-  exportPayload(): string {
-    const clean = this.profiles
-      .filter((p) => !p.ephemeral)
-      .map((p) => {
-        const c = { ...p } as Partial<ProfilePublic>
-        for (const k of RUNTIME_KEYS) delete c[k]
-        c.id = '' // re-imported as fresh profiles
-        return c as ConnectionProfile
-      })
-    return JSON.stringify({ version: 1, profiles: clean }, null, 2)
-  }
-
-  /** Import profiles from a parsed JSON payload; returns how many were saved. */
-  async importProfiles(profiles: ConnectionProfile[]): Promise<number> {
-    let n = 0
-    for (const profile of profiles) {
-      const saved = await this.save({ profile: { ...profile, id: '' }, password: null, ssh_password: null })
-      if (saved) n++
+  /** Merge connections saved by Import Connections (new ones appended, replaced
+   *  ones swapped in place). A replaced connection that is open keeps its session
+   *  — and is marked stale so its tree is re-read when it next (re)opens, exactly
+   *  like "Save only" in the connection form. */
+  applyImported(saved: ProfilePublic[]) {
+    for (const s of saved) {
+      const idx = this.profiles.findIndex((p) => p.id === s.id)
+      if (idx < 0) {
+        this.profiles.push(s)
+        continue
+      }
+      const prev = this.profiles[idx]
+      this.profiles[idx] = { ...s, connected: prev.connected, latency_ms: prev.latency_ms }
+      // replaced from a file: its config (and maybe password) is new → re-read on next open
+      this.staleConfig.add(s.id)
     }
-    return n
   }
 
   async duplicate(id: string) {

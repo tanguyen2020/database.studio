@@ -17,6 +17,8 @@ import { OS_DEMO_ID, isOsDemo, osDemo, osDemoEnabled } from './elastic/os-demo'
 import { RP_DEMO_ID, redpandaDemo, redpandaDemoEnabled } from './redpanda/demo'
 import { DOCDB_DEMO_ID, FERRET_DEMO_ID, docdbDemoEnabled, ferretDemoEnabled, mongoFlavorDemo } from './mongo/flavor-demo'
 import { backupDemo } from './backup/demo'
+import { transferDemo } from './connections/transfer-demo'
+import { mcpDemo } from './mcp/demo'
 
 export const IS_TAURI =
   typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
@@ -430,6 +432,42 @@ function emptyTableMode(): boolean {
   if (typeof window === 'undefined') return false
   return new URLSearchParams(window.location.search).get('emptyTable') === '1'
 }
+/** `?transferDemo=1` (demo/browser only): make the Data Transfer path deterministic
+ *  — a plain `SELECT <cols> FROM <table> LIMIT n OFFSET k` returns a small fixed
+ *  set on the first page and nothing after, so the paged read→insert loop ends and
+ *  `SELECT count(*) AS n` reports the copied total. Inert without the parameter. */
+function transferDemoMode(): boolean {
+  if (typeof window === 'undefined') return false
+  return new URLSearchParams(window.location.search).get('transferDemo') === '1'
+}
+/** `?compareDemo=1` (demo/browser only): the same `students` table on two
+ *  connections holds drifting rows so Data Compare shows every bucket — Postgres
+ *  (c1, source) has ids 1/2/3; Staging (c7, target) has 1 (same), 2 (one column
+ *  changed) and 4 (target-only). Inert without the parameter. */
+function compareDemoMode(): boolean {
+  if (typeof window === 'undefined') return false
+  return new URLSearchParams(window.location.search).get('compareDemo') === '1'
+}
+function compareDemoRows(args: Record<string, unknown> | undefined, sql: string): Record<string, unknown>[] | null {
+  const m = /^\s*select\s+(.+?)\s+from\s+.+?students/i.exec(sql)
+  if (!m || /count\s*\(/i.test(sql)) return null
+  const offset = /offset\s+(\d+)/i.exec(sql)
+  if (offset && Number(offset[1]) > 0) return [] // only one page of demo data
+  const cols = m[1].split(',').map((c) => c.replace(/["`[\]]/g, '').trim())
+  const base = String(args?.connId ?? '').split(/::|#/)[0]
+  const src = [
+    { id: 1, first_name: 'Ann', status: 'active', is_active: true, order: 1 },
+    { id: 2, first_name: 'Bob', status: 'active', is_active: true, order: 2 },
+    { id: 3, first_name: 'Cara', status: 'active', is_active: true, order: 3 },
+  ]
+  const tgt = [
+    { id: 1, first_name: 'Ann', status: 'active', is_active: true, order: 1 }, // same
+    { id: 2, first_name: 'Bobby', status: 'active', is_active: true, order: 2 }, // different
+    { id: 4, first_name: 'Dan', status: 'active', is_active: true, order: 4 }, // target-only
+  ]
+  const data = base === 'c1' ? src : tgt
+  return data.map((r) => Object.fromEntries(cols.map((c) => [c, (r as Record<string, unknown>)[c] ?? null])))
+}
 /** `?compareDrift=1` (demo/browser only): the Staging Postgres connection (c7)
  *  drifts from Postgres (c1) — a missing table, an extra table, changed/new/extra
  *  columns on students, a missing index and a changed function — so Schema Compare
@@ -580,6 +618,16 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
     } catch (e) {
       return Promise.reject(String((e as Error).message ?? e))
     }
+  }
+  // Export / Import Connections — sealed files work like the backend's.
+  {
+    const t = transferDemo(cmd, args ?? {}, DEMO_PROFILES)
+    if (t !== undefined) return t as Promise<T>
+  }
+  // MCP server config/status/audit (no real server in the browser).
+  if (cmd.startsWith('mcp_')) {
+    const m = mcpDemo(cmd, args ?? {}, DEMO_PROFILES)
+    if (m !== undefined) return m as Promise<T>
   }
   // Backup & Restore (every engine) — its own mock with the backend's shapes.
   {
@@ -1232,6 +1280,32 @@ export function demoInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
     case 'exec_statement': {
       // Collation unification (MySQL/MariaDB) — feed the audit dialog demo data.
       const stmtSql = String(args?.sql ?? '')
+      // Data Transfer e2e (?transferDemo=1): a paged export SELECT → 3 rows on the
+      // first page, empty after; a verify COUNT → 3. CREATE/TRUNCATE/INSERT fall
+      // through to the generic DDL/DML branches below (ok).
+      if (transferDemoMode()) {
+        if (/^\s*select\s+count\(\*\)\s+as\s+n\b/i.test(stmtSql)) {
+          return ok({ ok: true, result: { cols: [['n', 'int8']], rows: [{ n: 3 }], total: 1 }, duration_ms: 2 })
+        }
+        const tx = stmtSql.match(/^\s*select\s+(.+?)\s+from\s+.+?\s+(?:limit\s+\d+\s+)?offset\s+(\d+)/i)
+        if (tx) {
+          const offset = Number(tx[2])
+          const colNames = tx[1].split(',').map((c) => c.replace(/["`[\]]/g, '').trim())
+          const cols = colNames.map((c) => [c, 'text'] as [string, string])
+          const rows = offset > 0 ? [] : [0, 1, 2].map((i) => Object.fromEntries(colNames.map((c, j) => [c, j === 0 ? i + 1 : `${c}-${i}`])))
+          return ok({ ok: true, result: { cols, rows, total: rows.length }, duration_ms: 3 })
+        }
+      }
+      // Data Compare e2e (?compareDemo=1): the keyed SELECT returns per-connection
+      // rows so the two sides drift; everything else (sync INSERT/UPDATE/DELETE)
+      // falls through to the generic DML branches (ok).
+      if (compareDemoMode()) {
+        const cmp = compareDemoRows(args, stmtSql)
+        if (cmp) {
+          const cols = (Object.keys(cmp[0] ?? { id: 0 })).map((c) => [c, c === 'id' ? 'int4' : 'text'] as [string, string])
+          return ok({ ok: true, result: { cols, rows: cmp, total: cmp.length }, duration_ms: 3 })
+        }
+      }
       // ALTER/RENAME DATABASE — recorded, so the tree shows the new name on reload.
       const renDbM = stmtSql.match(
         /^\s*(?:ALTER\s+DATABASE\s+(\S+)\s+(?:RENAME\s+TO|MODIFY\s+NAME\s*=)\s*(\S+)|RENAME\s+DATABASE\s+(\S+)\s+TO\s+(\S+))/i,

@@ -12,6 +12,7 @@ pub mod connections;
 pub mod drivers;
 pub mod error;
 pub mod lint;
+pub mod mcp;
 pub mod state;
 pub mod storage;
 
@@ -65,6 +66,7 @@ pub fn run() {
                 kafka_stops: Default::default(),
                 test_cancels: Default::default(),
                 export_cancels: Default::default(),
+                mcp: Default::default(),
             });
 
             // Keep every open connection warm. Without this, an idle connection is
@@ -79,6 +81,17 @@ pub fn run() {
                     handle.state::<AppState>().registry.keepalive_sweep().await;
                 }
             });
+
+            // MCP server: start on launch only if the user left it enabled last time.
+            let mcp_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let enabled = crate::mcp::config::load_config(&mcp_handle.state::<AppState>().storage).enabled;
+                if enabled {
+                    if let Err(e) = crate::mcp::start(mcp_handle.clone()).await {
+                        eprintln!("MCP server failed to start: {e}");
+                    }
+                }
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -87,6 +100,10 @@ pub fn run() {
             commands::connections::save_connection,
             commands::connections::delete_connection,
             commands::connections::duplicate_connection,
+            commands::transfer::export_connections,
+            commands::transfer::inspect_connections_file,
+            commands::transfer::import_connections,
+            commands::transfer::find_dbeaver_sources,
             commands::connections::connect,
             commands::connections::disconnect,
             commands::connections::reconnect,
@@ -303,6 +320,7 @@ pub fn run() {
             commands::users_admin::users_view,
             // files
             commands::files::write_text_file,
+            commands::files::read_text_file,
             commands::files::write_file_base64,
             // lint tầng 1
             commands::lint::lint_sql,
@@ -325,6 +343,13 @@ pub fn run() {
             commands::tabs::load_tabs,
             commands::tabs::get_app_state,
             commands::tabs::set_app_state,
+            // MCP server (AI agent access)
+            commands::mcp::mcp_status,
+            commands::mcp::mcp_set_config,
+            commands::mcp::mcp_rotate_token,
+            commands::mcp::mcp_audit_list,
+            commands::mcp::mcp_clear_audit,
+            commands::mcp::mcp_approve,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Database Studio");

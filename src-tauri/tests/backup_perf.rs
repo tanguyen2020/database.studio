@@ -63,6 +63,7 @@ fn app_state() -> AppState {
         kafka_stops: Default::default(),
         test_cancels: Default::default(),
         export_cancels: Default::default(),
+        mcp: Default::default(),
     }
 }
 

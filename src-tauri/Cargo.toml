@@ -56,6 +56,9 @@ russh = { version = "0.54", default-features = false, features = ["ring", "flate
 # every launch derives a fresh key → AES-GCM decrypt of stored passwords fails
 # with `aead::Error`. (Was Windows-only before, which broke macOS/Linux.)
 aes-gcm = "0.10"
+# Export Connections with passwords: Argon2id turns the file password into the
+# AES-256-GCM key (connections/transfer.rs).
+argon2 = "0.5"
 rand = "0.8"
 base64 = "0.22"
 
@@ -68,6 +71,7 @@ roxmltree = "0.20"
 # ClickHouse qua HTTP 8123 + FORMAT JSON (addendum CH §9 — HTTP; dùng reqwest
 # thay crate `clickhouse` vì result set động không hợp API typed-row của crate đó)
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
+axum = { version = "0.7", default-features = false, features = ["tokio", "http1", "json"] }
 
 # Redis (Phase 3) — async tokio + rustls TLS (rediss://). CA tùy chọn qua TlsCertificates.
 redis = { version = "0.27", default-features = false, features = [
@@ -148,6 +152,13 @@ serde_json = "1"
 
 [profile.dev]
 incremental = true
+
+# Argon2 is a deliberately slow hash; unoptimised it takes many seconds per
+# export/import in `tauri dev`. Optimise just these crates in dev builds.
+[profile.dev.package.argon2]
+opt-level = 3
+[profile.dev.package.blake2]
+opt-level = 3
 
 [profile.release]
 codegen-units = 1

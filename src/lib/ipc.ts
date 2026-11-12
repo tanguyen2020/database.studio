@@ -39,6 +39,38 @@ export const deleteConnection = (id: string) => invoke<void>('delete_connection'
 export const duplicateConnection = (id: string) =>
   invoke<ProfilePublic>('duplicate_connection', { id })
 
+/** Export saved connections as file text. `passphrase` = include passwords,
+ *  sealed with that file password (Argon2id + AES-256-GCM, in the backend). */
+export const exportConnections = (ids: string[], passphrase: string | null) =>
+  invoke<string>('export_connections', { ids, passphrase })
+
+export type ConnectionsFileInspect =
+  | { status: 'needs_passphrase' }
+  | { status: 'wrong_passphrase' }
+  | { status: 'ok'; sealed: boolean; items: import('$lib/connections/transfer').ImportFileItem[] }
+
+/** Read a connections file without saving anything (no passwords come back). */
+export const inspectConnectionsFile = (content: string, passphrase: string | null) =>
+  invoke<ConnectionsFileInspect>('inspect_connections_file', { content, passphrase })
+
+export interface ImportChoice {
+  index: number
+  action: 'add' | 'replace'
+  target_id?: string | null
+  name?: string | null
+}
+
+/** Save the chosen connections of a file (passwords re-encrypted for this computer). */
+export const importConnections = (content: string, passphrase: string | null, choices: ImportChoice[]) =>
+  invoke<ProfilePublic[]>('import_connections', { content, passphrase, choices })
+
+/** Read a text file picked in an Open dialog. Tauri-only. */
+export const readTextFile = (path: string) => invoke<string>('read_text_file', { path })
+
+/** Paths of DBeaver data-sources.json files in the default workspace locations
+ *  (empty when DBeaver is not installed here). */
+export const findDbeaverSources = () => invoke<string[]>('find_dbeaver_sources', {})
+
 export const connect = (id: string) => invoke<number>('connect', { id })
 
 export const disconnect = (id: string) => invoke<void>('disconnect', { id })
@@ -1897,4 +1929,67 @@ export async function onNatsKvWatch(
     off1()
     off2()
   }
+}
+
+// ---- MCP server (AI agent access) ------------------------------------------
+
+export type McpApprovalMode = 'auto' | 'ask-on-write' | 'ask-on-everything'
+
+export interface McpConnRow {
+  id: string
+  name: string
+  engine: string
+  read: boolean
+  write: boolean
+}
+export interface McpStatus {
+  enabled: boolean
+  running: boolean
+  port: number
+  url: string
+  token: string
+  rowCap: number
+  approvalMode: McpApprovalMode
+  connections: McpConnRow[]
+}
+export interface McpConfigInput {
+  enabled: boolean
+  port: number
+  rowCap: number
+  approvalMode: McpApprovalMode
+  connections: Record<string, { read: boolean; write: boolean }>
+}
+export interface McpAuditEntry {
+  at: string
+  tool: string
+  connection?: string
+  sql?: string
+  outcome: string
+  detail?: string
+}
+export interface McpApprovalRequest {
+  id: string
+  connection: string
+  system: string
+  sql: string
+  write: boolean
+  production: boolean
+}
+
+export const mcpStatus = () => invoke<McpStatus>('mcp_status', {})
+export const mcpSetConfig = (config: McpConfigInput) => invoke<McpStatus>('mcp_set_config', { config })
+export const mcpRotateToken = () => invoke<string>('mcp_rotate_token', {})
+export const mcpAuditList = () => invoke<McpAuditEntry[]>('mcp_audit_list', {})
+export const mcpClearAudit = () => invoke<void>('mcp_clear_audit', {})
+export const mcpApprove = (id: string, allow: boolean, connection?: string, session?: boolean) =>
+  invoke<void>('mcp_approve', { id, allow, connection, session })
+
+/** Listen for approval popups the MCP server raises. Returns an unsubscribe fn. */
+export async function onMcpApproval(cb: (r: McpApprovalRequest) => void): Promise<() => void> {
+  if (!IS_TAURI) {
+    const { mcpDemoApprovalListen } = await import('./mcp/demo')
+    return mcpDemoApprovalListen(cb)
+  }
+  const { listen } = await import('@tauri-apps/api/event')
+  return listen<McpApprovalRequest>('mcp-approval-request', (e) => cb(e.payload))
 }

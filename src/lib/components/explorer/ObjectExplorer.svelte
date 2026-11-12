@@ -27,6 +27,7 @@
   import { importWizard } from '$lib/stores/import.svelte'
   import { exportWizard } from '$lib/stores/export.svelte'
   import { copyWizard } from '$lib/stores/copy.svelte'
+  import { transferWizard } from '$lib/stores/transfer.svelte'
   import { testDataWizard } from '$lib/stores/testdata.svelte'
   import { execRoutineWizard } from '$lib/stores/execroutine.svelte'
   import { chCreateWizard } from '$lib/stores/chcreate.svelte'
@@ -2359,6 +2360,7 @@ ${tree.replication}` })}
               <ContextMenu.Item onclick={() => selected && chCreateWizard.show(selected.id, schema.name, 'dict')}>Create Dictionary…</ContextMenu.Item>
             {/if}
             <ContextMenu.Item onclick={() => selected && scriptsWizard.show(selected.id, schema.name)}>Generate Scripts…</ContextMenu.Item>
+            <ContextMenu.Item onclick={() => selected && transferWizard.show(selected.id, schema.name)}>Transfer Data To…</ContextMenu.Item>
             <ContextMenu.Separator />
             {#if schemaNodeIsDatabase}
               <!-- database-node ops apply to every schema-as-database system (MySQL/

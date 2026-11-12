@@ -1,5 +1,5 @@
 // Unit test connections store — Section 8: quick connect (ephemeral), export
-// payload (no secrets, id reset), import (save per profile), remove ephemeral.
+// Import Connections merge (applyImported), remove ephemeral.
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ConnectionProfile, ProfilePublic } from '$lib/types'
@@ -92,34 +92,21 @@ describe('quickConnect', () => {
   })
 })
 
-describe('exportPayload', () => {
-  it('bỏ ephemeral, strip secrets/runtime, reset id', async () => {
-    connections.profiles = [
-      { ...blank('keep', 'Prod'), id: 'c1', has_password: true, connected: true, latency_ms: 5 },
-      { ...blank('adhoc'), id: 'quick-1', ephemeral: true, connected: true },
-    ]
-    const parsed = JSON.parse(connections.exportPayload())
-    expect(parsed.version).toBe(1)
-    expect(parsed.profiles).toHaveLength(1)
-    const only = parsed.profiles[0]
-    expect(only.name).toBe('keep')
-    expect(only.id).toBe('')
-    expect('has_password' in only).toBe(false)
-    expect('connected' in only).toBe(false)
-    expect('ephemeral' in only).toBe(false)
-  })
-})
-
-describe('importProfiles', () => {
-  it('save từng profile với id mới, trả về số lượng', async () => {
-    const n = await connections.importProfiles([
-      blank('one') as unknown as ConnectionProfile,
-      blank('two') as unknown as ConnectionProfile,
+describe('applyImported', () => {
+  it('appends new connections and swaps replaced ones in place, keeping the open session', () => {
+    connections.profiles = [{ ...blank('Prod'), id: 'c1', connected: true, latency_ms: 5, has_password: false }]
+    connections.applyImported([
+      { ...blank('Prod'), id: 'c1', host: 'new-host', has_password: true, connected: false },
+      { ...blank('Staging'), id: 'imp-1', has_password: true, connected: false },
     ])
-    expect(n).toBe(2)
-    expect(saveConnection).toHaveBeenCalledTimes(2)
-    // luôn import như profile mới (id rỗng)
-    expect(saveConnection.mock.calls[0][0].profile.id).toBe('')
+    expect(connections.profiles.map((p) => p.id)).toEqual(['c1', 'imp-1'])
+    expect(connections.profiles[0].host).toBe('new-host')
+    expect(connections.profiles[0].has_password).toBe(true)
+    // still the live session it had — the replace only changed the saved config
+    expect(connections.profiles[0].connected).toBe(true)
+    expect(connections.profiles[0].latency_ms).toBe(5)
+    expect(connections.staleConfig.has('c1')).toBe(true)
+    expect(connections.staleConfig.has('imp-1')).toBe(false)
   })
 })
 

@@ -233,6 +233,7 @@
   {/if}
   <ContextMenu.Separator />
   <ContextMenu.Item onclick={() => copyWizard.show(connId, schema, table)}>Copy to…</ContextMenu.Item>
+  <ContextMenu.Item onclick={() => tabs.openDataCompare(connId, { srcSchema: schema, srcTable: table })}>Compare Data…</ContextMenu.Item>
   <ContextMenu.Item onclick={rename}>Rename…</ContextMenu.Item>
   <ContextMenu.Item onclick={() => copyName(table)}>Copy Name</ContextMenu.Item>
   <ContextMenu.Item onclick={() => copyName(`${quoteIdent(system, schema)}.${quoteIdent(system, table)}`)}>Copy Qualified Name</ContextMenu.Item>

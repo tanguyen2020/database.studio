@@ -267,6 +267,7 @@ export type TabContentType =
   | 'query-plan'
   | 'er-diagram'
   | 'schema-compare'
+  | 'data-compare'
   | 'index-scanner'
   | 'index-manager'
   | 'admin'

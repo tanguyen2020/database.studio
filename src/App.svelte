@@ -42,6 +42,7 @@
   import PlanVisualizer from '$lib/components/workspace/PlanVisualizer.svelte'
   import ErDiagram from '$lib/components/workspace/ErDiagram.svelte'
   import SchemaCompare from '$lib/components/workspace/SchemaCompare.svelte'
+  import DataCompareView from '$lib/components/workspace/DataCompareView.svelte'
   import IndexScanner from '$lib/components/workspace/IndexScanner.svelte'
   import IndexManager from '$lib/components/workspace/IndexManager.svelte'
   import AdminView from '$lib/components/workspace/AdminView.svelte'
@@ -55,6 +56,7 @@
   import BackupDialog from '$lib/components/BackupDialog.svelte'
   import BackupProgressWindow from '$lib/components/BackupProgressWindow.svelte'
   import CopyTableDialog from '$lib/components/CopyTableDialog.svelte'
+  import DataTransferDialog from '$lib/components/DataTransferDialog.svelte'
   import CollationDialog from '$lib/components/CollationDialog.svelte'
   import GenerateTestDataDialog from '$lib/components/GenerateTestDataDialog.svelte'
   import ExecuteRoutineDialog from '$lib/components/ExecuteRoutineDialog.svelte'
@@ -70,6 +72,8 @@
   import AddPartitionDialog from '$lib/components/AddPartitionDialog.svelte'
   import TruncateDialog from '$lib/components/TruncateDialog.svelte'
   import NewDatabaseDialog from '$lib/components/NewDatabaseDialog.svelte'
+  import ExportConnectionsDialog from '$lib/components/connections/ExportConnectionsDialog.svelte'
+  import ImportConnectionsDialog from '$lib/components/connections/ImportConnectionsDialog.svelte'
   import RenameDialog from '$lib/components/RenameDialog.svelte'
   import UpdateDialog from '$lib/components/UpdateDialog.svelte'
   import { updater } from '$lib/stores/updater.svelte'
@@ -78,6 +82,7 @@
   import NatsCreateStreamDialog from '$lib/components/NatsCreateStreamDialog.svelte'
   import KafkaCreateTopicDialog from '$lib/components/KafkaCreateTopicDialog.svelte'
   import Settings from '$lib/components/Settings.svelte'
+  import McpApprovalDialog from '$lib/components/McpApprovalDialog.svelte'
   import { palette } from '$lib/stores/palette.svelte'
   import { settings } from '$lib/stores/settings.svelte'
   import HistoryTab from '$lib/components/workspace/HistoryTab.svelte'
@@ -431,6 +436,8 @@
             <ErDiagram tab={t} />
           {:else if t.contentType === 'schema-compare'}
             <SchemaCompare tab={t} />
+          {:else if t.contentType === 'data-compare'}
+            <DataCompareView tab={t} />
           {:else if t.contentType === 'index-scanner'}
             <IndexScanner tab={t} />
           {:else if t.contentType === 'index-manager'}
@@ -539,6 +546,7 @@
 <BackupDialog />
 <BackupProgressWindow />
 <CopyTableDialog />
+<DataTransferDialog />
 <CollationDialog />
 <GenerateTestDataDialog />
 <ExecuteRoutineDialog />
@@ -557,6 +565,8 @@
 <DuckAttachDialog />
 <TruncateDialog />
 <NewDatabaseDialog />
+<ExportConnectionsDialog />
+<ImportConnectionsDialog />
 <RenameDialog />
 <UpdateDialog />
 <DesignDocumentDialog />
@@ -564,4 +574,5 @@
 <NatsCreateStreamDialog />
 <KafkaCreateTopicDialog />
 <Settings />
+<McpApprovalDialog />
 <Toasts />
