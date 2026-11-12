@@ -101,18 +101,30 @@
   }
 
   const readableCount = $derived(status ? status.connections.filter((c) => c.read).length : 0)
-  const snippet = $derived(
-    status
-      ? `{
+
+  const TOKEN_PH = '<your-token>'
+  function urlOf(): string {
+    return status?.url ?? 'http://127.0.0.1:4319/mcp'
+  }
+  // Claude Code CLI command.
+  function cliText(tok: string): string {
+    return `claude mcp add --transport http database-studio \\\n  ${urlOf()} \\\n  --header "Authorization: Bearer ${tok}"`
+  }
+  // Claude Desktop / Cursor config block.
+  function jsonText(tok: string): string {
+    return `{
   "mcpServers": {
     "database-studio": {
-      "url": "${status.url}",
-      "headers": { "Authorization": "Bearer ${showToken ? status.token : '<your-token>'}" }
+      "url": "${urlOf()}",
+      "headers": { "Authorization": "Bearer ${tok}" }
     }
   }
 }`
-      : '',
-  )
+  }
+  // Shown masks the token unless "Show" is on; Copy always puts the real token on
+  // the clipboard so it pastes ready to use.
+  const cliShown = $derived(cliText(showToken ? (status?.token ?? '') : TOKEN_PH))
+  const jsonShown = $derived(jsonText(showToken ? (status?.token ?? '') : TOKEN_PH))
 
   function when(at: string): string {
     const n = Number(at)
@@ -210,11 +222,24 @@
     {/if}
 
     <!-- How to connect -->
-    <div style="font-size:var(--px-12);color:var(--text2);font-weight:600;margin-top:var(--px-4)">
-      How to connect
-      <button class="mcp-mini" style="float:right" onclick={() => copy(snippet, 'Config')}>Copy config</button>
+    <div class="mcp-howto-title">How to connect an agent</div>
+    <div class="mcp-howto-sub">
+      Add this server to a <strong>local</strong> agent — Claude Code, Claude Desktop or Cursor.
+      A browser-based assistant can't reach a server on <span class="mono">127.0.0.1</span>.
+      {#if !showToken}The token below is hidden — <strong>Copy</strong> still copies the real one.{/if}
     </div>
-    <pre class="mcp-snippet mono">{snippet}</pre>
+
+    <div class="mcp-code-head">
+      <span>Claude Code — run in a terminal</span>
+      <button class="mcp-mini" onclick={() => copy(cliText(status!.token), 'Command')}>Copy</button>
+    </div>
+    <pre class="mcp-code mono">{cliShown}</pre>
+
+    <div class="mcp-code-head">
+      <span>Claude Desktop · Cursor — add to the MCP config file</span>
+      <button class="mcp-mini" onclick={() => copy(jsonText(status!.token), 'Config')}>Copy</button>
+    </div>
+    <pre class="mcp-code mono">{jsonShown}</pre>
 
     <!-- Activity -->
     <div style="font-size:var(--px-12);color:var(--text2);font-weight:600;margin-top:var(--px-4);display:flex;align-items:center">
@@ -293,16 +318,39 @@
     padding: var(--px-4) var(--px-8);
     border-bottom: var(--px-1) solid var(--border);
   }
-  :global(.mcp-snippet) {
+  :global(.mcp-howto-title) {
+    font-size: var(--px-12);
+    color: var(--text2);
+    font-weight: 600;
+    margin-top: var(--px-6);
+  }
+  :global(.mcp-howto-sub) {
+    font-size: var(--px-11_5);
+    color: var(--muted);
+    line-height: 1.5;
+  }
+  :global(.mcp-code-head) {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--px-8);
     font-size: var(--px-11);
+    color: var(--text2);
+    margin-top: var(--px-8);
+  }
+  :global(.mcp-code) {
+    /* flex:none so the flex column never squashes it to one line */
+    flex: none;
+    font-size: var(--px-11_5);
     color: var(--text);
     background: var(--panel);
     border: var(--px-1) solid var(--border);
     border-radius: var(--px-6);
-    padding: var(--px-10);
-    overflow: auto;
-    white-space: pre;
-    margin: 0;
+    padding: var(--px-10) var(--px-12);
+    margin: var(--px-4) 0 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+    line-height: 1.55;
   }
   :global(.mcp-audit) {
     display: flex;
