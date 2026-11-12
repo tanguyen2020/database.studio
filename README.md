@@ -19,6 +19,7 @@ Built with **Tauri 2** (Rust backend) and **Svelte 5** (frontend). Runs on Windo
 - **Plain language over jargon.** Query plans, errors and settings are explained in words ("Full table scan — reads every row of enrollments"), with the engine's original message kept next to it.
 - **Safe by default.** Grid edits are only written when you click **Execute**, a diff shows the exact SQL first, and connections tagged **PROD** ask for confirmation before dangerous statements such as `DELETE` without `WHERE`.
 - **Secure storage.** Passwords are stored encrypted (AES-256-GCM). SSH tunnels (password or private key) and SSL/TLS are supported for every engine.
+- **AI-ready.** A built-in, local [MCP](https://modelcontextprotocol.io) server lets an AI agent explore and query the connections you choose — off by default, read-only unless you allow writes, and asking for approval first.
 
 ---
 
@@ -177,11 +178,38 @@ Elasticsearch and OpenSearch connections get a Kibana-style workspace:
 - **Stack Management**: index and component templates, ingest pipelines, lifecycle policies, data streams, snapshots, transforms and more.
 - **Dev tools**: a console with autocomplete, ES|QL / SQL (PPL on OpenSearch), the Search Profiler, the Grok Debugger and Painless Lab.
 
+### AI access (MCP server)
+
+![Settings → MCP: enable the server, share connections, copy the access token](docs/screenshots/mcp.png)
+
+Database Studio can act as an [MCP](https://modelcontextprotocol.io) server so an AI agent (Claude Code, Claude Desktop, Cursor, …) can explore your schemas and run queries **through the connections you already set up** — no separate credentials, no copy‑pasting SQL.
+
+It is **off by default** and built to stay safe:
+
+- **Opt in per connection** — tick **Readable** to let an agent see and query a connection; tick **Allow writes** for INSERT/UPDATE/DELETE.
+- **Local only** — the server binds to `127.0.0.1` and every request must carry the bearer **token** shown here.
+- **Read‑capped** — queries return at most the **row limit** (default 1000), and an agent may run **one statement at a time**.
+- **Approval before writes** — by default each write pauses for an in‑app Allow / Deny.
+
+![An agent's write pauses for Allow once / Allow for session / Deny](docs/screenshots/mcp-approval.png)
+
+Agents get six tools — `list_connections`, `list_schemas`, `list_tables`, `describe_table`, `sample_rows` and `run_query`. Add it to a **local** agent, for example Claude Code:
+
+```bash
+claude mcp add --transport http database-studio \
+  http://127.0.0.1:4319/mcp \
+  --header "Authorization: Bearer <your-token>"
+```
+
+The server runs on your own machine, so a local agent can reach it; the browser version of an assistant runs on the provider's servers and cannot reach `127.0.0.1`.
+
 ### Also included
 
 - **Command Palette** (`Ctrl+P`) to jump to connections, tables and commands.
 - **Generate Scripts** for a whole schema (structure, data or both), including indexes and foreign keys.
 - **Import** from CSV or JSON, **Copy Table to…** another connection, and **Generate Test Data** that respects foreign keys and unique constraints.
+- **Transfer Data** to copy many tables across connections at once, and **Compare Data** for a row‑level diff with a ready‑made sync script.
+- **Export / Import connections** — move your connections between machines (optionally with passwords, sealed with a passphrase), or **import them from DBeaver**.
 - **Session Monitor** to see and kill running sessions, and an **Index Scanner** that flags unused and missing indexes.
 - Light and dark themes, an adjustable interface size, and two sidebar layouts: **Connections | Explorer** side by side, or **One sidebar** where each connection's tree opens right under it.
 
