@@ -203,13 +203,38 @@ claude mcp add --transport http database-studio \
 
 The server runs on your own machine, so a local agent can reach it; the browser version of an assistant runs on the provider's servers and cannot reach `127.0.0.1`.
 
+### Transfer data between connections
+
+![Transfer data: pick tables, a destination, and how to copy](docs/screenshots/data-transfer.png)
+
+Copy many tables from one connection to another in a single pass — across different engines too. Pick the tables, a destination connection and schema, then how to copy:
+
+- **Create** (fail if a table already exists), **Create if missing**, **Append** into existing tables, or **Replace** (empty them first).
+- **Copy data** can be turned off to move only the structure.
+
+Tables are ordered parent-before-child so foreign keys line up, and each one is verified by its row count after it copies.
+
+### Compare data
+
+![Data Compare: Only in source / Different / Only in target / Same, with a sync script](docs/screenshots/data-compare.png)
+
+Compare the **rows** of two tables — in the same database or across connections. Choose the key columns and which columns to compare; rows are grouped into **Only in source** (→ INSERT), **Different** (→ UPDATE), **Only in target** (→ DELETE) and **Same**, with a per-row diff you can open. A ready-made **sync script** makes the target match the source — DELETE statements are left off until you ask for them, and applying to a connection tagged **PROD** asks you to type the table name first.
+
+### Export and import connections
+
+![Export connections, optionally sealed with a passphrase](docs/screenshots/export-connections.png)
+
+Move your connections to another computer or share them with your team. Export writes a single file; tick **Include passwords** to seal the whole file with a passphrase (AES-256) so the passwords travel with it — otherwise the file holds only hosts and user names and each password is typed again on the other side. SSH keys and TLS certificates are referenced by path, not copied, so bring those files along too.
+
+![Import from a Database Studio file or straight from DBeaver](docs/screenshots/import-connections.png)
+
+Import from a Database Studio file, or straight from **DBeaver** (point it at the workspace or its `data-sources.json` — hosts, ports, databases and SSH come across; DBeaver keeps passwords encrypted separately, so those are asked for on first connect). Every connection is reviewed before anything is added — **keep yours**, **update**, or **add a copy** — and anything already present is matched so you don't end up with duplicates.
+
 ### Also included
 
 - **Command Palette** (`Ctrl+P`) to jump to connections, tables and commands.
 - **Generate Scripts** for a whole schema (structure, data or both), including indexes and foreign keys.
 - **Import** from CSV or JSON, **Copy Table to…** another connection, and **Generate Test Data** that respects foreign keys and unique constraints.
-- **Transfer Data** to copy many tables across connections at once, and **Compare Data** for a row‑level diff with a ready‑made sync script.
-- **Export / Import connections** — move your connections between machines (optionally with passwords, sealed with a passphrase), or **import them from DBeaver**.
 - **Session Monitor** to see and kill running sessions, and an **Index Scanner** that flags unused and missing indexes.
 - Light and dark themes, an adjustable interface size, and two sidebar layouts: **Connections | Explorer** side by side, or **One sidebar** where each connection's tree opens right under it.
 
