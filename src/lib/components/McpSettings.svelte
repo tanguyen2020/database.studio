@@ -5,6 +5,7 @@
   import * as ipc from '$lib/ipc'
   import type { McpApprovalMode, McpAuditEntry, McpConnRow, McpStatus } from '$lib/ipc'
   import { toasts } from '$lib/stores/toast.svelte'
+  import { CLOUD_NOTE, mcpClientSnippets } from '$lib/mcp/clients'
 
   let status = $state<McpStatus | null>(null)
   let audit = $state<McpAuditEntry[]>([])
@@ -103,28 +104,21 @@
   const readableCount = $derived(status ? status.connections.filter((c) => c.read).length : 0)
 
   const TOKEN_PH = '<your-token>'
-  function urlOf(): string {
-    return status?.url ?? 'http://127.0.0.1:4319/mcp'
+  // Per-client configuration (src/lib/mcp/clients.ts). Shown masks the token
+  // unless "Show" is on; Copy always puts the real token on the clipboard.
+  let client = $state('claude-code')
+  function snippetsFor(token: string) {
+    return mcpClientSnippets({
+      url: status?.url ?? 'http://127.0.0.1:4319/mcp',
+      token,
+      bridgePath: status?.bridgePath || 'database-studio',
+    })
   }
-  // Claude Code CLI command.
-  function cliText(tok: string): string {
-    return `claude mcp add --transport http database-studio \\\n  ${urlOf()} \\\n  --header "Authorization: Bearer ${tok}"`
+  const clientSnippets = $derived(snippetsFor(showToken ? (status?.token ?? '') : TOKEN_PH))
+  const clientSnippet = $derived(clientSnippets.find((c) => c.id === client) ?? clientSnippets[0])
+  function clientReal(id: string): string {
+    return snippetsFor(status?.token ?? '').find((c) => c.id === id)?.snippet ?? ''
   }
-  // Claude Desktop / Cursor config block.
-  function jsonText(tok: string): string {
-    return `{
-  "mcpServers": {
-    "database-studio": {
-      "url": "${urlOf()}",
-      "headers": { "Authorization": "Bearer ${tok}" }
-    }
-  }
-}`
-  }
-  // Shown masks the token unless "Show" is on; Copy always puts the real token on
-  // the clipboard so it pastes ready to use.
-  const cliShown = $derived(cliText(showToken ? (status?.token ?? '') : TOKEN_PH))
-  const jsonShown = $derived(jsonText(showToken ? (status?.token ?? '') : TOKEN_PH))
 
   function when(at: string): string {
     const n = Number(at)
@@ -224,22 +218,29 @@
     <!-- How to connect -->
     <div class="mcp-howto-title">How to connect an agent</div>
     <div class="mcp-howto-sub">
-      Add this server to a <strong>local</strong> agent — Claude Code, Claude Desktop or Cursor.
-      A browser-based assistant can't reach a server on <span class="mono">127.0.0.1</span>.
-      {#if !showToken}The token below is hidden — <strong>Copy</strong> still copies the real one.{/if}
+      Pick the AI client you use and paste its configuration. Every client gets the same tools and the
+      same limits set on this page.
+      {#if clientSnippet?.hasToken && !showToken}The token below is hidden — <strong>Copy</strong> still copies the real one.{/if}
     </div>
 
-    <div class="mcp-code-head">
-      <span>Claude Code — run in a terminal</span>
-      <button class="mcp-mini" onclick={() => copy(cliText(status!.token), 'Command')}>Copy</button>
+    <div class="mcp-clients" role="tablist" aria-label="AI client">
+      {#each clientSnippets as c (c.id)}
+        <button role="tab" class="mcp-client" aria-selected={client === c.id} onclick={() => (client = c.id)}>{c.label}</button>
+      {/each}
     </div>
-    <pre class="mcp-code mono">{cliShown}</pre>
 
-    <div class="mcp-code-head">
-      <span>Claude Desktop · Cursor — add to the MCP config file</span>
-      <button class="mcp-mini" onclick={() => copy(jsonText(status!.token), 'Config')}>Copy</button>
+    {#if clientSnippet}
+      <div class="mcp-code-head">
+        <span>{clientSnippet.where}</span>
+        <button class="mcp-mini" onclick={() => copy(clientReal(clientSnippet!.id), clientSnippet!.label + ' configuration')}>Copy</button>
+      </div>
+      <pre class="mcp-code mono" data-client={clientSnippet.id}>{clientSnippet.snippet}</pre>
+      {#if clientSnippet.note}<div class="mcp-howto-sub">{clientSnippet.note}</div>{/if}
+    {/if}
+    <div class="mcp-howto-sub">
+      Ask for any database on a shared server by name — for example “100 rows of <span class="mono">users</span>
+      in database <span class="mono">sales</span>, schema <span class="mono">public</span>”. {CLOUD_NOTE}
     </div>
-    <pre class="mcp-code mono">{jsonShown}</pre>
 
     <!-- Activity -->
     <div style="font-size:var(--px-12);color:var(--text2);font-weight:600;margin-top:var(--px-4);display:flex;align-items:center">
@@ -328,6 +329,29 @@
     font-size: var(--px-11_5);
     color: var(--muted);
     line-height: 1.5;
+  }
+  :global(.mcp-clients) {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--px-4);
+    margin-top: var(--px-6);
+  }
+  :global(.mcp-client) {
+    font-size: var(--px-11_5);
+    color: var(--text2);
+    background: var(--raised);
+    border: var(--px-1) solid var(--border2);
+    border-radius: var(--px-12);
+    padding: var(--px-3) var(--px-10);
+    cursor: pointer;
+  }
+  :global(.mcp-client:hover) {
+    border-color: var(--primary);
+  }
+  :global(.mcp-client[aria-selected='true']) {
+    color: var(--hex-fff);
+    background: var(--primary);
+    border-color: var(--primary);
   }
   :global(.mcp-code-head) {
     display: flex;

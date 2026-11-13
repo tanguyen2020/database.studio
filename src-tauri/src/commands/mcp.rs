@@ -29,6 +29,9 @@ pub struct McpStatus {
     pub row_cap: u32,
     pub approval_mode: config::ApprovalMode,
     pub connections: Vec<McpConnRow>,
+    /// This app's executable — clients that only speak stdio launch it with
+    /// `--mcp-stdio` (see `mcp::stdio`).
+    pub bridge_path: String,
 }
 
 fn build_status(state: &AppState) -> McpStatus {
@@ -55,6 +58,7 @@ fn build_status(state: &AppState) -> McpStatus {
         row_cap: cfg.row_cap,
         approval_mode: cfg.approval_mode,
         connections,
+        bridge_path: std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_default(),
     }
 }
 

@@ -40,7 +40,9 @@
             An AI agent wants to {current.write ? 'change data' : 'run a query'}
           </div>
           <div style="font-size:var(--px-11_5);color:var(--muted)">
-            on <strong style="color:var(--text2)">{current.connection}</strong> · {current.system}
+            on <strong style="color:var(--text2)">{current.connectionName ?? current.connection}</strong>
+            {#if current.database}· database <strong style="color:var(--text2)" class="mono">{current.database}</strong>{/if}
+            · {current.system}
           </div>
         </div>
       </div>

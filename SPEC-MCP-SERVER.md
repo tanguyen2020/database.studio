@@ -132,3 +132,34 @@ axum router (127.0.0.1:port)  ── POST /mcp (JSON-RPC 2.0) ── auth(token)
   allowlist/denylist schema/table per connection.
 - **Token lộ**: localhost-only + regenerate; không ghi token ra log.
 - **App đóng = server tắt** (đã chọn in-app) → giảm thời gian phơi nhiễm.
+
+## 7. Bổ sung (2026-11-13) — chọn database + mọi AI client
+
+### 7.1 Tham số `database` (đã làm)
+- PostgreSQL gắn 1 database/connection và không truy vấn chéo database được. Trước đây agent chỉ thấy database
+  của profile (ví dụ `postgres`) dù user mở được mọi database trong Explorer.
+- Tool mới **`list_databases(connection)`** + tham số tuỳ chọn **`database`** cho `list_schemas`, `list_tables`,
+  `describe_table`, `sample_rows`, `run_query`. Mỗi lần gọi chọn 1 database; agent gọi nhiều lần để dùng nhiều
+  database (một câu SQL vẫn chỉ trong 1 database — giới hạn của PostgreSQL).
+- Thực thi: dùng LẠI sub-connection `{id}::{db}` của Explorer (`commands::connections::attach_database_for`).
+  Opt-in / Allow writes / approval / production vẫn theo connection gốc mà user đã chia sẻ (phạm vi A: mọi
+  database user của connection có quyền). Connection gốc phải đang mở trong app (không tự mở connection đã đóng).
+- Engine hỗ trợ: postgres, mssql, mysql, mariadb, clickhouse, duckdb. Engine khác truyền `database` → lỗi rõ.
+- Activity ghi `connection · database`; popup duyệt hiện tên connection + database.
+
+### 7.2 Tương thích mọi client
+- **Phiên bản giao thức**: trả đúng revision client yêu cầu nếu thuộc `2025-06-18 · 2025-03-26 · 2024-11-05`,
+  không thì bản mới nhất. Header `MCP-Protocol-Version` không hỗ trợ → 400.
+- **Streamable HTTP**: body đọc thô (sai JSON → JSON-RPC -32700 thay vì 415/422); **batch** JSON-RPC; body chỉ
+  có notification → 202; `resources/list`, `resources/templates/list`, `prompts/list` trả rỗng (không còn lỗi
+  "method not found" khi client dò); tool có `title` + `annotations` (`readOnlyHint`, `destructiveHint`).
+- **Origin guard** (chống DNS rebinding): từ chối trang web không phải loopback.
+- **stdio bridge** `database-studio --mcp-stdio` (`src-tauri/src/mcp/stdio.rs`): chính file exe của app, không mở
+  cửa sổ, đọc JSON-RPC từ stdin → POST tới server trong app → ghi stdout. Token + port **đọc từ app cùng OS user**
+  (read-only `studio.db` + master key) nên cấu hình client không chứa bí mật; ghi đè bằng `DS_MCP_TOKEN` /
+  `DS_MCP_URL` (hoặc `--token` / `--url`). Token/port đổi → tự đọc lại 1 lần. App chưa mở / MCP tắt / sai token →
+  trả lỗi JSON-RPC dễ hiểu cho agent. Mọi chính sách vẫn do app thực thi (bridge không giữ connection nào).
+- **Settings → MCP → How to connect**: tab cho Claude Code · Claude Desktop (stdio) · Cursor · VS Code Copilot
+  (`servers` + `${input:…}` để không lưu token) · Gemini CLI (`httpUrl`) · OpenAI Codex (TOML, stdio) · Windsurf
+  (stdio) · Other. Pure `src/lib/mcp/clients.ts` (unit-tested). ChatGPT / OpenAI API / Gemini API chạy trên cloud
+  không với tới `127.0.0.1` — ghi rõ trên UI, không hỗ trợ (đúng thiết kế localhost-only).

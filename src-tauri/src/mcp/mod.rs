@@ -4,14 +4,18 @@
 //! Cursor, …) can explore schemas and run queries through the connections the user
 //! shared — reusing this app's registry, credentials, approval popup and audit log.
 //! Off by default; bound to 127.0.0.1; every request needs the bearer token.
+//! Speaks MCP revisions 2024-11-05 … 2025-06-18 (Streamable HTTP with JSON
+//! answers, batches); clients that only speak stdio use the `--mcp-stdio` bridge.
 
 pub mod config;
 pub mod dispatch;
 pub mod policy;
+pub mod stdio;
 
 use axum::{
     extract::State,
     http::{HeaderMap, StatusCode},
+    body::Bytes,
     response::{IntoResponse, Response},
     routing::post,
     Json, Router,
@@ -56,7 +60,7 @@ pub fn stop(app: &AppHandle) {
     state.mcp.clear_session();
 }
 
-async fn mcp_endpoint(State(ctx): State<Ctx>, headers: HeaderMap, body: Json<Value>) -> Response {
+async fn mcp_endpoint(State(ctx): State<Ctx>, headers: HeaderMap, body: Bytes) -> Response {
     let state = ctx.app.state::<AppState>();
     let cfg = config::load_config(&state.storage);
     let token = config::load_or_create_token(&state.storage).unwrap_or_default();
@@ -64,8 +68,25 @@ async fn mcp_endpoint(State(ctx): State<Ctx>, headers: HeaderMap, body: Json<Val
     if let Err((code, msg)) = authorize(cfg.enabled, &token, header) {
         return (code, msg).into_response();
     }
+    // DNS-rebinding guard (MCP transport spec): a web page on another host must
+    // never reach this server, even though it would also need the token.
+    if !origin_allowed(headers.get("origin").and_then(|v| v.to_str().ok())) {
+        return (StatusCode::FORBIDDEN, "origin not allowed").into_response();
+    }
+    if let Some(v) = headers.get("mcp-protocol-version").and_then(|v| v.to_str().ok()) {
+        if !dispatch::SUPPORTED_VERSIONS.contains(&v.trim()) {
+            return (StatusCode::BAD_REQUEST, format!("unsupported MCP-Protocol-Version {v}")).into_response();
+        }
+    }
+    let message: Value = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(_) => {
+            let err = serde_json::json!({ "jsonrpc": "2.0", "id": null, "error": { "code": -32700, "message": "Parse error" } });
+            return (StatusCode::BAD_REQUEST, Json(err)).into_response();
+        }
+    };
 
-    match dispatch::handle(&ctx.app, body.0).await {
+    match dispatch::handle(&ctx.app, message).await {
         Some(resp) => Json(resp).into_response(),
         None => StatusCode::ACCEPTED.into_response(),
     }
@@ -82,6 +103,24 @@ pub fn authorize(enabled: bool, token: &str, auth_header: Option<&str>) -> Resul
         return Err((StatusCode::UNAUTHORIZED, "missing or invalid token"));
     }
     Ok(())
+}
+
+/// `Origin` is only sent by browsers. Allow none, non-web schemes (editor
+/// webviews) and loopback web pages; refuse any other web origin.
+pub fn origin_allowed(origin: Option<&str>) -> bool {
+    let Some(o) = origin.map(str::trim).filter(|o| !o.is_empty()) else { return true };
+    let rest = match o.split_once("://") {
+        Some((scheme, rest)) if scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https") => rest,
+        Some(_) => return true,
+        None => return o.eq_ignore_ascii_case("null"),
+    };
+    let authority = rest.split('/').next().unwrap_or("");
+    let host = if let Some(v6) = authority.strip_prefix('[') {
+        v6.split(']').next().unwrap_or("")
+    } else {
+        authority.rsplit_once(':').map(|(h, _)| h).unwrap_or(authority)
+    };
+    matches!(host.to_ascii_lowercase().as_str(), "localhost" | "127.0.0.1" | "::1")
 }
 
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
@@ -105,6 +144,26 @@ mod tests {
         assert!(!constant_time_eq(b"abc", b"abd"));
         assert!(!constant_time_eq(b"abc", b"ab"));
         assert!(constant_time_eq(b"", b""));
+    }
+
+    #[test]
+    fn origin_guard_blocks_foreign_web_pages_only() {
+        assert!(origin_allowed(None));
+        assert!(origin_allowed(Some("http://localhost:5173")));
+        assert!(origin_allowed(Some("http://127.0.0.1")));
+        assert!(origin_allowed(Some("http://[::1]:8080")));
+        assert!(origin_allowed(Some("vscode-webview://abc")));
+        assert!(!origin_allowed(Some("https://evil.example")));
+        assert!(!origin_allowed(Some("http://localhost.evil.example")));
+        assert!(!origin_allowed(Some("http://127.0.0.1.evil.example:80")));
+    }
+
+    #[test]
+    fn version_negotiation_echoes_supported_and_falls_back_to_newest() {
+        assert_eq!(dispatch::negotiate_version(Some("2024-11-05")), "2024-11-05");
+        assert_eq!(dispatch::negotiate_version(Some("2025-03-26")), "2025-03-26");
+        assert_eq!(dispatch::negotiate_version(Some("2099-01-01")), "2025-06-18");
+        assert_eq!(dispatch::negotiate_version(None), "2025-06-18");
     }
 
     #[test]

@@ -1951,6 +1951,8 @@ export interface McpStatus {
   rowCap: number
   approvalMode: McpApprovalMode
   connections: McpConnRow[]
+  /** The app executable — stdio-only clients run it with `--mcp-stdio`. */
+  bridgePath: string
 }
 export interface McpConfigInput {
   enabled: boolean
@@ -1970,6 +1972,10 @@ export interface McpAuditEntry {
 export interface McpApprovalRequest {
   id: string
   connection: string
+  /** Display name of the connection (the id above is what Allow/Deny keys on). */
+  connectionName?: string
+  /** Another database on the same server the statement runs in (omitted = the connection's own). */
+  database?: string | null
   system: string
   sql: string
   write: boolean

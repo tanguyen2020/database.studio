@@ -40,6 +40,7 @@ function status(profiles: DemoProfile[]): McpStatus {
     token: state.token,
     rowCap: state.rowCap,
     approvalMode: state.approvalMode,
+    bridgePath: String.raw`C:\Users\you\AppData\Local\Database Studio\database-studio.exe`,
     connections: profiles.map((p) => ({
       id: p.id,
       name: p.name,
@@ -91,6 +92,8 @@ export function mcpDemoApprovalListen(cb: ApprovalCb): () => void {
       cb({
         id: 'demo-approval-1',
         connection: 'c1',
+        connectionName: 'Postgres',
+        database: 'analytics',
         system: 'postgres',
         sql: 'UPDATE students SET status = 1 WHERE id = 42',
         write: true,

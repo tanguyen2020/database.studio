@@ -218,17 +218,24 @@ pub async fn attach_database(
     conn_id: String,
     database: String,
 ) -> Result<String, AppError> {
-    let (mut profile, password, ssh_password) = resolve_credentials(&state, &conn_id)?;
-    // Same DB as the source connection → no sub-connection needed.
-    if profile.database == database {
-        return Ok(conn_id);
-    }
+    attach_database_for(&state, &conn_id, &database).await
+}
+
+/// Shared body of `attach_database` (also used by the MCP server so an agent can
+/// address any database on the same server, exactly like the Explorer does).
+pub async fn attach_database_for(state: &AppState, conn_id: &str, database: &str) -> Result<String, AppError> {
+    // Already-open sub-connection: no storage read / decrypt needed.
     let sub_id = format!("{conn_id}::{database}");
     if state.registry.is_connected(&sub_id) {
         return Ok(sub_id);
     }
+    let (mut profile, password, ssh_password) = resolve_credentials(state, conn_id)?;
+    // Same DB as the source connection → no sub-connection needed.
+    if profile.database == database {
+        return Ok(conn_id.to_string());
+    }
     profile.id = sub_id.clone();
-    profile.database = database;
+    profile.database = database.to_string();
     state.registry.connect(profile, password, ssh_password).await?;
     Ok(sub_id)
 }
